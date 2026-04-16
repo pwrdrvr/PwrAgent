@@ -1,7 +1,7 @@
 ---
 title: feat: Grok app-server contract test suite
 type: feat
-status: active
+status: completed
 date: 2026-04-16
 origin: docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md
 ---
@@ -231,7 +231,7 @@ flowchart TB
 **Verification:**
 - The Grok adapter can satisfy the contract suite using only normalized app-server structures, with no test that depends on raw xAI response envelopes outside the provider boundary.
 
-- [ ] **Unit 4: Add opt-in live smoke coverage and local secret handling**
+- [x] **Unit 4: Add opt-in live smoke coverage and local secret handling**
 
 **Goal:** Add the smallest live test path that proves the in-memory server can talk to xAI for real, while keeping secrets local and default runs deterministic.
 
