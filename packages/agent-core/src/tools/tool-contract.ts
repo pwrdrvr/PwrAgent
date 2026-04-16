@@ -19,6 +19,9 @@ export type ToolExecutionContext = {
   approvalPolicy?: string;
   sandbox?: string;
   signal?: AbortSignal;
+  requestApproval?: (
+    request: ToolApprovalRequest,
+  ) => Promise<unknown> | unknown;
 };
 
 export type ToolInvocation = {
@@ -31,6 +34,8 @@ export type ToolExecutionOutput = {
   output: string;
   data?: Record<string, unknown>;
   commandAction?: AppServerCommandAction;
+  itemType?: "dynamicToolCall" | "commandExecution";
+  command?: string;
 };
 
 export type ToolDescriptor = {
@@ -64,15 +69,29 @@ export interface ToolExecutor {
     errorCode?: string;
     commandAction?: AppServerCommandAction;
     item: {
-      type: "dynamicToolCall";
+      type: "dynamicToolCall" | "commandExecution";
       text: string;
       toolName: string;
       success: boolean;
       arguments: Record<string, unknown>;
       commandAction?: AppServerCommandAction;
+      command?: string;
     };
   }>;
 }
+
+export type ToolApprovalKind = "fileChange" | "commandExecution";
+
+export type ToolApprovalDecision = "approve" | "decline" | "cancel";
+
+export type ToolApprovalRequest = {
+  requestId: string;
+  kind: ToolApprovalKind;
+  reason?: string;
+  path?: string;
+  command?: string;
+  commandAction?: AppServerCommandAction;
+};
 
 export function asObjectArguments(
   toolName: string,
@@ -146,4 +165,33 @@ export function readOptionalPositiveInteger(
     );
   }
   return value;
+}
+
+export function normalizeApprovalDecision(value: unknown): ToolApprovalDecision {
+  if (
+    value &&
+    typeof value === "object" &&
+    "decision" in value &&
+    typeof (value as { decision?: unknown }).decision === "string"
+  ) {
+    return normalizeApprovalDecision((value as { decision: string }).decision);
+  }
+  if (value === "approve") {
+    return "approve";
+  }
+  if (value === "cancel") {
+    return "cancel";
+  }
+  return "decline";
+}
+
+export async function requestToolApproval(
+  context: ToolExecutionContext,
+  request: ToolApprovalRequest,
+): Promise<ToolApprovalDecision> {
+  if (!context.requestApproval) {
+    return "decline";
+  }
+  const response = await context.requestApproval(request);
+  return normalizeApprovalDecision(response);
 }

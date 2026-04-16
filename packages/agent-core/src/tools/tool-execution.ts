@@ -38,12 +38,13 @@ export class LocalToolExecutor implements ToolExecutor {
         data: execution.data,
         commandAction: execution.commandAction,
         item: {
-          type: "dynamicToolCall" as const,
+          type: execution.itemType ?? "dynamicToolCall",
           text: execution.output,
           toolName: tool.name,
           success: execution.success,
           arguments: parsedArguments,
           commandAction: execution.commandAction,
+          command: execution.command,
         },
       };
     } catch (error) {

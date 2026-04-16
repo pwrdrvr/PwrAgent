@@ -1,7 +1,10 @@
 import type { ToolDefinition, ToolDescriptor } from "./tool-contract.js";
 import { createListFilesTool } from "./list-files-tool.js";
+import { createEditFileTool } from "./edit-file-tool.js";
 import { createReadFileTool } from "./read-file-tool.js";
 import { createSearchCodeTool } from "./search-code-tool.js";
+import { createShellCommandTool } from "./shell-command-tool.js";
+import { createWriteFileTool } from "./write-file-tool.js";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition<any>>();
@@ -35,5 +38,8 @@ export function createDefaultToolRegistry(): ToolRegistry {
     createReadFileTool(),
     createListFilesTool(),
     createSearchCodeTool(),
+    createWriteFileTool(),
+    createEditFileTool(),
+    createShellCommandTool(),
   ]);
 }

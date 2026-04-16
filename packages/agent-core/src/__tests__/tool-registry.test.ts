@@ -28,6 +28,18 @@ describe("tool registry", () => {
         name: "search_code",
         readOnly: true,
       }),
+      expect.objectContaining({
+        name: "write_file",
+        readOnly: false,
+      }),
+      expect.objectContaining({
+        name: "edit_file",
+        readOnly: false,
+      }),
+      expect.objectContaining({
+        name: "shell_command",
+        readOnly: false,
+      }),
     ]);
   });
 

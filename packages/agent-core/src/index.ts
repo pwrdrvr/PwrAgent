@@ -41,7 +41,12 @@ export {
   readOptionalPositiveInteger,
   readOptionalString,
   readRequiredString,
+  normalizeApprovalDecision,
+  requestToolApproval,
   type ToolDefinition,
+  type ToolApprovalDecision,
+  type ToolApprovalKind,
+  type ToolApprovalRequest,
   type ToolDescriptor,
   type ToolExecutionContext,
   type ToolExecutionOutput,
@@ -57,7 +62,11 @@ export {
   UnknownToolError,
 } from "./tools/tool-errors.js";
 export { LocalToolExecutor } from "./tools/tool-execution.js";
+export { createEditFileTool } from "./tools/edit-file-tool.js";
 export { createListFilesTool } from "./tools/list-files-tool.js";
 export { createReadFileTool } from "./tools/read-file-tool.js";
 export { createSearchCodeTool } from "./tools/search-code-tool.js";
+export { classifyShellCommand, splitShellWords, type ShellSafetyClassification } from "./tools/shell-safety.js";
+export { createShellCommandTool } from "./tools/shell-command-tool.js";
 export { createDefaultToolRegistry, ToolRegistry } from "./tools/tool-registry.js";
+export { createWriteFileTool } from "./tools/write-file-tool.js";

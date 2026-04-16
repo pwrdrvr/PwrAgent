@@ -308,7 +308,7 @@ Lock the behavior down with deterministic contract tests and a live-gated tool-l
 **Verification:**
 - The model has dedicated repository exploration tools and no longer needs shell for every read-only operation.
 
-- [ ] **Unit 4: Add mutation tools and shell safety with approval policy**
+- [x] **Unit 4: Add mutation tools and shell safety with approval policy**
 
 **Goal:** Support durable edits and shell execution while preserving guarded behavior and transparent approvals.
 
