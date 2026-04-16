@@ -108,6 +108,11 @@ describe("App", () => {
     expect(
       screen.getByText("The Codex client is wired and the thread browser is live.")
     ).toBeInTheDocument();
+    const openContextButton = screen.getByRole("button", { name: "Open context rail" });
+    openContextButton.click();
+    expect(
+      await screen.findByRole("heading", { level: 3, name: "Thread details" })
+    ).toBeInTheDocument();
     expect(screen.getByText("darwin")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });

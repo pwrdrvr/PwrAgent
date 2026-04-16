@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { ThreadView } from "../ThreadView";
 
 describe("ThreadView", () => {
@@ -42,11 +42,14 @@ describe("ThreadView", () => {
     expect(
       screen.getByRole("heading", { level: 2, name: "Plan the app-server protocol" })
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open context rail" }));
+
     expect(screen.getByText("No linked directory")).toBeInTheDocument();
     expect(
       screen.getByText("The desktop client now reads the full transcript.")
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Unpin context rail" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Thread details" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pin context rail" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 });

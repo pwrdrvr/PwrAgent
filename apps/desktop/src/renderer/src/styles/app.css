@@ -498,37 +498,46 @@ textarea {
   position: sticky;
   top: 24px;
   display: flex;
-  align-items: stretch;
+  align-items: flex-start;
   align-self: flex-start;
-  min-height: 420px;
-  height: fit-content;
-  width: 56px;
-  border-radius: 8px;
-  transition: width 160ms ease;
+  flex: 0 0 auto;
+  min-width: 40px;
 }
 
 .context-rail.is-open {
-  width: min(320px, 32vw);
+  width: min(360px, 36vw);
 }
 
-.context-rail__handle {
+.context-rail__collapsed-tab {
   display: inline-flex;
-  width: 56px;
+  width: 40px;
+  min-height: 72px;
   align-items: center;
   justify-content: center;
-  padding: 12px 8px;
+  padding: 10px 0;
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--bg-panel);
   color: var(--text-secondary);
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
 }
 
-.context-rail.is-open .context-rail__handle {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-  border-right: 0;
+.context-rail__collapsed-tab:hover {
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+}
+
+.context-rail__collapsed-glyph {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.context-rail__collapsed-glyph span {
+  display: block;
+  width: 12px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
 }
 
 .context-panel {
@@ -543,6 +552,9 @@ textarea {
   transition:
     opacity 140ms ease,
     transform 160ms ease;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-panel);
 }
 
 .context-rail.is-open .context-panel {
@@ -553,16 +565,39 @@ textarea {
 
 .context-panel__rail-header {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 16px 0;
+  padding: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.context-panel__title {
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.context-panel__rail-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .context-panel__rail-state {
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 500;
+}
+
+.context-panel__pin-button {
+  min-height: 28px;
+  padding: 0 10px;
+}
+
+.context-panel__close-button {
+  min-height: 28px;
+  padding: 0 10px;
 }
 
 .context-panel__section {
@@ -674,21 +709,14 @@ textarea {
   .context-rail.is-open {
     position: static;
     width: 100%;
-    min-height: 0;
+    min-width: 0;
   }
 
-  .context-rail__handle {
-    writing-mode: initial;
-    text-orientation: initial;
+  .context-rail__collapsed-tab {
     width: 100%;
-    min-height: 34px;
+    min-height: 40px;
     justify-content: flex-start;
-  }
-
-  .context-rail.is-open .context-rail__handle {
-    border-right: 1px solid var(--border-subtle);
-    border-top-right-radius: 8px;
-    border-bottom-right-radius: 8px;
+    padding: 0 12px;
   }
 
   .context-panel {
