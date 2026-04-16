@@ -15,12 +15,12 @@ describe("TranscriptList", () => {
           {
             id: "message-1",
             role: "user",
-            text: "Show me the current desktop thread shell"
+            text: "Open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)\n\n- Check Unit 4\n- Keep Unit 3 isolated"
           },
           {
             id: "message-2",
             role: "assistant",
-            text: "The desktop shell is live and listing Codex threads."
+            text: "The desktop shell is live.\n\nRun `pnpm test -- --project desktop-renderer` next."
           }
         ]}
         pagination={{
@@ -32,17 +32,18 @@ describe("TranscriptList", () => {
       />
     );
 
-    expect(screen.getByText("Show me the current desktop thread shell")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "`ce:work`" })).toHaveAttribute(
+      "href",
+      "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md"
+    );
+    expect(screen.getByText("Check Unit 4")).toBeInTheDocument();
+    expect(screen.getByText("Keep Unit 3 isolated")).toBeInTheDocument();
+    expect(screen.getByText("pnpm test -- --project desktop-renderer")).toBeInTheDocument();
     expect(
-      screen.getByText("The desktop shell is live and listing Codex threads.")
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("Show me the current desktop thread shell").closest("article")
+      screen.getByRole("link", { name: "`ce:work`" }).closest("article")
     ).toHaveClass("transcript-message--user");
     expect(
-      screen
-        .getByText("The desktop shell is live and listing Codex threads.")
-        .closest("article")
+      screen.getByText("pnpm test -- --project desktop-renderer").closest("article")
     ).toHaveClass("transcript-message--assistant");
 
     fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));

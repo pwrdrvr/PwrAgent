@@ -1,4 +1,5 @@
 import type { AppServerThreadMessage } from "@pwragnt/shared";
+import { MarkdownText } from "./MarkdownText";
 
 type TranscriptMessageProps = {
   message: AppServerThreadMessage;
@@ -22,7 +23,7 @@ export function TranscriptMessage(props: TranscriptMessageProps) {
           </time>
         ) : null}
       </header>
-      <p className="transcript-message__text">{props.message.text}</p>
+      <MarkdownText className="transcript-message__text" text={props.message.text} />
     </article>
   );
 }
