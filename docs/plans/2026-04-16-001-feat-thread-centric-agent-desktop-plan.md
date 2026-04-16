@@ -206,49 +206,51 @@ flowchart TB
 **Verification:**
 - Main-process services can store desktop-only inbox/navigation metadata, reconcile fresh app-server thread snapshots on focus, and preserve a stable UI when nothing materially changed.
 
-- [ ] **Unit 3: Build the provider contract and agent harness**
+- [ ] **Unit 3: Integrate the Grok app server and normalize backend thread loading**
 
-**Goal:** Deliver the first real agent runtime with a Grok-first adapter, a generic responses-style provider contract, command execution hooks, and thread event emission.
+**Goal:** Wire the existing Grok app server into the desktop beside Codex App Server, normalize the minimum thread-loading and run-lifecycle contracts across both backends, and expose capability-aware IPC without rebuilding `agent-core` abstractions that already exist.
 
 **Requirements:** R16-R22
 
 **Dependencies:** Unit 2
 
 **Files:**
-- Create: `packages/shared/src/contracts/provider.ts`
+- Create: `packages/shared/src/contracts/backend.ts`
 - Create: `packages/shared/src/contracts/agent.ts`
-- Create: `packages/agent-core/src/providers/provider-registry.ts`
-- Create: `packages/agent-core/src/providers/grok-provider.ts`
-- Create: `packages/agent-core/src/providers/responses-provider.ts`
-- Create: `packages/agent-core/src/runtime/agent-harness.ts`
-- Create: `packages/agent-core/src/runtime/command-runner.ts`
-- Create: `packages/agent-core/src/runtime/approval-policy.ts`
+- Create: `apps/desktop/src/main/grok-app-server/client.ts`
+- Create: `apps/desktop/src/main/app-server/backend-registry.ts`
 - Create: `apps/desktop/src/main/ipc/agent-ipc.ts`
-- Test: `packages/agent-core/src/__tests__/agent-harness.test.ts`
-- Test: `packages/agent-core/src/__tests__/approval-policy.test.ts`
+- Update: `apps/desktop/src/main/ipc/app-server.ts`
+- Update: `apps/desktop/src/preload/index.ts`
+- Update: `apps/desktop/src/shared/ipc.ts`
+- Test: `apps/desktop/src/main/__tests__/grok-app-server-client.test.ts`
 - Test: `apps/desktop/src/main/__tests__/agent-ipc.test.ts`
+- Test: `apps/desktop/src/main/__tests__/backend-registry.test.ts`
 
 **Approach:**
-- Define one provider interface that covers request submission, streaming responses/events, tool or command intents, cancellation, and structured error reporting.
-- Implement Grok first behind that interface, then add a second generic responses-style adapter to prove the abstraction is not fake.
-- Keep command execution and approval checks in the harness boundary so thread events, logs, and user prompts share one source of truth.
+- Treat `packages/agent-core` as the existing Grok app server implementation rather than re-planning a new provider or harness layer.
+- Add a desktop main-process client for the Grok app server that mirrors the role of the Codex App Server client while respecting the Grok server's current limitations.
+- Normalize the desktop-facing contract around the backend operations the UI actually needs now: initialize, list threads, create/resume threads, read threads, start turns, observe notifications, and cancel when supported.
+- Introduce backend capability metadata so the renderer can tell the difference between "not implemented yet" and "unsupported by this backend" for tools, approvals, transcript pagination, steering, and interruption.
+- Keep tool execution, code search, and richer command/approval behavior out of this unit unless they are already available from the backing app server; the desktop should integrate real capability, not invent fake parity.
 
-**Execution note:** Start with failing tests around provider event translation and approval decisions before wiring the live adapter.
+**Execution note:** Start with failing tests around backend capability reporting, Grok thread loading, and notification normalization before wiring the live desktop integration.
 
 **Patterns to follow:**
 - Typed IPC and domain contracts from Units 1 and 2.
+- Reuse the existing `agent-core` app-server protocol and runners instead of creating parallel runtime abstractions in the desktop layer.
 
 **Test scenarios:**
-- Happy path: harness starts a thread run, streams provider output, and persists thread events.
-- Happy path: Grok adapter satisfies the shared provider contract and emits normalized events.
-- Happy path: generic responses-style adapter can be registered beside Grok without changing harness code.
-- Edge case: user cancels an in-flight run and the thread returns to a non-running state with a persisted cancellation event.
-- Error path: provider error surfaces as a thread event and does not corrupt prior transcript state.
-- Error path: guarded-mode destructive command request triggers approval-needed status instead of executing immediately.
-- Integration: IPC call from renderer starts a harness run and returns normalized state updates to the UI.
+- Happy path: desktop can initialize both Codex and Grok backends and read capability metadata for each.
+- Happy path: Grok-backed threads can be listed, started, read, and surfaced through the same navigation pipeline as Codex-backed threads.
+- Happy path: starting a Grok run through desktop IPC yields normalized lifecycle updates that the renderer can consume without backend-specific branching everywhere.
+- Edge case: a backend lacking transcript pagination reports that capability clearly and still supports one-shot `thread/read`.
+- Edge case: a backend lacking interruption, steering, tool use, or approvals reports those gaps without breaking thread loading or run start.
+- Error path: backend request failure surfaces as normalized desktop state instead of wedging the selected thread or navigation model.
+- Integration: renderer-to-main IPC can choose a backend, start a thread/run, and receive normalized updates from either Codex or Grok.
 
 **Verification:**
-- The app can run a real provider-backed thread and produce persisted messages/events with guarded/full-access behavior.
+- The desktop can load and run threads from both Codex and Grok backends, while accurately representing each backend's current feature envelope instead of assuming parity.
 
 - [ ] **Unit 4: Ship Inbox, Recents, Directories, and thread detail UI**
 
@@ -279,6 +281,7 @@ flowchart TB
 
 **Approach:**
 - Make Inbox the top section of the sidebar, with Recents and Directories presented as alternate browsing lenses below it.
+- Treat Unit 3's backend integration as the data boundary for this renderer work: the UI should consume normalized thread loading, run lifecycle, capability metadata, and `thread/read` responses without embedding backend-specific protocol logic.
 - Ensure thread rows can display linked-directory summary text without requiring users to open the thread first.
 - Replace the current Telegram-era stopgap of “Last user message” and “Last assistant message” with a real transcript surface that renders normalized messages returned by `thread/read`.
 - Support scrollable thread history and incremental scrollback/pagination whenever the backing app server can provide it, while still degrading to a complete one-shot read when pagination is unavailable.
