@@ -5,6 +5,7 @@ async function flushAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe("Codex review start", () => {
@@ -68,6 +69,11 @@ describe("Codex review start", () => {
     });
     await flushAsync();
 
+    const replay = await server.request("thread/read", {
+      threadId: "thread-1",
+      includeTurns: true,
+    });
+
     expect(notifications).toEqual([
       {
         method: "item/completed",
@@ -90,6 +96,117 @@ describe("Codex review start", () => {
             id: "turn-2",
             status: "completed",
             output: [{ type: "text", text: "Looks good overall." }],
+          },
+        },
+      },
+    ]);
+    expect(replay).toEqual({
+      threadId: "thread-1",
+      thread: expect.objectContaining({
+        threadId: "thread-1",
+        cwd: "/repo/workspace",
+      }),
+      messages: [
+        { role: "user", text: "Please review the current diff." },
+        { role: "assistant", text: "Ready to review." },
+        { role: "assistant", text: "Looks good overall." },
+      ],
+      items: [
+        {
+          id: expect.any(String),
+          type: "userMessage",
+          status: "completed",
+          role: "user",
+          text: "Please review the current diff.",
+        },
+        {
+          id: expect.any(String),
+          type: "agentMessage",
+          status: "completed",
+          role: "assistant",
+          text: "Ready to review.",
+        },
+        {
+          id: "turn-2-item",
+          type: "exitedReviewMode",
+          status: "completed",
+          review: "Looks good overall.",
+        },
+        {
+          id: expect.any(String),
+          type: "agentMessage",
+          status: "completed",
+          role: "assistant",
+          text: "Looks good overall.",
+        },
+      ],
+      lastUserMessage: "Please review the current diff.",
+      lastAssistantMessage: "Looks good overall.",
+    });
+  });
+
+  it("routes interactive review requests through the client before completing", async () => {
+    const provider = new FakeProvider();
+    const { server, notifications } = createTestHarness({
+      provider,
+      requestHandler: async () => ({ decision: "approve" }),
+    });
+    await server.request("thread/start", { cwd: "/repo/workspace" });
+
+    await server.request("review/start", {
+      threadId: "thread-1",
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+    });
+
+    await provider.runs[0]?.emit({
+      type: "request_input",
+      requestId: "review-req-1",
+      method: "review/requestApproval",
+      params: {
+        prompt: "Approve this review check?",
+      },
+      respond: async () => {
+        return;
+      },
+    });
+    provider.runs[0]?.deferred.resolve({
+      assistantText: "Review complete.",
+      providerResponseId: "resp_review_approval",
+    });
+    await flushAsync();
+
+    expect(provider.runs[0]?.eventResponses).toEqual([{ decision: "approve" }]);
+    expect(notifications).toEqual([
+      {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          requestId: "review-req-1",
+        },
+      },
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          item: {
+            id: "turn-1-item",
+            type: "exitedReviewMode",
+            review: "Review complete.",
+          },
+        },
+      },
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "Review complete." }],
           },
         },
       },
@@ -137,6 +254,7 @@ describe("Codex review start", () => {
         cwd: "/repo/workspace",
       }),
       messages: [],
+      items: [],
       lastUserMessage: undefined,
       lastAssistantMessage: undefined,
     });

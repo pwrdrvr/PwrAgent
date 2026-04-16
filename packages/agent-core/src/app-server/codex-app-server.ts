@@ -86,6 +86,7 @@ export class CodexAppServer {
       emit: async (notification) => {
         await this.emit(notification);
       },
+      turnRunner: this.turnRunner,
     });
     this.reviewRunner = new ReviewRunner({
       provider: this.provider,
@@ -93,6 +94,7 @@ export class CodexAppServer {
       emit: async (notification) => {
         await this.emit(notification);
       },
+      turnRunner: this.turnRunner,
     });
   }
 

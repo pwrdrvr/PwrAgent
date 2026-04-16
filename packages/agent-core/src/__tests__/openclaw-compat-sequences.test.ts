@@ -10,6 +10,7 @@ async function flushAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function createTransport(
@@ -177,6 +178,22 @@ describe("OpenClaw compatibility sequences", () => {
       messages: [
         { role: "user", text: "Ship the Grok app server." },
         { role: "assistant", text: "Shipped." },
+      ],
+      items: [
+        {
+          id: expect.any(String),
+          type: "userMessage",
+          status: "completed",
+          role: "user",
+          text: "Ship the Grok app server.",
+        },
+        {
+          id: expect.any(String),
+          type: "agentMessage",
+          status: "completed",
+          role: "assistant",
+          text: "Shipped.",
+        },
       ],
       lastUserMessage: "Ship the Grok app server.",
       lastAssistantMessage: "Shipped.",

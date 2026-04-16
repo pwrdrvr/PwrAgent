@@ -200,7 +200,7 @@ Lock the behavior down with deterministic contract tests and a live-gated tool-l
 
 ## Implementation Units
 
-- [ ] **Unit 1: Extend protocol and replay state for tool-bearing turns**
+- [x] **Unit 1: Extend protocol and replay state for tool-bearing turns**
 
 **Goal:** Make `agent-core` capable of representing shell commands and explicit tool calls as durable app-server items instead of flattening everything into assistant text.
 
