@@ -6,3 +6,4 @@ dist-electron/
 out/
 playwright-report/
 test-results/
+.env.local
