@@ -66,6 +66,28 @@ class MockTransport implements JsonRpcTransport {
           }
         })
       );
+      return;
+    }
+
+    if (payload.method === "thread/read") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: {
+            messages: [
+              {
+                role: "user",
+                text: "Show me the current desktop thread shell"
+              },
+              {
+                role: "assistant",
+                text: "The desktop shell is live and listing Codex threads."
+              }
+            ]
+          }
+        })
+      );
     }
   }
 
@@ -114,6 +136,25 @@ describe("CodexAppServerClient", () => {
       ]
     });
     expect(threads[1]?.title).toBe("Plan Codex compatibility");
+
+    await client.close();
+  });
+
+  it("extracts last user and assistant messages from thread/read", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex"
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-2"
+    });
+
+    expect(replay).toEqual({
+      lastUserMessage: "Show me the current desktop thread shell",
+      lastAssistantMessage: "The desktop shell is live and listing Codex threads."
+    });
 
     await client.close();
   });

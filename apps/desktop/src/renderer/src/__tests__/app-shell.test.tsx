@@ -28,6 +28,16 @@ describe("App", () => {
             }
           ]
         }),
+        readThread: async () => ({
+          backend: "codex",
+          fetchedAt: Date.now(),
+          threadId: "thread-1",
+          replay: {
+            lastUserMessage: "Open the desktop plan and build the Codex client.",
+            lastAssistantMessage:
+              "The Codex client is wired and the thread browser is live."
+          }
+        }),
         platform: "darwin",
         versions: {
           electron: "41.2.1"
@@ -47,6 +57,9 @@ describe("App", () => {
       screen.getByRole("button", { name: "recents" })
     ).toBeInTheDocument();
     expect(
+      screen.getByRole("button", { name: "Refresh threads" })
+    ).toBeInTheDocument();
+    expect(
       await screen.findByRole("heading", {
         level: 2,
         name: "Build Codex client"
@@ -55,6 +68,12 @@ describe("App", () => {
     expect(
       screen.getAllByText("Wire the app-server transport and list threads")
     ).toHaveLength(2);
+    expect(
+      await screen.findByText("Open the desktop plan and build the Codex client.")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("The Codex client is wired and the thread browser is live.")
+    ).toBeInTheDocument();
     expect(screen.getByText("darwin")).toBeInTheDocument();
   });
 });

@@ -1,5 +1,6 @@
 import path from "node:path";
 import type {
+  AppServerThreadReplay,
   AppServerThreadSummary,
   LinkedDirectorySummary
 } from "@pwragnt/shared";
@@ -106,6 +107,106 @@ function dedupeJoinedText(parts: string[]): string | undefined {
   return unique.join("\n\n");
 }
 
+function normalizeConversationRole(
+  value: string | undefined
+): "user" | "assistant" | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "user" || normalized === "usermessage") {
+    return "user";
+  }
+  if (
+    normalized === "assistant" ||
+    normalized === "agentmessage" ||
+    normalized === "assistantmessage"
+  ) {
+    return "assistant";
+  }
+  return undefined;
+}
+
+function collectMessageText(record: Record<string, unknown>): string {
+  return (
+    dedupeJoinedText([
+      ...collectText(record.content),
+      ...collectText(record.text),
+      ...collectText(record.message),
+      ...collectText(record.messages),
+      ...collectText(record.input),
+      ...collectText(record.output),
+      ...collectText(record.parts)
+    ]) ?? ""
+  );
+}
+
+function extractConversationMessages(
+  value: unknown
+): Array<{ role: "user" | "assistant"; text: string }> {
+  const output: Array<{ role: "user" | "assistant"; text: string }> = [];
+
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach((entry) => visit(entry));
+      return;
+    }
+
+    const record = asRecord(node);
+    if (!record) {
+      return;
+    }
+
+    const role = normalizeConversationRole(
+      pickString(record, ["role", "author", "speaker", "source", "type"])
+    );
+    const text = collectMessageText(record);
+    if (role && text) {
+      output.push({ role, text });
+    }
+
+    for (const key of [
+      "items",
+      "messages",
+      "content",
+      "parts",
+      "entries",
+      "data",
+      "results",
+      "turns",
+      "events",
+      "item",
+      "message",
+      "thread",
+      "response",
+      "result"
+    ]) {
+      visit(record[key]);
+    }
+  };
+
+  visit(value);
+  return output;
+}
+
+function extractThreadReplayFromReadResult(value: unknown): AppServerThreadReplay {
+  const messages = extractConversationMessages(value);
+  let lastUserMessage: string | undefined;
+  let lastAssistantMessage: string | undefined;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!lastAssistantMessage && message?.role === "assistant") {
+      lastAssistantMessage = message.text;
+    }
+    if (!lastUserMessage && message?.role === "user") {
+      lastUserMessage = message.text;
+    }
+    if (lastUserMessage && lastAssistantMessage) {
+      break;
+    }
+  }
+
+  return { lastUserMessage, lastAssistantMessage };
+}
+
 function extractThreadRecords(value: unknown): Record<string, unknown>[] {
   if (Array.isArray(value)) {
     return value.flatMap((entry) => extractThreadRecords(entry));
@@ -148,6 +249,11 @@ function isMethodUnavailableError(error: unknown, method?: string): boolean {
   }
 
   return normalized.includes(`unknown variant \`${method.toLowerCase()}\``);
+}
+
+function isAlreadyInitializedError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.toLowerCase().includes("already initialized");
 }
 
 function deriveLinkedDirectories(projectKey?: string): LinkedDirectorySummary[] {
@@ -259,6 +365,7 @@ async function requestWithFallbacks(params: {
 export class CodexAppServerClient {
   private readonly connection: JsonRpcConnection;
   private initialized = false;
+  private initializationPromise: Promise<void> | null = null;
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.connection = new JsonRpcConnection(
@@ -273,6 +380,7 @@ export class CodexAppServerClient {
 
   async close(): Promise<void> {
     this.initialized = false;
+    this.initializationPromise = null;
     await this.connection.close();
   }
 
@@ -292,18 +400,54 @@ export class CodexAppServerClient {
     }));
   }
 
+  async readThread(params: { threadId: string }): Promise<AppServerThreadReplay> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/read"],
+      payloads: [{ threadId: params.threadId, includeTurns: true }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    return extractThreadReplayFromReadResult(result);
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;
     }
 
-    await this.connection.connect();
-    await this.connection.request("initialize", {
-      protocolVersion: DEFAULT_PROTOCOL_VERSION,
-      clientInfo: { name: "pwragnt-desktop", version: "0.1.0" },
-      capabilities: { experimentalApi: true }
-    });
-    await this.connection.notify("initialized", {});
-    this.initialized = true;
+    if (this.initializationPromise) {
+      await this.initializationPromise;
+      return;
+    }
+
+    this.initializationPromise = (async () => {
+      await this.connection.connect();
+
+      try {
+        await this.connection.request("initialize", {
+          protocolVersion: DEFAULT_PROTOCOL_VERSION,
+          clientInfo: { name: "pwragnt-desktop", version: "0.1.0" },
+          capabilities: { experimentalApi: true }
+        });
+      } catch (error) {
+        if (!isAlreadyInitializedError(error)) {
+          throw error;
+        }
+      }
+
+      await this.connection.notify("initialized", {});
+      this.initialized = true;
+    })();
+
+    try {
+      await this.initializationPromise;
+    } finally {
+      if (!this.initialized) {
+        this.initializationPromise = null;
+      }
+    }
   }
 }

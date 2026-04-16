@@ -1,10 +1,25 @@
 import { ipcMain } from "electron";
 import type {
   AppServerListThreadsRequest,
-  AppServerListThreadsResponse
+  AppServerListThreadsResponse,
+  AppServerReadThreadRequest,
+  AppServerReadThreadResponse
 } from "@pwragnt/shared";
 import { CodexAppServerClient } from "../codex-app-server/client";
-import { APP_SERVER_LIST_THREADS_CHANNEL } from "../../shared/ipc";
+import {
+  APP_SERVER_LIST_THREADS_CHANNEL,
+  APP_SERVER_READ_THREAD_CHANNEL
+} from "../../shared/ipc";
+
+const isDevelopment = process.env.NODE_ENV !== "production";
+
+function logDebug(event: string, payload: Record<string, unknown>): void {
+  if (!isDevelopment) {
+    return;
+  }
+
+  console.info(`[pwragnt:app-server] ${event}`, payload);
+}
 
 function parseEnvArgs(rawArgs: string | undefined): string[] {
   if (!rawArgs?.trim()) {
@@ -34,10 +49,45 @@ class DesktopAppServerService {
       filter: request.filter
     });
 
+    logDebug("listThreads", {
+      backend,
+      count: threads.length,
+      threadIds: threads.slice(0, 5).map((thread) => thread.id)
+    });
+
     return {
       backend,
       fetchedAt: Date.now(),
       threads
+    };
+  }
+
+  async readThread(
+    request: AppServerReadThreadRequest
+  ): Promise<AppServerReadThreadResponse> {
+    const backend = request.backend ?? "codex";
+
+    if (backend !== "codex") {
+      throw new Error(`${backend} app server is not wired yet`);
+    }
+
+    const client = this.getCodexClient();
+    const replay = await client.readThread({
+      threadId: request.threadId
+    });
+
+    logDebug("readThread", {
+      backend,
+      threadId: request.threadId,
+      hasLastUserMessage: Boolean(replay.lastUserMessage),
+      hasLastAssistantMessage: Boolean(replay.lastAssistantMessage)
+    });
+
+    return {
+      backend,
+      fetchedAt: Date.now(),
+      threadId: request.threadId,
+      replay
     };
   }
 
@@ -74,10 +124,21 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.listThreads(request);
     }
   );
+  ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_READ_THREAD_CHANNEL,
+    async (
+      _event,
+      request: AppServerReadThreadRequest
+    ): Promise<AppServerReadThreadResponse> => {
+      return await appServerService.readThread(request);
+    }
+  );
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
   await appServerService.close();
 }
 export { APP_SERVER_LIST_THREADS_CHANNEL };

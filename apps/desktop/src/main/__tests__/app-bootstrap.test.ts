@@ -56,7 +56,7 @@ describe("createMainWindow", () => {
 
     expect(BrowserWindowMock).toHaveBeenCalledTimes(1);
     expect(browserWindowState.options?.webPreferences?.preload).toContain(
-      "preload/index.js"
+      "preload/index.cjs"
     );
     expect(browserWindowState.options?.webPreferences?.contextIsolation).toBe(
       true

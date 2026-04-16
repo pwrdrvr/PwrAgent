@@ -11,6 +11,13 @@ export default defineConfig({
     ]
   },
   preload: {
+    build: {
+      rollupOptions: {
+        output: {
+          format: "cjs"
+        }
+      }
+    },
     plugins: [
       externalizeDepsPlugin({
         exclude: ["@pwragnt/shared"]
