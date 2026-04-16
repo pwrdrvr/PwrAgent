@@ -5,6 +5,14 @@ export default defineConfig({
     projects: [
       {
         test: {
+          name: "agent-core",
+          globals: true,
+          environment: "node",
+          include: ["packages/agent-core/src/__tests__/**/*.test.ts"]
+        }
+      },
+      {
+        test: {
           name: "desktop-main",
           globals: true,
           environment: "node",

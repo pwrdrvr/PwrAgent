@@ -113,7 +113,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Wire `packages/agent-core` into the workspace test runner**
+- [x] **Unit 1: Wire `packages/agent-core` into the workspace test runner**
 
 **Goal:** Establish the package-local test harness, fixture helpers, and env-loading conventions so later contract and adapter tests have one stable home.
 
@@ -150,7 +150,7 @@ flowchart TB
 **Verification:**
 - Running the root workspace tests includes a new `agent-core` project, and all non-live tests pass without any local xAI configuration.
 
-- [ ] **Unit 2: Lock the Codex app-server contract from the consumer side**
+- [x] **Unit 2: Lock the Codex app-server contract from the consumer side**
 
 **Goal:** Capture the minimal Codex app-server method and notification contract that the Grok server must satisfy for current consumers.
 
@@ -190,7 +190,7 @@ flowchart TB
 **Verification:**
 - The server harness can satisfy the method lifecycle currently assumed by the OpenClaw client without fallback-specific hacks in the client.
 
-- [ ] **Unit 3: Add Grok Responses adapter and normalization tests**
+- [x] **Unit 3: Add Grok Responses adapter and normalization tests**
 
 **Goal:** Prove that Grok Responses requests and responses can be translated into the Codex app-server contract without Grok-specific leakage.
 
