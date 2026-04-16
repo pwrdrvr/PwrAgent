@@ -46,6 +46,7 @@ describe("ThreadView", () => {
     expect(
       screen.getByText("The desktop client now reads the full transcript.")
     ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Unpin context rail" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 });

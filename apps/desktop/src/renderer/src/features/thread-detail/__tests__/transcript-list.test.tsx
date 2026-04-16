@@ -36,6 +36,14 @@ describe("TranscriptList", () => {
     expect(
       screen.getByText("The desktop shell is live and listing Codex threads.")
     ).toBeInTheDocument();
+    expect(
+      screen.getByText("Show me the current desktop thread shell").closest("article")
+    ).toHaveClass("transcript-message--user");
+    expect(
+      screen
+        .getByText("The desktop shell is live and listing Codex threads.")
+        .closest("article")
+    ).toHaveClass("transcript-message--assistant");
 
     fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
 

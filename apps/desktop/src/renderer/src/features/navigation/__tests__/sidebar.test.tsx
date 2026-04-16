@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
+import { within } from "@testing-library/react";
 import { Sidebar } from "../Sidebar";
 
 const sharedThread = {
@@ -71,6 +72,9 @@ describe("Sidebar", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { level: 3, name: "No linked directory" })
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("heading", { level: 3, name: "PwrAgnt" })).getByText("📁")
     ).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /Cross-project cleanup/i })).toHaveLength(2);
   });

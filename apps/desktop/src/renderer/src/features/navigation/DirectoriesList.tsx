@@ -8,6 +8,7 @@ type DirectoriesListProps = {
 
 type DirectoryGroup = {
   id: string;
+  icon: string;
   label: string;
   path?: string;
   threads: NavigationThreadSummary[];
@@ -22,6 +23,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
         <section key={group.id} className="directory-group">
           <header className="directory-group__header">
             <h3 className="directory-group__title" title={group.path ?? group.label}>
+              <span aria-hidden="true" className="directory-group__icon">
+                {group.icon}
+              </span>
               {group.label}
             </h3>
             <span className="directory-group__count">
@@ -67,6 +71,7 @@ function groupThreadsByDirectory(threads: NavigationThreadSummary[]): DirectoryG
       } else {
         groups.set("unlinked", {
           id: "unlinked",
+          icon: "•",
           label: "No linked directory",
           threads: [thread]
         });
@@ -83,6 +88,7 @@ function groupThreadsByDirectory(threads: NavigationThreadSummary[]): DirectoryG
 
       groups.set(directory.id, {
         id: directory.id,
+        icon: "📁",
         label: directory.label,
         path: directory.path,
         threads: [thread]
