@@ -38,6 +38,9 @@ export function RecentsList(props: RecentsListProps) {
                     className="thread-row__chip"
                     title={directory.path}
                   >
+                    <span aria-hidden="true" className="thread-row__chip-icon">
+                      {directory.kind === "worktree" ? "🔀" : "📁"}
+                    </span>
                     {directory.label}
                   </span>
                 ))
@@ -49,6 +52,9 @@ export function RecentsList(props: RecentsListProps) {
 
               {thread.gitBranch ? (
                 <span className="thread-row__chip thread-row__chip--mono">
+                  <span aria-hidden="true" className="thread-row__chip-icon">
+                    🌿
+                  </span>
                   {thread.gitBranch}
                 </span>
               ) : null}
