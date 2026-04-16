@@ -525,10 +525,13 @@ textarea {
 
 .transcript-list {
   display: flex;
+  position: relative;
+  flex: 1;
   flex-direction: column;
   gap: 12px;
   min-height: 0;
   padding: 16px;
+  overflow: hidden;
 }
 
 .transcript-list__load-older {
@@ -537,12 +540,43 @@ textarea {
 
 .transcript-list__items {
   display: flex;
+  position: relative;
+  flex: 1;
   flex-direction: column;
   gap: 12px;
   min-height: 0;
-  max-height: 56vh;
   overflow-y: auto;
   padding-right: 4px;
+  padding-bottom: 72px;
+  scroll-behavior: smooth;
+}
+
+.transcript-list__scroll-bottom {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  z-index: 1;
+  display: inline-flex;
+  width: 40px;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-color: var(--border-strong);
+  background: rgba(11, 13, 18, 0.92);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  transform: translateX(-50%);
+  border-color: var(--accent-border);
+  background: rgba(17, 21, 28, 0.96);
+}
+
+.transcript-list__scroll-bottom-icon {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
 }
 
 .transcript-message {
@@ -956,8 +990,9 @@ textarea {
     flex-direction: column;
   }
 
-  .transcript-list__items {
-    max-height: 44vh;
+  .transcript-list__scroll-bottom {
+    left: 50%;
+    bottom: 16px;
   }
 
   .context-rail,
