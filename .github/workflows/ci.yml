@@ -67,6 +67,9 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
 
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Test
         run: pnpm run test
 
@@ -82,7 +85,10 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
 
-      - name: Live agent-core smoke
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Live agent-core smoke and tool coverage
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           XAI_BASE_URL: https://api.x.ai/v1

@@ -15,6 +15,8 @@ import { TurnRunner } from "./turn-runner.js";
 import { CompactionRunner } from "./compaction-runner.js";
 import { ReviewRunner } from "./review-runner.js";
 import type { AppServerProvider } from "../providers/provider-contract.js";
+import { createDefaultToolRegistry } from "../tools/tool-registry.js";
+import { LocalToolExecutor } from "../tools/tool-execution.js";
 
 type NotificationHandler = (
   notification: AppServerNotification,
@@ -66,11 +68,13 @@ export class CodexAppServer {
   private readonly turnRunner: TurnRunner;
   private readonly compactionRunner: CompactionRunner;
   private readonly reviewRunner: ReviewRunner;
+  private readonly toolExecutor: LocalToolExecutor;
   private readonly createThreadId: () => string;
   private readonly createRunId: () => string;
 
   constructor(options: ServerOptions) {
     this.provider = options.provider;
+    this.toolExecutor = new LocalToolExecutor(createDefaultToolRegistry());
     this.createThreadId = options.threadIdGenerator ?? (() => createId("thread"));
     this.createRunId = options.runIdGenerator ?? (() => createId("turn"));
     this.turnRunner = new TurnRunner({
@@ -86,6 +90,8 @@ export class CodexAppServer {
       emit: async (notification) => {
         await this.emit(notification);
       },
+      turnRunner: this.turnRunner,
+      tools: this.toolExecutor,
     });
     this.reviewRunner = new ReviewRunner({
       provider: this.provider,
@@ -93,6 +99,8 @@ export class CodexAppServer {
       emit: async (notification) => {
         await this.emit(notification);
       },
+      turnRunner: this.turnRunner,
+      tools: this.toolExecutor,
     });
   }
 
@@ -282,6 +290,7 @@ export class CodexAppServer {
       thread,
       input: normalizedInput,
       previousResponseId: this.state.getPreviousResponseId(threadId),
+      tools: this.toolExecutor,
     });
     const runId = this.createRunId();
     this.state.appendInput(threadId, normalizedInput);

@@ -202,4 +202,83 @@ describe("Codex pending input", () => {
       },
     ]);
   });
+
+  it("cancels queued interactive requests when interruption happens mid-flight", async () => {
+    const provider = new FakeProvider();
+    const neverResolve = new Deferred<unknown>();
+    const { server, notifications } = createTestHarness({
+      provider,
+      requestHandler: async () => await neverResolve.promise,
+    });
+    await server.request("thread/start", { cwd: "/repo/workspace" });
+
+    await server.request("turn/start", {
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Queue multiple approvals" }],
+    });
+
+    await provider.runs[0]?.emit({
+      type: "request_input",
+      requestId: "req-4",
+      method: "turn/requestApproval",
+      params: {
+        prompt: "Approve the first action?",
+      },
+      respond: async () => {
+        return;
+      },
+    });
+    await provider.runs[0]?.emit({
+      type: "request_input",
+      requestId: "req-5",
+      method: "turn/requestApproval",
+      params: {
+        prompt: "Approve the second action?",
+      },
+      respond: async () => {
+        return;
+      },
+    });
+    await flushAsync();
+
+    await server.request("turn/interrupt", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    await flushAsync();
+
+    expect(provider.runs[0]?.eventResponses).toEqual([
+      { decision: "cancel" },
+      { decision: "cancel" },
+    ]);
+    expect(notifications).toEqual([
+      {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          requestId: "req-4",
+        },
+      },
+      {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          requestId: "req-5",
+        },
+      },
+      {
+        method: "turn/cancelled",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "cancelled",
+          },
+        },
+      },
+    ]);
+  });
 });

@@ -10,6 +10,7 @@ async function flushAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function createTransport(
@@ -78,6 +79,148 @@ function buildThreadStartPayloads(workspaceDir: string, model?: string): unknown
 }
 
 describe("OpenClaw compatibility sequences", () => {
+  it("emits tool-bearing notifications and replay through the public turn surface", async () => {
+    const provider = new FakeProvider();
+    const { server, notifications } = createTestHarness({ provider });
+    const client = createTransport(server);
+
+    await server.request("thread/start", {
+      cwd: "/repo/workspace",
+      model: "grok-4.20-reasoning",
+    });
+
+    const startedTurn = await requestWithFallbacks({
+      client,
+      methods: ["turn/start"],
+      payloads: [
+        {
+          threadId: "thread-1",
+          input: [{ type: "text", text: "Find the Grok tool usage plan." }],
+        },
+      ],
+    });
+
+    await provider.runs[0]?.emit({
+      type: "item_started",
+      item: {
+        id: "tool-1",
+        type: "dynamicToolCall",
+        text: "search_code",
+        toolName: "search_code",
+        arguments: { query: "tool usage" },
+      },
+    });
+    await provider.runs[0]?.emit({
+      type: "item_completed",
+      item: {
+        id: "tool-1",
+        type: "dynamicToolCall",
+        text: "Found docs/plans/2026-04-16-003-feat-grok-tool-usage-code-search-plan.md.",
+        toolName: "search_code",
+        success: true,
+        arguments: { query: "tool usage" },
+        commandAction: "search",
+      },
+    });
+    provider.runs[0]?.deferred.resolve({
+      assistantText: "I found the plan document.",
+      providerResponseId: "resp_tool_turn_1",
+    });
+    await flushAsync();
+
+    const replay = await requestWithFallbacks({
+      client,
+      methods: ["thread/read"],
+      payloads: [{ threadId: "thread-1", includeTurns: true }],
+    });
+
+    expect(startedTurn).toEqual({ threadId: "thread-1", runId: "turn-1" });
+    expect(notifications).toEqual([
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          item: {
+            id: "tool-1",
+            type: "dynamicToolCall",
+            text: "search_code",
+            toolName: "search_code",
+            arguments: { query: "tool usage" },
+          },
+        },
+      },
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          item: {
+            id: "tool-1",
+            type: "dynamicToolCall",
+            text: "Found docs/plans/2026-04-16-003-feat-grok-tool-usage-code-search-plan.md.",
+            toolName: "search_code",
+            success: true,
+            arguments: { query: "tool usage" },
+            commandAction: "search",
+          },
+        },
+      },
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "I found the plan document." }],
+          },
+        },
+      },
+    ]);
+    expect(replay).toEqual({
+      threadId: "thread-1",
+      thread: expect.objectContaining({
+        threadId: "thread-1",
+        cwd: "/repo/workspace",
+        model: "grok-4.20-reasoning",
+      }),
+      messages: [
+        { role: "user", text: "Find the Grok tool usage plan." },
+        { role: "assistant", text: "I found the plan document." },
+      ],
+      items: [
+        {
+          id: expect.any(String),
+          type: "userMessage",
+          status: "completed",
+          role: "user",
+          text: "Find the Grok tool usage plan.",
+        },
+        {
+          id: "tool-1",
+          type: "dynamicToolCall",
+          status: "completed",
+          text: "Found docs/plans/2026-04-16-003-feat-grok-tool-usage-code-search-plan.md.",
+          toolName: "search_code",
+          success: true,
+          arguments: { query: "tool usage" },
+          commandAction: "search",
+        },
+        {
+          id: expect.any(String),
+          type: "agentMessage",
+          status: "completed",
+          role: "assistant",
+          text: "I found the plan document.",
+        },
+      ],
+      lastUserMessage: "Find the Grok tool usage plan.",
+      lastAssistantMessage: "I found the plan document.",
+    });
+  });
+
   it("supports OpenClaw-style startup, turn start, and thread replay", async () => {
     const provider = new FakeProvider();
     const { server, notifications } = createTestHarness({ provider });
@@ -177,6 +320,22 @@ describe("OpenClaw compatibility sequences", () => {
       messages: [
         { role: "user", text: "Ship the Grok app server." },
         { role: "assistant", text: "Shipped." },
+      ],
+      items: [
+        {
+          id: expect.any(String),
+          type: "userMessage",
+          status: "completed",
+          role: "user",
+          text: "Ship the Grok app server.",
+        },
+        {
+          id: expect.any(String),
+          type: "agentMessage",
+          status: "completed",
+          role: "assistant",
+          text: "Shipped.",
+        },
       ],
       lastUserMessage: "Ship the Grok app server.",
       lastAssistantMessage: "Shipped.",

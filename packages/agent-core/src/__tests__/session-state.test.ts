@@ -68,6 +68,22 @@ describe("AppServerSessionState", () => {
         { role: "user", text: "Ship it" },
         { role: "assistant", text: "Done." },
       ],
+      items: [
+        {
+          id: expect.any(String),
+          type: "userMessage",
+          status: "completed",
+          role: "user",
+          text: "Ship it",
+        },
+        {
+          id: expect.any(String),
+          type: "agentMessage",
+          status: "completed",
+          role: "assistant",
+          text: "Done.",
+        },
+      ],
       lastUserMessage: "Ship it",
       lastAssistantMessage: "Done.",
     });

@@ -5,6 +5,7 @@ async function flushAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe("Codex review start", () => {
@@ -68,6 +69,11 @@ describe("Codex review start", () => {
     });
     await flushAsync();
 
+    const replay = await server.request("thread/read", {
+      threadId: "thread-1",
+      includeTurns: true,
+    });
+
     expect(notifications).toEqual([
       {
         method: "item/completed",
@@ -94,6 +100,198 @@ describe("Codex review start", () => {
         },
       },
     ]);
+    expect(replay).toEqual({
+      threadId: "thread-1",
+      thread: expect.objectContaining({
+        threadId: "thread-1",
+        cwd: "/repo/workspace",
+      }),
+      messages: [
+        { role: "user", text: "Please review the current diff." },
+        { role: "assistant", text: "Ready to review." },
+        { role: "assistant", text: "Looks good overall." },
+      ],
+      items: [
+        {
+          id: expect.any(String),
+          type: "userMessage",
+          status: "completed",
+          role: "user",
+          text: "Please review the current diff.",
+        },
+        {
+          id: expect.any(String),
+          type: "agentMessage",
+          status: "completed",
+          role: "assistant",
+          text: "Ready to review.",
+        },
+        {
+          id: "turn-2-item",
+          type: "exitedReviewMode",
+          status: "completed",
+          review: "Looks good overall.",
+        },
+        {
+          id: expect.any(String),
+          type: "agentMessage",
+          status: "completed",
+          role: "assistant",
+          text: "Looks good overall.",
+        },
+      ],
+      lastUserMessage: "Please review the current diff.",
+      lastAssistantMessage: "Looks good overall.",
+    });
+  });
+
+  it("routes interactive review requests through the client before completing", async () => {
+    const provider = new FakeProvider();
+    const { server, notifications } = createTestHarness({
+      provider,
+      requestHandler: async () => ({ decision: "approve" }),
+    });
+    await server.request("thread/start", { cwd: "/repo/workspace" });
+
+    await server.request("review/start", {
+      threadId: "thread-1",
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+    });
+
+    await provider.runs[0]?.emit({
+      type: "request_input",
+      requestId: "review-req-1",
+      method: "review/requestApproval",
+      params: {
+        prompt: "Approve this review check?",
+      },
+      respond: async () => {
+        return;
+      },
+    });
+    provider.runs[0]?.deferred.resolve({
+      assistantText: "Review complete.",
+      providerResponseId: "resp_review_approval",
+    });
+    await flushAsync();
+
+    expect(provider.runs[0]?.eventResponses).toEqual([{ decision: "approve" }]);
+    expect(notifications).toEqual([
+      {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          requestId: "review-req-1",
+        },
+      },
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          item: {
+            id: "turn-1-item",
+            type: "exitedReviewMode",
+            review: "Review complete.",
+          },
+        },
+      },
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "Review complete." }],
+          },
+        },
+      },
+    ]);
+  });
+
+  it("builds review context from a prior tool-bearing turn replay", async () => {
+    const provider = new FakeProvider();
+    const { server } = createTestHarness({ provider });
+    await server.request("thread/start", {
+      cwd: "/repo/workspace",
+      model: "grok-4.20-reasoning",
+    });
+
+    await server.request("turn/start", {
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Search for the Grok tool usage plan." }],
+    });
+    await provider.runs[0]?.emit({
+      type: "item_started",
+      item: {
+        id: "tool-1",
+        type: "dynamicToolCall",
+        text: "search_code",
+        toolName: "search_code",
+        arguments: { query: "tool usage plan" },
+      },
+    });
+    await provider.runs[0]?.emit({
+      type: "item_completed",
+      item: {
+        id: "tool-1",
+        type: "dynamicToolCall",
+        text: "Found docs/plans/2026-04-16-003-feat-grok-tool-usage-code-search-plan.md.",
+        toolName: "search_code",
+        success: true,
+        arguments: { query: "tool usage plan" },
+        commandAction: "search",
+      },
+    });
+    provider.runs[0]?.deferred.resolve({
+      assistantText: "I found the tool usage plan.",
+      providerResponseId: "resp_turn_1",
+    });
+    await flushAsync();
+
+    await server.request("review/start", {
+      threadId: "thread-1",
+      target: {
+        type: "uncommittedChanges",
+      },
+      delivery: "inline",
+    });
+
+    expect(provider.runs[1]?.previousResponseId).toBe("resp_turn_1");
+    expect(provider.runs[1]?.input).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("USER: Search for the Grok tool usage plan."),
+      },
+    ]);
+    expect(provider.runs[1]?.input[0]).toEqual({
+      type: "text",
+      text: expect.stringContaining("ASSISTANT: I found the tool usage plan."),
+    });
+
+    const replay = await server.request("thread/read", {
+      threadId: "thread-1",
+      includeTurns: true,
+    });
+    expect(replay).toEqual(
+      expect.objectContaining({
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            id: "tool-1",
+            type: "dynamicToolCall",
+            status: "completed",
+            toolName: "search_code",
+            success: true,
+            commandAction: "search",
+          }),
+        ]),
+        lastAssistantMessage: "I found the tool usage plan.",
+      }),
+    );
   });
 
   it("emits a failed turn when the provider review run rejects", async () => {
@@ -137,6 +335,7 @@ describe("Codex review start", () => {
         cwd: "/repo/workspace",
       }),
       messages: [],
+      items: [],
       lastUserMessage: undefined,
       lastAssistantMessage: undefined,
     });

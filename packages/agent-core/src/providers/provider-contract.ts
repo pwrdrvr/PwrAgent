@@ -1,9 +1,15 @@
-import type { AppServerTurnInputItem, ThreadState } from "../app-server/protocol.js";
+import type {
+  AppServerCommandAction,
+  AppServerTurnInputItem,
+  ThreadState,
+} from "../app-server/protocol.js";
+import type { ToolExecutor } from "../tools/tool-contract.js";
 
 export type ProviderTurnParams = {
   thread: ThreadState;
   input: AppServerTurnInputItem[];
   previousResponseId?: string;
+  tools?: ToolExecutor;
 };
 
 export type ProviderSteerParams = {
@@ -30,6 +36,11 @@ export type ProviderTurnEvent =
         type: string;
         text?: string;
         review?: string;
+        command?: string;
+        commandAction?: AppServerCommandAction;
+        toolName?: string;
+        success?: boolean;
+        arguments?: Record<string, unknown>;
       };
     }
   | {

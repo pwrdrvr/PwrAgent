@@ -59,8 +59,35 @@ export type ThreadReplay = {
     role: AppServerRole;
     text: string;
   }>;
+  items: ThreadReplayItem[];
   lastUserMessage?: string;
   lastAssistantMessage?: string;
+};
+
+export type AppServerItemStatus =
+  | "in_progress"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type AppServerCommandAction =
+  | "read"
+  | "listFiles"
+  | "search"
+  | "unknown";
+
+export type ThreadReplayItem = {
+  id: string;
+  type: string;
+  status?: AppServerItemStatus;
+  role?: AppServerRole;
+  text?: string;
+  review?: string;
+  command?: string;
+  commandAction?: AppServerCommandAction;
+  toolName?: string;
+  success?: boolean;
+  arguments?: Record<string, unknown>;
 };
 
 export type ModelSummary = {
@@ -186,6 +213,11 @@ export type AppServerNotification =
           type: string;
           text?: string;
           review?: string;
+          command?: string;
+          commandAction?: AppServerCommandAction;
+          toolName?: string;
+          success?: boolean;
+          arguments?: Record<string, unknown>;
         };
       };
     }

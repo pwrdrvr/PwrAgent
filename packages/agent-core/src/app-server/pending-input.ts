@@ -38,15 +38,23 @@ export class PendingInputCoordinator {
   }
 
   async cancelPending(response: unknown = { decision: "cancel" }): Promise<void> {
+    const pending: PendingInputRequest[] = [];
     const active = this.currentRequest;
-    if (!active || active.settled) {
-      this.resolveIdleIfPossible();
-      return;
+    if (active && !active.settled) {
+      active.settled = true;
+      pending.push(active.request);
     }
-    active.settled = true;
-    await active.request.respond(response);
-    await this.onResolved?.(active.request.requestId);
     this.currentRequest = null;
+    while (this.queue.length > 0) {
+      const queued = this.queue.shift();
+      if (queued) {
+        pending.push(queued);
+      }
+    }
+    for (const request of pending) {
+      await request.respond(response);
+      await this.onResolved?.(request.requestId);
+    }
     this.resolveIdleIfPossible();
   }
 

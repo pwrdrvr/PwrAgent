@@ -1,7 +1,9 @@
 import type {
+  AppServerItemStatus,
   AppServerRole,
   AppServerTurnInputItem,
   ThreadReplay,
+  ThreadReplayItem,
   ThreadState,
   ThreadSummary,
 } from "./protocol.js";
@@ -11,7 +13,6 @@ type StoredMessage = {
   role: AppServerRole;
   text: string;
 };
-
 type ActiveRunRecord = {
   runId: string;
   threadId: string;
@@ -35,9 +36,11 @@ type ThreadMutation = Partial<Omit<ThreadState, "threadId" | "createdAt">>;
 export class AppServerSessionState {
   private readonly threads = new Map<string, ThreadState>();
   private readonly messages = new Map<string, StoredMessage[]>();
+  private readonly items = new Map<string, ThreadReplayItem[]>();
   private readonly responseIds = new Map<string, string>();
   private readonly runs = new Map<string, ActiveRunRecord>();
   private lastTimestamp = 0;
+  private itemSequence = 0;
 
   createThread(params: CreateThreadParams): ThreadState {
     const timestamp = this.nextTimestamp();
@@ -56,6 +59,7 @@ export class AppServerSessionState {
     };
     this.threads.set(thread.threadId, thread);
     this.messages.set(thread.threadId, []);
+    this.items.set(thread.threadId, []);
     return thread;
   }
 
@@ -111,7 +115,13 @@ export class AppServerSessionState {
       this.touchThread(threadId);
       return;
     }
-    this.appendMessage(threadId, { role: "user", text });
+    this.appendMessage(threadId, { role: "user", text }, {
+      id: this.nextItemId("user"),
+      type: "userMessage",
+      status: "completed",
+      role: "user",
+      text,
+    });
   }
 
   appendAssistant(threadId: string, text: string): void {
@@ -120,13 +130,66 @@ export class AppServerSessionState {
       this.touchThread(threadId);
       return;
     }
-    this.appendMessage(threadId, { role: "assistant", text: trimmed });
+    this.appendMessage(threadId, { role: "assistant", text: trimmed }, {
+      id: this.nextItemId("assistant"),
+      type: "agentMessage",
+      status: "completed",
+      role: "assistant",
+      text: trimmed,
+    });
   }
 
-  private appendMessage(threadId: string, message: StoredMessage): void {
+  upsertItem(threadId: string, item: ThreadReplayItem): ThreadReplayItem {
+    const items = this.items.get(threadId) ?? [];
+    const normalized = normalizeReplayItem(item);
+    const index = items.findIndex((entry) => entry.id === normalized.id);
+    if (index >= 0) {
+      items[index] = {
+        ...items[index],
+        ...normalized,
+      };
+    } else {
+      items.push(normalized);
+    }
+    this.items.set(threadId, items);
+    this.touchThread(threadId);
+    return normalized;
+  }
+
+  appendItemTextDelta(
+    threadId: string,
+    itemId: string,
+    delta: string,
+    type = "plan",
+    status: AppServerItemStatus = "in_progress",
+  ): ThreadReplayItem {
+    const existing = (this.items.get(threadId) ?? []).find((item) => item.id === itemId);
+    return this.upsertItem(threadId, {
+      id: itemId,
+      type: existing?.type ?? type,
+      status: existing?.status ?? status,
+      text: `${existing?.text ?? ""}${delta}`,
+      review: existing?.review,
+      role: existing?.role,
+      command: existing?.command,
+      commandAction: existing?.commandAction,
+      toolName: existing?.toolName,
+      success: existing?.success,
+      arguments: existing?.arguments,
+    });
+  }
+
+  private appendMessage(
+    threadId: string,
+    message: StoredMessage,
+    item: ThreadReplayItem,
+  ): void {
     const messages = this.messages.get(threadId) ?? [];
     messages.push(message);
     this.messages.set(threadId, messages);
+    const items = this.items.get(threadId) ?? [];
+    items.push(item);
+    this.items.set(threadId, items);
     this.touchThread(threadId);
   }
 
@@ -136,6 +199,7 @@ export class AppServerSessionState {
       throw new Error(`Unknown thread: ${threadId}`);
     }
     const messages = [...(this.messages.get(threadId) ?? [])];
+    const items = [...(this.items.get(threadId) ?? [])];
     let lastUserMessage: string | undefined;
     let lastAssistantMessage: string | undefined;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -150,7 +214,14 @@ export class AppServerSessionState {
         break;
       }
     }
-    return { threadId, thread, messages, lastUserMessage, lastAssistantMessage };
+    return {
+      threadId,
+      thread,
+      messages,
+      items,
+      lastUserMessage,
+      lastAssistantMessage,
+    };
   }
 
   setPreviousResponseId(threadId: string, responseId: string | undefined): void {
@@ -238,4 +309,15 @@ export class AppServerSessionState {
     this.lastTimestamp = Math.max(Date.now(), this.lastTimestamp + 1);
     return this.lastTimestamp;
   }
+
+  private nextItemId(prefix: string): string {
+    this.itemSequence += 1;
+    return `${prefix}-${this.itemSequence}`;
+  }
+}
+
+function normalizeReplayItem(item: ThreadReplayItem): ThreadReplayItem {
+  return Object.fromEntries(
+    Object.entries(item).filter(([, value]) => value !== undefined),
+  ) as ThreadReplayItem;
 }
