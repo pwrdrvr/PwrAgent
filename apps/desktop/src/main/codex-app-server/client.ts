@@ -107,6 +107,24 @@ function dedupeJoinedText(parts: string[]): string | undefined {
   return unique.join("\n\n");
 }
 
+function normalizeThreadSummary(value: string | undefined): string | undefined {
+  const trimmed = value?.replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (
+    trimmed.length > 160 ||
+    trimmed.startsWith("[$") ||
+    trimmed.includes("](/") ||
+    trimmed.includes("/Users/")
+  ) {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
 function normalizeConversationRole(
   value: string | undefined
 ): "user" | "assistant" | undefined {
@@ -299,9 +317,10 @@ function extractThreadsFromValue(value: unknown): CodexThreadSummary[] {
         pickString(record, ["title", "name", "headline"]) ??
         pickString(sessionRecord ?? {}, ["title", "name"]) ??
         "Untitled thread",
-      summary:
-        pickString(record, ["summary", "preview", "snippet", "text"]) ??
-        dedupeJoinedText(collectText(record.messages ?? record.lastMessage ?? record.content)),
+      summary: normalizeThreadSummary(
+        pickString(record, ["summary", "preview", "snippet"]) ??
+          pickString(sessionRecord ?? {}, ["summary", "preview", "snippet"])
+      ),
       linkedDirectories: deriveLinkedDirectories(projectKey),
       createdAt: normalizeEpochTimestamp(
         pickNumber(record, ["createdAt", "created_at"]) ??

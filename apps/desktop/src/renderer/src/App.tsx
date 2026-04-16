@@ -84,13 +84,57 @@ function formatTimestamp(timestamp: number | undefined): string {
   }).format(timestamp);
 }
 
-function getPrimarySummary(thread: AppServerThreadSummary): string {
-  return (
-    thread.summary?.trim() ||
-    `${thread.linkedDirectories.length || 0} linked director${
-      thread.linkedDirectories.length === 1 ? "y" : "ies"
-    }`
-  );
+function formatLinkedDirectoryCount(thread: AppServerThreadSummary): string {
+  return `${thread.linkedDirectories.length || 0} linked director${
+    thread.linkedDirectories.length === 1 ? "y" : "ies"
+  }`;
+}
+
+function getDirectoryLabelSummary(thread: AppServerThreadSummary): string {
+  if (thread.linkedDirectories.length === 0) {
+    return "No linked directories yet";
+  }
+
+  const labels = thread.linkedDirectories.map((directory) => directory.label);
+  if (labels.length <= 2) {
+    return labels.join(" • ");
+  }
+
+  return `${labels.slice(0, 2).join(" • ")} +${labels.length - 2}`;
+}
+
+function getThreadListSubtitle(thread: AppServerThreadSummary): string {
+  const parts = [getDirectoryLabelSummary(thread)];
+  if (thread.gitBranch) {
+    parts.push(thread.gitBranch);
+  }
+  return parts.join(" • ");
+}
+
+function getInspectorSummary(thread: AppServerThreadSummary): string {
+  const lines = [formatLinkedDirectoryCount(thread)];
+
+  if (thread.linkedDirectories.length > 0) {
+    lines.push(
+      `Projects: ${thread.linkedDirectories
+        .map((directory) => directory.label)
+        .join(", ")}`
+    );
+  }
+
+  if (thread.gitBranch) {
+    lines.push(`Branch: ${thread.gitBranch}`);
+  }
+
+  if (thread.updatedAt) {
+    lines.push(`Last activity: ${formatTimestamp(thread.updatedAt)}`);
+  }
+
+  if (thread.summary) {
+    lines.push(thread.summary);
+  }
+
+  return lines.join("\n");
 }
 
 function sectionLabelStyle(): React.CSSProperties {
@@ -217,10 +261,14 @@ function ThreadList(props: {
                 margin: 0,
                 color: colors.muted,
                 fontSize: "0.88rem",
-                lineHeight: 1.35
+                lineHeight: 1.35,
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden"
               }}
             >
-              {getPrimarySummary(thread)}
+              {getThreadListSubtitle(thread)}
             </p>
 
             <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
@@ -819,7 +867,7 @@ export function App(): React.ReactElement {
                 }}
               >
                 {selectedThread
-                  ? getPrimarySummary(selectedThread)
+                  ? getInspectorSummary(selectedThread)
                   : "Select a thread to inspect it."}
               </p>
             </div>

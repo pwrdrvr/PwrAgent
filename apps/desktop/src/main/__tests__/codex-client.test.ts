@@ -57,6 +57,7 @@ class MockTransport implements JsonRpcTransport {
               {
                 id: "thread-1",
                 title: "Plan Codex compatibility",
+                text: "Do not leak this planning prompt into the thread browser",
                 updatedAt: 1_763_400_000,
                 session: {
                   cwd: "/Users/huntharo/pwrdrvr/openclaw-codex-app-server"
@@ -136,6 +137,20 @@ describe("CodexAppServerClient", () => {
       ]
     });
     expect(threads[1]?.title).toBe("Plan Codex compatibility");
+
+    await client.close();
+  });
+
+  it("does not synthesize summaries from raw conversation text", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex"
+    });
+
+    const threads = await client.listThreads();
+
+    expect(threads[1]?.summary).toBeUndefined();
 
     await client.close();
   });

@@ -65,9 +65,8 @@ describe("App", () => {
         name: "Build Codex client"
       })
     ).toBeInTheDocument();
-    expect(
-      screen.getAllByText("Wire the app-server transport and list threads")
-    ).toHaveLength(2);
+    expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
+    expect(screen.getByText(/1 linked directory/i)).toBeInTheDocument();
     expect(
       await screen.findByText("Open the desktop plan and build the Codex client.")
     ).toBeInTheDocument();
