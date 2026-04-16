@@ -7,6 +7,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "test": "vitest run --project agent-core --config ../../vitest.workspace.ts",
+    "test:live": "pnpm --dir ../.. exec vitest run --config vitest.workspace.ts --project agent-core packages/agent-core/src/__tests__/grok-live.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   }
 }
