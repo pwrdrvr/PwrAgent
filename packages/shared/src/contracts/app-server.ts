@@ -2,6 +2,26 @@ export type AppServerBackendKind = "codex" | "grok";
 
 export type ThreadIdentifier = string;
 
+export type AppServerTextInputItem = {
+  type: "text";
+  text: string;
+};
+
+export type AppServerImageInputItem = {
+  type: "image";
+  url: string;
+};
+
+export type AppServerLocalImageInputItem = {
+  type: "localImage";
+  path: string;
+};
+
+export type AppServerTurnInputItem =
+  | AppServerTextInputItem
+  | AppServerImageInputItem
+  | AppServerLocalImageInputItem;
+
 export type LinkedDirectorySummary = {
   id: string;
   label: string;
@@ -47,3 +67,99 @@ export type AppServerReadThreadResponse = {
   threadId: ThreadIdentifier;
   replay: AppServerThreadReplay;
 };
+
+export type AppServerNotification =
+  | {
+      method: "turn/completed";
+      params: {
+        threadId: string;
+        runId: string;
+        turn: {
+          id: string;
+          status: "completed";
+          output: Array<{
+            type: "text";
+            text: string;
+          }>;
+        };
+      };
+    }
+  | {
+      method: "turn/failed";
+      params: {
+        threadId: string;
+        runId: string;
+        turn: {
+          id: string;
+          status: "failed";
+          error: {
+            message: string;
+          };
+        };
+      };
+    }
+  | {
+      method: "turn/cancelled";
+      params: {
+        threadId: string;
+        runId: string;
+        turn: {
+          id: string;
+          status: "cancelled";
+        };
+      };
+    }
+  | {
+      method: "item/started" | "item/completed";
+      params: {
+        threadId: string;
+        runId?: string;
+        item: {
+          id: string;
+          type: string;
+          text?: string;
+          review?: string;
+        };
+      };
+    }
+  | {
+      method: "item/plan/delta";
+      params: {
+        threadId: string;
+        runId?: string;
+        item: {
+          id: string;
+          type: "plan";
+        };
+        delta: string;
+      };
+    }
+  | {
+      method: "turn/plan/updated";
+      params: {
+        threadId: string;
+        runId: string;
+        plan: {
+          explanation?: string;
+          steps: Array<{
+            step: string;
+            status: "pending" | "in_progress" | "completed";
+          }>;
+        };
+      };
+    }
+  | {
+      method: "serverRequest/resolved";
+      params: {
+        threadId: string;
+        runId?: string;
+        requestId: string;
+      };
+    }
+  | {
+      method: "thread/compacted";
+      params: {
+        threadId: string;
+        itemId?: string;
+      };
+    };

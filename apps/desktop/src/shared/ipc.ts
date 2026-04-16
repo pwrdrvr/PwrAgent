@@ -1,5 +1,10 @@
 export const APP_SERVER_LIST_THREADS_CHANNEL = "app-server:list-threads";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
+export const BACKEND_LIST_CHANNEL = "backend:list";
+export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";
+export const AGENT_START_TURN_CHANNEL = "agent:start-turn";
+export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";
+export const AGENT_EVENT_CHANNEL = "agent:event";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
 export const WINDOW_FOCUS_SYNC_CHANNEL = "window:focus-sync";
