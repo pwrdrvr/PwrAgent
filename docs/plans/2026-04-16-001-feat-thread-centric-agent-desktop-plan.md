@@ -10,11 +10,11 @@ origin: docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md
 
 ## Overview
 
-Build the first real version of a desktop coding agent whose differentiator is thread navigation rather than repo-first attachment. The milestone should ship a runnable Electron app with a real provider/harness path, thread persistence, Inbox plus Recents plus Directories navigation, multi-directory thread associations, and enough plugin/wiki infrastructure that the product already feels accumulative instead of stateless.
+Build the first real version of a desktop coding agent whose differentiator is thread navigation rather than repo-first attachment. The milestone should ship a runnable Electron app with a real provider/harness path, desktop-owned overlay state, Inbox plus Recents plus Directories navigation, multi-directory thread associations, and enough plugin/wiki infrastructure that the product already feels accumulative instead of stateless.
 
 ## Problem Frame
 
-The origin requirements define a thread-first product surface where users can start from a blank thread, attach repos later, and find important work from Inbox before drilling into Recents or Directories (see origin: `docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md`). The technical plan must preserve that product behavior while creating the repo structure, local persistence, IPC boundaries, and provider abstraction needed for a credible interview-ready demo.
+The origin requirements define a thread-first product surface where users can start from a blank thread, attach repos later, and find important work from Inbox before drilling into Recents or Directories (see origin: `docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md`). The technical plan must preserve that product behavior while creating the repo structure, desktop-owned overlay state, IPC boundaries, and provider abstraction needed for a credible interview-ready demo.
 
 ## Requirements Trace
 
@@ -167,44 +167,44 @@ flowchart TB
 **Verification:**
 - A developer can install dependencies and launch a blank but running desktop shell with passing baseline tests.
 
-- [ ] **Unit 2: Model thread, directory, and inbox persistence**
+- [ ] **Unit 2: Add desktop overlay state, inbox state, and refresh reconciliation**
 
-**Goal:** Create the persisted domain model for threads, linked Git directories, working directories, inbox state, execution mode, and thread events/messages.
+**Goal:** Create the desktop-owned persistence layer for inbox state, extra directory associations, lightweight selection/view state, and refresh reconciliation without duplicating canonical thread or transcript state already owned by the app server.
 
-**Requirements:** R1-R6, R12-R19
+**Requirements:** R1-R6, R5-R11, R12-R15
 
 **Dependencies:** Unit 1
 
 **Files:**
-- Create: `packages/agent-core/src/domain/thread.ts`
-- Create: `packages/agent-core/src/domain/project.ts`
 - Create: `packages/agent-core/src/domain/inbox.ts`
-- Create: `packages/agent-core/src/persistence/store.ts`
+- Create: `packages/agent-core/src/domain/navigation-state.ts`
+- Create: `packages/agent-core/src/persistence/overlay-store.ts`
 - Create: `packages/agent-core/src/persistence/migrations.ts`
-- Create: `packages/shared/src/contracts/threading.ts`
 - Create: `packages/shared/src/contracts/navigation.ts`
-- Test: `packages/agent-core/src/__tests__/thread-store.test.ts`
-- Test: `packages/agent-core/src/__tests__/directory-linking.test.ts`
+- Create: `apps/desktop/src/main/window-focus-sync.ts`
+- Test: `packages/agent-core/src/__tests__/overlay-store.test.ts`
+- Test: `packages/agent-core/src/__tests__/refresh-reconciliation.test.ts`
 - Test: `packages/agent-core/src/__tests__/inbox-ranking.test.ts`
 
 **Approach:**
-- Represent threads, Git directories, and working directories as separate entities with explicit join records so one thread can surface under multiple directories without inventing a fake primary owner.
-- Persist execution mode on the thread and inbox membership/ranking as derived-but-stored state so Inbox queries remain fast and explainable.
-- Store thread events/messages in the same persistence boundary as navigation metadata so the UI can correlate status, approvals, and results.
+- Treat the app server as the source of truth for thread identity, transcript history, and run state; persist only the desktop overlay state the app server does not model.
+- Persist inbox signals, dismiss/snooze state, last-seen timestamps, material-change hashes, and any extra linked Git directories needed to make basic single-directory app servers behave like multi-project threads in the desktop UI.
+- Add refresh-on-focus behavior that re-fetches thread lists in the background, compares them against the last known snapshot, and avoids visible UI churn when nothing material changed.
+- Keep transcript scrollback out of this persistence unit; real thread history remains an app-server read concern and should surface in the renderer through richer `thread/read` contracts rather than a duplicated local transcript store.
 
 **Patterns to follow:**
 - Follow the type and package boundaries established in Unit 1.
 
 **Test scenarios:**
-- Happy path: creating a thread without a directory persists successfully and remains queryable in Recents.
-- Happy path: attaching two Git directories to one thread makes the thread queryable under both directories.
-- Edge case: local-mode thread stores identical Git and working directory identifiers without duplicate-link corruption.
-- Edge case: worktree-mode thread stores distinct Git-root and working-directory records and resolves both correctly.
-- Error path: linking a missing or moved directory marks the association degraded without deleting the thread.
-- Integration: inbox query returns active, blocked, and newly completed threads in rank order from persisted state.
+- Happy path: inbox dismiss/snooze state persists locally and survives app restart without modifying the app-server-owned thread.
+- Happy path: a Codex-backed thread can carry additional linked Git directories in desktop overlay state and surface under all relevant directory views.
+- Happy path: focus-triggered refresh detects a changed thread snapshot and updates inbox membership and recents ordering.
+- Edge case: focus-triggered refresh sees no material change and does not clear selection, reorder rows, or show blocking loading state.
+- Edge case: overlay directory link points at a missing path and is marked degraded without deleting the thread from the UI.
+- Integration: inbox query returns active, blocked, and newly completed threads in rank order from overlay state plus the latest app-server snapshot.
 
 **Verification:**
-- Main-process services can create, update, and query threads and directory links entirely from the local store without renderer-specific logic.
+- Main-process services can store desktop-only inbox/navigation metadata, reconcile fresh app-server thread snapshots on focus, and preserve a stable UI when nothing materially changed.
 
 - [ ] **Unit 3: Build the provider contract and agent harness**
 
@@ -252,7 +252,7 @@ flowchart TB
 
 - [ ] **Unit 4: Ship Inbox, Recents, Directories, and thread detail UI**
 
-**Goal:** Build the renderer experience that makes thread navigation visibly better than repo-first tools.
+**Goal:** Build the renderer experience that makes thread navigation visibly better than repo-first tools, including a real transcript view with thread history scrollback instead of the current last-user/last-assistant placeholder cards.
 
 **Requirements:** R5-R13, R20-R22
 
@@ -266,17 +266,23 @@ flowchart TB
 - Create: `apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx`
 - Create: `apps/desktop/src/renderer/src/features/thread-detail/ThreadHeader.tsx`
 - Create: `apps/desktop/src/renderer/src/features/thread-detail/ThreadContextPanel.tsx`
+- Create: `apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx`
+- Create: `apps/desktop/src/renderer/src/features/thread-detail/TranscriptMessage.tsx`
 - Create: `apps/desktop/src/renderer/src/features/composer/Composer.tsx`
 - Create: `apps/desktop/src/renderer/src/lib/useThreadNavigation.ts`
+- Create: `apps/desktop/src/renderer/src/lib/useThreadTranscript.ts`
 - Create: `apps/desktop/src/renderer/src/styles/app.css`
 - Test: `apps/desktop/src/renderer/src/features/navigation/__tests__/sidebar.test.tsx`
 - Test: `apps/desktop/src/renderer/src/features/thread-detail/__tests__/thread-view.test.tsx`
+- Test: `apps/desktop/src/renderer/src/features/thread-detail/__tests__/transcript-list.test.tsx`
 - Test: `apps/desktop/e2e/thread-navigation.spec.ts`
 
 **Approach:**
 - Make Inbox the top section of the sidebar, with Recents and Directories presented as alternate browsing lenses below it.
 - Ensure thread rows can display linked-directory summary text without requiring users to open the thread first.
-- In thread detail, surface linked Git directories, working directories, branches, and PR/stacked-PR context in one place so multi-repo work is legible.
+- Replace the current Telegram-era stopgap of “Last user message” and “Last assistant message” with a real transcript surface that renders normalized messages returned by `thread/read`.
+- Support scrollable thread history and incremental scrollback/pagination whenever the backing app server can provide it, while still degrading to a complete one-shot read when pagination is unavailable.
+- In thread detail, surface linked Git directories, working directories, branches, and PR/stacked-PR context alongside the transcript so multi-repo work is legible.
 
 **Patterns to follow:**
 - Renderer feature-folder pattern established in Unit 1.
@@ -285,12 +291,15 @@ flowchart TB
 - Happy path: sidebar opens with Inbox first and Recents as the default lens beneath it.
 - Happy path: a cross-project thread appears under both linked directories in directory mode.
 - Happy path: a thread can appear in Inbox and still appear in Recents without duplication bugs in thread identity.
+- Happy path: selecting a thread renders a real transcript history rather than only the latest request/response pair.
+- Happy path: scrolling upward loads additional transcript history when the provider/app server supports incremental pagination.
 - Edge case: a directory-less thread still renders meaningfully in Recents and thread detail.
 - Edge case: long linked-directory labels truncate safely without hiding the fact that multiple repos are attached.
+- Edge case: transcript pagination unavailable falls back to a non-paginated thread read without breaking the thread detail surface.
 - Integration: clicking a thread from Inbox preserves selected thread state while switching the underlying browse lens.
 
 **Verification:**
-- A demo user can understand the app's thread-first model from the sidebar and thread detail alone.
+- A demo user can understand the app's thread-first model from the sidebar and can scroll through real thread history from thread detail alone.
 
 - [ ] **Unit 5: Add project attachment, worktree awareness, and repo-status enrichment**
 
@@ -413,7 +422,7 @@ flowchart TB
 
 - **Interaction graph:** renderer -> preload -> main IPC -> agent core services -> local store/provider/git/plugin/wiki services.
 - **Error propagation:** provider, git, search, or plugin failures should surface as thread or feature-level state without crashing the renderer or corrupting persisted thread state.
-- **State lifecycle risks:** thread runs, approvals, and directory attachments can race with navigation updates; the store must remain the source of truth for derived Inbox and directory views.
+- **State lifecycle risks:** thread runs, approvals, and directory attachments can race with navigation updates; the overlay store must remain the source of truth for desktop-only inbox and refresh state, while the app server remains the source of truth for transcript and run history.
 - **API surface parity:** provider adapters, plugin manifests, wiki search interfaces, and thread IPC payloads all depend on stable shared contracts in `packages/shared`.
 - **Integration coverage:** cross-layer tests are required for provider event flow, project attachment flow, and wiki edit/search flow because unit tests alone will not prove IPC and persistence behavior.
 - **Unchanged invariants:** credential mediation stays out of scope; thread-first navigation remains the hero even as plugins and wiki memory are added.
