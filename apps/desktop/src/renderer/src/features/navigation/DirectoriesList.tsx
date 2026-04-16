@@ -27,7 +27,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               <button
                 aria-label={`Copy path for ${group.label}`}
                 className="directory-group__button path-copy-target"
-                title={group.path ? formatCopyTooltip(group.path) : undefined}
+                data-tooltip={group.path ? formatCopyTooltip(group.path) : undefined}
                 type="button"
                 onClick={() => {
                   if (group.path) {

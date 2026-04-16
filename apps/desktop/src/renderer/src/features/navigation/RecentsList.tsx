@@ -40,7 +40,7 @@ export function RecentsList(props: RecentsListProps) {
                     className="thread-row__chip path-copy-target"
                     role="button"
                     tabIndex={0}
-                    title={formatCopyTooltip(directory.path)}
+                    data-tooltip={formatCopyTooltip(directory.path)}
                     onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();

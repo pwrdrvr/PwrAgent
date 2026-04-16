@@ -99,7 +99,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                     <button
                       aria-label={`Copy path for ${directory.label}`}
                       className="context-list__label path-copy-target"
-                      title={formatCopyTooltip(directory.path)}
+                      data-tooltip={formatCopyTooltip(directory.path)}
                       type="button"
                       onClick={(event) => {
                         void handleCopyPath(event, directory.path);
@@ -113,7 +113,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                     <button
                       aria-label={`Copy path for ${directory.kind} ${directory.label}`}
                       className="context-list__meta path-copy-target"
-                      title={formatCopyTooltip(directory.worktreePath ?? directory.path)}
+                      data-tooltip={formatCopyTooltip(directory.worktreePath ?? directory.path)}
                       type="button"
                       onClick={(event) => {
                         void handleCopyPath(event, directory.worktreePath ?? directory.path);

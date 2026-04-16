@@ -328,11 +328,56 @@ textarea {
 }
 
 .path-copy-target {
-  cursor: copy;
+  position: relative;
+  cursor: pointer;
 }
 
 .path-copy-target:hover {
   filter: brightness(1.06);
+}
+
+.path-copy-target[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  z-index: 30;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: rgba(16, 20, 28, 0.96);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  text-align: left;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(4px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.path-copy-target[data-tooltip]:hover::after,
+.path-copy-target[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.context-list__meta.path-copy-target[data-tooltip]::after {
+  right: 0;
+  left: auto;
+  transform: translateY(4px);
+}
+
+.context-list__meta.path-copy-target[data-tooltip]:hover::after,
+.context-list__meta.path-copy-target[data-tooltip]:focus-visible::after {
+  transform: translateY(0);
 }
 
 .path-copy-target:focus-visible {
