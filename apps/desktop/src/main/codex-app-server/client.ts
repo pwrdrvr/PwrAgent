@@ -1,5 +1,8 @@
+import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
+import { promisify } from "node:util";
 import type {
+  AppServerThreadReplay,
   AppServerThreadSummary,
   LinkedDirectorySummary
 } from "@pwragnt/shared";
@@ -8,15 +11,24 @@ import { StdioJsonRpcTransport } from "./stdio-transport";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const execFile = promisify(execFileCallback);
 
 type CodexClientOptions = {
   command?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
+  directoryResolver?: (
+    projectKey?: string
+  ) => Promise<LinkedDirectorySummary[]>;
   requestTimeoutMs?: number;
 };
 
-type CodexThreadSummary = Omit<AppServerThreadSummary, "source">;
+type RawCodexThreadSummary = Omit<
+  AppServerThreadSummary,
+  "source" | "linkedDirectories"
+> & {
+  projectKey?: string;
+};
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -106,6 +118,124 @@ function dedupeJoinedText(parts: string[]): string | undefined {
   return unique.join("\n\n");
 }
 
+function normalizeThreadSummary(value: string | undefined): string | undefined {
+  const trimmed = value?.replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (
+    trimmed.length > 160 ||
+    trimmed.startsWith("[$") ||
+    trimmed.includes("](/") ||
+    trimmed.includes("/Users/")
+  ) {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
+function normalizeConversationRole(
+  value: string | undefined
+): "user" | "assistant" | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "user" || normalized === "usermessage") {
+    return "user";
+  }
+  if (
+    normalized === "assistant" ||
+    normalized === "agentmessage" ||
+    normalized === "assistantmessage"
+  ) {
+    return "assistant";
+  }
+  return undefined;
+}
+
+function collectMessageText(record: Record<string, unknown>): string {
+  return (
+    dedupeJoinedText([
+      ...collectText(record.content),
+      ...collectText(record.text),
+      ...collectText(record.message),
+      ...collectText(record.messages),
+      ...collectText(record.input),
+      ...collectText(record.output),
+      ...collectText(record.parts)
+    ]) ?? ""
+  );
+}
+
+function extractConversationMessages(
+  value: unknown
+): Array<{ role: "user" | "assistant"; text: string }> {
+  const output: Array<{ role: "user" | "assistant"; text: string }> = [];
+
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach((entry) => visit(entry));
+      return;
+    }
+
+    const record = asRecord(node);
+    if (!record) {
+      return;
+    }
+
+    const role = normalizeConversationRole(
+      pickString(record, ["role", "author", "speaker", "source", "type"])
+    );
+    const text = collectMessageText(record);
+    if (role && text) {
+      output.push({ role, text });
+    }
+
+    for (const key of [
+      "items",
+      "messages",
+      "content",
+      "parts",
+      "entries",
+      "data",
+      "results",
+      "turns",
+      "events",
+      "item",
+      "message",
+      "thread",
+      "response",
+      "result"
+    ]) {
+      visit(record[key]);
+    }
+  };
+
+  visit(value);
+  return output;
+}
+
+function extractThreadReplayFromReadResult(value: unknown): AppServerThreadReplay {
+  const messages = extractConversationMessages(value);
+  let lastUserMessage: string | undefined;
+  let lastAssistantMessage: string | undefined;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!lastAssistantMessage && message?.role === "assistant") {
+      lastAssistantMessage = message.text;
+    }
+    if (!lastUserMessage && message?.role === "user") {
+      lastUserMessage = message.text;
+    }
+    if (lastUserMessage && lastAssistantMessage) {
+      break;
+    }
+  }
+
+  return { lastUserMessage, lastAssistantMessage };
+}
+
 function extractThreadRecords(value: unknown): Record<string, unknown>[] {
   if (Array.isArray(value)) {
     return value.flatMap((entry) => extractThreadRecords(entry));
@@ -150,7 +280,29 @@ function isMethodUnavailableError(error: unknown, method?: string): boolean {
   return normalized.includes(`unknown variant \`${method.toLowerCase()}\``);
 }
 
-function deriveLinkedDirectories(projectKey?: string): LinkedDirectorySummary[] {
+function isAlreadyInitializedError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.toLowerCase().includes("already initialized");
+}
+
+async function runGit(projectKey: string, args: string[]): Promise<string> {
+  const result = await execFile("git", ["-C", projectKey, ...args], {
+    env: process.env
+  });
+  return result.stdout.trim();
+}
+
+function parseGitWorktrees(output: string): string[] {
+  return output
+    .split("\n")
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length).trim())
+    .filter(Boolean);
+}
+
+async function resolveLinkedDirectories(
+  projectKey?: string
+): Promise<LinkedDirectorySummary[]> {
   if (!projectKey) {
     return [];
   }
@@ -160,18 +312,38 @@ function deriveLinkedDirectories(projectKey?: string): LinkedDirectorySummary[] 
     return [];
   }
 
-  return [
-    {
-      id: normalizedPath,
-      path: normalizedPath,
-      label: path.basename(normalizedPath) || normalizedPath
-    }
-  ];
+  try {
+    const repoRoot = await runGit(normalizedPath, ["rev-parse", "--show-toplevel"]);
+    const worktreeList = await runGit(normalizedPath, ["worktree", "list", "--porcelain"]);
+    const worktreePaths = parseGitWorktrees(worktreeList);
+    const primaryPath = worktreePaths[0] || repoRoot;
+    const currentPath = path.resolve(repoRoot);
+    const resolvedPrimaryPath = path.resolve(primaryPath);
+
+    return [
+      {
+        id: resolvedPrimaryPath,
+        path: resolvedPrimaryPath,
+        label: path.basename(resolvedPrimaryPath) || resolvedPrimaryPath,
+        kind: currentPath === resolvedPrimaryPath ? "local" : "worktree"
+      }
+    ];
+  } catch {
+    const fallbackPath = path.resolve(normalizedPath);
+    return [
+      {
+        id: fallbackPath,
+        path: fallbackPath,
+        label: path.basename(fallbackPath) || fallbackPath,
+        kind: "local"
+      }
+    ];
+  }
 }
 
-function extractThreadsFromValue(value: unknown): CodexThreadSummary[] {
+function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
   const items = extractThreadRecords(value);
-  const summaries = new Map<string, CodexThreadSummary>();
+  const summaries = new Map<string, RawCodexThreadSummary>();
 
   for (const record of items) {
     const threadId =
@@ -193,10 +365,11 @@ function extractThreadsFromValue(value: unknown): CodexThreadSummary[] {
         pickString(record, ["title", "name", "headline"]) ??
         pickString(sessionRecord ?? {}, ["title", "name"]) ??
         "Untitled thread",
-      summary:
-        pickString(record, ["summary", "preview", "snippet", "text"]) ??
-        dedupeJoinedText(collectText(record.messages ?? record.lastMessage ?? record.content)),
-      linkedDirectories: deriveLinkedDirectories(projectKey),
+      summary: normalizeThreadSummary(
+        pickString(record, ["summary", "preview", "snippet"]) ??
+          pickString(sessionRecord ?? {}, ["summary", "preview", "snippet"])
+      ),
+      projectKey,
       createdAt: normalizeEpochTimestamp(
         pickNumber(record, ["createdAt", "created_at"]) ??
           pickNumber(sessionRecord ?? {}, ["createdAt", "created_at"])
@@ -258,7 +431,11 @@ async function requestWithFallbacks(params: {
 
 export class CodexAppServerClient {
   private readonly connection: JsonRpcConnection;
+  private readonly directoryResolver: (
+    projectKey?: string
+  ) => Promise<LinkedDirectorySummary[]>;
   private initialized = false;
+  private initializationPromise: Promise<void> | null = null;
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.connection = new JsonRpcConnection(
@@ -269,10 +446,12 @@ export class CodexAppServerClient {
       }),
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
+    this.directoryResolver = options.directoryResolver ?? resolveLinkedDirectories;
   }
 
   async close(): Promise<void> {
     this.initialized = false;
+    this.initializationPromise = null;
     await this.connection.close();
   }
 
@@ -286,10 +465,26 @@ export class CodexAppServerClient {
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     });
 
-    return extractThreadsFromValue(result).map((thread) => ({
-      ...thread,
-      source: "codex"
-    }));
+    return await Promise.all(
+      extractThreadsFromValue(result).map(async (thread) => ({
+        ...thread,
+        linkedDirectories: await this.directoryResolver(thread.projectKey),
+        source: "codex"
+      }))
+    );
+  }
+
+  async readThread(params: { threadId: string }): Promise<AppServerThreadReplay> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/read"],
+      payloads: [{ threadId: params.threadId, includeTurns: true }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    return extractThreadReplayFromReadResult(result);
   }
 
   private async ensureInitialized(): Promise<void> {
@@ -297,13 +492,36 @@ export class CodexAppServerClient {
       return;
     }
 
-    await this.connection.connect();
-    await this.connection.request("initialize", {
-      protocolVersion: DEFAULT_PROTOCOL_VERSION,
-      clientInfo: { name: "pwragnt-desktop", version: "0.1.0" },
-      capabilities: { experimentalApi: true }
-    });
-    await this.connection.notify("initialized", {});
-    this.initialized = true;
+    if (this.initializationPromise) {
+      await this.initializationPromise;
+      return;
+    }
+
+    this.initializationPromise = (async () => {
+      await this.connection.connect();
+
+      try {
+        await this.connection.request("initialize", {
+          protocolVersion: DEFAULT_PROTOCOL_VERSION,
+          clientInfo: { name: "pwragnt-desktop", version: "0.1.0" },
+          capabilities: { experimentalApi: true }
+        });
+      } catch (error) {
+        if (!isAlreadyInitializedError(error)) {
+          throw error;
+        }
+      }
+
+      await this.connection.notify("initialized", {});
+      this.initialized = true;
+    })();
+
+    try {
+      await this.initializationPromise;
+    } finally {
+      if (!this.initialized) {
+        this.initializationPromise = null;
+      }
+    }
   }
 }

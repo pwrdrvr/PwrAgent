@@ -6,6 +6,7 @@ export type LinkedDirectorySummary = {
   id: string;
   label: string;
   path: string;
+  kind: "local" | "worktree";
 };
 
 export type AppServerThreadSummary = {
@@ -19,6 +20,11 @@ export type AppServerThreadSummary = {
   source: AppServerBackendKind;
 };
 
+export type AppServerThreadReplay = {
+  lastUserMessage?: string;
+  lastAssistantMessage?: string;
+};
+
 export type AppServerListThreadsRequest = {
   backend?: AppServerBackendKind;
   filter?: string;
@@ -28,4 +34,16 @@ export type AppServerListThreadsResponse = {
   backend: AppServerBackendKind;
   fetchedAt: number;
   threads: AppServerThreadSummary[];
+};
+
+export type AppServerReadThreadRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type AppServerReadThreadResponse = {
+  backend: AppServerBackendKind;
+  fetchedAt: number;
+  threadId: ThreadIdentifier;
+  replay: AppServerThreadReplay;
 };

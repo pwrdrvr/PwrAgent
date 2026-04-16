@@ -57,10 +57,33 @@ class MockTransport implements JsonRpcTransport {
               {
                 id: "thread-1",
                 title: "Plan Codex compatibility",
+                text: "Do not leak this planning prompt into the thread browser",
                 updatedAt: 1_763_400_000,
                 session: {
                   cwd: "/Users/huntharo/pwrdrvr/openclaw-codex-app-server"
                 }
+              }
+            ]
+          }
+        })
+      );
+      return;
+    }
+
+    if (payload.method === "thread/read") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: {
+            messages: [
+              {
+                role: "user",
+                text: "Show me the current desktop thread shell"
+              },
+              {
+                role: "assistant",
+                text: "The desktop shell is live and listing Codex threads."
               }
             ]
           }
@@ -95,7 +118,18 @@ describe("CodexAppServerClient", () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
-      command: "codex"
+      command: "codex",
+      directoryResolver: async (projectKey) =>
+        projectKey
+          ? [
+              {
+                id: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                label: "PwrAgnt",
+                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                kind: "worktree"
+              }
+            ]
+          : []
     });
 
     const threads = await client.listThreads();
@@ -109,11 +143,47 @@ describe("CodexAppServerClient", () => {
         {
           id: "/Users/huntharo/pwrdrvr/PwrAgnt",
           label: "PwrAgnt",
-          path: "/Users/huntharo/pwrdrvr/PwrAgnt"
+          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          kind: "worktree"
         }
       ]
     });
     expect(threads[1]?.title).toBe("Plan Codex compatibility");
+
+    await client.close();
+  });
+
+  it("does not synthesize summaries from raw conversation text", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const threads = await client.listThreads();
+
+    expect(threads[1]?.summary).toBeUndefined();
+
+    await client.close();
+  });
+
+  it("extracts last user and assistant messages from thread/read", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-2"
+    });
+
+    expect(replay).toEqual({
+      lastUserMessage: "Show me the current desktop thread shell",
+      lastAssistantMessage: "The desktop shell is live and listing Codex threads."
+    });
 
     await client.close();
   });

@@ -1,15 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
-  AppServerListThreadsRequest,
-  AppServerListThreadsResponse,
-  AppServerThreadSummary
+  AppServerReadThreadRequest,
+  AppServerReadThreadResponse,
+  AppServerThreadSummary,
+  GetNavigationSnapshotRequest,
+  MarkThreadSeenRequest,
+  NavigationSnapshot,
+  NavigationThreadSummary,
 } from "@pwragnt/shared";
 
 type DesktopApi = {
   ping?: () => string;
-  listThreads?: (
-    request?: AppServerListThreadsRequest
-  ) => Promise<AppServerListThreadsResponse>;
+  readThread?: (
+    request: AppServerReadThreadRequest
+  ) => Promise<AppServerReadThreadResponse>;
+  getNavigationSnapshot?: (
+    request?: GetNavigationSnapshotRequest,
+  ) => Promise<NavigationSnapshot>;
+  markThreadSeen?: (
+    request: MarkThreadSeenRequest,
+  ) => Promise<unknown>;
+  onWindowFocus?: (callback: () => void) => () => void;
   platform?: string;
   versions?: {
     chrome?: string;
@@ -29,7 +40,8 @@ const colors = {
   text: "#f2f1ea",
   muted: "#a5ab9b",
   accent: "#cbff45",
-  accentMuted: "rgba(203, 255, 69, 0.16)"
+  accentMuted: "rgba(203, 255, 69, 0.16)",
+  danger: "#ff9d8b"
 } as const;
 
 function formatRelativeTime(timestamp: number | undefined): string {
@@ -65,7 +77,7 @@ function formatRelativeTime(timestamp: number | undefined): string {
   }).format(timestamp);
 }
 
-function formatUpdatedAt(timestamp: number | undefined): string {
+function formatTimestamp(timestamp: number | undefined): string {
   if (!timestamp) {
     return "Unknown";
   }
@@ -78,19 +90,116 @@ function formatUpdatedAt(timestamp: number | undefined): string {
   }).format(timestamp);
 }
 
-function getPrimarySummary(thread: AppServerThreadSummary): string {
+function formatLinkedDirectoryCount(thread: AppServerThreadSummary): string {
+  return `${thread.linkedDirectories.length || 0} linked director${
+    thread.linkedDirectories.length === 1 ? "y" : "ies"
+  }`;
+}
+
+function getThreadMetadataPills(
+  thread: AppServerThreadSummary
+): Array<{ key: string; icon: string; label: string }> {
+  const projectPills = thread.linkedDirectories.map((directory) => ({
+    key: directory.id,
+    icon: directory.kind === "worktree" ? "🔀" : "📁",
+    label: directory.label
+  }));
+
+  if (!thread.gitBranch) {
+    return projectPills;
+  }
+
+  return [
+    ...projectPills,
+    {
+      key: `branch:${thread.gitBranch}`,
+      icon: "🌿",
+      label: thread.gitBranch
+    }
+  ];
+}
+
+function getInspectorSummary(thread: AppServerThreadSummary): string {
+  const lines = [formatLinkedDirectoryCount(thread)];
+
+  if (thread.linkedDirectories.length > 0) {
+    lines.push(
+      `Projects: ${thread.linkedDirectories
+        .map((directory) => directory.label)
+        .join(", ")}`
+    );
+  }
+
+  if (thread.gitBranch) {
+    lines.push(`Branch: ${thread.gitBranch}`);
+  }
+
+  if (thread.updatedAt) {
+    lines.push(`Last activity: ${formatTimestamp(thread.updatedAt)}`);
+  }
+
+  if (thread.summary) {
+    lines.push(thread.summary);
+  }
+
+  return lines.join("\n");
+}
+
+function sectionLabelStyle(): React.CSSProperties {
+  return {
+    margin: 0,
+    color: colors.muted,
+    fontSize: "0.82rem",
+    textTransform: "uppercase",
+    fontWeight: 700
+  };
+}
+
+function actionButtonStyle(active = false): React.CSSProperties {
+  return {
+    minWidth: "2.4rem",
+    height: "2rem",
+    padding: "0 0.8rem",
+    border: `1px solid ${active ? colors.accent : colors.border}`,
+    borderRadius: "8px",
+    background: active ? colors.accent : colors.panel,
+    color: active ? "#0f1300" : colors.text,
+    cursor: "pointer",
+    fontSize: "0.84rem",
+    fontWeight: 600
+  };
+}
+
+function ErrorBlock(props: { title: string; message: string }): React.ReactElement {
   return (
-    thread.summary?.trim() ||
-    `${thread.linkedDirectories.length || 0} linked director${
-      thread.linkedDirectories.length === 1 ? "y" : "ies"
-    }`
+    <div
+      style={{
+        marginTop: "0.85rem",
+        padding: "0.85rem 0.95rem",
+        borderRadius: "8px",
+        border: `1px solid rgba(255, 157, 139, 0.32)`,
+        background: "rgba(88, 26, 18, 0.25)"
+      }}
+    >
+      <p style={{ margin: 0, color: colors.danger, fontWeight: 700 }}>{props.title}</p>
+      <p
+        style={{
+          margin: "0.45rem 0 0",
+          color: colors.text,
+          fontSize: "0.9rem",
+          lineHeight: 1.45
+        }}
+      >
+        {props.message}
+      </p>
+    </div>
   );
 }
 
 function ThreadList(props: {
-  threads: AppServerThreadSummary[];
+  threads: NavigationThreadSummary[];
   selectedThreadId?: string;
-  onSelectThread: (thread: AppServerThreadSummary) => void;
+  onSelectThread: (thread: NavigationThreadSummary) => void;
 }): React.ReactElement {
   return (
     <div
@@ -105,6 +214,7 @@ function ThreadList(props: {
     >
       {props.threads.map((thread) => {
         const isSelected = thread.id === props.selectedThreadId;
+        const metadataPills = getThreadMetadataPills(thread);
 
         return (
           <button
@@ -155,24 +265,14 @@ function ThreadList(props: {
               </span>
             </div>
 
-            <p
-              style={{
-                margin: 0,
-                color: colors.muted,
-                fontSize: "0.88rem",
-                lineHeight: 1.35
-              }}
-            >
-              {getPrimarySummary(thread)}
-            </p>
-
             <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
-              {thread.linkedDirectories.map((directory) => (
+              {metadataPills.map((pill) => (
                 <span
-                  key={directory.id}
+                  key={pill.key}
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
+                    gap: "0.35rem",
                     minHeight: "1.65rem",
                     padding: "0 0.55rem",
                     borderRadius: "999px",
@@ -181,7 +281,8 @@ function ThreadList(props: {
                     fontSize: "0.78rem"
                   }}
                 >
-                  {directory.label}
+                  <span aria-hidden="true">{pill.icon}</span>
+                  {pill.label}
                 </span>
               ))}
             </div>
@@ -193,13 +294,13 @@ function ThreadList(props: {
 }
 
 function DirectoryList(props: {
-  threads: AppServerThreadSummary[];
+  threads: NavigationThreadSummary[];
   selectedThreadId?: string;
-  onSelectThread: (thread: AppServerThreadSummary) => void;
+  onSelectThread: (thread: NavigationThreadSummary) => void;
 }): React.ReactElement {
   const groupedDirectories = new Map<
     string,
-    { label: string; path: string; threads: AppServerThreadSummary[] }
+    { label: string; path: string; threads: NavigationThreadSummary[] }
   >();
 
   for (const thread of props.threads) {
@@ -302,57 +403,298 @@ function DirectoryList(props: {
   );
 }
 
+function InboxList(props: {
+  threads: NavigationThreadSummary[];
+  selectedThreadId?: string;
+  onSelectThread: (thread: NavigationThreadSummary) => void;
+}): React.ReactElement {
+  if (props.threads.length === 0) {
+    return (
+      <p
+        style={{
+          margin: "0.65rem 0 0",
+          color: colors.muted,
+          fontSize: "0.9rem",
+          lineHeight: 1.35,
+        }}
+      >
+        Nothing is waiting on you yet.
+      </p>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.5rem",
+        marginTop: "0.75rem",
+      }}
+    >
+      {props.threads.slice(0, 4).map((thread) => {
+        const isSelected = props.selectedThreadId === thread.id;
+        return (
+          <button
+            key={thread.id}
+            type="button"
+            onClick={() => props.onSelectThread(thread)}
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              gap: "0.75rem",
+              padding: "0.7rem 0.75rem",
+              borderRadius: "8px",
+              border: `1px solid ${
+                isSelected ? colors.accent : "rgba(228, 232, 220, 0.08)"
+              }`,
+              background: isSelected ? colors.panel : "transparent",
+              color: colors.text,
+              textAlign: "left",
+              cursor: "pointer",
+            }}
+          >
+            <span
+              style={{
+                fontSize: "0.9rem",
+                fontWeight: 600,
+                lineHeight: 1.25,
+              }}
+            >
+              {thread.title}
+            </span>
+            <span style={{ color: colors.muted, fontSize: "0.78rem" }}>
+              {formatRelativeTime(thread.updatedAt)}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function MessagePreview(props: {
+  label: string;
+  text?: string;
+  emptyText: string;
+}): React.ReactElement {
+  return (
+    <div
+      style={{
+        padding: "1rem",
+        borderRadius: "8px",
+        background: colors.panelAlt,
+        border: `1px solid ${colors.border}`
+      }}
+    >
+      <p style={sectionLabelStyle()}>{props.label}</p>
+      <p
+        style={{
+          margin: "0.65rem 0 0",
+          color: props.text ? colors.text : colors.muted,
+          fontSize: "0.95rem",
+          lineHeight: 1.5,
+          whiteSpace: "pre-wrap"
+        }}
+      >
+        {props.text ?? props.emptyText}
+      </p>
+    </div>
+  );
+}
+
 export function App(): React.ReactElement {
   const shellApi = (window as Window & { pwragnt?: DesktopApi }).pwragnt;
   const [browseMode, setBrowseMode] = useState<BrowseMode>("recents");
   const [threadState, setThreadState] = useState<{
     loading: boolean;
+    refreshing: boolean;
     error?: string;
-    response?: AppServerListThreadsResponse;
+    response?: NavigationSnapshot;
   }>({
-    loading: true
+    loading: true,
+    refreshing: false
   });
   const [selectedThreadId, setSelectedThreadId] = useState<string>();
+  const [shouldMarkSelectionSeen, setShouldMarkSelectionSeen] = useState(false);
+  const [detailState, setDetailState] = useState<{
+    loading: boolean;
+    error?: string;
+    response?: AppServerReadThreadResponse;
+  }>({
+    loading: false
+  });
+
+  const loadNavigationSnapshot = useCallback(async (): Promise<void> => {
+    if (!shellApi?.getNavigationSnapshot) {
+      setThreadState({
+        loading: false,
+        refreshing: false,
+        error: "Desktop bridge is missing getNavigationSnapshot().",
+        response: undefined
+      });
+      return;
+    }
+
+    setThreadState((current) => ({
+      ...current,
+      loading: !current.response,
+      refreshing: Boolean(current.response),
+      error: undefined
+    }));
+
+    try {
+      const response = await shellApi.getNavigationSnapshot({ backend: "codex" });
+      setThreadState((current) => {
+        if (current.response && response.unchanged) {
+          return {
+            ...current,
+            loading: false,
+            refreshing: false,
+            error: undefined,
+          };
+        }
+
+        return {
+          loading: false,
+          refreshing: false,
+          error: undefined,
+          response,
+        };
+      });
+
+      if (!response.unchanged) {
+        setSelectedThreadId((current) => {
+          if (current && response.threads.some((thread) => thread.id === current)) {
+            return current;
+          }
+          return response.threads[0]?.id;
+        });
+      }
+    } catch (error) {
+      setThreadState((current) => ({
+        loading: false,
+        refreshing: false,
+        response: current.response,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }, [shellApi]);
+
+  useEffect(() => {
+    void loadNavigationSnapshot();
+  }, [loadNavigationSnapshot]);
+
+  useEffect(() => {
+    if (!shellApi?.onWindowFocus) {
+      return;
+    }
+
+    return shellApi.onWindowFocus(() => {
+      void loadNavigationSnapshot();
+    });
+  }, [loadNavigationSnapshot, shellApi]);
+
+  const threads = threadState.response?.threads ?? [];
+  const inboxThreads = useMemo(() => {
+    const inboxIds = new Set(threadState.response?.inboxThreadIds ?? []);
+    return threads.filter((thread) => inboxIds.has(thread.id));
+  }, [threadState.response?.inboxThreadIds, threads]);
+  const selectedThread = useMemo(
+    () => threads.find((thread) => thread.id === selectedThreadId) ?? threads[0],
+    [selectedThreadId, threads]
+  );
+
+  const markThreadSeen = useCallback(
+    async (thread: NavigationThreadSummary): Promise<void> => {
+      if (!shellApi?.markThreadSeen) {
+        return;
+      }
+
+      await shellApi.markThreadSeen({
+        backend: "codex",
+        threadId: thread.id,
+        seenUpdatedAt: thread.updatedAt,
+      });
+
+      await loadNavigationSnapshot();
+    },
+    [loadNavigationSnapshot, shellApi],
+  );
+
+  useEffect(() => {
+    if (!selectedThread || !shouldMarkSelectionSeen) {
+      return;
+    }
+
+    void markThreadSeen(selectedThread);
+    setShouldMarkSelectionSeen(false);
+  }, [markThreadSeen, selectedThread, shouldMarkSelectionSeen]);
+
+  const handleSelectThread = useCallback((thread: NavigationThreadSummary): void => {
+    setSelectedThreadId(thread.id);
+    setShouldMarkSelectionSeen(true);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadThreads(): Promise<void> {
+    async function loadSelectedThread(): Promise<void> {
+      if (!selectedThread?.id) {
+        setDetailState({
+          loading: false,
+          response: undefined,
+          error: undefined
+        });
+        return;
+      }
+
+      if (!shellApi?.readThread) {
+        setDetailState({
+          loading: false,
+          response: undefined,
+          error: "Desktop bridge is missing readThread()."
+        });
+        return;
+      }
+
+      setDetailState((current) => ({
+        ...current,
+        loading: true,
+        error: undefined
+      }));
+
       try {
-        const response = await shellApi?.listThreads?.({ backend: "codex" });
+        const response = await shellApi.readThread({
+          backend: "codex",
+          threadId: selectedThread.id
+        });
         if (cancelled) {
           return;
         }
-
-        setThreadState({
+        setDetailState({
           loading: false,
           response
         });
-        setSelectedThreadId((current) => current ?? response?.threads[0]?.id);
       } catch (error) {
         if (cancelled) {
           return;
         }
-
-        setThreadState({
+        setDetailState({
           loading: false,
+          response: undefined,
           error: error instanceof Error ? error.message : String(error)
         });
       }
     }
 
-    void loadThreads();
+    void loadSelectedThread();
 
     return () => {
       cancelled = true;
     };
-  }, [shellApi]);
-
-  const threads = threadState.response?.threads ?? [];
-  const selectedThread = useMemo(
-    () => threads.find((thread) => thread.id === selectedThreadId) ?? threads[0],
-    [selectedThreadId, threads]
-  );
+  }, [selectedThread?.id, shellApi]);
 
   return (
     <div
@@ -410,19 +752,13 @@ export function App(): React.ReactElement {
 
           <button
             type="button"
-            style={{
-              width: "2.1rem",
-              height: "2.1rem",
-              borderRadius: "8px",
-              border: `1px solid ${colors.border}`,
-              background: colors.panel,
-              color: colors.text,
-              fontSize: "1.2rem",
-              cursor: "pointer"
+            style={actionButtonStyle()}
+            aria-label="Refresh threads"
+            onClick={() => {
+              void loadNavigationSnapshot();
             }}
-            aria-label="New thread"
           >
-            +
+            {threadState.refreshing ? "..." : "Refresh"}
           </button>
         </div>
 
@@ -456,19 +792,14 @@ export function App(): React.ReactElement {
                 fontSize: "0.82rem"
               }}
             >
-              0
+              {inboxThreads.length}
             </span>
           </div>
-          <p
-            style={{
-              margin: "0.65rem 0 0",
-              color: colors.muted,
-              fontSize: "0.9rem",
-              lineHeight: 1.35
-            }}
-          >
-            Nothing is waiting on you yet.
-          </p>
+          <InboxList
+            threads={inboxThreads}
+            selectedThreadId={selectedThread?.id}
+            onSelectThread={handleSelectThread}
+          />
         </section>
 
         <section
@@ -491,7 +822,21 @@ export function App(): React.ReactElement {
               gap: "0.75rem"
             }}
           >
-            <h2 style={{ margin: 0, fontSize: "1.08rem" }}>Browse</h2>
+            <div>
+              <h2 style={{ margin: 0, fontSize: "1.08rem" }}>Browse</h2>
+              <p
+                style={{
+                  margin: "0.25rem 0 0",
+                  color: colors.muted,
+                  fontSize: "0.8rem"
+                }}
+              >
+                {threads.length} threads •{" "}
+                {threadState.response
+                  ? formatTimestamp(threadState.response.fetchedAt)
+                  : "waiting"}
+              </p>
+            </div>
             <div
               style={{
                 display: "inline-flex",
@@ -534,20 +879,28 @@ export function App(): React.ReactElement {
               Loading Codex threads...
             </p>
           ) : threadState.error ? (
-            <p style={{ margin: "1rem 0 0", color: "#ff9d8b", lineHeight: 1.4 }}>
-              {threadState.error}
+            <ErrorBlock title="Thread list failed" message={threadState.error} />
+          ) : threads.length === 0 ? (
+            <p
+              style={{
+                margin: "1rem 0 0",
+                color: colors.muted,
+                lineHeight: 1.45
+              }}
+            >
+              Codex returned zero threads for this account.
             </p>
           ) : browseMode === "directories" ? (
             <DirectoryList
               threads={threads}
               selectedThreadId={selectedThread?.id}
-              onSelectThread={(thread) => setSelectedThreadId(thread.id)}
+              onSelectThread={handleSelectThread}
             />
           ) : (
             <ThreadList
               threads={threads}
               selectedThreadId={selectedThread?.id}
-              onSelectThread={(thread) => setSelectedThreadId(thread.id)}
+              onSelectThread={handleSelectThread}
             />
           )}
         </section>
@@ -572,16 +925,7 @@ export function App(): React.ReactElement {
           }}
         >
           <div>
-            <div
-              style={{
-                color: colors.muted,
-                fontSize: "0.82rem",
-                textTransform: "uppercase",
-                fontWeight: 700
-              }}
-            >
-              Recent view
-            </div>
+            <div style={sectionLabelStyle()}>Recent view</div>
             <h2 style={{ margin: "0.3rem 0 0", fontSize: "1.85rem" }}>
               {selectedThread?.title ?? "No thread selected"}
             </h2>
@@ -623,35 +967,62 @@ export function App(): React.ReactElement {
         >
           <div
             style={{
-              padding: "1.2rem",
-              borderRadius: "8px",
-              background: colors.panel,
-              border: `1px solid ${colors.border}`
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem"
             }}
           >
-            <p
+            <div
               style={{
-                margin: 0,
-                color: colors.muted,
-                fontSize: "0.84rem",
-                textTransform: "uppercase",
-                fontWeight: 700
+                padding: "1.2rem",
+                borderRadius: "8px",
+                background: colors.panel,
+                border: `1px solid ${colors.border}`
               }}
             >
-              Summary
-            </p>
-            <p
-              style={{
-                margin: "0.85rem 0 0",
-                fontSize: "1.05rem",
-                lineHeight: 1.55,
-                color: selectedThread ? colors.text : colors.muted
-              }}
-            >
-              {selectedThread
-                ? getPrimarySummary(selectedThread)
-                : "Start a thread or pick one from Recents."}
-            </p>
+              <p style={sectionLabelStyle()}>Summary</p>
+              <p
+                style={{
+                  margin: "0.85rem 0 0",
+                  fontSize: "1.05rem",
+                  lineHeight: 1.55,
+                  color: selectedThread ? colors.text : colors.muted
+                }}
+              >
+                {selectedThread
+                  ? getInspectorSummary(selectedThread)
+                  : "Select a thread to inspect it."}
+              </p>
+            </div>
+
+            {detailState.error ? (
+              <ErrorBlock title="Thread read failed" message={detailState.error} />
+            ) : detailState.loading ? (
+              <div
+                style={{
+                  padding: "1.2rem",
+                  borderRadius: "8px",
+                  background: colors.panel,
+                  border: `1px solid ${colors.border}`,
+                  color: colors.muted
+                }}
+              >
+                Loading thread context...
+              </div>
+            ) : (
+              <>
+                <MessagePreview
+                  label="Last user message"
+                  text={detailState.response?.replay.lastUserMessage}
+                  emptyText="No user message was extracted from this thread."
+                />
+                <MessagePreview
+                  label="Last assistant message"
+                  text={detailState.response?.replay.lastAssistantMessage}
+                  emptyText="No assistant message was extracted from this thread."
+                />
+              </>
+            )}
           </div>
 
           <div
@@ -669,17 +1040,7 @@ export function App(): React.ReactElement {
                 border: `1px solid ${colors.border}`
               }}
             >
-              <p
-                style={{
-                  margin: 0,
-                  color: colors.muted,
-                  fontSize: "0.84rem",
-                  textTransform: "uppercase",
-                  fontWeight: 700
-                }}
-              >
-                Linked directories
-              </p>
+              <p style={sectionLabelStyle()}>Linked directories</p>
               <div
                 style={{
                   display: "flex",
@@ -696,6 +1057,7 @@ export function App(): React.ReactElement {
                         display: "inline-flex",
                         minHeight: "1.8rem",
                         alignItems: "center",
+                        gap: "0.35rem",
                         padding: "0 0.65rem",
                         borderRadius: "999px",
                         background: colors.accentMuted,
@@ -703,6 +1065,9 @@ export function App(): React.ReactElement {
                         fontSize: "0.84rem"
                       }}
                     >
+                      <span aria-hidden="true">
+                        {directory.kind === "worktree" ? "🔀" : "📁"}
+                      </span>
                       {directory.label}
                     </span>
                   ))
@@ -722,17 +1087,7 @@ export function App(): React.ReactElement {
                 border: `1px solid ${colors.border}`
               }}
             >
-              <p
-                style={{
-                  margin: 0,
-                  color: colors.muted,
-                  fontSize: "0.84rem",
-                  textTransform: "uppercase",
-                  fontWeight: 700
-                }}
-              >
-                Runtime
-              </p>
+              <p style={sectionLabelStyle()}>Runtime</p>
               <dl
                 style={{
                   margin: "0.85rem 0 0",
@@ -743,10 +1098,18 @@ export function App(): React.ReactElement {
                   fontSize: "0.9rem"
                 }}
               >
+                <dt style={{ color: colors.muted }}>Fetched</dt>
+                <dd style={{ margin: 0 }}>
+                  {threadState.response
+                    ? formatTimestamp(threadState.response.fetchedAt)
+                    : "Unknown"}
+                </dd>
                 <dt style={{ color: colors.muted }}>Updated</dt>
                 <dd style={{ margin: 0 }}>
-                  {selectedThread ? formatUpdatedAt(selectedThread.updatedAt) : "Unknown"}
+                  {selectedThread ? formatTimestamp(selectedThread.updatedAt) : "Unknown"}
                 </dd>
+                <dt style={{ color: colors.muted }}>Threads</dt>
+                <dd style={{ margin: 0 }}>{threads.length}</dd>
                 <dt style={{ color: colors.muted }}>Platform</dt>
                 <dd style={{ margin: 0 }}>{shellApi?.platform ?? "unknown"}</dd>
                 <dt style={{ color: colors.muted }}>Electron</dt>

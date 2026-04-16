@@ -6,11 +6,18 @@ export default defineConfig({
   main: {
     plugins: [
       externalizeDepsPlugin({
-        exclude: ["@pwragnt/shared"]
+        exclude: ["@pwragnt/shared", "@pwragnt/agent-core"]
       })
     ]
   },
   preload: {
+    build: {
+      rollupOptions: {
+        output: {
+          format: "cjs"
+        }
+      }
+    },
     plugins: [
       externalizeDepsPlugin({
         exclude: ["@pwragnt/shared"]

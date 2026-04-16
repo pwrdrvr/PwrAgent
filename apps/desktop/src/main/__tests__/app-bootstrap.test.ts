@@ -5,6 +5,8 @@ const browserWindowState: {
   options?: BrowserWindowConstructorOptions;
   loadFile?: ReturnType<typeof vi.fn>;
   loadURL?: ReturnType<typeof vi.fn>;
+  on?: ReturnType<typeof vi.fn>;
+  send?: ReturnType<typeof vi.fn>;
   setWindowOpenHandler?: ReturnType<typeof vi.fn>;
   show?: ReturnType<typeof vi.fn>;
 } = {};
@@ -16,15 +18,19 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
   browserWindowState.options = options;
   browserWindowState.loadFile = vi.fn();
   browserWindowState.loadURL = vi.fn();
+  browserWindowState.on = vi.fn();
+  browserWindowState.send = vi.fn();
   browserWindowState.setWindowOpenHandler = vi.fn();
   browserWindowState.show = vi.fn();
 
   return {
     loadFile: browserWindowState.loadFile,
     loadURL: browserWindowState.loadURL,
+    on: browserWindowState.on,
     once: (_event: string, handler: () => void) => handler(),
     show: browserWindowState.show,
     webContents: {
+      send: browserWindowState.send,
       setWindowOpenHandler: browserWindowState.setWindowOpenHandler
     }
   };
@@ -56,7 +62,7 @@ describe("createMainWindow", () => {
 
     expect(BrowserWindowMock).toHaveBeenCalledTimes(1);
     expect(browserWindowState.options?.webPreferences?.preload).toContain(
-      "preload/index.js"
+      "preload/index.cjs"
     );
     expect(browserWindowState.options?.webPreferences?.contextIsolation).toBe(
       true

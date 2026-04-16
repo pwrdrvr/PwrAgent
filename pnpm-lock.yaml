@@ -23,6 +23,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@pwragnt/agent-core':
+        specifier: workspace:*
+        version: link:../../packages/agent-core
       '@pwragnt/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -58,7 +61,11 @@ importers:
         specifier: ^7.3.2
         version: 7.3.2(@types/node@25.6.0)(lightningcss@1.32.0)
 
-  packages/agent-core: {}
+  packages/agent-core:
+    dependencies:
+      '@pwragnt/shared':
+        specifier: workspace:*
+        version: link:../shared
 
   packages/shared: {}
 

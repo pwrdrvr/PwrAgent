@@ -34,3 +34,4 @@ export {
   loadLocalEnv,
   type LocalEnvLoadResult,
 } from "./testing/load-local-env.js";
+export { OverlayStore } from "./persistence/overlay-store.js";

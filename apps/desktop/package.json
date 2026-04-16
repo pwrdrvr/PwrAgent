@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@pwragnt/agent-core": "workspace:*",
     "@pwragnt/shared": "workspace:*",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
