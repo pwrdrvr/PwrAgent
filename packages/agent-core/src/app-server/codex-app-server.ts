@@ -11,11 +11,17 @@ import {
 } from "./protocol.js";
 import { AppServerSessionState } from "./session-state.js";
 import { AppServerMetadataService } from "./metadata-service.js";
+import { TurnRunner } from "./turn-runner.js";
 import type { AppServerProvider } from "../providers/provider-contract.js";
 
 type NotificationHandler = (
   notification: AppServerNotification,
 ) => void | Promise<void>;
+
+type RequestHandler = (
+  method: string,
+  params?: Record<string, unknown>,
+) => Promise<unknown> | unknown;
 
 type ServerOptions = {
   provider: AppServerProvider;
@@ -52,6 +58,8 @@ export class CodexAppServer {
   private readonly state = new AppServerSessionState();
   private readonly metadata = new AppServerMetadataService();
   private readonly notificationHandlers = new Set<NotificationHandler>();
+  private readonly requestHandlers = new Set<RequestHandler>();
+  private readonly turnRunner: TurnRunner;
   private readonly createThreadId: () => string;
   private readonly createRunId: () => string;
 
@@ -59,12 +67,26 @@ export class CodexAppServer {
     this.provider = options.provider;
     this.createThreadId = options.threadIdGenerator ?? (() => createId("thread"));
     this.createRunId = options.runIdGenerator ?? (() => createId("turn"));
+    this.turnRunner = new TurnRunner({
+      state: this.state,
+      emit: async (notification) => {
+        await this.emit(notification);
+      },
+      requestClient: async (method, params) => await this.sendRequest(method, params),
+    });
   }
 
   onNotification(handler: NotificationHandler): () => void {
     this.notificationHandlers.add(handler);
     return () => {
       this.notificationHandlers.delete(handler);
+    };
+  }
+
+  onRequest(handler: RequestHandler): () => void {
+    this.requestHandlers.add(handler);
+    return () => {
+      this.requestHandlers.delete(handler);
     };
   }
 
@@ -202,62 +224,8 @@ export class CodexAppServer {
     const runId = this.createRunId();
     this.state.appendInput(threadId, normalizedInput);
     this.state.createRun({ runId, threadId, handle });
-    void this.completeTurn({ threadId, runId, handle });
+    this.turnRunner.attach({ threadId, runId, handle });
     return { threadId, runId };
-  }
-
-  private async completeTurn(params: {
-    threadId: string;
-    runId: string;
-    handle: Awaited<ReturnType<AppServerProvider["startTurn"]>>;
-  }): Promise<void> {
-    try {
-      const result = await params.handle.result;
-      const run = this.state.getRun(params.runId);
-      if (!run || run.status !== "active") {
-        return;
-      }
-      this.state.completeRun(params.runId);
-      this.state.appendAssistant(params.threadId, result.assistantText ?? "");
-      this.state.setPreviousResponseId(params.threadId, result.providerResponseId);
-      await this.emit({
-        method: "turn/completed",
-        params: {
-          threadId: params.threadId,
-          runId: params.runId,
-          turn: {
-            id: params.runId,
-            status: "completed",
-            output: [
-              {
-                type: "text",
-                text: result.assistantText ?? "",
-              },
-            ],
-          },
-        },
-      });
-    } catch (error) {
-      const run = this.state.getRun(params.runId);
-      if (!run || run.status !== "active") {
-        return;
-      }
-      this.state.failRun(params.runId);
-      await this.emit({
-        method: "turn/failed",
-        params: {
-          threadId: params.threadId,
-          runId: params.runId,
-          turn: {
-            id: params.runId,
-            status: "failed",
-            error: {
-              message: error instanceof Error ? error.message : String(error),
-            },
-          },
-        },
-      });
-    }
   }
 
   private async steerTurn(params: Record<string, unknown>): Promise<AppServerTurnResult> {
@@ -294,6 +262,7 @@ export class CodexAppServer {
       throw new AppServerProtocolError(`Cannot interrupt inactive turn: ${runId}`);
     }
     await run.handle.interrupt?.();
+    await this.turnRunner.cancel(runId);
     this.state.cancelRun(runId);
     await this.emit({
       method: "turn/cancelled",
@@ -313,6 +282,14 @@ export class CodexAppServer {
     for (const handler of this.notificationHandlers) {
       await handler(notification);
     }
+  }
+
+  private async sendRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
+    const handlers = [...this.requestHandlers];
+    if (handlers.length === 0) {
+      return { decision: "cancel" };
+    }
+    return await handlers[0](method, params);
   }
 }
 

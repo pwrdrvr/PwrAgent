@@ -281,7 +281,7 @@ Add review and compaction flows, then lock the whole surface down with consumer-
 **Verification:**
 - OpenClaw can populate its thread and metadata UI against the Grok server without method-missing failures.
 
-- [ ] **Unit 4: Implement richer turn notifications and interactive request flow**
+- [x] **Unit 4: Implement richer turn notifications and interactive request flow**
 
 **Goal:** Expand `turn/start`, `turn/steer`, and `turn/interrupt` so they emit the progress, plan, file-edit, and interactive-request signals OpenClaw already expects.
 

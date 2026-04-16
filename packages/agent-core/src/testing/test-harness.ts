@@ -7,6 +7,8 @@ import type {
   AppServerProvider,
   ProviderActiveTurn,
   ProviderSteerParams,
+  ProviderTurnEvent,
+  ProviderTurnEventListener,
   ProviderTurnParams,
   ProviderTurnResult,
 } from "../providers/provider-contract.js";
@@ -31,6 +33,8 @@ export type FakeProviderRun = {
   deferred: Deferred<ProviderTurnResult>;
   steerCalls: ProviderSteerParams[];
   interrupted: boolean;
+  eventResponses: unknown[];
+  emit: (event: ProviderTurnEvent) => Promise<void>;
 };
 
 export class FakeProvider implements AppServerProvider {
@@ -38,6 +42,7 @@ export class FakeProvider implements AppServerProvider {
 
   startTurn(params: ProviderTurnParams): ProviderActiveTurn {
     const deferred = new Deferred<ProviderTurnResult>();
+    const listeners = new Set<ProviderTurnEventListener>();
     const run: FakeProviderRun = {
       thread: params.thread,
       input: params.input,
@@ -45,10 +50,32 @@ export class FakeProvider implements AppServerProvider {
       deferred,
       steerCalls: [],
       interrupted: false,
+      eventResponses: [],
+      emit: async (event) => {
+        const eventWithCapture =
+          event.type === "request_input"
+            ? {
+                ...event,
+                respond: async (response: unknown) => {
+                  run.eventResponses.push(response);
+                  await event.respond(response);
+                },
+              }
+            : event;
+        for (const listener of listeners) {
+          await listener(eventWithCapture);
+        }
+      },
     };
     this.runs.push(run);
     return {
       result: deferred.promise,
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
       steer: async (steerParams) => {
         run.steerCalls.push(steerParams);
       },
@@ -61,9 +88,11 @@ export class FakeProvider implements AppServerProvider {
 
 export function createTestHarness(options?: {
   provider?: AppServerProvider;
+  requestHandler?: (method: string, params: Record<string, unknown>) => Promise<unknown> | unknown;
 }) {
   const provider = options?.provider ?? new FakeProvider();
   const notifications: AppServerNotification[] = [];
+  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   const server = new CodexAppServer({
     provider,
     threadIdGenerator: (() => {
@@ -78,7 +107,15 @@ export function createTestHarness(options?: {
   server.onNotification(async (notification) => {
     notifications.push(notification);
   });
-  return { server, provider, notifications };
+  server.onRequest(async (method, params) => {
+    const normalized = (params ?? {}) as Record<string, unknown>;
+    requests.push({ method, params: normalized });
+    if (options?.requestHandler) {
+      return await options.requestHandler(method, normalized);
+    }
+    return { decision: "approve" };
+  });
+  return { server, provider, notifications, requests };
 }
 
 export async function createTemporaryTestDirectory(): Promise<{
