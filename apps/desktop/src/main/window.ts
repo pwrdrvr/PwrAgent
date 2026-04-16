@@ -1,5 +1,6 @@
 import { BrowserWindow, shell } from "electron";
 import { join } from "node:path";
+import { attachWindowFocusSync } from "./window-focus-sync";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 
@@ -55,6 +56,7 @@ export function createMainWindow(): BrowserWindow {
   });
 
   const { webContents } = window;
+  attachWindowFocusSync(window);
 
   if (typeof webContents.on === "function") {
     webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl) => {

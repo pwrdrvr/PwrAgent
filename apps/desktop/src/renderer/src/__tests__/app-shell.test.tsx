@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { App } from "../App";
 
 describe("App", () => {
@@ -8,9 +8,11 @@ describe("App", () => {
       configurable: true,
       value: {
         ping: () => "pong",
-        listThreads: async () => ({
+        getNavigationSnapshot: async () => ({
           backend: "codex",
           fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadIds: ["thread-1"],
           threads: [
             {
               id: "thread-1",
@@ -26,10 +28,20 @@ describe("App", () => {
                   kind: "worktree"
                 }
               ],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread",
+              },
               updatedAt: Date.now()
             }
           ]
         }),
+        markThreadSeen: async () => ({
+          backend: "codex",
+          threadId: "thread-1",
+          seenAt: Date.now(),
+        }),
+        onWindowFocus: () => () => undefined,
         readThread: async () => ({
           backend: "codex",
           fetchedAt: Date.now(),
@@ -67,6 +79,10 @@ describe("App", () => {
         name: "Build Codex client"
       })
     ).toBeInTheDocument();
+    const inboxHeading = screen.getByRole("heading", { level: 2, name: "Inbox" });
+    const inboxSection = inboxHeading.closest("section");
+    expect(inboxSection).not.toBeNull();
+    expect(within(inboxSection as HTMLElement).getByText("1")).toBeInTheDocument();
     expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
     expect(screen.getByText("codex/build-codex-client")).toBeInTheDocument();
     expect(screen.getByText(/1 linked directory/i)).toBeInTheDocument();
