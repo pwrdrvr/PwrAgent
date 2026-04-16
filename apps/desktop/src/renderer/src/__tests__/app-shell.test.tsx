@@ -1,13 +1,59 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { vi } from "vitest";
 import { App } from "../App";
 
 describe("App", () => {
-  it("renders the live recent-thread shell", async () => {
+  it("renders the live thread shell with transcript history", async () => {
+    const copyText = vi.fn(async () => undefined);
     Object.defineProperty(window, "pwragnt", {
       configurable: true,
       value: {
+        copyText,
         ping: () => "pong",
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read"],
+              capabilities: {
+                listThreads: true,
+                createThread: false,
+                resumeThread: true,
+                readThread: true,
+                startTurn: false,
+                interruptTurn: false,
+                steerTurn: false,
+                transcriptPagination: true,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: true
+              }
+            },
+            {
+              kind: "grok",
+              label: "Grok app server",
+              available: true,
+              methods: ["thread/list", "thread/read"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: true,
+                steerTurn: true,
+                transcriptPagination: false,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: false
+              }
+            }
+          ]
+        }),
         getNavigationSnapshot: async () => ({
           backend: "codex",
           fetchedAt: Date.now(),
@@ -25,6 +71,7 @@ describe("App", () => {
                   id: "/Users/huntharo/pwrdrvr/PwrAgnt",
                   label: "PwrAgnt",
                   path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                  worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
                   kind: "worktree"
                 }
               ],
@@ -47,9 +94,25 @@ describe("App", () => {
           fetchedAt: Date.now(),
           threadId: "thread-1",
           replay: {
+            messages: [
+              {
+                id: "message-1",
+                role: "user",
+                text: "Open the desktop plan and build the Codex client."
+              },
+              {
+                id: "message-2",
+                role: "assistant",
+                text: "The Codex client is wired and the thread browser is live."
+              }
+            ],
             lastUserMessage: "Open the desktop plan and build the Codex client.",
             lastAssistantMessage:
-              "The Codex client is wired and the thread browser is live."
+              "The Codex client is wired and the thread browser is live.",
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false
+            }
           }
         }),
         platform: "darwin",
@@ -84,14 +147,31 @@ describe("App", () => {
     expect(inboxSection).not.toBeNull();
     expect(within(inboxSection as HTMLElement).getByText("1")).toBeInTheDocument();
     expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
-    expect(screen.getByText("codex/build-codex-client")).toBeInTheDocument();
-    expect(screen.getByText(/1 linked directory/i)).toBeInTheDocument();
+    expect(screen.getAllByText("codex/build-codex-client").length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { level: 3, name: "Transcript" })).toBeInTheDocument();
     expect(
       await screen.findByText("Open the desktop plan and build the Codex client.")
     ).toBeInTheDocument();
     expect(
       screen.getByText("The Codex client is wired and the thread browser is live.")
     ).toBeInTheDocument();
+    const openContextButton = screen.getByRole("button", { name: "Open context rail" });
+    openContextButton.click();
+    expect(
+      await screen.findByRole("heading", { level: 3, name: "Thread details" })
+    ).toBeInTheDocument();
+    const context = screen.getByLabelText("Thread context");
+    fireEvent.click(
+      within(context).getByRole("button", { name: "Copy path for PwrAgnt" })
+    );
+    fireEvent.click(
+      within(context).getByRole("button", { name: "Copy path for worktree PwrAgnt" })
+    );
+    expect(copyText).toHaveBeenNthCalledWith(1, "/Users/huntharo/pwrdrvr/PwrAgnt");
+    expect(copyText).toHaveBeenNthCalledWith(2, "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt");
+    expect(screen.getByText("Codex app server")).toBeInTheDocument();
+    expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByText("darwin")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 });
