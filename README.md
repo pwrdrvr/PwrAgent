@@ -44,6 +44,17 @@ When you are ready to run live xAI-backed smoke coverage, put credentials in
 `packages/agent-core/.env.local`. The tracked template lives at
 `packages/agent-core/.env.local.example`.
 
+The desktop Grok app server client also falls back to the user config
+directory. It will load `XAI_API_KEY`, `GROK_MODEL`, and `XAI_BASE_URL` from
+the first existing file under `~/.config/grok-app-server` in this order:
+
+- `config.env`
+- `.env.local`
+- `.env`
+
+Project-local env and already-exported shell env still win over that global
+fallback.
+
 CI uses the existing `live-agent-core` workflow job with the `XAI_API_KEY`
 repository secret. No separate tool-test secret is required.
 

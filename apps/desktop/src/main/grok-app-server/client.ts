@@ -1,5 +1,10 @@
 import path from "node:path";
-import { CodexAppServer, GrokProvider, loadLocalEnv } from "@pwragnt/agent-core";
+import {
+  CodexAppServer,
+  GrokProvider,
+  loadGrokAppServerConfig,
+  loadLocalEnv,
+} from "@pwragnt/agent-core";
 import type {
   AppServerNotification,
   AppServerThreadReplay,
@@ -346,6 +351,7 @@ export class GrokAppServerClient {
     }
 
     loadLocalEnv({ override: false });
+    loadGrokAppServerConfig({ override: false });
     const apiKey = this.options.apiKey?.trim() || process.env.XAI_API_KEY?.trim();
     if (!apiKey) {
       throw new Error("grok app server unavailable: XAI_API_KEY is not set");

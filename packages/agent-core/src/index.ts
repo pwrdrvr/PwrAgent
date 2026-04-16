@@ -39,7 +39,10 @@ export {
   type FakeProviderRun,
 } from "./testing/test-harness.js";
 export {
+  defaultGrokAppServerConfigDir,
+  defaultGrokAppServerConfigPaths,
   defaultLocalEnvPath,
+  loadGrokAppServerConfig,
   loadLocalEnv,
   type LocalEnvLoadResult,
 } from "./testing/load-local-env.js";

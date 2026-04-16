@@ -1,5 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { CodexAppServer, FakeProvider } from "@pwragnt/agent-core";
+import {
+  CodexAppServer,
+  FakeProvider,
+  createTemporaryTestDirectory,
+  defaultGrokAppServerConfigPaths,
+} from "@pwragnt/agent-core";
 import { GrokAppServerClient } from "../grok-app-server/client";
 
 describe("GrokAppServerClient", () => {
@@ -84,5 +91,48 @@ describe("GrokAppServerClient", () => {
 
     unsubscribe();
     await client.close();
+  });
+
+  it("initializes from ~/.config/grok-app-server when env vars are absent", async () => {
+    const originalHome = process.env.HOME;
+    const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+    delete process.env.XAI_API_KEY;
+    delete process.env.GROK_MODEL;
+    delete process.env.XAI_BASE_URL;
+    delete process.env.XDG_CONFIG_HOME;
+
+    const temp = await createTemporaryTestDirectory();
+    process.env.HOME = temp.path;
+    const [configPath] = defaultGrokAppServerConfigPaths({ homeDir: temp.path });
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      "XAI_API_KEY=config-key\nGROK_MODEL=grok-4.20-fast\nXAI_BASE_URL=https://api.example.test/v1\n",
+      "utf8",
+    );
+
+    try {
+      const client = new GrokAppServerClient();
+      await expect(client.getInitializeResult()).resolves.toEqual(
+        expect.objectContaining({
+          serverInfo: expect.objectContaining({
+            name: "@pwragnt/grok-app-server",
+          }),
+        }),
+      );
+      await client.close();
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalXdgConfigHome === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+      }
+      await temp.cleanup();
+    }
   });
 });

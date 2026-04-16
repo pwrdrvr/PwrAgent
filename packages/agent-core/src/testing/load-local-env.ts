@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,11 +15,61 @@ export function defaultLocalEnvPath(): string {
   return path.resolve(currentDir, "../../.env.local");
 }
 
+export function defaultGrokAppServerConfigDir(options?: {
+  homeDir?: string;
+  xdgConfigHome?: string;
+}): string {
+  const homeDir = options?.homeDir ?? os.homedir();
+  const xdgConfigHome = options?.xdgConfigHome?.trim() || process.env.XDG_CONFIG_HOME?.trim();
+  return path.join(xdgConfigHome || path.join(homeDir, ".config"), "grok-app-server");
+}
+
+export function defaultGrokAppServerConfigPaths(options?: {
+  homeDir?: string;
+  xdgConfigHome?: string;
+}): string[] {
+  const configDir = defaultGrokAppServerConfigDir(options);
+  return [
+    path.join(configDir, "config.env"),
+    path.join(configDir, ".env.local"),
+    path.join(configDir, ".env"),
+  ];
+}
+
 export function loadLocalEnv(options?: {
   envPath?: string;
   override?: boolean;
 }): LocalEnvLoadResult {
   const envPath = options?.envPath ?? defaultLocalEnvPath();
+  return loadEnvFile(envPath, options?.override);
+}
+
+export function loadGrokAppServerConfig(options?: {
+  configPaths?: string[];
+  override?: boolean;
+  homeDir?: string;
+  xdgConfigHome?: string;
+}): LocalEnvLoadResult {
+  const configPaths =
+    options?.configPaths ?? defaultGrokAppServerConfigPaths(options);
+  for (const configPath of configPaths) {
+    if (fs.existsSync(configPath)) {
+      return loadEnvFile(configPath, options?.override);
+    }
+  }
+
+  return {
+    path: configPaths[0] ?? defaultGrokAppServerConfigPaths(options)[0],
+    loaded: false,
+    entries: [],
+    skippedReason: "missing",
+  };
+}
+
+function loadEnvFile(
+  envPath: string,
+  override = false,
+): LocalEnvLoadResult {
   if (!fs.existsSync(envPath)) {
     return {
       path: envPath,
@@ -44,7 +95,7 @@ export function loadLocalEnv(options?: {
     if (!key) {
       throw new Error(`Invalid env key on line ${index + 1} in ${envPath}`);
     }
-    if (options?.override || process.env[key] === undefined) {
+    if (override || process.env[key] === undefined) {
       process.env[key] = value;
     }
     entries.push(key);
