@@ -553,7 +553,7 @@ textarea {
 
 .transcript-list__scroll-bottom {
   position: absolute;
-  right: 20px;
+  left: 50%;
   bottom: 20px;
   z-index: 1;
   display: inline-flex;
@@ -565,9 +565,7 @@ textarea {
   border-color: var(--border-strong);
   background: rgba(11, 13, 18, 0.92);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
-}
-
-.transcript-list__scroll-bottom[data-has-content-below="true"] {
+  transform: translateX(-50%);
   border-color: var(--accent-border);
   background: rgba(17, 21, 28, 0.96);
 }
@@ -919,7 +917,7 @@ textarea {
   }
 
   .transcript-list__scroll-bottom {
-    right: 16px;
+    left: 50%;
     bottom: 16px;
   }
 

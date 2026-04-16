@@ -93,7 +93,9 @@ describe("TranscriptList", () => {
     fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
 
     expect(loadOlder).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: "Jump to latest message" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Jump to latest message" })
+    ).not.toBeInTheDocument();
   });
 
   it("anchors a freshly loaded transcript to the newest message", () => {
@@ -179,5 +181,38 @@ describe("TranscriptList", () => {
     );
 
     expect(list.scrollTop).toBe(240);
+  });
+
+  it("shows the jump-to-latest control only when the newest message is below the viewport", () => {
+    render(
+      <TranscriptList
+        loading={false}
+        loadingMore={false}
+        messages={[
+          {
+            id: "message-1",
+            role: "user",
+            text: "First message"
+          },
+          {
+            id: "message-2",
+            role: "assistant",
+            text: "Second message"
+          }
+        ]}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    expect(
+      screen.queryByRole("button", { name: "Jump to latest message" })
+    ).not.toBeInTheDocument();
+
+    list.scrollTop = 0;
+    fireEvent.scroll(list);
+
+    expect(screen.getByRole("button", { name: "Jump to latest message" })).toBeInTheDocument();
   });
 });

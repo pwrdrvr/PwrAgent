@@ -179,17 +179,18 @@ export function TranscriptList(props: TranscriptListProps) {
         ))}
       </div>
 
-      <button
-        className="button button--ghost transcript-list__scroll-bottom"
-        data-has-content-below={hasContentBelow}
-        type="button"
-        aria-label="Jump to latest message"
-        onClick={() => {
-          scrollToBottom();
-        }}
-      >
-        <span className="transcript-list__scroll-bottom-icon" aria-hidden="true" />
-      </button>
+      {hasContentBelow ? (
+        <button
+          className="button button--ghost transcript-list__scroll-bottom"
+          type="button"
+          aria-label="Jump to latest message"
+          onClick={() => {
+            scrollToBottom();
+          }}
+        >
+          <span className="transcript-list__scroll-bottom-icon" aria-hidden="true" />
+        </button>
+      ) : null}
     </div>
   );
 }
