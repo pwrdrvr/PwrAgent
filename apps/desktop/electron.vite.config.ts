@@ -6,7 +6,7 @@ export default defineConfig({
   main: {
     plugins: [
       externalizeDepsPlugin({
-        exclude: ["@pwragnt/shared"]
+        exclude: ["@pwragnt/shared", "@pwragnt/agent-core"]
       })
     ]
   },
