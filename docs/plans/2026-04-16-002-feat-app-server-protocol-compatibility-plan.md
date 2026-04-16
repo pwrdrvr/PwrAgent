@@ -349,7 +349,7 @@ Add review and compaction flows, then lock the whole surface down with consumer-
 **Verification:**
 - OpenClaw can invoke review and compaction flows against the Grok server without special-case fallbacks.
 
-- [ ] **Unit 6: Lock parity with consumer-sequence compatibility tests**
+- [x] **Unit 6: Lock parity with consumer-sequence compatibility tests**
 
 **Goal:** Prove the Grok app server satisfies the request and notification sequences OpenClaw actually drives today.
 
