@@ -1,5 +1,5 @@
 import type {
-  AppServerThreadMessage,
+  AppServerThreadEntry,
   AppServerThreadReplayPagination,
   BackendSummary,
   NavigationThreadSummary
@@ -19,7 +19,7 @@ type ThreadViewProps = {
   platform?: string;
   selectedThread?: NavigationThreadSummary;
   transcriptError?: string;
-  transcriptMessages: AppServerThreadMessage[];
+  transcriptEntries: AppServerThreadEntry[];
   transcriptPagination?: AppServerThreadReplayPagination;
   onLoadOlder: () => Promise<void>;
   onRefresh: () => Promise<void>;
@@ -69,9 +69,9 @@ export function ThreadView(props: ThreadViewProps) {
 
           <TranscriptList
             error={props.transcriptError}
+            entries={props.transcriptEntries}
             loading={props.loading}
             loadingMore={props.loadingMore}
-            messages={props.transcriptMessages}
             pagination={props.transcriptPagination}
             threadId={props.selectedThread.id}
             onLoadOlder={props.onLoadOlder}

@@ -694,6 +694,51 @@ textarea {
   text-decoration-color: currentColor;
 }
 
+.transcript-activity {
+  width: min(100%, 760px);
+  padding: 12px 0 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.transcript-list__items > .transcript-activity:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.transcript-activity__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.transcript-activity__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.transcript-activity__time {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.transcript-activity__details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.transcript-activity__detail {
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .context-rail {
   display: flex;
   align-self: stretch;

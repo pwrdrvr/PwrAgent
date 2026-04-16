@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
-  AppServerThreadMessage,
+  AppServerThreadEntry,
   AppServerThreadReplayPagination
 } from "@pwragnt/shared";
+import { TranscriptActivity } from "./TranscriptActivity";
 import { TranscriptMessage } from "./TranscriptMessage";
 
 type TranscriptListProps = {
+  entries: AppServerThreadEntry[];
   error?: string;
   loading: boolean;
   loadingMore: boolean;
-  messages: AppServerThreadMessage[];
   pagination?: AppServerThreadReplayPagination;
   threadId?: string;
   onLoadOlder: () => Promise<void>;
@@ -42,8 +43,8 @@ export function TranscriptList(props: TranscriptListProps) {
       return undefined;
     }
 
-    const firstMessageId = props.messages[0]?.id;
-    const lastMessageId = props.messages[props.messages.length - 1]?.id;
+    const firstMessageId = props.entries[0]?.id;
+    const lastMessageId = props.entries[props.entries.length - 1]?.id;
     const distanceFromBottom = Math.max(
       container.scrollHeight - container.clientHeight - container.scrollTop,
       0
@@ -58,7 +59,7 @@ export function TranscriptList(props: TranscriptListProps) {
       scrollTop: container.scrollTop,
       threadId: props.threadId
     };
-  }, [props.messages, props.threadId]);
+  }, [props.entries, props.threadId]);
 
   const syncScrollState = useCallback(() => {
     const snapshot = captureSnapshot();
@@ -96,15 +97,15 @@ export function TranscriptList(props: TranscriptListProps) {
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
-    if (!container || props.messages.length === 0) {
+    if (!container || props.entries.length === 0) {
       snapshotRef.current = undefined;
       setHasContentBelow(false);
       return;
     }
 
     const previousSnapshot = snapshotRef.current;
-    const firstMessageId = props.messages[0]?.id;
-    const lastMessageId = props.messages[props.messages.length - 1]?.id;
+    const firstMessageId = props.entries[0]?.id;
+    const lastMessageId = props.entries[props.entries.length - 1]?.id;
     const hasPrependedMessages = Boolean(
       previousSnapshot &&
         previousSnapshot.threadId === props.threadId &&
@@ -138,17 +139,17 @@ export function TranscriptList(props: TranscriptListProps) {
     }
 
     syncScrollState();
-  }, [props.messages, props.threadId, scrollToBottom, syncScrollState]);
+  }, [props.entries, props.threadId, scrollToBottom, syncScrollState]);
 
-  if (props.loading && props.messages.length === 0) {
+  if (props.loading && props.entries.length === 0) {
     return <p className="transcript-empty">Loading transcript…</p>;
   }
 
-  if (props.error && props.messages.length === 0) {
+  if (props.error && props.entries.length === 0) {
     return <p className="transcript-error">{props.error}</p>;
   }
 
-  if (props.messages.length === 0) {
+  if (props.entries.length === 0) {
     return <p className="transcript-empty">No thread history yet.</p>;
   }
 
@@ -174,9 +175,13 @@ export function TranscriptList(props: TranscriptListProps) {
         role="list"
         onScroll={syncScrollState}
       >
-        {props.messages.map((message) => (
-          <TranscriptMessage key={message.id} message={message} />
-        ))}
+        {props.entries.map((entry) =>
+          entry.type === "activity" ? (
+            <TranscriptActivity key={entry.id} entry={entry} />
+          ) : (
+            <TranscriptMessage key={entry.id} message={entry} />
+          )
+        )}
       </div>
 
       {hasContentBelow ? (

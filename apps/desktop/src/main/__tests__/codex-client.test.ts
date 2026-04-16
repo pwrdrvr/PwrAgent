@@ -76,16 +76,73 @@ class MockTransport implements JsonRpcTransport {
           jsonrpc: "2.0",
           id: payload.id,
           result: {
-            messages: [
-              {
-                role: "user",
-                text: "Show me the current desktop thread shell"
-              },
-              {
-                role: "assistant",
-                text: "The desktop shell is live and listing Codex threads."
-              }
-            ]
+            thread: {
+              turns: [
+                {
+                  id: "turn-1",
+                  startedAt: 1_763_500_100,
+                  items: [
+                    {
+                      type: "userMessage",
+                      id: "item-1",
+                      content: [
+                        {
+                          type: "text",
+                          text: "Show me the current desktop thread shell"
+                        }
+                      ]
+                    },
+                    {
+                      type: "agentMessage",
+                      id: "item-2",
+                      phase: "commentary",
+                      text: "I’m tracing the transcript scroll container."
+                    },
+                    {
+                      type: "commandExecution",
+                      id: "item-3",
+                      status: "completed",
+                      command: "/bin/zsh -lc 'sed -n 1,220p TranscriptList.tsx'",
+                      commandActions: [
+                        {
+                          type: "read",
+                          path: "/repo/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx"
+                        }
+                      ]
+                    },
+                    {
+                      type: "commandExecution",
+                      id: "item-4",
+                      status: "completed",
+                      command: "/bin/zsh -lc 'pwd && rg --files'",
+                      commandActions: [
+                        {
+                          type: "unknown"
+                        }
+                      ]
+                    },
+                    {
+                      type: "fileChange",
+                      id: "item-5",
+                      status: "completed",
+                      changes: [
+                        {
+                          path: "/repo/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
+                          kind: {
+                            type: "update"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      type: "agentMessage",
+                      id: "item-6",
+                      text: "The desktop shell is live and listing Codex threads."
+                    }
+                  ]
+                }
+              ]
+            }
           }
         })
       );
@@ -183,15 +240,74 @@ describe("CodexAppServerClient", () => {
     });
 
     expect(replay).toEqual({
+      entries: [
+        {
+          type: "message",
+          id: "item-1",
+          role: "user",
+          text: "Show me the current desktop thread shell",
+          createdAt: 1_763_500_100_000
+        },
+        {
+          type: "message",
+          id: "item-2",
+          role: "assistant",
+          text: "I’m tracing the transcript scroll container.",
+          createdAt: 1_763_500_100_000,
+          phase: "commentary"
+        },
+        {
+          type: "activity",
+          id: "activity-item-3",
+          summary: "Explored 1 file, Ran 1 command, Edited 1 file",
+          createdAt: 1_763_500_100_000,
+          status: "completed",
+          details: [
+            {
+              id: "item-3-1",
+              kind: "read",
+              label: "Read TranscriptList.tsx",
+              path: "/repo/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
+              status: "completed"
+            },
+            {
+              id: "item-4-1",
+              kind: "command",
+              label: "pwd && rg --files",
+              status: "completed"
+            },
+            {
+              id: "item-5-1",
+              kind: "write",
+              label: "Update TranscriptList.tsx",
+              path: "/repo/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
+              status: "completed"
+            }
+          ]
+        },
+        {
+          type: "message",
+          id: "item-6",
+          role: "assistant",
+          text: "The desktop shell is live and listing Codex threads.",
+          createdAt: 1_763_500_100_000
+        }
+      ],
       messages: [
         {
-          id: "message-1",
+          id: "item-1",
           role: "user",
           text: "Show me the current desktop thread shell",
           createdAt: undefined
         },
         {
-          id: "message-2",
+          id: "item-2",
+          role: "assistant",
+          text: "I’m tracing the transcript scroll container.",
+          createdAt: undefined
+        },
+        {
+          id: "item-6",
           role: "assistant",
           text: "The desktop shell is live and listing Codex threads.",
           createdAt: undefined

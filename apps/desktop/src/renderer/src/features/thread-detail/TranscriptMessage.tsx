@@ -1,8 +1,8 @@
-import type { AppServerThreadMessage } from "@pwragnt/shared";
+import type { AppServerThreadMessageEntry } from "@pwragnt/shared";
 import { MarkdownText } from "./MarkdownText";
 
 type TranscriptMessageProps = {
-  message: AppServerThreadMessage;
+  message: AppServerThreadMessageEntry;
 };
 
 export function TranscriptMessage(props: TranscriptMessageProps) {
@@ -28,7 +28,7 @@ export function TranscriptMessage(props: TranscriptMessageProps) {
   );
 }
 
-function labelForRole(role: AppServerThreadMessage["role"]): string {
+function labelForRole(role: AppServerThreadMessageEntry["role"]): string {
   if (role === "assistant") {
     return "Assistant";
   }

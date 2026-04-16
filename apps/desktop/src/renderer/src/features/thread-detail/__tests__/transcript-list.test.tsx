@@ -53,20 +53,44 @@ describe("TranscriptList", () => {
 
     render(
       <TranscriptList
-        loading={false}
-        loadingMore={false}
-        messages={[
+        entries={[
           {
+            type: "message",
             id: "message-1",
             role: "user",
             text: "Open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)\n\n- Check Unit 4\n- Keep Unit 3 isolated"
           },
           {
+            type: "activity",
+            id: "activity-1",
+            summary: "Explored 2 files, ran 1 command",
+            details: [
+              {
+                id: "detail-1",
+                kind: "read",
+                label: "Read TranscriptList.tsx"
+              },
+              {
+                id: "detail-2",
+                kind: "read",
+                label: "Read ThreadView.tsx"
+              },
+              {
+                id: "detail-3",
+                kind: "command",
+                label: "pwd && rg --files"
+              }
+            ]
+          },
+          {
+            type: "message",
             id: "message-2",
             role: "assistant",
             text: "The desktop shell is live.\n\nRun `pnpm test -- --project desktop-renderer` next."
           }
         ]}
+        loading={false}
+        loadingMore={false}
         pagination={{
           supportsPagination: true,
           hasPreviousPage: true,
@@ -90,6 +114,10 @@ describe("TranscriptList", () => {
     expect(
       screen.getByText("pnpm test -- --project desktop-renderer").closest("article")
     ).toHaveClass("transcript-message--assistant");
+    expect(screen.getByText("Explored 2 files, ran 1 command")).toBeInTheDocument();
+    expect(screen.getByText("Read TranscriptList.tsx")).toBeInTheDocument();
+    expect(screen.getByText("Read ThreadView.tsx")).toBeInTheDocument();
+    expect(screen.getByText("pwd && rg --files")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
 
@@ -99,23 +127,47 @@ describe("TranscriptList", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("anchors a freshly loaded transcript to the newest message", () => {
+  it("anchors a freshly loaded transcript to the newest entry", () => {
     render(
       <TranscriptList
-        loading={false}
-        loadingMore={false}
-        messages={[
+        entries={[
           {
+            type: "message",
             id: "message-1",
             role: "user",
             text: "Show me the current desktop thread shell"
           },
           {
+            type: "activity",
+            id: "activity-1",
+            summary: "Explored 2 files, ran 1 command",
+            details: [
+              {
+                id: "detail-1",
+                kind: "read",
+                label: "Read TranscriptList.tsx"
+              },
+              {
+                id: "detail-2",
+                kind: "read",
+                label: "Read ThreadView.tsx"
+              },
+              {
+                id: "detail-3",
+                kind: "command",
+                label: "pwd && rg --files"
+              }
+            ]
+          },
+          {
+            type: "message",
             id: "message-2",
             role: "assistant",
             text: "The desktop shell is live and listing Codex threads."
           }
         ]}
+        loading={false}
+        loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
       />
@@ -130,20 +182,22 @@ describe("TranscriptList", () => {
   it("preserves the reader position when older messages are prepended", () => {
     const { rerender } = render(
       <TranscriptList
-        loading={false}
-        loadingMore={false}
-        messages={[
+        entries={[
           {
+            type: "message",
             id: "message-2",
             role: "user",
             text: "Second message"
           },
           {
+            type: "message",
             id: "message-3",
             role: "assistant",
             text: "Third message"
           }
         ]}
+        loading={false}
+        loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
       />
@@ -157,25 +211,28 @@ describe("TranscriptList", () => {
 
     rerender(
       <TranscriptList
-        loading={false}
-        loadingMore={false}
-        messages={[
+        entries={[
           {
+            type: "message",
             id: "message-1",
             role: "assistant",
             text: "First message"
           },
           {
+            type: "message",
             id: "message-2",
             role: "user",
             text: "Second message"
           },
           {
+            type: "message",
             id: "message-3",
             role: "assistant",
             text: "Third message"
           }
         ]}
+        loading={false}
+        loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
       />
@@ -184,29 +241,32 @@ describe("TranscriptList", () => {
     expect(list.scrollTop).toBe(240);
   });
 
-  it("shows the jump-to-latest control only when the newest message is below the viewport", () => {
+  it("shows the jump-to-latest control only when the newest entry is below the viewport", () => {
     render(
       <TranscriptList
-        loading={false}
-        loadingMore={false}
-        messages={[
+        entries={[
           {
+            type: "message",
             id: "message-1",
             role: "user",
             text: "First message"
           },
           {
+            type: "message",
             id: "message-2",
             role: "assistant",
             text: "Second message"
           }
         ]}
+        loading={false}
+        loadingMore={false}
         threadId="thread-1"
         onLoadOlder={async () => undefined}
       />
     );
 
     const list = screen.getByRole("list");
+
     expect(
       screen.queryByRole("button", { name: "Jump to latest message" })
     ).not.toBeInTheDocument();

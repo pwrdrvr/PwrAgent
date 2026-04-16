@@ -7,6 +7,7 @@ import {
 } from "@pwragnt/agent-core";
 import type {
   AppServerNotification,
+  AppServerThreadEntry,
   AppServerThreadReplay,
   AppServerThreadSummary,
   AppServerTurnInputItem,
@@ -135,6 +136,7 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
 
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {
+      entries: [],
       messages: [],
       pagination,
     };
@@ -151,6 +153,7 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
     typeof record.lastAssistantMessage === "string"
   ) {
     return {
+      entries: [],
       messages: [],
       lastUserMessage:
         typeof record.lastUserMessage === "string"
@@ -187,6 +190,10 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
       },
     ];
   });
+  const entries: AppServerThreadEntry[] = messages.map((message) => ({
+    type: "message",
+    ...message,
+  }));
 
   let lastUserMessage: string | undefined;
   let lastAssistantMessage: string | undefined;
@@ -209,6 +216,7 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
   }
 
   return {
+    entries,
     messages,
     lastUserMessage,
     lastAssistantMessage,
@@ -300,12 +308,18 @@ export class GrokAppServerClient {
     );
   }
 
-  async readThread(params: { threadId: string }): Promise<AppServerThreadReplay> {
+  async readThread(params: {
+    threadId: string;
+    before?: string;
+    limit?: number;
+  }): Promise<AppServerThreadReplay> {
     await this.ensureInitialized();
 
     const result = await this.getServer().request("thread/read", {
       threadId: params.threadId,
       includeTurns: true,
+      before: params.before,
+      limit: params.limit,
     });
 
     return extractThreadReplay(result);
