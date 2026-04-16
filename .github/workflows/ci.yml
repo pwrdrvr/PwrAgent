@@ -82,7 +82,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
 
-      - name: Live agent-core smoke
+      - name: Live agent-core smoke and tool coverage
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           XAI_BASE_URL: https://api.x.ai/v1

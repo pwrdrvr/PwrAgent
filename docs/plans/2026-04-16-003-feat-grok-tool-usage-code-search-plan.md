@@ -390,7 +390,7 @@ Lock the behavior down with deterministic contract tests and a live-gated tool-l
 **Verification:**
 - A Grok turn can perform at least one real repository tool call before producing final assistant text.
 
-- [ ] **Unit 6: Lock down app-server compatibility and live coverage for tool-bearing turns**
+- [x] **Unit 6: Lock down app-server compatibility and live coverage for tool-bearing turns**
 
 **Goal:** Prove that the new tool runtime works through the public app-server surface and in the real xAI-backed live path.
 

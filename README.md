@@ -44,8 +44,12 @@ When you are ready to run live xAI-backed smoke coverage, put credentials in
 `packages/agent-core/.env.local`. The tracked template lives at
 `packages/agent-core/.env.local.example`.
 
+CI uses the existing `live-agent-core` workflow job with the `XAI_API_KEY`
+repository secret. No separate tool-test secret is required.
+
 Live smoke coverage:
 
 - `pnpm --filter @pwragnt/agent-core test:live`
 - Covers live thread continuation via `thread/resume`
 - Covers live context compaction via `thread/compact/start`
+- Covers live repository-tool usage against a temporary workspace
