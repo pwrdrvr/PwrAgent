@@ -120,7 +120,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Establish the workspace and desktop shell**
+- [x] **Unit 1: Establish the workspace and desktop shell**
 
 **Goal:** Create the monorepo structure, Electron app shell, shared TypeScript configuration, and baseline test harness that every later unit can build on.
 

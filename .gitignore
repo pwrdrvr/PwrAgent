@@ -1,0 +1,8 @@
+node_modules/
+.DS_Store
+coverage/
+dist/
+dist-electron/
+out/
+playwright-report/
+test-results/

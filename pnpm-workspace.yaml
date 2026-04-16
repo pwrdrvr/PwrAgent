@@ -1,0 +1,13 @@
+packages:
+  - apps/*
+  - packages/*
+allowBuilds:
+  b: true
+  d: true
+  e: true
+  electron: true
+  esbuild: true
+  i: true
+  l: true
+  s: true
+  u: true
