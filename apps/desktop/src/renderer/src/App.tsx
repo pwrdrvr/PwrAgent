@@ -95,7 +95,7 @@ function getThreadMetadataPills(
 ): Array<{ key: string; icon: string; label: string }> {
   const projectPills = thread.linkedDirectories.map((directory) => ({
     key: directory.id,
-    icon: "📁",
+    icon: directory.kind === "worktree" ? "🔀" : "📁",
     label: directory.label
   }));
 
@@ -924,6 +924,7 @@ export function App(): React.ReactElement {
                         display: "inline-flex",
                         minHeight: "1.8rem",
                         alignItems: "center",
+                        gap: "0.35rem",
                         padding: "0 0.65rem",
                         borderRadius: "999px",
                         background: colors.accentMuted,
@@ -931,6 +932,9 @@ export function App(): React.ReactElement {
                         fontSize: "0.84rem"
                       }}
                     >
+                      <span aria-hidden="true">
+                        {directory.kind === "worktree" ? "🔀" : "📁"}
+                      </span>
                       {directory.label}
                     </span>
                   ))

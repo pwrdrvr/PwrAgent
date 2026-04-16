@@ -118,7 +118,18 @@ describe("CodexAppServerClient", () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
-      command: "codex"
+      command: "codex",
+      directoryResolver: async (projectKey) =>
+        projectKey
+          ? [
+              {
+                id: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                label: "PwrAgnt",
+                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                kind: "worktree"
+              }
+            ]
+          : []
     });
 
     const threads = await client.listThreads();
@@ -132,7 +143,8 @@ describe("CodexAppServerClient", () => {
         {
           id: "/Users/huntharo/pwrdrvr/PwrAgnt",
           label: "PwrAgnt",
-          path: "/Users/huntharo/pwrdrvr/PwrAgnt"
+          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          kind: "worktree"
         }
       ]
     });
@@ -145,7 +157,8 @@ describe("CodexAppServerClient", () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
-      command: "codex"
+      command: "codex",
+      directoryResolver: async () => []
     });
 
     const threads = await client.listThreads();
@@ -159,7 +172,8 @@ describe("CodexAppServerClient", () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
-      command: "codex"
+      command: "codex",
+      directoryResolver: async () => []
     });
 
     const replay = await client.readThread({

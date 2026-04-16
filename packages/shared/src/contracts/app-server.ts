@@ -6,6 +6,7 @@ export type LinkedDirectorySummary = {
   id: string;
   label: string;
   path: string;
+  kind: "local" | "worktree";
 };
 
 export type AppServerThreadSummary = {

@@ -22,7 +22,8 @@ describe("App", () => {
                 {
                   id: "/Users/huntharo/pwrdrvr/PwrAgnt",
                   label: "PwrAgnt",
-                  path: "/Users/huntharo/pwrdrvr/PwrAgnt"
+                  path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                  kind: "worktree"
                 }
               ],
               updatedAt: Date.now()

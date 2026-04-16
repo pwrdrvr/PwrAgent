@@ -1,4 +1,6 @@
+import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
+import { promisify } from "node:util";
 import type {
   AppServerThreadReplay,
   AppServerThreadSummary,
@@ -9,15 +11,24 @@ import { StdioJsonRpcTransport } from "./stdio-transport";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const execFile = promisify(execFileCallback);
 
 type CodexClientOptions = {
   command?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
+  directoryResolver?: (
+    projectKey?: string
+  ) => Promise<LinkedDirectorySummary[]>;
   requestTimeoutMs?: number;
 };
 
-type CodexThreadSummary = Omit<AppServerThreadSummary, "source">;
+type RawCodexThreadSummary = Omit<
+  AppServerThreadSummary,
+  "source" | "linkedDirectories"
+> & {
+  projectKey?: string;
+};
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -274,7 +285,24 @@ function isAlreadyInitializedError(error: unknown): boolean {
   return text.toLowerCase().includes("already initialized");
 }
 
-function deriveLinkedDirectories(projectKey?: string): LinkedDirectorySummary[] {
+async function runGit(projectKey: string, args: string[]): Promise<string> {
+  const result = await execFile("git", ["-C", projectKey, ...args], {
+    env: process.env
+  });
+  return result.stdout.trim();
+}
+
+function parseGitWorktrees(output: string): string[] {
+  return output
+    .split("\n")
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length).trim())
+    .filter(Boolean);
+}
+
+async function resolveLinkedDirectories(
+  projectKey?: string
+): Promise<LinkedDirectorySummary[]> {
   if (!projectKey) {
     return [];
   }
@@ -284,18 +312,38 @@ function deriveLinkedDirectories(projectKey?: string): LinkedDirectorySummary[] 
     return [];
   }
 
-  return [
-    {
-      id: normalizedPath,
-      path: normalizedPath,
-      label: path.basename(normalizedPath) || normalizedPath
-    }
-  ];
+  try {
+    const repoRoot = await runGit(normalizedPath, ["rev-parse", "--show-toplevel"]);
+    const worktreeList = await runGit(normalizedPath, ["worktree", "list", "--porcelain"]);
+    const worktreePaths = parseGitWorktrees(worktreeList);
+    const primaryPath = worktreePaths[0] || repoRoot;
+    const currentPath = path.resolve(repoRoot);
+    const resolvedPrimaryPath = path.resolve(primaryPath);
+
+    return [
+      {
+        id: resolvedPrimaryPath,
+        path: resolvedPrimaryPath,
+        label: path.basename(resolvedPrimaryPath) || resolvedPrimaryPath,
+        kind: currentPath === resolvedPrimaryPath ? "local" : "worktree"
+      }
+    ];
+  } catch {
+    const fallbackPath = path.resolve(normalizedPath);
+    return [
+      {
+        id: fallbackPath,
+        path: fallbackPath,
+        label: path.basename(fallbackPath) || fallbackPath,
+        kind: "local"
+      }
+    ];
+  }
 }
 
-function extractThreadsFromValue(value: unknown): CodexThreadSummary[] {
+function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
   const items = extractThreadRecords(value);
-  const summaries = new Map<string, CodexThreadSummary>();
+  const summaries = new Map<string, RawCodexThreadSummary>();
 
   for (const record of items) {
     const threadId =
@@ -321,7 +369,7 @@ function extractThreadsFromValue(value: unknown): CodexThreadSummary[] {
         pickString(record, ["summary", "preview", "snippet"]) ??
           pickString(sessionRecord ?? {}, ["summary", "preview", "snippet"])
       ),
-      linkedDirectories: deriveLinkedDirectories(projectKey),
+      projectKey,
       createdAt: normalizeEpochTimestamp(
         pickNumber(record, ["createdAt", "created_at"]) ??
           pickNumber(sessionRecord ?? {}, ["createdAt", "created_at"])
@@ -383,6 +431,9 @@ async function requestWithFallbacks(params: {
 
 export class CodexAppServerClient {
   private readonly connection: JsonRpcConnection;
+  private readonly directoryResolver: (
+    projectKey?: string
+  ) => Promise<LinkedDirectorySummary[]>;
   private initialized = false;
   private initializationPromise: Promise<void> | null = null;
 
@@ -395,6 +446,7 @@ export class CodexAppServerClient {
       }),
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
+    this.directoryResolver = options.directoryResolver ?? resolveLinkedDirectories;
   }
 
   async close(): Promise<void> {
@@ -413,10 +465,13 @@ export class CodexAppServerClient {
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     });
 
-    return extractThreadsFromValue(result).map((thread) => ({
-      ...thread,
-      source: "codex"
-    }));
+    return await Promise.all(
+      extractThreadsFromValue(result).map(async (thread) => ({
+        ...thread,
+        linkedDirectories: await this.directoryResolver(thread.projectKey),
+        source: "codex"
+      }))
+    );
   }
 
   async readThread(params: { threadId: string }): Promise<AppServerThreadReplay> {
