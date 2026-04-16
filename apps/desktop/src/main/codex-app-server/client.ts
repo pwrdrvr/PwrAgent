@@ -2,8 +2,10 @@ import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import type {
+  AppServerNotification,
   AppServerThreadReplay,
   AppServerThreadSummary,
+  AppServerTurnInputItem,
   LinkedDirectorySummary
 } from "@pwragnt/shared";
 import { JsonRpcConnection } from "./json-rpc";
@@ -21,6 +23,14 @@ type CodexClientOptions = {
     projectKey?: string
   ) => Promise<LinkedDirectorySummary[]>;
   requestTimeoutMs?: number;
+};
+
+type InitializeResult = {
+  serverInfo?: {
+    name?: string;
+    version?: string;
+  };
+  methods?: string[];
 };
 
 type RawCodexThreadSummary = Omit<
@@ -236,6 +246,24 @@ function extractThreadReplayFromReadResult(value: unknown): AppServerThreadRepla
   return { lastUserMessage, lastAssistantMessage };
 }
 
+function extractThreadIdFromValue(value: unknown): string | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  return pickString(record, ["threadId", "thread_id", "id"]);
+}
+
+function extractRunIdFromValue(value: unknown): string | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  return pickString(record, ["runId", "run_id", "id"]);
+}
+
 function extractThreadRecords(value: unknown): Record<string, unknown>[] {
   if (Array.isArray(value)) {
     return value.flatMap((entry) => extractThreadRecords(entry));
@@ -436,6 +464,10 @@ export class CodexAppServerClient {
   ) => Promise<LinkedDirectorySummary[]>;
   private initialized = false;
   private initializationPromise: Promise<void> | null = null;
+  private initializeResult: InitializeResult | null = null;
+  private readonly notificationListeners = new Set<
+    (notification: AppServerNotification) => void | Promise<void>
+  >();
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.connection = new JsonRpcConnection(
@@ -447,12 +479,35 @@ export class CodexAppServerClient {
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
     this.directoryResolver = options.directoryResolver ?? resolveLinkedDirectories;
+    this.connection.setNotificationHandler(async (method, params) => {
+      for (const listener of this.notificationListeners) {
+        await listener({
+          method: method as AppServerNotification["method"],
+          params: (params ?? {}) as AppServerNotification["params"],
+        } as AppServerNotification);
+      }
+    });
   }
 
   async close(): Promise<void> {
     this.initialized = false;
     this.initializationPromise = null;
+    this.initializeResult = null;
     await this.connection.close();
+  }
+
+  onNotification(
+    listener: (notification: AppServerNotification) => void | Promise<void>
+  ): () => void {
+    this.notificationListeners.add(listener);
+    return () => {
+      this.notificationListeners.delete(listener);
+    };
+  }
+
+  async getInitializeResult(): Promise<InitializeResult> {
+    await this.ensureInitialized();
+    return this.initializeResult ?? {};
   }
 
   async listThreads(params?: { filter?: string }): Promise<AppServerThreadSummary[]> {
@@ -487,6 +542,76 @@ export class CodexAppServerClient {
     return extractThreadReplayFromReadResult(result);
   }
 
+  async startThread(params: {
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/start", "thread/new"],
+      payloads: [params],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    const threadId = extractThreadIdFromValue(result);
+    if (!threadId) {
+      throw new Error("codex app server thread/start did not return threadId");
+    }
+
+    return { threadId };
+  }
+
+  async startTurn(params: {
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    model?: string;
+  }): Promise<{ threadId: string; runId: string }> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["turn/start"],
+      payloads: [params],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    const threadId = extractThreadIdFromValue(result);
+    const runId = extractRunIdFromValue(result);
+    if (!threadId || !runId) {
+      throw new Error("codex app server turn/start did not return threadId and runId");
+    }
+
+    return { threadId, runId };
+  }
+
+  async interruptTurn(params: {
+    threadId: string;
+    runId: string;
+  }): Promise<{ threadId: string; runId: string }> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["turn/interrupt"],
+      payloads: [{ threadId: params.threadId, turnId: params.runId }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    const threadId = extractThreadIdFromValue(result);
+    const runId = extractRunIdFromValue(result);
+    if (!threadId || !runId) {
+      throw new Error("codex app server turn/interrupt did not return threadId and runId");
+    }
+
+    return { threadId, runId };
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;
@@ -501,11 +626,12 @@ export class CodexAppServerClient {
       await this.connection.connect();
 
       try {
-        await this.connection.request("initialize", {
+        const result = await this.connection.request("initialize", {
           protocolVersion: DEFAULT_PROTOCOL_VERSION,
           clientInfo: { name: "pwragnt-desktop", version: "0.1.0" },
           capabilities: { experimentalApi: true }
         });
+        this.initializeResult = (asRecord(result) ?? {}) as InitializeResult;
       } catch (error) {
         if (!isAlreadyInitializedError(error)) {
           throw error;

@@ -11,7 +11,10 @@ import type {
   MarkThreadSeenResponse,
   NavigationSnapshot,
 } from "@pwragnt/shared";
-import { CodexAppServerClient } from "../codex-app-server/client";
+import {
+  disposeDesktopBackendRegistry,
+  getDesktopBackendRegistry,
+} from "../app-server/backend-registry";
 import {
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
@@ -29,43 +32,26 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
   console.info(`[pwragnt:app-server] ${event}`, payload);
 }
 
-function parseEnvArgs(rawArgs: string | undefined): string[] {
-  if (!rawArgs?.trim()) {
-    return [];
-  }
-
-  return rawArgs
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
-
 class DesktopAppServerService {
-  private codexClient: CodexAppServerClient | null = null;
   private overlayStore: OverlayStore | null = null;
 
   async listThreads(
     request: AppServerListThreadsRequest = {}
   ): Promise<AppServerListThreadsResponse> {
-    const backend = request.backend ?? "codex";
-
-    if (backend !== "codex") {
-      throw new Error(`${backend} app server is not wired yet`);
-    }
-
-    const client = this.getCodexClient();
-    const threads = await client.listThreads({
-      filter: request.filter
+    const backend = request.backend;
+    const threads = await getDesktopBackendRegistry().listThreads({
+      backend,
+      filter: request.filter,
     });
 
     logDebug("listThreads", {
-      backend,
+      backend: backend ?? "all",
       count: threads.length,
       threadIds: threads.slice(0, 5).map((thread) => thread.id)
     });
 
     return {
-      backend,
+      backend: backend ?? "codex",
       fetchedAt: Date.now(),
       threads
     };
@@ -75,42 +61,27 @@ class DesktopAppServerService {
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> {
     const backend = request.backend ?? "codex";
-
-    if (backend !== "codex") {
-      throw new Error(`${backend} app server is not wired yet`);
-    }
-
-    const client = this.getCodexClient();
-    const replay = await client.readThread({
-      threadId: request.threadId
+    const response = await getDesktopBackendRegistry().readThread({
+      backend,
+      threadId: request.threadId,
     });
 
     logDebug("readThread", {
       backend,
       threadId: request.threadId,
-      hasLastUserMessage: Boolean(replay.lastUserMessage),
-      hasLastAssistantMessage: Boolean(replay.lastAssistantMessage)
+      hasLastUserMessage: Boolean(response.replay.lastUserMessage),
+      hasLastAssistantMessage: Boolean(response.replay.lastAssistantMessage)
     });
 
-    return {
-      backend,
-      fetchedAt: Date.now(),
-      threadId: request.threadId,
-      replay
-    };
+    return response;
   }
 
   async getNavigationSnapshot(
     request: GetNavigationSnapshotRequest = {},
   ): Promise<NavigationSnapshot> {
     const backend = request.backend ?? "codex";
-
-    if (backend !== "codex") {
-      throw new Error(`${backend} app server is not wired yet`);
-    }
-
-    const client = this.getCodexClient();
-    const threads = await client.listThreads({
+    const threads = await getDesktopBackendRegistry().listThreads({
+      backend,
       filter: request.filter,
     });
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
@@ -155,22 +126,7 @@ class DesktopAppServerService {
   }
 
   async close(): Promise<void> {
-    await this.codexClient?.close();
-    this.codexClient = null;
-  }
-
-  private getCodexClient(): CodexAppServerClient {
-    if (this.codexClient) {
-      return this.codexClient;
-    }
-
-    this.codexClient = new CodexAppServerClient({
-      command: process.env.PWRAGNT_CODEX_COMMAND?.trim() || "codex",
-      args: parseEnvArgs(process.env.PWRAGNT_CODEX_ARGS),
-      requestTimeoutMs: 20_000
-    });
-
-    return this.codexClient;
+    await disposeDesktopBackendRegistry();
   }
 
   private getOverlayStore(): OverlayStore {

@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, shell } from "electron";
+import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import { disposeAppServerIpcHandlers, registerAppServerIpcHandlers } from "./ipc/app-server";
 import { createMainWindow } from "./window";
 
@@ -34,6 +35,7 @@ export function bootstrapApp(): void {
   app.whenReady().then(() => {
     installApplicationMenu();
     registerAppServerIpcHandlers();
+    registerAgentIpcHandlers();
     createMainWindow();
 
     app.on("activate", () => {
@@ -50,6 +52,7 @@ export function bootstrapApp(): void {
   });
 
   app.on("before-quit", () => {
+    disposeAgentIpcHandlers();
     void disposeAppServerIpcHandlers();
   });
 }
