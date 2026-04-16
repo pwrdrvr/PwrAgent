@@ -213,6 +213,11 @@ export type AppServerNotification =
           type: string;
           text?: string;
           review?: string;
+          command?: string;
+          commandAction?: AppServerCommandAction;
+          toolName?: string;
+          success?: boolean;
+          arguments?: Record<string, unknown>;
         };
       };
     }

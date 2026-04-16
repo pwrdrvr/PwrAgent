@@ -236,7 +236,7 @@ Lock the behavior down with deterministic contract tests and a live-gated tool-l
 **Verification:**
 - `thread/read` reflects the tool-bearing turn history needed by later phases.
 
-- [ ] **Unit 2: Add a local tool contract and registry**
+- [x] **Unit 2: Add a local tool contract and registry**
 
 **Goal:** Create one internal place where model-visible tools are declared, validated, executed, and mapped back into provider and app-server events.
 
@@ -270,7 +270,7 @@ Lock the behavior down with deterministic contract tests and a live-gated tool-l
 **Verification:**
 - Provider code can request a tool by name without importing the tool implementation directly.
 
-- [ ] **Unit 3: Implement read-only repository tools with ripgrep-first search**
+- [x] **Unit 3: Implement read-only repository tools with ripgrep-first search**
 
 **Goal:** Give the model stable, high-signal tools for reading files, listing files, and searching repository contents without forcing it to synthesize shell every time.
 

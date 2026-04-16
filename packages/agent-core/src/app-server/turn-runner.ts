@@ -88,6 +88,11 @@ export class TurnRunner {
           status: event.type === "item_started" ? "in_progress" : "completed",
           text: event.item.text,
           review: event.item.review,
+          command: event.item.command,
+          commandAction: event.item.commandAction,
+          toolName: event.item.toolName,
+          success: event.item.success,
+          arguments: event.item.arguments,
         });
         await this.emit({
           method: event.type === "item_started" ? "item/started" : "item/completed",
@@ -99,6 +104,11 @@ export class TurnRunner {
               type: event.item.type,
               text: event.item.text,
               review: event.item.review,
+              command: event.item.command,
+              commandAction: event.item.commandAction,
+              toolName: event.item.toolName,
+              success: event.item.success,
+              arguments: event.item.arguments,
             },
           },
         });

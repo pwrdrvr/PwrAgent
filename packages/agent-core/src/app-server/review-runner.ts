@@ -2,12 +2,14 @@ import type { AppServerNotification, ThreadState } from "./protocol.js";
 import { AppServerSessionState } from "./session-state.js";
 import { TurnRunner } from "./turn-runner.js";
 import type { AppServerProvider } from "../providers/provider-contract.js";
+import type { ToolExecutor } from "../tools/tool-contract.js";
 
 type ReviewRunnerOptions = {
   provider: AppServerProvider;
   state: AppServerSessionState;
   emit: (notification: AppServerNotification) => Promise<void>;
   turnRunner: TurnRunner;
+  tools: ToolExecutor;
 };
 
 export class ReviewRunner {
@@ -15,12 +17,14 @@ export class ReviewRunner {
   private readonly state: AppServerSessionState;
   private readonly emit: (notification: AppServerNotification) => Promise<void>;
   private readonly turnRunner: TurnRunner;
+  private readonly tools: ToolExecutor;
 
   constructor(options: ReviewRunnerOptions) {
     this.provider = options.provider;
     this.state = options.state;
     this.emit = options.emit;
     this.turnRunner = options.turnRunner;
+    this.tools = options.tools;
   }
 
   async start(params: {
@@ -41,6 +45,7 @@ export class ReviewRunner {
         },
       ],
       previousResponseId: this.state.getPreviousResponseId(params.thread.threadId),
+      tools: this.tools,
     });
     this.state.createRun({
       runId: params.runId,
