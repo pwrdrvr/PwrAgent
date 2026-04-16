@@ -8,11 +8,11 @@ const envResult = loadLocalEnv({ override: true });
 const xaiApiKey = process.env.XAI_API_KEY?.trim();
 const xaiBaseUrl = process.env.XAI_BASE_URL?.trim() || "https://api.x.ai/v1";
 const grokModel = process.env.GROK_MODEL?.trim() || "grok-4.20-reasoning";
-const liveSkipReason = !envResult.loaded
-  ? `missing local env file at ${envResult.path}`
-  : !xaiApiKey
-    ? "XAI_API_KEY is missing from the local env file"
-    : undefined;
+const liveSkipReason = xaiApiKey
+  ? undefined
+  : envResult.loaded
+    ? "XAI_API_KEY is missing from the local env file or environment"
+    : `missing local env file at ${envResult.path} and XAI_API_KEY is not set`;
 
 const itLive = liveSkipReason ? it.skip : it;
 const liveNotificationTimeoutMs = 60_000;
