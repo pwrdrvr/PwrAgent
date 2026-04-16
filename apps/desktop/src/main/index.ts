@@ -1,4 +1,5 @@
 import { app, BrowserWindow, Menu, shell } from "electron";
+import { disposeAppServerIpcHandlers, registerAppServerIpcHandlers } from "./ipc/app-server";
 import { createMainWindow } from "./window";
 
 const APP_NAME = "PwrAgnt";
@@ -32,6 +33,7 @@ export function bootstrapApp(): void {
 
   app.whenReady().then(() => {
     installApplicationMenu();
+    registerAppServerIpcHandlers();
     createMainWindow();
 
     app.on("activate", () => {
@@ -45,6 +47,10 @@ export function bootstrapApp(): void {
     if (process.platform !== "darwin") {
       app.quit();
     }
+  });
+
+  app.on("before-quit", () => {
+    void disposeAppServerIpcHandlers();
   });
 }
 

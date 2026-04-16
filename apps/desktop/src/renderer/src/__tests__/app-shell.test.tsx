@@ -3,11 +3,31 @@ import { render, screen } from "@testing-library/react";
 import { App } from "../App";
 
 describe("App", () => {
-  it("renders the shell navigation and desktop bridge status", () => {
+  it("renders the live recent-thread shell", async () => {
     Object.defineProperty(window, "pwragnt", {
       configurable: true,
       value: {
         ping: () => "pong",
+        listThreads: async () => ({
+          backend: "codex",
+          fetchedAt: Date.now(),
+          threads: [
+            {
+              id: "thread-1",
+              title: "Build Codex client",
+              summary: "Wire the app-server transport and list threads",
+              source: "codex",
+              linkedDirectories: [
+                {
+                  id: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                  label: "PwrAgnt",
+                  path: "/Users/huntharo/pwrdrvr/PwrAgnt"
+                }
+              ],
+              updatedAt: Date.now()
+            }
+          ]
+        }),
         platform: "darwin",
         versions: {
           electron: "41.2.1"
@@ -18,15 +38,23 @@ describe("App", () => {
     render(<App />);
 
     expect(
-      screen.getByRole("heading", { level: 1, name: "PwrAgnt" })
+      screen.getByRole("heading", { level: 1, name: "Threads" })
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { level: 2, name: "Inbox" })
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Recents" })
+      screen.getByRole("button", { name: "recents" })
     ).toBeInTheDocument();
-    expect(screen.getByText("Ping: pong")).toBeInTheDocument();
-    expect(screen.getByText("Platform: darwin")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", {
+        level: 2,
+        name: "Build Codex client"
+      })
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText("Wire the app-server transport and list threads")
+    ).toHaveLength(2);
+    expect(screen.getByText("darwin")).toBeInTheDocument();
   });
 });

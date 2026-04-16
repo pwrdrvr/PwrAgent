@@ -1,6 +1,1 @@
-export type ThreadIdentifier = string;
-
-export type LinkedDirectorySummary = {
-  id: string;
-  label: string;
-};
+export * from "./contracts/app-server";

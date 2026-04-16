@@ -23,6 +23,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@pwragnt/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       react:
         specifier: ^19.2.0
         version: 19.2.5
