@@ -10,6 +10,7 @@ import {
   type ThreadState,
 } from "./protocol.js";
 import { AppServerSessionState } from "./session-state.js";
+import { AppServerMetadataService } from "./metadata-service.js";
 import type { AppServerProvider } from "../providers/provider-contract.js";
 
 type NotificationHandler = (
@@ -24,10 +25,19 @@ type ServerOptions = {
 
 const SUPPORTED_METHODS = [
   "initialize",
+  "thread/list",
+  "thread/loaded/list",
   "thread/start",
   "thread/new",
   "thread/resume",
+  "thread/name/set",
   "thread/read",
+  "model/list",
+  "skills/list",
+  "experimentalFeature/list",
+  "mcpServerStatus/list",
+  "account/rateLimits/read",
+  "account/read",
   "turn/start",
   "turn/steer",
   "turn/interrupt",
@@ -40,6 +50,7 @@ function createId(prefix: string): string {
 export class CodexAppServer {
   private readonly provider: AppServerProvider;
   private readonly state = new AppServerSessionState();
+  private readonly metadata = new AppServerMetadataService();
   private readonly notificationHandlers = new Set<NotificationHandler>();
   private readonly createThreadId: () => string;
   private readonly createRunId: () => string;
@@ -65,22 +76,43 @@ export class CodexAppServer {
   }
 
   async request(method: string, params?: unknown): Promise<unknown> {
+    const record = asOptionalRecord(params);
     switch (method) {
       case "initialize":
         return this.initialize();
+      case "thread/list":
+      case "thread/loaded/list":
+        return this.listThreads();
       case "thread/start":
       case "thread/new":
-        return this.startThread((params ?? {}) as Record<string, unknown>);
+        return this.startThread(record);
       case "thread/resume":
-        return this.resumeThread((params ?? {}) as Record<string, unknown>);
+        return this.resumeThread(record);
+      case "thread/name/set":
+        return this.setThreadName(record);
       case "thread/read":
-        return this.readThread((params ?? {}) as Record<string, unknown>);
+        return this.readThread(record);
+      case "model/list":
+        return this.metadata.listModels();
+      case "skills/list":
+        return this.metadata.listSkills({
+          cwd: asOptionalString(record.cwd),
+          cwds: asOptionalStringArray(record.cwds),
+        });
+      case "experimentalFeature/list":
+        return this.metadata.listExperimentalFeatures();
+      case "mcpServerStatus/list":
+        return this.metadata.listMcpServerStatus();
+      case "account/rateLimits/read":
+        return this.metadata.readRateLimits();
+      case "account/read":
+        return this.metadata.readAccount();
       case "turn/start":
         return this.startTurn((params ?? {}) as AppServerTurnInput);
       case "turn/steer":
-        return this.steerTurn((params ?? {}) as Record<string, unknown>);
+        return this.steerTurn(record);
       case "turn/interrupt":
-        return this.interruptTurn((params ?? {}) as Record<string, unknown>);
+        return this.interruptTurn(record);
       default:
         throw new AppServerProtocolError(`Unsupported method: ${method}`);
     }
@@ -100,6 +132,12 @@ export class CodexAppServer {
     };
   }
 
+  private listThreads(): { threads: ReturnType<AppServerSessionState["listThreads"]> } {
+    return {
+      threads: this.state.listThreads(),
+    };
+  }
+
   private startThread(params: Record<string, unknown>): ThreadState {
     const threadId = this.createThreadId();
     return this.state.createThread({
@@ -110,6 +148,7 @@ export class CodexAppServer {
       sandbox: asOptionalString(params.sandbox),
       serviceTier: asOptionalString(params.serviceTier),
       reasoningEffort: asOptionalString(params.reasoningEffort),
+      modelProvider: "xai",
     });
   }
 
@@ -123,6 +162,16 @@ export class CodexAppServer {
       serviceTier: asOptionalString(params.serviceTier),
       reasoningEffort: asOptionalString(params.reasoningEffort),
     });
+    if (!thread) {
+      throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
+    }
+    return thread;
+  }
+
+  private setThreadName(params: Record<string, unknown>): ThreadState {
+    const threadId = asRequiredString(params.threadId, "thread/name/set requires threadId");
+    const name = asRequiredString(params.name, "thread/name/set requires name");
+    const thread = this.state.setThreadName(threadId, name);
     if (!thread) {
       throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
     }
@@ -153,12 +202,12 @@ export class CodexAppServer {
     const runId = this.createRunId();
     this.state.appendInput(threadId, normalizedInput);
     this.state.createRun({ runId, threadId, handle });
-    void this.completeTurn({ thread, runId, handle });
+    void this.completeTurn({ threadId, runId, handle });
     return { threadId, runId };
   }
 
   private async completeTurn(params: {
-    thread: ThreadState;
+    threadId: string;
     runId: string;
     handle: Awaited<ReturnType<AppServerProvider["startTurn"]>>;
   }): Promise<void> {
@@ -169,12 +218,12 @@ export class CodexAppServer {
         return;
       }
       this.state.completeRun(params.runId);
-      this.state.appendAssistant(params.thread.threadId, result.assistantText ?? "");
-      this.state.setPreviousResponseId(params.thread.threadId, result.providerResponseId);
+      this.state.appendAssistant(params.threadId, result.assistantText ?? "");
+      this.state.setPreviousResponseId(params.threadId, result.providerResponseId);
       await this.emit({
         method: "turn/completed",
         params: {
-          threadId: params.thread.threadId,
+          threadId: params.threadId,
           runId: params.runId,
           turn: {
             id: params.runId,
@@ -197,7 +246,7 @@ export class CodexAppServer {
       await this.emit({
         method: "turn/failed",
         params: {
-          threadId: params.thread.threadId,
+          threadId: params.threadId,
           runId: params.runId,
           turn: {
             id: params.runId,
@@ -276,6 +325,20 @@ function asRequiredString(value: unknown, message: string): string {
 
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function asOptionalStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized = value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function asOptionalRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
 function normalizeTurnInput(value: unknown): AppServerTurnInputItem[] {

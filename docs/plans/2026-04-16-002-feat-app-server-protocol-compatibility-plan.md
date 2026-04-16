@@ -212,7 +212,7 @@ Add review and compaction flows, then lock the whole surface down with consumer-
 - deterministic `agent-core` tests pass without secrets
 - live xAI smoke stays opt-in
 
-- [ ] **Unit 2: Expand protocol types and session state for parity surfaces**
+- [x] **Unit 2: Expand protocol types and session state for parity surfaces**
 
 **Goal:** Make the in-process contract rich enough to represent the remaining OpenClaw-consumed methods and notifications without ad hoc blobs.
 
@@ -247,7 +247,7 @@ Add review and compaction flows, then lock the whole surface down with consumer-
 **Verification:**
 - The server can express every result and notification shape needed by the remaining implementation units without type escapes.
 
-- [ ] **Unit 3: Implement thread discovery and metadata endpoints**
+- [x] **Unit 3: Implement thread discovery and metadata endpoints**
 
 **Goal:** Add the non-turn request surface OpenClaw reads before and around live turns.
 

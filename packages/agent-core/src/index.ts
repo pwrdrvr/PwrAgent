@@ -1,11 +1,18 @@
 export { CodexAppServer } from "./app-server/codex-app-server.js";
 export type {
+  AccountSummary,
   AppServerInitializeResult,
   AppServerNotification,
   AppServerTurnInput,
   AppServerTurnInputItem,
   AppServerTurnResult,
+  ExperimentalFeatureSummary,
+  McpServerSummary,
+  ModelSummary,
+  RateLimitSummary,
+  SkillSummary,
   ThreadReplay,
+  ThreadSummary,
   ThreadState,
 } from "./app-server/protocol.js";
 export { GrokProvider } from "./providers/grok-provider.js";

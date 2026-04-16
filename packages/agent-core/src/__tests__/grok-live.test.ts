@@ -33,6 +33,7 @@ async function waitForNotification(
     const match = notifications.find(
       (notification) =>
         notification.method === method &&
+        "runId" in notification.params &&
         notification.params.runId === runId,
     );
     if (match) {
