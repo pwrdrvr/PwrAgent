@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import { App } from "../App";
 
 describe("App", () => {
-  it("renders the live recent-thread shell", async () => {
+  it("renders the live thread shell with transcript history", async () => {
     Object.defineProperty(window, "pwragnt", {
       configurable: true,
       value: {
@@ -47,9 +47,25 @@ describe("App", () => {
           fetchedAt: Date.now(),
           threadId: "thread-1",
           replay: {
+            messages: [
+              {
+                id: "message-1",
+                role: "user",
+                text: "Open the desktop plan and build the Codex client."
+              },
+              {
+                id: "message-2",
+                role: "assistant",
+                text: "The Codex client is wired and the thread browser is live."
+              }
+            ],
             lastUserMessage: "Open the desktop plan and build the Codex client.",
             lastAssistantMessage:
-              "The Codex client is wired and the thread browser is live."
+              "The Codex client is wired and the thread browser is live.",
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false
+            }
           }
         }),
         platform: "darwin",
@@ -84,8 +100,8 @@ describe("App", () => {
     expect(inboxSection).not.toBeNull();
     expect(within(inboxSection as HTMLElement).getByText("1")).toBeInTheDocument();
     expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
-    expect(screen.getByText("codex/build-codex-client")).toBeInTheDocument();
-    expect(screen.getByText(/1 linked directory/i)).toBeInTheDocument();
+    expect(screen.getAllByText("codex/build-codex-client").length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { level: 3, name: "Transcript" })).toBeInTheDocument();
     expect(
       await screen.findByText("Open the desktop plan and build the Codex client.")
     ).toBeInTheDocument();
@@ -93,5 +109,6 @@ describe("App", () => {
       screen.getByText("The Codex client is wired and the thread browser is live.")
     ).toBeInTheDocument();
     expect(screen.getByText("darwin")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 });

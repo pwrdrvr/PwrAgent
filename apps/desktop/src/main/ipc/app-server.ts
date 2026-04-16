@@ -64,13 +64,17 @@ class DesktopAppServerService {
     const response = await getDesktopBackendRegistry().readThread({
       backend,
       threadId: request.threadId,
+      before: request.before,
+      limit: request.limit,
     });
 
     logDebug("readThread", {
       backend,
       threadId: request.threadId,
+      messageCount: response.replay.messages.length,
       hasLastUserMessage: Boolean(response.replay.lastUserMessage),
-      hasLastAssistantMessage: Boolean(response.replay.lastAssistantMessage)
+      hasLastAssistantMessage: Boolean(response.replay.lastAssistantMessage),
+      hasPreviousPage: response.replay.pagination.hasPreviousPage,
     });
 
     return response;

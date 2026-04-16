@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import type {
   AppServerNotification,
   AppServerThreadReplay,
+  AppServerThreadReplayPagination,
   AppServerThreadSummary,
   AppServerTurnInputItem,
   LinkedDirectorySummary
@@ -78,6 +79,19 @@ function pickNumber(
       if (!Number.isNaN(parsed)) {
         return parsed;
       }
+    }
+  }
+  return undefined;
+}
+
+function pickBoolean(
+  record: Record<string, unknown>,
+  keys: string[]
+): boolean | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") {
+      return value;
     }
   }
   return undefined;
@@ -179,8 +193,8 @@ function collectMessageText(record: Record<string, unknown>): string {
 
 function extractConversationMessages(
   value: unknown
-): Array<{ role: "user" | "assistant"; text: string }> {
-  const output: Array<{ role: "user" | "assistant"; text: string }> = [];
+): AppServerThreadReplay["messages"] {
+  const output: AppServerThreadReplay["messages"] = [];
 
   const visit = (node: unknown): void => {
     if (Array.isArray(node)) {
@@ -198,7 +212,16 @@ function extractConversationMessages(
     );
     const text = collectMessageText(record);
     if (role && text) {
-      output.push({ role, text });
+      output.push({
+        id:
+          pickString(record, ["id", "messageId", "message_id", "itemId", "item_id"]) ??
+          `message-${output.length + 1}`,
+        role,
+        text,
+        createdAt: normalizeEpochTimestamp(
+          pickNumber(record, ["createdAt", "created_at", "timestamp", "time"])
+        )
+      });
     }
 
     for (const key of [
@@ -225,6 +248,29 @@ function extractConversationMessages(
   return output;
 }
 
+function extractReplayPagination(value: unknown): AppServerThreadReplayPagination {
+  const record = asRecord(value);
+  const supportsPagination = Boolean(
+    record &&
+      (pickBoolean(record, ["supportsPagination", "supports_pagination"]) ||
+        pickString(record, ["previousCursor", "previous_cursor", "before", "cursor"]))
+  );
+  const hasPreviousPage = Boolean(
+    record &&
+      (pickBoolean(record, ["hasPreviousPage", "has_previous_page", "hasMore", "has_more"]) ||
+        pickString(record, ["previousCursor", "previous_cursor", "before", "cursor"]))
+  );
+  const previousCursor = record
+    ? pickString(record, ["previousCursor", "previous_cursor", "before", "cursor"])
+    : undefined;
+
+  return {
+    supportsPagination,
+    hasPreviousPage,
+    previousCursor
+  };
+}
+
 function extractThreadReplayFromReadResult(value: unknown): AppServerThreadReplay {
   const messages = extractConversationMessages(value);
   let lastUserMessage: string | undefined;
@@ -243,7 +289,12 @@ function extractThreadReplayFromReadResult(value: unknown): AppServerThreadRepla
     }
   }
 
-  return { lastUserMessage, lastAssistantMessage };
+  return {
+    messages,
+    lastUserMessage,
+    lastAssistantMessage,
+    pagination: extractReplayPagination(value)
+  };
 }
 
 function extractThreadIdFromValue(value: unknown): string | undefined {
@@ -529,13 +580,24 @@ export class CodexAppServerClient {
     );
   }
 
-  async readThread(params: { threadId: string }): Promise<AppServerThreadReplay> {
+  async readThread(params: {
+    threadId: string;
+    before?: string;
+    limit?: number;
+  }): Promise<AppServerThreadReplay> {
     await this.ensureInitialized();
 
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/read"],
-      payloads: [{ threadId: params.threadId, includeTurns: true }],
+      payloads: [
+        {
+          threadId: params.threadId,
+          includeTurns: true,
+          before: params.before,
+          limit: params.limit
+        }
+      ],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     });
 

@@ -168,7 +168,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("extracts last user and assistant messages from thread/read", async () => {
+  it("extracts transcript messages and pagination metadata from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -181,8 +181,27 @@ describe("CodexAppServerClient", () => {
     });
 
     expect(replay).toEqual({
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          text: "Show me the current desktop thread shell",
+          createdAt: undefined
+        },
+        {
+          id: "message-2",
+          role: "assistant",
+          text: "The desktop shell is live and listing Codex threads.",
+          createdAt: undefined
+        }
+      ],
       lastUserMessage: "Show me the current desktop thread shell",
-      lastAssistantMessage: "The desktop shell is live and listing Codex threads."
+      lastAssistantMessage: "The desktop shell is live and listing Codex threads.",
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+        previousCursor: undefined
+      }
     });
 
     await client.close();

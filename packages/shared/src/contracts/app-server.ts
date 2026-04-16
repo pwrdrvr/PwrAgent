@@ -40,9 +40,24 @@ export type AppServerThreadSummary = {
   source: AppServerBackendKind;
 };
 
+export type AppServerThreadMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  createdAt?: number;
+};
+
+export type AppServerThreadReplayPagination = {
+  supportsPagination: boolean;
+  hasPreviousPage: boolean;
+  previousCursor?: string;
+};
+
 export type AppServerThreadReplay = {
+  messages: AppServerThreadMessage[];
   lastUserMessage?: string;
   lastAssistantMessage?: string;
+  pagination: AppServerThreadReplayPagination;
 };
 
 export type AppServerListThreadsRequest = {
@@ -59,6 +74,8 @@ export type AppServerListThreadsResponse = {
 export type AppServerReadThreadRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  before?: string;
+  limit?: number;
 };
 
 export type AppServerReadThreadResponse = {
