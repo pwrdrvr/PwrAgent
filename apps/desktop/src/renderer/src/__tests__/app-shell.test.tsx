@@ -8,6 +8,49 @@ describe("App", () => {
       configurable: true,
       value: {
         ping: () => "pong",
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read"],
+              capabilities: {
+                listThreads: true,
+                createThread: false,
+                resumeThread: true,
+                readThread: true,
+                startTurn: false,
+                interruptTurn: false,
+                steerTurn: false,
+                transcriptPagination: true,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: true
+              }
+            },
+            {
+              kind: "grok",
+              label: "Grok app server",
+              available: true,
+              methods: ["thread/list", "thread/read"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: true,
+                steerTurn: true,
+                transcriptPagination: false,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: false
+              }
+            }
+          ]
+        }),
         getNavigationSnapshot: async () => ({
           backend: "codex",
           fetchedAt: Date.now(),
@@ -113,6 +156,8 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { level: 3, name: "Thread details" })
     ).toBeInTheDocument();
+    expect(screen.getByText("Codex app server")).toBeInTheDocument();
+    expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByText("darwin")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });

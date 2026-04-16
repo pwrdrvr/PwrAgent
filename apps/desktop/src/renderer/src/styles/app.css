@@ -644,6 +644,10 @@ textarea {
   border-bottom: 0;
 }
 
+.context-panel__section--status {
+  margin-top: auto;
+}
+
 .context-list {
   display: flex;
   flex-direction: column;
@@ -687,6 +691,47 @@ textarea {
 .context-grid dd {
   margin: 4px 0 0;
   font-size: 14px;
+}
+
+.backend-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.backend-status-list__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.backend-status-list__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.backend-status-list__dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.backend-status-list__dot.is-unavailable {
+  background: var(--danger-text);
+}
+
+.backend-status-list__details {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .composer {

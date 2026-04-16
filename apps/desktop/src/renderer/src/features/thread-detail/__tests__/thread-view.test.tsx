@@ -6,6 +6,47 @@ describe("ThreadView", () => {
   it("renders a directory-less thread with transcript history and context", () => {
     render(
       <ThreadView
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: false,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            }
+          },
+          {
+            kind: "grok",
+            label: "Grok app server",
+            available: false,
+            methods: [],
+            capabilities: {
+              listThreads: false,
+              createThread: false,
+              resumeThread: false,
+              readThread: false,
+              startTurn: false,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: false
+            },
+            unavailableReason: "XAI_API_KEY is not set"
+          }
+        ]}
         fetchedAt={Date.now()}
         loading={false}
         loadingMore={false}
@@ -50,6 +91,8 @@ describe("ThreadView", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 3, name: "Thread details" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pin context rail" })).toBeInTheDocument();
+    expect(screen.getByText("Codex app server")).toBeInTheDocument();
+    expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 });

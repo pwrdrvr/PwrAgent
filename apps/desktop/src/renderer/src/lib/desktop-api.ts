@@ -2,6 +2,8 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   GetNavigationSnapshotRequest,
+  ListBackendsRequest,
+  ListBackendsResponse,
   MarkThreadSeenRequest,
   NavigationSnapshot
 } from "@pwragnt/shared";
@@ -14,6 +16,9 @@ export type DesktopApi = {
   getNavigationSnapshot?: (
     request?: GetNavigationSnapshotRequest
   ) => Promise<NavigationSnapshot>;
+  listBackends?: (
+    request?: ListBackendsRequest
+  ) => Promise<ListBackendsResponse>;
   markThreadSeen?: (request: MarkThreadSeenRequest) => Promise<unknown>;
   onWindowFocus?: (callback: () => void) => () => void;
   platform?: string;

@@ -54,7 +54,13 @@ class MockBackendClient {
   }
 
   async readThread(): Promise<AppServerThreadReplay> {
-    return this.options.replay ?? {};
+    return this.options.replay ?? {
+      messages: [],
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+    };
   }
 
   async startThread(): Promise<{ threadId: string }> {

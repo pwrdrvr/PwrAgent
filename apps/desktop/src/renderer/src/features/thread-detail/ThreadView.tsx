@@ -1,6 +1,7 @@
 import type {
   AppServerThreadMessage,
   AppServerThreadReplayPagination,
+  BackendSummary,
   NavigationThreadSummary
 } from "@pwragnt/shared";
 import { Composer } from "../composer/Composer";
@@ -9,6 +10,8 @@ import { ThreadHeader } from "./ThreadHeader";
 import { TranscriptList } from "./TranscriptList";
 
 type ThreadViewProps = {
+  backendError?: string;
+  backends: BackendSummary[];
   fetchedAt?: number;
   loading: boolean;
   loadingMore: boolean;
@@ -74,7 +77,12 @@ export function ThreadView(props: ThreadViewProps) {
           />
         </section>
 
-        <ThreadContextPanel platform={props.platform} thread={props.selectedThread} />
+        <ThreadContextPanel
+          backendError={props.backendError}
+          backends={props.backends}
+          platform={props.platform}
+          thread={props.selectedThread}
+        />
       </div>
 
       <Composer disabled />

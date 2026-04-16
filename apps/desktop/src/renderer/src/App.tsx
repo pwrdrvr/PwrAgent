@@ -1,3 +1,4 @@
+import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { ThreadView } from "./features/thread-detail/ThreadView";
 import { getDesktopApi } from "./lib/desktop-api";
@@ -6,6 +7,7 @@ import { useThreadTranscript } from "./lib/useThreadTranscript";
 
 export function App() {
   const desktopApi = getDesktopApi();
+  const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);
   const transcript = useThreadTranscript({
     desktopApi,
@@ -30,6 +32,8 @@ export function App() {
 
       <main className="app-main">
         <ThreadView
+          backendError={backendSummaries.error}
+          backends={backendSummaries.backends}
           fetchedAt={transcript.response?.fetchedAt}
           loading={transcript.loading}
           loadingMore={transcript.loadingMore}

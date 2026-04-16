@@ -128,8 +128,16 @@ function extractThreadSummaryList(value: unknown): RawThreadSummary[] {
 }
 
 function extractThreadReplay(value: unknown): AppServerThreadReplay {
+  const pagination = {
+    supportsPagination: false,
+    hasPreviousPage: false,
+  } as const;
+
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
+    return {
+      messages: [],
+      pagination,
+    };
   }
 
   const record = value as {
@@ -143,6 +151,7 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
     typeof record.lastAssistantMessage === "string"
   ) {
     return {
+      messages: [],
       lastUserMessage:
         typeof record.lastUserMessage === "string"
           ? record.lastUserMessage
@@ -151,15 +160,39 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
         typeof record.lastAssistantMessage === "string"
           ? record.lastAssistantMessage
           : undefined,
+      pagination,
     };
   }
 
-  const messages = Array.isArray(record.messages) ? record.messages : [];
+  const rawMessages = Array.isArray(record.messages) ? record.messages : [];
+  const messages = rawMessages.flatMap((message, index) => {
+    if (!message || typeof message !== "object") {
+      return [];
+    }
+
+    const role: "user" | "assistant" | undefined =
+      message.role === "user" || message.role === "assistant"
+        ? message.role
+        : undefined;
+    const text = typeof message.text === "string" ? message.text : undefined;
+    if (!role || !text) {
+      return [];
+    }
+
+    return [
+      {
+        id: `message-${index + 1}`,
+        role,
+        text,
+      },
+    ];
+  });
+
   let lastUserMessage: string | undefined;
   let lastAssistantMessage: string | undefined;
 
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
+  for (let index = rawMessages.length - 1; index >= 0; index -= 1) {
+    const message = rawMessages[index];
     if (!lastUserMessage && message?.role === "user" && typeof message.text === "string") {
       lastUserMessage = message.text;
     }
@@ -175,7 +208,12 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
     }
   }
 
-  return { lastUserMessage, lastAssistantMessage };
+  return {
+    messages,
+    lastUserMessage,
+    lastAssistantMessage,
+    pagination,
+  };
 }
 
 function extractThreadId(value: unknown): string | undefined {

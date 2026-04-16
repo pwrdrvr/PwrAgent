@@ -10,9 +10,18 @@ export type LocalEnvLoadResult = {
   skippedReason?: string;
 };
 
-export function defaultLocalEnvPath(): string {
-  const currentDir = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(currentDir, "../../.env.local");
+export function defaultLocalEnvPath(options?: {
+  currentDir?: string;
+}): string {
+  const currentDir =
+    options?.currentDir ?? path.dirname(fileURLToPath(import.meta.url));
+  const candidatePaths = [
+    path.resolve(currentDir, "../../../../.env.local"),
+    path.resolve(currentDir, "../../.env.local"),
+  ];
+
+  return candidatePaths.find((candidatePath) => fs.existsSync(candidatePath))
+    ?? candidatePaths[0];
 }
 
 export function defaultGrokAppServerConfigDir(options?: {

@@ -1,7 +1,9 @@
 import { useState } from "react";
-import type { NavigationThreadSummary } from "@pwragnt/shared";
+import type { BackendSummary, NavigationThreadSummary } from "@pwragnt/shared";
 
 type ThreadContextPanelProps = {
+  backendError?: string;
+  backends: BackendSummary[];
   platform?: string;
   thread: NavigationThreadSummary;
 };
@@ -130,6 +132,36 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                 <dd>{props.platform ?? "Unknown"}</dd>
               </div>
             </dl>
+          </section>
+
+          <section className="context-panel__section context-panel__section--status">
+            <h3>App servers</h3>
+            {props.backendError ? (
+              <p className="context-empty">{props.backendError}</p>
+            ) : props.backends.length > 0 ? (
+              <ul className="backend-status-list">
+                {props.backends.map((backend) => (
+                  <li key={backend.kind} className="backend-status-list__item">
+                    <div className="backend-status-list__summary">
+                      <span
+                        aria-hidden="true"
+                        className={`backend-status-list__dot${
+                          backend.available ? "" : " is-unavailable"
+                        }`}
+                      />
+                      <span>{backend.label}</span>
+                    </div>
+                    <p className="backend-status-list__details">
+                      {backend.available
+                        ? "Available"
+                        : backend.unavailableReason ?? "Unavailable"}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="context-empty">Status unavailable</p>
+            )}
           </section>
         </div>
       ) : null}

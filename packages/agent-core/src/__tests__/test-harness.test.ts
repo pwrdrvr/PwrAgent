@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createTemporaryTestDirectory } from "../testing/test-harness.js";
 import {
   defaultGrokAppServerConfigPaths,
+  defaultLocalEnvPath,
   loadGrokAppServerConfig,
   loadLocalEnv,
 } from "../testing/load-local-env.js";
@@ -47,6 +48,39 @@ describe("test harness helpers", () => {
     expect(result.loaded).toBe(false);
     expect(result.skippedReason).toBe("missing");
     expect(result.entries).toEqual([]);
+  });
+
+  it("prefers the workspace root env file over the package-local env file", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const currentDir = path.join(temp.path, "packages/agent-core/src/testing");
+    await fs.mkdir(currentDir, { recursive: true });
+    await fs.writeFile(path.join(temp.path, ".env.local"), "XAI_API_KEY=root-key\n");
+    await fs.writeFile(
+      path.join(temp.path, "packages/agent-core/.env.local"),
+      "XAI_API_KEY=package-key\n"
+    );
+
+    expect(defaultLocalEnvPath({ currentDir })).toBe(
+      path.join(temp.path, ".env.local")
+    );
+
+    await temp.cleanup();
+  });
+
+  it("falls back to the package-local env file when the workspace root env file is missing", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const currentDir = path.join(temp.path, "packages/agent-core/src/testing");
+    await fs.mkdir(currentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(temp.path, "packages/agent-core/.env.local"),
+      "XAI_API_KEY=package-key\n"
+    );
+
+    expect(defaultLocalEnvPath({ currentDir })).toBe(
+      path.join(temp.path, "packages/agent-core/.env.local")
+    );
+
+    await temp.cleanup();
   });
 
   it("loads values from a local env file", async () => {

@@ -84,8 +84,13 @@ describe("GrokAppServerClient", () => {
 
     const replay = await client.readThread({ threadId: "thread-1" });
     expect(replay).toEqual({
+      messages: [],
       lastUserMessage: "Ship Unit 3",
       lastAssistantMessage: "Done.",
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
     });
     expect(notifications).toContain("turn/completed");
 
