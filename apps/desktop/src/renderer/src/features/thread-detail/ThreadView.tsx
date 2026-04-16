@@ -73,6 +73,7 @@ export function ThreadView(props: ThreadViewProps) {
             loadingMore={props.loadingMore}
             messages={props.transcriptMessages}
             pagination={props.transcriptPagination}
+            threadId={props.selectedThread.id}
             onLoadOlder={props.onLoadOlder}
           />
         </section>
