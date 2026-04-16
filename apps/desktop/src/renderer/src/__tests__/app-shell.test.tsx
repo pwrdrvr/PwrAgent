@@ -17,6 +17,7 @@ describe("App", () => {
               title: "Build Codex client",
               summary: "Wire the app-server transport and list threads",
               source: "codex",
+              gitBranch: "codex/build-codex-client",
               linkedDirectories: [
                 {
                   id: "/Users/huntharo/pwrdrvr/PwrAgnt",
@@ -66,6 +67,7 @@ describe("App", () => {
       })
     ).toBeInTheDocument();
     expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
+    expect(screen.getByText("codex/build-codex-client")).toBeInTheDocument();
     expect(screen.getByText(/1 linked directory/i)).toBeInTheDocument();
     expect(
       await screen.findByText("Open the desktop plan and build the Codex client.")

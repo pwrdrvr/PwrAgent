@@ -90,25 +90,27 @@ function formatLinkedDirectoryCount(thread: AppServerThreadSummary): string {
   }`;
 }
 
-function getDirectoryLabelSummary(thread: AppServerThreadSummary): string {
-  if (thread.linkedDirectories.length === 0) {
-    return "No linked directories yet";
+function getThreadMetadataPills(
+  thread: AppServerThreadSummary
+): Array<{ key: string; icon: string; label: string }> {
+  const projectPills = thread.linkedDirectories.map((directory) => ({
+    key: directory.id,
+    icon: "📁",
+    label: directory.label
+  }));
+
+  if (!thread.gitBranch) {
+    return projectPills;
   }
 
-  const labels = thread.linkedDirectories.map((directory) => directory.label);
-  if (labels.length <= 2) {
-    return labels.join(" • ");
-  }
-
-  return `${labels.slice(0, 2).join(" • ")} +${labels.length - 2}`;
-}
-
-function getThreadListSubtitle(thread: AppServerThreadSummary): string {
-  const parts = [getDirectoryLabelSummary(thread)];
-  if (thread.gitBranch) {
-    parts.push(thread.gitBranch);
-  }
-  return parts.join(" • ");
+  return [
+    ...projectPills,
+    {
+      key: `branch:${thread.gitBranch}`,
+      icon: "🌿",
+      label: thread.gitBranch
+    }
+  ];
 }
 
 function getInspectorSummary(thread: AppServerThreadSummary): string {
@@ -206,6 +208,7 @@ function ThreadList(props: {
     >
       {props.threads.map((thread) => {
         const isSelected = thread.id === props.selectedThreadId;
+        const metadataPills = getThreadMetadataPills(thread);
 
         return (
           <button
@@ -256,28 +259,14 @@ function ThreadList(props: {
               </span>
             </div>
 
-            <p
-              style={{
-                margin: 0,
-                color: colors.muted,
-                fontSize: "0.88rem",
-                lineHeight: 1.35,
-                display: "-webkit-box",
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: "vertical",
-                overflow: "hidden"
-              }}
-            >
-              {getThreadListSubtitle(thread)}
-            </p>
-
             <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
-              {thread.linkedDirectories.map((directory) => (
+              {metadataPills.map((pill) => (
                 <span
-                  key={directory.id}
+                  key={pill.key}
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
+                    gap: "0.35rem",
                     minHeight: "1.65rem",
                     padding: "0 0.55rem",
                     borderRadius: "999px",
@@ -286,7 +275,8 @@ function ThreadList(props: {
                     fontSize: "0.78rem"
                   }}
                 >
-                  {directory.label}
+                  <span aria-hidden="true">{pill.icon}</span>
+                  {pill.label}
                 </span>
               ))}
             </div>
