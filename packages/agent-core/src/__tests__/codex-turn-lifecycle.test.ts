@@ -84,15 +84,16 @@ describe("Codex turn lifecycle", () => {
     expect(steered).toEqual({ threadId: "thread-1", runId: "turn-1" });
     expect(provider.runs[0]?.steerCalls).toEqual([
       {
-        thread: {
+        thread: expect.objectContaining({
           threadId: "thread-1",
           cwd: "/repo/workspace",
           model: undefined,
+          modelProvider: "xai",
           approvalPolicy: "on-request",
           sandbox: "workspace-write",
           serviceTier: undefined,
           reasoningEffort: undefined,
-        },
+        }),
         runId: "turn-1",
         input: [{ type: "text", text: "Continue with more detail" }],
       },
