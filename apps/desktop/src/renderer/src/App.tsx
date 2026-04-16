@@ -3,6 +3,7 @@ import { Sidebar } from "./features/navigation/Sidebar";
 import { ThreadView } from "./features/thread-detail/ThreadView";
 import { getDesktopApi } from "./lib/desktop-api";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
+import { useThreadSkills } from "./lib/useThreadSkills";
 import { useThreadTranscript } from "./lib/useThreadTranscript";
 
 export function App() {
@@ -10,8 +11,13 @@ export function App() {
   const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);
   const transcript = useThreadTranscript({
+    backend: navigation.selectedThread?.source,
     desktopApi,
     threadId: navigation.selectedThread?.id
+  });
+  const skills = useThreadSkills({
+    desktopApi,
+    thread: navigation.selectedThread,
   });
 
   return (
@@ -38,8 +44,21 @@ export function App() {
           loading={transcript.loading}
           loadingMore={transcript.loadingMore}
           messageCount={transcript.messages.length}
+          composerDisabled={
+            !navigation.selectedThread ||
+            !backendSummaries.backends.some(
+              (backend) =>
+                backend.kind === navigation.selectedThread?.source &&
+                backend.available &&
+                backend.capabilities.startTurn
+            )
+          }
+          desktopApi={desktopApi}
           platform={desktopApi?.platform}
           selectedThread={navigation.selectedThread}
+          skillError={skills.error}
+          skillLoading={skills.loading}
+          skills={skills.skills}
           transcriptError={transcript.error}
           transcriptEntries={transcript.entries}
           transcriptPagination={transcript.response?.replay.pagination}

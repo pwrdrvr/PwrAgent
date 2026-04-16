@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   AppServerThreadEntry,
+  AppServerSkillSummary,
   AppServerThreadReplayPagination
 } from "@pwragnt/shared";
 import { TranscriptActivity } from "./TranscriptActivity";
@@ -13,6 +14,7 @@ type TranscriptListProps = {
   loadingMore: boolean;
   pagination?: AppServerThreadReplayPagination;
   threadId?: string;
+  skills?: AppServerSkillSummary[];
   onLoadOlder: () => Promise<void>;
 };
 
@@ -29,6 +31,7 @@ type ScrollSnapshot = {
 const BOTTOM_THRESHOLD_PX = 24;
 
 export function TranscriptList(props: TranscriptListProps) {
+  const skills = props.skills ?? [];
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const snapshotRef = useRef<ScrollSnapshot | undefined>(undefined);
   const shouldScrollToBottomRef = useRef(true);
@@ -179,7 +182,7 @@ export function TranscriptList(props: TranscriptListProps) {
           entry.type === "activity" ? (
             <TranscriptActivity key={entry.id} entry={entry} />
           ) : (
-            <TranscriptMessage key={entry.id} message={entry} />
+            <TranscriptMessage key={entry.id} message={entry} skills={skills} />
           )
         )}
       </div>

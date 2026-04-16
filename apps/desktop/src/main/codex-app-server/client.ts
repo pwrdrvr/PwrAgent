@@ -8,6 +8,7 @@ import type {
   AppServerThreadActivityStatus,
   AppServerThreadEntry,
   AppServerThreadMessageEntry,
+  AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadReplayPagination,
   AppServerThreadSummary,
@@ -44,6 +45,11 @@ type RawCodexThreadSummary = Omit<
   "source" | "linkedDirectories"
 > & {
   projectKey?: string;
+};
+
+type SkillCatalogEntry = {
+  cwd?: string;
+  skills: AppServerSkillSummary[];
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -649,6 +655,60 @@ function extractThreadIdFromValue(value: unknown): string | undefined {
   return pickString(record, ["threadId", "thread_id", "id"]);
 }
 
+function extractSkillSummary(value: unknown): AppServerSkillSummary | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const name = pickString(record, ["name", "id", "slug"]);
+  if (!name) {
+    return undefined;
+  }
+
+  return {
+    name,
+    description: pickString(record, ["description", "summary"]),
+    shortDescription: pickString(record, ["shortDescription", "short_description"]),
+    path: pickString(record, ["path", "skillPath", "skill_path"]),
+    enabled: pickBoolean(record, ["enabled"]),
+    scope: pickString(record, ["scope"])
+  };
+}
+
+function extractSkillCatalog(value: unknown): SkillCatalogEntry[] {
+  const record = asRecord(value);
+  const data = Array.isArray(record?.data)
+    ? record.data
+    : Array.isArray(value)
+      ? value
+      : [];
+
+  return data.flatMap((entry): SkillCatalogEntry[] => {
+    const entryRecord = asRecord(entry);
+    if (!entryRecord) {
+      return [];
+    }
+
+    const rawSkills = Array.isArray(entryRecord.skills)
+      ? entryRecord.skills
+      : Array.isArray(entryRecord.data)
+        ? entryRecord.data
+        : [];
+    const skills = rawSkills.flatMap((skill) => {
+      const normalized = extractSkillSummary(skill);
+      return normalized ? [normalized] : [];
+    });
+
+    return [
+      {
+        cwd: pickString(entryRecord, ["cwd"]),
+        skills
+      }
+    ];
+  });
+}
+
 function extractRunIdFromValue(value: unknown): string | undefined {
   const record = asRecord(value);
   if (!record) {
@@ -939,6 +999,23 @@ export class CodexAppServerClient {
         source: "codex"
       }))
     );
+  }
+
+  async listSkills(params?: {
+    cwd?: string;
+    cwds?: string[];
+  }): Promise<SkillCatalogEntry[]> {
+    await this.ensureInitialized();
+
+    const cwds = [...new Set([...(params?.cwds ?? []), params?.cwd].filter(Boolean))];
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["skills/list"],
+      payloads: [{ cwds }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    return extractSkillCatalog(result);
   }
 
   async readThread(params: {

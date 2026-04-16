@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   AgentEvent,
   AppServerNotification,
+  AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadSummary,
   AppServerTurnInputItem,
@@ -30,6 +31,7 @@ class MockBackendClient {
       initializeError?: Error;
       threads?: AppServerThreadSummary[];
       replay?: AppServerThreadReplay;
+      skills?: Array<{ cwd?: string; skills: AppServerSkillSummary[] }>;
     }
   ) {}
 
@@ -47,6 +49,10 @@ class MockBackendClient {
 
   async listThreads(): Promise<AppServerThreadSummary[]> {
     return this.options.threads ?? [];
+  }
+
+  async listSkills(): Promise<Array<{ cwd?: string; skills: AppServerSkillSummary[] }>> {
+    return this.options.skills ?? [];
   }
 
   onNotification(

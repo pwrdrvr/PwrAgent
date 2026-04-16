@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AppServerBackendKind,
   AppServerReadThreadResponse,
   AppServerThreadEntry,
   AppServerThreadMessage
@@ -20,6 +21,7 @@ function mergeItems<T extends { id: string }>(
 }
 
 export function useThreadTranscript(params: {
+  backend?: AppServerBackendKind;
   desktopApi?: DesktopApi;
   threadId?: string;
 }): {
@@ -32,7 +34,7 @@ export function useThreadTranscript(params: {
   refresh: () => Promise<void>;
   response?: AppServerReadThreadResponse;
 } {
-  const { desktopApi, threadId } = params;
+  const { backend, desktopApi, threadId } = params;
   const [response, setResponse] = useState<AppServerReadThreadResponse>();
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -65,7 +67,7 @@ export function useThreadTranscript(params: {
 
     try {
       const nextResponse = await desktopApi.readThread({
-        backend: "codex",
+        backend,
         threadId
       });
       if (requestVersionRef.current !== requestVersion) {
@@ -83,7 +85,7 @@ export function useThreadTranscript(params: {
         setLoading(false);
       }
     }
-  }, [desktopApi, threadId]);
+  }, [backend, desktopApi, threadId]);
 
   useEffect(() => {
     void loadLatest();
@@ -106,7 +108,7 @@ export function useThreadTranscript(params: {
 
     try {
       const olderResponse = await desktopApi.readThread({
-        backend: "codex",
+        backend,
         threadId,
         before: response.replay.pagination.previousCursor
       });
@@ -137,7 +139,7 @@ export function useThreadTranscript(params: {
         setLoadingMore(false);
       }
     }
-  }, [desktopApi, response, threadId]);
+  }, [backend, desktopApi, response, threadId]);
 
   const entries = useMemo(
     () => response?.replay.entries ?? [],

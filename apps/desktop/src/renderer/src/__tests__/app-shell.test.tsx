@@ -11,6 +11,23 @@ describe("App", () => {
       value: {
         copyText,
         ping: () => "pong",
+        listSkills: async () => ({
+          backend: "codex",
+          fetchedAt: Date.now(),
+          data: [
+            {
+              cwd: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
+              skills: [
+                {
+                  name: "frontend-design",
+                  description: "Design and verify renderer UI work.",
+                  path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+                  enabled: true,
+                },
+              ],
+            },
+          ],
+        }),
         listBackends: async () => ({
           fetchedAt: Date.now(),
           backends: [
@@ -18,13 +35,13 @@ describe("App", () => {
               kind: "codex",
               label: "Codex app server",
               available: true,
-              methods: ["thread/list", "thread/read"],
+              methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
               capabilities: {
                 listThreads: true,
                 createThread: false,
                 resumeThread: true,
                 readThread: true,
-                startTurn: false,
+                startTurn: true,
                 interruptTurn: false,
                 steerTurn: false,
                 transcriptPagination: true,
@@ -152,6 +169,12 @@ describe("App", () => {
           }
         }),
         platform: "darwin",
+        startTurn: async () => ({
+          backend: "codex",
+          threadId: "thread-1",
+          runId: "turn-1",
+        }),
+        onAgentEvent: () => () => undefined,
         versions: {
           electron: "41.2.1"
         }
@@ -209,6 +232,7 @@ describe("App", () => {
     expect(screen.getByText("Codex app server")).toBeInTheDocument();
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByText("darwin")).toBeInTheDocument();
+    expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 });

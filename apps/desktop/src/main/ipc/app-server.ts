@@ -2,6 +2,8 @@ import { app, ipcMain } from "electron";
 import path from "node:path";
 import { OverlayStore } from "@pwragnt/agent-core";
 import type {
+  AppServerListSkillsRequest,
+  AppServerListSkillsResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
   AppServerReadThreadRequest,
@@ -16,6 +18,7 @@ import {
   getDesktopBackendRegistry,
 } from "../app-server/backend-registry";
 import {
+  APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
@@ -54,6 +57,31 @@ class DesktopAppServerService {
       backend: backend ?? "codex",
       fetchedAt: Date.now(),
       threads
+    };
+  }
+
+  async listSkills(
+    request: AppServerListSkillsRequest = {},
+  ): Promise<AppServerListSkillsResponse> {
+    const backend = request.backend ?? "codex";
+    const response = await getDesktopBackendRegistry().listSkills({
+      backend,
+      cwd: request.cwd,
+      cwds: request.cwds,
+    });
+
+    logDebug("listSkills", {
+      backend,
+      cwd: request.cwd ?? null,
+      cwds: request.cwds ?? [],
+      entries: response.data.length,
+      skills: response.data.reduce((count, entry) => count + entry.skills.length, 0),
+    });
+
+    return {
+      backend,
+      fetchedAt: Date.now(),
+      data: response.data,
     };
   }
 
@@ -149,6 +177,16 @@ class DesktopAppServerService {
 const appServerService = new DesktopAppServerService();
 
 export function registerAppServerIpcHandlers(): void {
+  ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_LIST_SKILLS_CHANNEL,
+    async (
+      _event,
+      request?: AppServerListSkillsRequest,
+    ): Promise<AppServerListSkillsResponse> => {
+      return await appServerService.listSkills(request);
+    }
+  );
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.handle(
     APP_SERVER_LIST_THREADS_CHANNEL,
@@ -192,6 +230,7 @@ export function registerAppServerIpcHandlers(): void {
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
+  ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);

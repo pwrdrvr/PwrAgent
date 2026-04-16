@@ -17,6 +17,15 @@ export type AppServerLocalImageInputItem = {
   path: string;
 };
 
+export type AppServerSkillSummary = {
+  name: string;
+  description?: string;
+  shortDescription?: string;
+  path?: string;
+  enabled?: boolean;
+  scope?: string;
+};
+
 export type AppServerTurnInputItem =
   | AppServerTextInputItem
   | AppServerImageInputItem
@@ -129,6 +138,21 @@ export type AppServerReadThreadResponse = {
   fetchedAt: number;
   threadId: ThreadIdentifier;
   replay: AppServerThreadReplay;
+};
+
+export type AppServerListSkillsRequest = {
+  backend?: AppServerBackendKind;
+  cwd?: string;
+  cwds?: string[];
+};
+
+export type AppServerListSkillsResponse = {
+  backend: AppServerBackendKind;
+  fetchedAt: number;
+  data: Array<{
+    cwd?: string;
+    skills: AppServerSkillSummary[];
+  }>;
 };
 
 export type AppServerNotification =

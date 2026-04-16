@@ -155,6 +155,34 @@ class MockTransport implements JsonRpcTransport {
           }
         })
       );
+      return;
+    }
+
+    if (payload.method === "skills/list") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: {
+            data: [
+              {
+                cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                skills: [
+                  {
+                    name: "frontend-design",
+                    description: "Design and verify renderer UI work.",
+                    shortDescription: "Renderer UI design workflow.",
+                    path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+                    scope: "user",
+                    enabled: true,
+                  },
+                ],
+                errors: [],
+              },
+            ],
+          },
+        })
+      );
     }
   }
 
@@ -344,6 +372,37 @@ describe("CodexAppServerClient", () => {
         previousCursor: undefined
       }
     });
+
+    await client.close();
+  });
+
+  it("normalizes skills/list results for composer autocomplete", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const skills = await client.listSkills({
+      cwds: ["/Users/huntharo/pwrdrvr/PwrAgnt"],
+    });
+
+    expect(skills).toEqual([
+      {
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        skills: [
+          {
+            name: "frontend-design",
+            description: "Design and verify renderer UI work.",
+            shortDescription: "Renderer UI design workflow.",
+            path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+            scope: "user",
+            enabled: true,
+          },
+        ],
+      },
+    ]);
 
     await client.close();
   });

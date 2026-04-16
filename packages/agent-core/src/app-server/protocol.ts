@@ -104,7 +104,10 @@ export type SkillSummary = {
   cwd?: string;
   name: string;
   description?: string;
+  shortDescription?: string;
+  path?: string;
   enabled?: boolean;
+  scope?: string;
 };
 
 export type ExperimentalFeatureSummary = {

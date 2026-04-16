@@ -1,10 +1,12 @@
 import type {
   AppServerThreadEntry,
+  AppServerSkillSummary,
   AppServerThreadReplayPagination,
   BackendSummary,
   NavigationThreadSummary
 } from "@pwragnt/shared";
 import { Composer } from "../composer/Composer";
+import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import { ThreadHeader } from "./ThreadHeader";
 import { TranscriptList } from "./TranscriptList";
@@ -12,12 +14,17 @@ import { TranscriptList } from "./TranscriptList";
 type ThreadViewProps = {
   backendError?: string;
   backends: BackendSummary[];
+  composerDisabled: boolean;
+  desktopApi?: DesktopApi;
   fetchedAt?: number;
   loading: boolean;
   loadingMore: boolean;
   messageCount: number;
   platform?: string;
   selectedThread?: NavigationThreadSummary;
+  skillError?: string;
+  skillLoading?: boolean;
+  skills: AppServerSkillSummary[];
   transcriptError?: string;
   transcriptEntries: AppServerThreadEntry[];
   transcriptPagination?: AppServerThreadReplayPagination;
@@ -74,6 +81,7 @@ export function ThreadView(props: ThreadViewProps) {
             loadingMore={props.loadingMore}
             pagination={props.transcriptPagination}
             threadId={props.selectedThread.id}
+            skills={props.skills}
             onLoadOlder={props.onLoadOlder}
           />
         </section>
@@ -86,7 +94,15 @@ export function ThreadView(props: ThreadViewProps) {
         />
       </div>
 
-      <Composer disabled />
+      <Composer
+        desktopApi={props.desktopApi}
+        disabled={props.composerDisabled}
+        onRefresh={props.onRefresh}
+        skillError={props.skillError}
+        skillLoading={props.skillLoading}
+        skills={props.skills}
+        thread={props.selectedThread}
+      />
     </section>
   );
 }

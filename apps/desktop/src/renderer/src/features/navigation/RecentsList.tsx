@@ -37,7 +37,7 @@ export function RecentsList(props: RecentsListProps) {
                   <span
                     aria-label={`Copy path for ${directory.label}`}
                     key={`${thread.id}:${directory.id}`}
-                    className="thread-row__chip path-copy-target"
+                    className="thread-row__chip path-copy-target tooltip-target"
                     role="button"
                     tabIndex={0}
                     data-tooltip={formatCopyTooltip(directory.path)}

@@ -11,13 +11,13 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
-            methods: ["thread/list", "thread/read"],
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
             capabilities: {
               listThreads: true,
               createThread: false,
               resumeThread: true,
               readThread: true,
-              startTurn: false,
+              startTurn: true,
               interruptTurn: false,
               steerTurn: false,
               transcriptPagination: true,
@@ -47,6 +47,14 @@ describe("ThreadView", () => {
             unavailableReason: "XAI_API_KEY is not set"
           }
         ]}
+        composerDisabled={false}
+        desktopApi={{
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            runId: "turn-1",
+          }),
+        }}
         fetchedAt={Date.now()}
         loading={false}
         loadingMore={false}
@@ -63,12 +71,20 @@ describe("ThreadView", () => {
             inInbox: false
           }
         }}
+        skills={[
+          {
+            name: "frontend-design",
+            description: "Design and verify renderer UI work.",
+            path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+            enabled: true,
+          },
+        ]}
         transcriptEntries={[
           {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Inspect the app-server output."
+            text: "Inspect [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)."
           },
           {
             type: "activity",
@@ -96,6 +112,7 @@ describe("ThreadView", () => {
         ]}
         onLoadOlder={async () => undefined}
         onRefresh={async () => undefined}
+        skillLoading={false}
       />
     );
 
@@ -109,10 +126,11 @@ describe("ThreadView", () => {
       screen.getByText("The desktop client now reads the full transcript.")
     ).toBeInTheDocument();
     expect(screen.getByText("Explored 2 files")).toBeInTheDocument();
+    expect(screen.getByText("$frontend-design")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 3, name: "Thread details" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pin context rail" })).toBeInTheDocument();
     expect(screen.getByText("Codex app server")).toBeInTheDocument();
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 });
