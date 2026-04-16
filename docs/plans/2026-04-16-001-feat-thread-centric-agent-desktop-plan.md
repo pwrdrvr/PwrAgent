@@ -167,7 +167,7 @@ flowchart TB
 **Verification:**
 - A developer can install dependencies and launch a blank but running desktop shell with passing baseline tests.
 
-- [ ] **Unit 2: Add desktop overlay state, inbox state, and refresh reconciliation**
+- [x] **Unit 2: Add desktop overlay state, inbox state, and refresh reconciliation**
 
 **Goal:** Create the desktop-owned persistence layer for inbox state, extra directory associations, lightweight selection/view state, and refresh reconciliation without duplicating canonical thread or transcript state already owned by the app server.
 
@@ -206,7 +206,9 @@ flowchart TB
 **Verification:**
 - Main-process services can store desktop-only inbox/navigation metadata, reconcile fresh app-server thread snapshots on focus, and preserve a stable UI when nothing materially changed.
 
-- [ ] **Unit 3: Integrate the Grok app server and normalize backend thread loading**
+**Status note:** Completed with a narrowed persistence scope. The desktop now uses the file-backed overlay store and refresh reconciliation needed for inbox/navigation behavior; the heavier relational-store direction originally described for this unit was intentionally deferred.
+
+- [x] **Unit 3: Integrate the Grok app server and normalize backend thread loading**
 
 **Goal:** Wire the existing Grok app server into the desktop beside Codex App Server, normalize the minimum thread-loading and run-lifecycle contracts across both backends, and expose capability-aware IPC without rebuilding `agent-core` abstractions that already exist.
 
@@ -252,7 +254,9 @@ flowchart TB
 **Verification:**
 - The desktop can load and run threads from both Codex and Grok backends, while accurately representing each backend's current feature envelope instead of assuming parity.
 
-- [ ] **Unit 4: Ship Inbox, Recents, Directories, and thread detail UI**
+**Status note:** Completed. The desktop now initializes Codex and Grok backends through the backend registry, exposes backend capability metadata over typed IPC, and normalizes backend thread loading and lifecycle events for the renderer.
+
+- [x] **Unit 4: Ship Inbox, Recents, Directories, and thread detail UI**
 
 **Goal:** Build the renderer experience that makes thread navigation visibly better than repo-first tools, including a real transcript view with thread history scrollback instead of the current last-user/last-assistant placeholder cards.
 
@@ -303,6 +307,8 @@ flowchart TB
 
 **Verification:**
 - A demo user can understand the app's thread-first model from the sidebar and can scroll through real thread history from thread detail alone.
+
+**Status note:** Completed, with the originally planned end-to-end Playwright spec still deferred. The renderer now ships Inbox-first navigation, Recents and Directories lenses, thread detail, transcript history with pagination-aware loading, and context/sidebar refinements that make multi-directory thread work legible.
 
 - [ ] **Unit 5: Add project attachment, worktree awareness, and repo-status enrichment**
 
