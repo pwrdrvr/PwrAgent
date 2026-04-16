@@ -495,46 +495,80 @@ textarea {
 }
 
 .context-rail {
-  position: sticky;
-  top: 24px;
   display: flex;
-  align-items: flex-start;
-  align-self: flex-start;
-  flex: 0 0 auto;
-  min-width: 40px;
+  align-self: stretch;
+  flex: 0 0 48px;
+  width: 48px;
+  min-width: 48px;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  transition:
+    width 160ms ease,
+    flex-basis 160ms ease,
+    border-color 140ms ease,
+    background 140ms ease;
 }
 
 .context-rail.is-open {
-  width: min(360px, 36vw);
+  flex-basis: min(380px, 34vw);
+  width: min(380px, 34vw);
 }
 
-.context-rail__collapsed-tab {
+.context-rail:hover,
+.context-rail:focus-within,
+.context-rail.is-open {
+  border-color: rgba(168, 255, 63, 0.24);
+}
+
+.context-rail__spine {
+  display: flex;
+  width: 48px;
+  flex: 0 0 48px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 8px 0;
+  border-right: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.context-rail__menu-button {
   display: inline-flex;
-  width: 40px;
-  min-height: 72px;
+  width: 36px;
+  height: 36px;
   align-items: center;
   justify-content: center;
-  padding: 10px 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: var(--bg-panel);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
   color: var(--text-secondary);
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    color 140ms ease;
 }
 
-.context-rail__collapsed-tab:hover {
+.context-rail__menu-button:hover,
+.context-rail__menu-button:focus-visible,
+.context-rail__menu-button.is-active {
+  border-color: var(--border-subtle);
   background: var(--bg-row-active);
   color: var(--text-primary);
+  outline: none;
 }
 
-.context-rail__collapsed-glyph {
+.context-rail__menu-glyph {
   display: inline-flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.context-rail__collapsed-glyph span {
+.context-rail__menu-glyph span {
   display: block;
-  width: 12px;
+  width: 14px;
   height: 2px;
   border-radius: 999px;
   background: currentColor;
@@ -545,16 +579,17 @@ textarea {
   flex-direction: column;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   opacity: 0;
   pointer-events: none;
-  transform: translateX(10px);
+  transform: translateX(12px);
   transition:
     opacity 140ms ease,
     transform 160ms ease;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: var(--bg-panel);
 }
 
 .context-rail.is-open .context-panel {
@@ -710,13 +745,17 @@ textarea {
     position: static;
     width: 100%;
     min-width: 0;
+    flex-basis: auto;
   }
 
-  .context-rail__collapsed-tab {
+  .context-rail__spine {
     width: 100%;
-    min-height: 40px;
-    justify-content: flex-start;
-    padding: 0 12px;
+    flex: 0 0 auto;
+    flex-direction: row;
+    justify-content: flex-end;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .context-panel {

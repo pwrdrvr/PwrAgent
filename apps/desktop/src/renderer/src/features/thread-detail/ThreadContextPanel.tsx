@@ -38,22 +38,28 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         }
       }}
     >
-      {!open ? (
+      <div className="context-rail__spine">
         <button
-          aria-label="Open context rail"
-          className="context-rail__collapsed-tab"
+          aria-label={pinned ? "Unpin context rail" : "Open context rail"}
+          className={`context-rail__menu-button${open ? " is-active" : ""}`}
           type="button"
           onClick={() => {
+            if (pinned) {
+              setPinned(false);
+              setRevealed(false);
+              return;
+            }
+
             setRevealed(true);
           }}
         >
-          <span className="context-rail__collapsed-glyph" aria-hidden="true">
+          <span className="context-rail__menu-glyph" aria-hidden="true">
             <span />
             <span />
             <span />
           </span>
         </button>
-      ) : null}
+      </div>
 
       {open ? (
         <div className="context-panel">
@@ -78,18 +84,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               >
                 {pinned ? "Unpin" : "Pin"}
               </button>
-              {!pinned ? (
-                <button
-                  aria-label="Close context rail"
-                  className="button button--ghost context-panel__close-button"
-                  type="button"
-                  onClick={() => {
-                    setRevealed(false);
-                  }}
-                >
-                  Hide
-                </button>
-              ) : null}
             </div>
           </div>
 
