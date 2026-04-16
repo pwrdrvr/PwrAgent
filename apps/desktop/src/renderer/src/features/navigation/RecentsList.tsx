@@ -1,4 +1,5 @@
 import type { NavigationThreadSummary } from "@pwragnt/shared";
+import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 
 type RecentsListProps = {
   selectedThreadId?: string;
@@ -34,9 +35,26 @@ export function RecentsList(props: RecentsListProps) {
               {thread.linkedDirectories.length > 0 ? (
                 thread.linkedDirectories.map((directory) => (
                   <span
+                    aria-label={`Copy path for ${directory.label}`}
                     key={`${thread.id}:${directory.id}`}
-                    className="thread-row__chip"
-                    title={directory.path}
+                    className="thread-row__chip path-copy-target"
+                    role="button"
+                    tabIndex={0}
+                    title={formatCopyTooltip(directory.path)}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void copyText(directory.path);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") {
+                        return;
+                      }
+
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void copyText(directory.path);
+                    }}
                   >
                     <span aria-hidden="true" className="thread-row__chip-icon">
                       {directory.kind === "worktree" ? "🔀" : "📁"}

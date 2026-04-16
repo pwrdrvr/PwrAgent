@@ -1,12 +1,15 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { vi } from "vitest";
 import { App } from "../App";
 
 describe("App", () => {
   it("renders the live thread shell with transcript history", async () => {
+    const copyText = vi.fn(async () => undefined);
     Object.defineProperty(window, "pwragnt", {
       configurable: true,
       value: {
+        copyText,
         ping: () => "pong",
         listBackends: async () => ({
           fetchedAt: Date.now(),
@@ -68,6 +71,7 @@ describe("App", () => {
                   id: "/Users/huntharo/pwrdrvr/PwrAgnt",
                   label: "PwrAgnt",
                   path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                  worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
                   kind: "worktree"
                 }
               ],
@@ -156,6 +160,15 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { level: 3, name: "Thread details" })
     ).toBeInTheDocument();
+    const context = screen.getByLabelText("Thread context");
+    fireEvent.click(
+      within(context).getByRole("button", { name: "Copy path for PwrAgnt" })
+    );
+    fireEvent.click(
+      within(context).getByRole("button", { name: "Copy path for worktree PwrAgnt" })
+    );
+    expect(copyText).toHaveBeenNthCalledWith(1, "/Users/huntharo/pwrdrvr/PwrAgnt");
+    expect(copyText).toHaveBeenNthCalledWith(2, "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt");
     expect(screen.getByText("Codex app server")).toBeInTheDocument();
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByText("darwin")).toBeInTheDocument();

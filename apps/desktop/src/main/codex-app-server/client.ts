@@ -379,6 +379,21 @@ function parseGitWorktrees(output: string): string[] {
     .filter(Boolean);
 }
 
+function findContainingWorktree(
+  currentPath: string,
+  worktreePaths: string[]
+): string | undefined {
+  const matches = worktreePaths
+    .map((worktreePath) => path.resolve(worktreePath))
+    .filter(
+      (worktreePath) =>
+        currentPath === worktreePath || currentPath.startsWith(`${worktreePath}${path.sep}`)
+    )
+    .sort((left, right) => right.length - left.length);
+
+  return matches[0];
+}
+
 async function resolveLinkedDirectories(
   projectKey?: string
 ): Promise<LinkedDirectorySummary[]> {
@@ -392,19 +407,22 @@ async function resolveLinkedDirectories(
   }
 
   try {
+    const currentPath = path.resolve(normalizedPath);
     const repoRoot = await runGit(normalizedPath, ["rev-parse", "--show-toplevel"]);
     const worktreeList = await runGit(normalizedPath, ["worktree", "list", "--porcelain"]);
     const worktreePaths = parseGitWorktrees(worktreeList);
-    const primaryPath = worktreePaths[0] || repoRoot;
-    const currentPath = path.resolve(repoRoot);
-    const resolvedPrimaryPath = path.resolve(primaryPath);
+    const primaryPath = path.resolve(worktreePaths[0] || repoRoot);
+    const currentWorktreePath = findContainingWorktree(currentPath, worktreePaths)
+      ?? path.resolve(repoRoot);
+    const isWorktree = currentWorktreePath !== primaryPath;
 
     return [
       {
-        id: resolvedPrimaryPath,
-        path: resolvedPrimaryPath,
-        label: path.basename(resolvedPrimaryPath) || resolvedPrimaryPath,
-        kind: currentPath === resolvedPrimaryPath ? "local" : "worktree"
+        id: primaryPath,
+        path: primaryPath,
+        worktreePath: isWorktree ? currentWorktreePath : undefined,
+        label: path.basename(primaryPath) || primaryPath,
+        kind: isWorktree ? "worktree" : "local"
       }
     ];
   } catch {

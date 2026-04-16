@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragnt/shared";
+import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 
 type ThreadContextPanelProps = {
   backendError?: string;
@@ -95,13 +96,31 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               <ul className="context-list">
                 {props.thread.linkedDirectories.map((directory) => (
                   <li key={directory.id} className="context-list__item">
-                    <span className="context-list__label" title={directory.path}>
+                    <button
+                      aria-label={`Copy path for ${directory.label}`}
+                      className="context-list__label path-copy-target"
+                      title={formatCopyTooltip(directory.path)}
+                      type="button"
+                      onClick={(event) => {
+                        void handleCopyPath(event, directory.path);
+                      }}
+                    >
                       <span aria-hidden="true" className="context-list__icon">
                         {directory.kind === "worktree" ? "🔀" : "📁"}
                       </span>
                       {directory.label}
-                    </span>
-                    <span className="context-list__meta">{directory.kind}</span>
+                    </button>
+                    <button
+                      aria-label={`Copy path for ${directory.kind} ${directory.label}`}
+                      className="context-list__meta path-copy-target"
+                      title={formatCopyTooltip(directory.worktreePath ?? directory.path)}
+                      type="button"
+                      onClick={(event) => {
+                        void handleCopyPath(event, directory.worktreePath ?? directory.path);
+                      }}
+                    >
+                      {directory.kind}
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -167,6 +186,15 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       ) : null}
     </aside>
   );
+}
+
+async function handleCopyPath(
+  event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
+  path: string
+): Promise<void> {
+  event.preventDefault();
+  event.stopPropagation();
+  await copyText(path);
 }
 
 function formatTimestamp(timestamp: number): string {

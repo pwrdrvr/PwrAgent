@@ -9,6 +9,7 @@ import type {
 } from "@pwragnt/shared";
 
 export type DesktopApi = {
+  copyText?: (text: string) => Promise<void>;
   ping?: () => string;
   readThread?: (
     request: AppServerReadThreadRequest

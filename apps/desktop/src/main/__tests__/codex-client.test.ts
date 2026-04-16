@@ -126,6 +126,7 @@ describe("CodexAppServerClient", () => {
                 id: "/Users/huntharo/pwrdrvr/PwrAgnt",
                 label: "PwrAgnt",
                 path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
                 kind: "worktree"
               }
             ]
@@ -144,6 +145,7 @@ describe("CodexAppServerClient", () => {
           id: "/Users/huntharo/pwrdrvr/PwrAgnt",
           label: "PwrAgnt",
           path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
           kind: "worktree"
         }
       ]

@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { within } from "@testing-library/react";
+import { vi } from "vitest";
 import { Sidebar } from "../Sidebar";
 
 const sharedThread = {
@@ -19,6 +20,7 @@ const sharedThread = {
       id: "dir-a",
       label: "PwrAgnt",
       path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+      worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
       kind: "local" as const
     },
     {
@@ -77,5 +79,34 @@ describe("Sidebar", () => {
       within(screen.getByRole("heading", { level: 3, name: "PwrAgnt" })).getByText("📁")
     ).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /Cross-project cleanup/i })).toHaveLength(2);
+  });
+
+  it("copies a linked directory path from the recents chip", () => {
+    const copyText = vi.fn(async () => undefined);
+    Object.defineProperty(window, "pwragnt", {
+      configurable: true,
+      value: {
+        copyText
+      }
+    });
+
+    render(
+      <Sidebar
+        browseMode="recents"
+        fetchedAt={Date.now()}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        refreshing={false}
+        selectedThreadId="thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onRefresh={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy path for PwrAgnt" }));
+
+    expect(copyText).toHaveBeenCalledWith("/Users/huntharo/pwrdrvr/PwrAgnt");
   });
 });

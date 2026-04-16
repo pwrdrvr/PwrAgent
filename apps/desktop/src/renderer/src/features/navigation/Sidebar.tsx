@@ -77,25 +77,27 @@ export function Sidebar(props: SidebarProps) {
           </div>
         </div>
 
-        {props.loading ? (
-          <p className="sidebar-empty">Loading Codex threads…</p>
-        ) : props.error ? (
-          <p className="sidebar-error">{props.error}</p>
-        ) : props.threads.length === 0 ? (
-          <p className="sidebar-empty">Codex returned zero threads.</p>
-        ) : props.browseMode === "directories" ? (
-          <DirectoriesList
-            selectedThreadId={props.selectedThreadId}
-            threads={props.threads}
-            onSelectThread={props.onSelectThread}
-          />
-        ) : (
-          <RecentsList
-            selectedThreadId={props.selectedThreadId}
-            threads={props.threads}
-            onSelectThread={props.onSelectThread}
-          />
-        )}
+        <div className="sidebar__scroll-region">
+          {props.loading ? (
+            <p className="sidebar-empty">Loading Codex threads…</p>
+          ) : props.error ? (
+            <p className="sidebar-error">{props.error}</p>
+          ) : props.threads.length === 0 ? (
+            <p className="sidebar-empty">Codex returned zero threads.</p>
+          ) : props.browseMode === "directories" ? (
+            <DirectoriesList
+              selectedThreadId={props.selectedThreadId}
+              threads={props.threads}
+              onSelectThread={props.onSelectThread}
+            />
+          ) : (
+            <RecentsList
+              selectedThreadId={props.selectedThreadId}
+              threads={props.threads}
+              onSelectThread={props.onSelectThread}
+            />
+          )}
+        </div>
       </section>
     </aside>
   );

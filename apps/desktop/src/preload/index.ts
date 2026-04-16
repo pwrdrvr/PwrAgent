@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { clipboard, contextBridge, ipcRenderer } from "electron";
 import type {
   AgentEvent,
   InterruptTurnRequest,
@@ -39,6 +39,9 @@ console.info("[pwragnt:preload] start", {
 
 const desktopApi = Object.freeze({
   ping: () => "pong",
+  copyText: async (text: string): Promise<void> => {
+    clipboard.writeText(text);
+  },
   listThreads: async (
     request?: AppServerListThreadsRequest
   ): Promise<AppServerListThreadsResponse> =>

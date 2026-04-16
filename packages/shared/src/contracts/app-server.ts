@@ -26,6 +26,7 @@ export type LinkedDirectorySummary = {
   id: string;
   label: string;
   path: string;
+  worktreePath?: string;
   kind: "local" | "worktree";
 };
 

@@ -1,4 +1,5 @@
 import type { NavigationThreadSummary } from "@pwragnt/shared";
+import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 
 type DirectoriesListProps = {
   selectedThreadId?: string;
@@ -22,11 +23,23 @@ export function DirectoriesList(props: DirectoriesListProps) {
       {groups.map((group) => (
         <section key={group.id} className="directory-group">
           <header className="directory-group__header">
-            <h3 className="directory-group__title" title={group.path ?? group.label}>
-              <span aria-hidden="true" className="directory-group__icon">
-                {group.icon}
-              </span>
-              {group.label}
+            <h3 className="directory-group__title">
+              <button
+                aria-label={`Copy path for ${group.label}`}
+                className="directory-group__button path-copy-target"
+                title={group.path ? formatCopyTooltip(group.path) : undefined}
+                type="button"
+                onClick={() => {
+                  if (group.path) {
+                    void copyText(group.path);
+                  }
+                }}
+              >
+                <span aria-hidden="true" className="directory-group__icon">
+                  {group.icon}
+                </span>
+                {group.label}
+              </button>
             </h3>
             <span className="directory-group__count">
               {group.threads.length} thread{group.threads.length === 1 ? "" : "s"}
