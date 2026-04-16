@@ -38,6 +38,14 @@ async function waitForNotification(
 ): Promise<AppServerNotification> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < liveNotificationTimeoutMs) {
+    const failed = notifications.find(
+      (notification) => notification.method === "turn/failed",
+    );
+    if (failed?.method === "turn/failed") {
+      throw new Error(
+        `Received turn/failed while waiting for ${description}: ${failed.params.turn.error?.message ?? "unknown error"}`,
+      );
+    }
     const match = notifications.find((notification) => predicate(notification));
     if (match) {
       return match;
@@ -93,7 +101,7 @@ describe("Grok live smoke", () => {
         input: [
           {
             type: "text",
-            text: `Reply with this token and no explanation: ${marker}`,
+            text: `Reply with this token exactly. Do not use any tools or inspect the workspace. No explanation: ${marker}`,
           },
         ],
       })) as { threadId: string; runId: string };
@@ -127,7 +135,7 @@ describe("Grok live smoke", () => {
         input: [
           {
             type: "text",
-            text: "What token did you just return? Reply with the token only.",
+            text: "What token did you just return? Reply with the token only. Do not use any tools.",
           },
         ],
       })) as { threadId: string; runId: string };
@@ -145,7 +153,8 @@ describe("Grok live smoke", () => {
       const replay = await server.request("thread/read", { threadId: "thread-live" });
       expect(replay).toMatchObject({
         threadId: "thread-live",
-        lastUserMessage: "What token did you just return? Reply with the token only.",
+        lastUserMessage:
+          "What token did you just return? Reply with the token only. Do not use any tools.",
       });
       expect((replay as { lastAssistantMessage?: string }).lastAssistantMessage).toContain(marker);
     },

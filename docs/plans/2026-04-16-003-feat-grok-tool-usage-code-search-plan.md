@@ -352,7 +352,7 @@ Lock the behavior down with deterministic contract tests and a live-gated tool-l
 **Verification:**
 - Guarded tool execution is observable, cancellable, and aligned with the current app-server approval flow.
 
-- [ ] **Unit 5: Wire the Grok Responses tool loop**
+- [x] **Unit 5: Wire the Grok Responses tool loop**
 
 **Goal:** Teach the Grok provider to advertise tools to xAI, execute tool calls locally, and continue the conversation until the provider reaches a terminal assistant response.
 

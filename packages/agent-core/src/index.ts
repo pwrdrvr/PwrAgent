@@ -17,9 +17,18 @@ export type {
 } from "./app-server/protocol.js";
 export { GrokProvider } from "./providers/grok-provider.js";
 export type { GrokProviderOptions } from "./providers/grok-provider.js";
+export { startResponsesToolLoop } from "./providers/responses-tool-loop.js";
 export { XaiResponsesClient } from "./providers/xai-responses-client.js";
 export {
+  buildFunctionCallOutputInput,
+  buildXaiFunctionTools,
+  buildXaiInput,
+  type XaiFunctionTool,
+} from "./providers/xai-responses-client.js";
+export {
   normalizeXaiResponse,
+  parseNormalizedFunctionArguments,
+  type NormalizedFunctionCall,
   type NormalizedResponseOutput,
 } from "./providers/response-normalizer.js";
 export {
