@@ -59,6 +59,7 @@ The origin requirements define a thread-first product surface where users can st
 - Keep Git roots and working directories as separate persisted concepts so local mode and worktree mode can share one thread model.
 - Start with one internal plugin/skill registration path that the app itself consumes, then generalize only after the first milestone proves the shape.
 - Treat semantic wiki search as a service boundary, not a UI trick, so the first milestone can start with a pluggable indexer and avoid hard-coding one search backend into the renderer.
+- For Grok-based desktop integration, target the OpenClaw-consumed Codex App Server subset rather than a turn-only proof of concept, so the desktop can rely on one existing client contract for thread discovery, turn control, review, and compaction.
 
 ## Open Questions
 

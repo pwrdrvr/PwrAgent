@@ -380,7 +380,7 @@ Add review and compaction flows, then lock the whole surface down with consumer-
 **Verification:**
 - The app-server contract is locked to the real consumer instead of drifting behind hand-written protocol assumptions.
 
-- [ ] **Unit 7: Extend live smoke coverage and update docs**
+- [x] **Unit 7: Extend live smoke coverage and update docs**
 
 **Goal:** Prove the expanded compatibility surface still works against real xAI calls where it matters, and document the supported subset clearly.
 
