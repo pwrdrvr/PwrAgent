@@ -317,7 +317,7 @@ Add review and compaction flows, then lock the whole surface down with consumer-
 **Verification:**
 - OpenClaw can drive an active turn, observe progress, answer approvals, and recover a final outcome without Grok-specific client code.
 
-- [ ] **Unit 5: Add compaction and review runners**
+- [x] **Unit 5: Add compaction and review runners**
 
 **Goal:** Implement the two remaining action surfaces OpenClaw treats as first-class operations: thread compaction and review.
 
