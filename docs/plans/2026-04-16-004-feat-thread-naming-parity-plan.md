@@ -1,7 +1,7 @@
 ---
 title: feat: Normalize thread naming across Codex and Grok
 type: feat
-status: active
+status: completed
 date: 2026-04-16
 origin: docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md
 ---
@@ -107,7 +107,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Normalize Codex thread metadata into explicit versus derived title states**
+- [x] **Unit 1: Normalize Codex thread metadata into explicit versus derived title states**
 
 **Goal:** Stop treating Codex `preview` as summary-only metadata and instead produce the correct desktop title for Codex threads before any explicit rename exists.
 
@@ -142,7 +142,7 @@ flowchart TB
 **Verification:**
 - Codex-backed threads show a meaningful label in thread discovery immediately after the first user turn, without requiring an explicit rename.
 
-- [ ] **Unit 2: Make Grok thread state preserve explicit names and first-user-message-derived titles separately**
+- [x] **Unit 2: Make Grok thread state preserve explicit names and first-user-message-derived titles separately**
 
 **Goal:** Bring Grok onto the same naming model as Codex so mixed-backend thread rows mean the same thing.
 
@@ -181,7 +181,7 @@ flowchart TB
 **Verification:**
 - Grok and Codex threads follow the same naming rules in the desktop sidebar even before Grok persistence lands.
 
-- [ ] **Unit 3: Propagate naming changes live through desktop navigation**
+- [x] **Unit 3: Propagate naming changes live through desktop navigation**
 
 **Goal:** Ensure derived or explicit title changes actually appear in the renderer without waiting for a manual refresh or window-focus event.
 
@@ -219,7 +219,7 @@ flowchart TB
 **Verification:**
 - Title changes become visible in the thread list and thread header during normal use, not only after a full refresh cycle.
 
-- [ ] **Unit 4: Lock the naming contract down with mixed-backend regression coverage**
+- [x] **Unit 4: Lock the naming contract down with mixed-backend regression coverage**
 
 **Goal:** Prevent future protocol and persistence work from regressing naming semantics, especially while Grok persistence is landing in parallel.
 

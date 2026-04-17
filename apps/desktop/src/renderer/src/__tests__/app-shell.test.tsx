@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 
@@ -188,6 +188,7 @@ describe("App", () => {
             {
               id: "thread-1",
               title: "Build Codex client",
+              titleSource: "explicit",
               summary: "Wire the app-server transport and list threads",
               source: "codex",
               executionMode: "default",
@@ -445,6 +446,7 @@ describe("App", () => {
                 {
                   id: "thread-1",
                   title: "Build Codex client",
+                  titleSource: "explicit",
                   summary: "Wire the app-server transport and list threads",
                   source: "codex",
                   executionMode: "default",
@@ -469,6 +471,7 @@ describe("App", () => {
               {
                 id: "thread-2",
                 title: "Investigate Grok thread",
+                titleSource: "explicit",
                 summary: "Start a new thread on Grok",
                 source: "grok",
                 executionMode: "default",
@@ -482,6 +485,7 @@ describe("App", () => {
               {
                 id: "thread-1",
                 title: "Build Codex client",
+                titleSource: "explicit",
                 summary: "Wire the app-server transport and list threads",
                 source: "codex",
                 executionMode: "default",
@@ -619,6 +623,36 @@ describe("App", () => {
       threadId: "thread-new",
       executionMode: "default" as const,
     }));
+    const agentEventListeners = new Set<
+      (event: {
+        backend: "codex" | "grok";
+        notification: {
+          method: string;
+          params: Record<string, unknown>;
+        };
+      }) => void
+    >();
+    let navigationSnapshot: any = {
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-existing"],
+      threads: [
+        {
+          id: "thread-existing",
+          title: "Existing Codex thread",
+          titleSource: "explicit" as const,
+          summary: "Already in the list",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread" as const
+          },
+          updatedAt: Date.now()
+        }
+      ]
+    };
     const startTurn = vi.fn(
       async ({
         backend,
@@ -674,27 +708,7 @@ describe("App", () => {
             }
           ]
         }),
-        getNavigationSnapshot: async () => ({
-          backend: "all",
-          fetchedAt: Date.now(),
-          unchanged: false,
-          inboxThreadKeys: ["codex:thread-existing"],
-          threads: [
-            {
-              id: "thread-existing",
-              title: "Existing Codex thread",
-              summary: "Already in the list",
-              source: "codex",
-              executionMode: "default",
-              linkedDirectories: [],
-              inbox: {
-                inInbox: true,
-                reason: "new-thread"
-              },
-              updatedAt: Date.now()
-            }
-          ]
-        }),
+        getNavigationSnapshot: async () => navigationSnapshot,
         markThreadSeen: async ({
           backend,
           threadId
@@ -706,7 +720,20 @@ describe("App", () => {
           threadId,
           seenAt: Date.now()
         }),
-        onAgentEvent: () => () => undefined,
+        onAgentEvent: (
+          listener: (event: {
+            backend: "codex" | "grok";
+            notification: {
+              method: string;
+              params: Record<string, unknown>;
+            };
+          }) => void
+        ) => {
+          agentEventListeners.add(listener);
+          return () => {
+            agentEventListeners.delete(listener);
+          };
+        },
         onWindowFocus: () => () => undefined,
         readThread: async ({
           backend,
@@ -766,6 +793,50 @@ describe("App", () => {
       backend: "codex",
       threadId: "thread-new",
       input: [{ type: "text", text: "hello new codex thread" }]
+    });
+
+    navigationSnapshot = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-new"],
+      threads: [
+        {
+          id: "thread-new",
+          title: "hello new codex thread",
+          titleSource: "derived",
+          summary: undefined,
+          source: "codex",
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread"
+          },
+          updatedAt: Date.now()
+        },
+        ...navigationSnapshot.threads,
+      ]
+    };
+
+    await act(async () => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-new",
+              runId: "turn-1",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { level: 2, name: "hello new codex thread" })
+      ).toBeInTheDocument();
     });
   });
 });

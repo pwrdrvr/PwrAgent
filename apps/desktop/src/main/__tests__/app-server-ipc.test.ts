@@ -10,6 +10,7 @@ const listThreads = vi.fn(async (_request?: { backend?: "codex" | "grok"; filter
   {
     id: "thread-1",
     title: "Thread one",
+    titleSource: "explicit" as const,
     source: "codex" as const,
     linkedDirectories: [],
     updatedAt: 2000,
@@ -17,6 +18,7 @@ const listThreads = vi.fn(async (_request?: { backend?: "codex" | "grok"; filter
   {
     id: "thread-1",
     title: "Thread one (Grok)",
+    titleSource: "explicit" as const,
     source: "grok" as const,
     linkedDirectories: [],
     updatedAt: 1000,

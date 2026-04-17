@@ -45,7 +45,7 @@ describe("Codex app-server contract", () => {
   });
 
   it("creates, lists, renames, and resumes a thread without requiring cwd on resume", async () => {
-    const { server } = createTestHarness();
+    const { server, notifications } = createTestHarness();
 
     const created = await server.request("thread/start", {
       cwd: "/repo/workspace",
@@ -55,6 +55,7 @@ describe("Codex app-server contract", () => {
     expect(created).toEqual({
       threadId: "thread-1",
       threadName: undefined,
+      firstUserMessage: undefined,
       cwd: "/repo/workspace",
       model: "grok-4.20-reasoning",
       modelProvider: "xai",
@@ -82,6 +83,7 @@ describe("Codex app-server contract", () => {
     expect(renamed).toEqual({
       threadId: "thread-1",
       threadName: "OpenClaw parity",
+      firstUserMessage: undefined,
       cwd: "/repo/workspace",
       model: "grok-4.20-reasoning",
       modelProvider: "xai",
@@ -95,6 +97,7 @@ describe("Codex app-server contract", () => {
     expect(resumed).toEqual({
       threadId: "thread-1",
       threadName: "OpenClaw parity",
+      firstUserMessage: undefined,
       cwd: "/repo/workspace",
       model: "grok-4.20-fast",
       modelProvider: "xai",
@@ -110,6 +113,7 @@ describe("Codex app-server contract", () => {
         {
           threadId: "thread-1",
           title: "OpenClaw parity",
+          titleSource: "explicit",
           summary: undefined,
           projectKey: "/repo/workspace",
           model: "grok-4.20-fast",
@@ -117,6 +121,13 @@ describe("Codex app-server contract", () => {
           updatedAt: expect.any(Number),
         },
       ],
+    });
+    expect(notifications).toContainEqual({
+      method: "thread/name/updated",
+      params: {
+        threadId: "thread-1",
+        threadName: "OpenClaw parity",
+      },
     });
   });
 
@@ -148,6 +159,7 @@ describe("Codex app-server contract", () => {
       thread: {
         threadId: "thread-1",
         threadName: undefined,
+        firstUserMessage: "Ship it",
         cwd: "/repo/workspace",
         model: undefined,
         modelProvider: "xai",

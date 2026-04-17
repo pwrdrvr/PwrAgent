@@ -72,6 +72,7 @@ const backends: BackendSummary[] = [
 const sharedThread = {
   id: "thread-1",
   title: "Cross-project cleanup",
+  titleSource: "explicit" as const,
   summary: "Line up the desktop shell with the app server",
   source: "codex" as const,
   gitBranch: "codex/thread-centric-ui",
@@ -115,6 +116,7 @@ describe("Sidebar", () => {
           {
             id: "thread-2",
             title: "Unlinked planning thread",
+            titleSource: "explicit",
             summary: undefined,
             source: "codex",
             updatedAt: Date.now(),

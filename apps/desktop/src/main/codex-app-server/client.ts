@@ -1,6 +1,9 @@
 import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  shortenDerivedThreadTitle,
+} from "@pwragnt/shared";
 import type {
   AppServerNotification,
   AppServerPendingRequestNotification,
@@ -12,9 +15,10 @@ import type {
   AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadReplayPagination,
+  AppServerThreadTitleSource,
   AppServerThreadSummary,
   AppServerTurnInputItem,
-  LinkedDirectorySummary
+  LinkedDirectorySummary,
 } from "@pwragnt/shared";
 import { JsonRpcConnection } from "./json-rpc";
 import { StdioJsonRpcTransport } from "./stdio-transport";
@@ -225,6 +229,44 @@ function normalizeThreadSummary(value: string | undefined): string | undefined {
   }
 
   return trimmed;
+}
+
+function getThreadTitleInfo(record: Record<string, unknown>): {
+  title: string;
+  titleSource: AppServerThreadTitleSource;
+} {
+  const sessionRecord = asRecord(record.session);
+  const explicitTitle =
+    pickString(record, ["title", "name", "headline"]) ??
+    pickString(sessionRecord ?? {}, ["title", "name", "headline"]);
+
+  if (explicitTitle) {
+    return {
+      title: explicitTitle,
+      titleSource: "explicit",
+    };
+  }
+
+  const derivedTitle =
+    pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
+    pickString(sessionRecord ?? {}, [
+      "preview",
+      "snippet",
+      "firstUserMessage",
+      "first_user_message",
+    ]);
+
+  if (derivedTitle) {
+    return {
+      title: shortenDerivedThreadTitle(derivedTitle) ?? derivedTitle,
+      titleSource: "derived",
+    };
+  }
+
+  return {
+    title: "Untitled thread",
+    titleSource: "fallback",
+  };
 }
 
 function normalizeConversationRole(
@@ -936,17 +978,42 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
     const projectKey =
       pickString(record, ["projectKey", "project_key", "cwd"]) ??
       pickString(sessionRecord ?? {}, ["cwd", "projectKey", "project_key"]);
+    const titleInfo = getThreadTitleInfo(record);
+    const rawDerivedTitle =
+      pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
+      pickString(sessionRecord ?? {}, [
+        "preview",
+        "snippet",
+        "firstUserMessage",
+        "first_user_message",
+      ]);
+    const summary = normalizeThreadSummary(
+      pickString(record, [
+        "summary",
+        "preview",
+        "snippet",
+        "firstUserMessage",
+        "first_user_message",
+      ]) ??
+        pickString(sessionRecord ?? {}, [
+          "summary",
+          "preview",
+          "snippet",
+          "firstUserMessage",
+          "first_user_message",
+        ])
+    );
 
     summaries.set(threadId, {
       id: threadId,
-      title:
-        pickString(record, ["title", "name", "headline"]) ??
-        pickString(sessionRecord ?? {}, ["title", "name"]) ??
-        "Untitled thread",
-      summary: normalizeThreadSummary(
-        pickString(record, ["summary", "preview", "snippet"]) ??
-          pickString(sessionRecord ?? {}, ["summary", "preview", "snippet"])
-      ),
+      title: titleInfo.title,
+      titleSource: titleInfo.titleSource,
+      summary:
+        summary === titleInfo.title ||
+        (titleInfo.titleSource === "derived" &&
+          summary === normalizeThreadSummary(rawDerivedTitle))
+          ? undefined
+          : summary,
       projectKey,
       createdAt: normalizeEpochTimestamp(
         pickNumber(record, ["createdAt", "created_at"]) ??

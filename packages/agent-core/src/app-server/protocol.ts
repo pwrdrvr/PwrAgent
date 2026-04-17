@@ -28,9 +28,12 @@ export type AppServerTurnInput = {
   model?: string;
 };
 
+export type ThreadTitleSource = "explicit" | "derived" | "fallback";
+
 export type ThreadState = {
   threadId: string;
   threadName?: string;
+  firstUserMessage?: string;
   cwd?: string;
   model?: string;
   modelProvider?: string;
@@ -44,7 +47,8 @@ export type ThreadState = {
 
 export type ThreadSummary = {
   threadId: string;
-  title?: string;
+  title: string;
+  titleSource: ThreadTitleSource;
   summary?: string;
   projectKey?: string;
   model?: string;
@@ -256,6 +260,13 @@ export type AppServerNotification =
         threadId: string;
         runId?: string;
         requestId: string;
+      };
+    }
+  | {
+      method: "thread/name/updated";
+      params: {
+        threadId: string;
+        threadName?: string;
       };
     }
   | {

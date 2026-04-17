@@ -92,7 +92,8 @@ class MockTransport implements JsonRpcTransport {
               },
               {
                 id: "thread-1",
-                title: "Plan Codex compatibility",
+                preview:
+                  "I need a bedtime story about Nvidia and building AI through programmable shaders as an accident.",
                 text: "Do not leak this planning prompt into the thread browser",
                 updatedAt: 1_763_400_000,
                 session: {
@@ -366,6 +367,7 @@ describe("CodexAppServerClient", () => {
     expect(threads[0]).toMatchObject({
       id: "thread-2",
       title: "Ship desktop shell",
+      titleSource: "explicit",
       source: "codex",
       linkedDirectories: [
         {
@@ -377,7 +379,11 @@ describe("CodexAppServerClient", () => {
         }
       ]
     });
-    expect(threads[1]?.title).toBe("Plan Codex compatibility");
+    expect(threads[1]?.title).toBe(
+      "A bedtime story about Nvidia and building AI through programmable...",
+    );
+    expect(threads[1]?.titleSource).toBe("derived");
+    expect(threads[1]?.summary).toBeUndefined();
 
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();

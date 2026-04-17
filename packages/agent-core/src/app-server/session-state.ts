@@ -5,12 +5,14 @@ import type {
   ThreadReplayItem,
   ThreadState,
   ThreadSummary,
+  ThreadTitleSource,
 } from "./protocol.js";
 import type {
   AppServerSessionStore,
   HydratedSessionState,
   StoredMessage,
 } from "../persistence/grok-rollout-store.js";
+import { shortenDerivedThreadTitle } from "@pwragnt/shared";
 import type { ProviderActiveTurn } from "../providers/provider-contract.js";
 
 type ActiveRunRecord = {
@@ -59,6 +61,7 @@ export class AppServerSessionState {
     const thread: ThreadState = {
       threadId: params.threadId,
       threadName: undefined,
+      firstUserMessage: undefined,
       cwd: params.cwd,
       model: params.model,
       modelProvider: params.modelProvider ?? "xai",
@@ -79,15 +82,23 @@ export class AppServerSessionState {
 
   listThreads(): ThreadSummary[] {
     return [...this.threads.values()]
-      .map((thread) => ({
-        threadId: thread.threadId,
-        title: thread.threadName,
-        summary: this.summarizeThread(thread.threadId),
-        projectKey: thread.cwd,
-        model: thread.model,
-        createdAt: thread.createdAt,
-        updatedAt: thread.updatedAt,
-      }))
+      .map((thread) => {
+        const title = getThreadTitle(thread);
+        const summary = this.summarizeThread(thread.threadId, [
+          title.title,
+          title.titleSource === "derived" ? thread.firstUserMessage?.trim() : undefined,
+        ]);
+        return {
+          threadId: thread.threadId,
+          title: title.title,
+          titleSource: title.titleSource,
+          summary,
+          projectKey: thread.cwd,
+          model: thread.model,
+          createdAt: thread.createdAt,
+          updatedAt: thread.updatedAt,
+        };
+      })
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
   }
 
@@ -97,13 +108,13 @@ export class AppServerSessionState {
 
   setThreadName(threadId: string, threadName: string): ThreadState | undefined {
     const trimmed = threadName.trim();
-    if (!trimmed) {
-      return this.updateThread(threadId, { threadName: undefined });
-    }
-    return this.updateThread(threadId, { threadName: trimmed });
+    return this.updateThread(threadId, { threadName: trimmed || null });
   }
 
-  updateThread(threadId: string, patch: ThreadMutation): ThreadState | undefined {
+  updateThread(
+    threadId: string,
+    patch: ThreadMutation | Record<string, unknown>,
+  ): ThreadState | undefined {
     const thread = this.threads.get(threadId);
     if (!thread) {
       return undefined;
@@ -113,6 +124,9 @@ export class AppServerSessionState {
       ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)),
       updatedAt: this.nextTimestamp(),
     };
+    if ("threadName" in patch && patch.threadName === null) {
+      next.threadName = undefined;
+    }
     this.threads.set(threadId, next);
     this.persistThread(threadId);
     return next;
@@ -129,6 +143,10 @@ export class AppServerSessionState {
     if (!text) {
       this.touchThread(threadId);
       return;
+    }
+    const thread = this.threads.get(threadId);
+    if (thread && !thread.firstUserMessage) {
+      thread.firstUserMessage = text;
     }
     this.appendMessage(threadId, { role: "user", text }, {
       id: this.nextItemId("user"),
@@ -318,12 +336,21 @@ export class AppServerSessionState {
     return run;
   }
 
-  private summarizeThread(threadId: string): string | undefined {
+  private summarizeThread(threadId: string, suppressedTexts: Array<string | undefined>): string | undefined {
     const messages = this.messages.get(threadId) ?? [];
+    const ignored = new Set(
+      suppressedTexts
+        .map((text) => text?.trim())
+        .filter((text): text is string => Boolean(text)),
+    );
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
-      if (message?.text.trim()) {
-        return message.text;
+      const text = message?.text.trim();
+      if (!text) {
+        continue;
+      }
+      if (!ignored.has(text)) {
+        return text;
       }
     }
     return undefined;
@@ -434,4 +461,30 @@ function nextReplayItemOccurrenceId(baseId: string, items: ThreadReplayItem[]): 
 function stripReplayItemSuffix(id: string): string {
   const match = /^(.*)#\d+$/.exec(id);
   return match?.[1] ?? id;
+}
+
+function getThreadTitle(thread: ThreadState): {
+  title: string;
+  titleSource: ThreadTitleSource;
+} {
+  const explicit = thread.threadName?.trim();
+  if (explicit) {
+    return {
+      title: explicit,
+      titleSource: "explicit",
+    };
+  }
+
+  const derived = thread.firstUserMessage?.trim();
+  if (derived) {
+    return {
+      title: shortenDerivedThreadTitle(derived) ?? derived,
+      titleSource: "derived",
+    };
+  }
+
+  return {
+    title: "Untitled thread",
+    titleSource: "fallback",
+  };
 }

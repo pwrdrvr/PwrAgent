@@ -31,6 +31,7 @@ describe("Composer", () => {
         thread={{
           id: "thread-1",
           title: "Build Codex client",
+          titleSource: "explicit",
           source: "codex",
           linkedDirectories: [],
           inbox: { inInbox: false },
@@ -88,6 +89,7 @@ describe("Composer", () => {
         thread={{
           id: "thread-1",
           title: "Build Codex client",
+          titleSource: "explicit",
           source: "codex",
           linkedDirectories: [],
           inbox: { inInbox: false },

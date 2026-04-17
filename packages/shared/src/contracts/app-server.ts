@@ -41,9 +41,12 @@ export type LinkedDirectorySummary = {
   kind: "local" | "worktree";
 };
 
+export type AppServerThreadTitleSource = "explicit" | "derived" | "fallback";
+
 export type AppServerThreadSummary = {
   id: ThreadIdentifier;
   title: string;
+  titleSource: AppServerThreadTitleSource;
   summary?: string;
   createdAt?: number;
   updatedAt?: number;
@@ -289,6 +292,13 @@ export type AppServerNotification =
         threadId: string;
         runId?: string;
         requestId: string;
+      };
+    }
+  | {
+      method: "thread/name/updated";
+      params: {
+        threadId: string;
+        threadName?: string;
       };
     }
   | {

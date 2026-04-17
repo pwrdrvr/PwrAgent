@@ -7,12 +7,16 @@ import {
   loadLocalEnv,
   resolveGrokAppServerRuntimeConfig,
 } from "@pwragnt/agent-core";
+import {
+  shortenDerivedThreadTitle,
+} from "@pwragnt/shared";
 import type {
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadEntry,
   AppServerSkillSummary,
   AppServerThreadReplay,
+  AppServerThreadTitleSource,
   AppServerThreadSummary,
   AppServerTurnInputItem,
   LinkedDirectorySummary,
@@ -58,6 +62,7 @@ type GrokClientOptions = {
 type RawThreadSummary = {
   threadId: string;
   title?: string;
+  titleSource?: AppServerThreadTitleSource;
   summary?: string;
   projectKey?: string;
   createdAt?: number;
@@ -70,11 +75,34 @@ type SkillCatalogEntry = {
 };
 
 function normalizeThreadSummary(thread: RawThreadSummary): RawThreadSummary {
+  const normalizedTitleSource = normalizeTitleSource(thread.titleSource);
+  const normalizedRawTitle = thread.title?.trim();
+  const normalizedTitle =
+    normalizedTitleSource === "derived"
+      ? shortenDerivedThreadTitle(normalizedRawTitle) ?? "Untitled thread"
+      : normalizedRawTitle || "Untitled thread";
+  const normalizedSummary = thread.summary?.trim() || undefined;
+
   return {
     ...thread,
-    title: thread.title?.trim() || "Untitled thread",
-    summary: thread.summary?.trim() || undefined,
+    title: normalizedTitle,
+    titleSource:
+      normalizedTitleSource ??
+      (normalizedTitle === "Untitled thread" ? "fallback" : "explicit"),
+    summary:
+      normalizedSummary === normalizedTitle ||
+      (normalizedTitleSource === "derived" && normalizedSummary === normalizedRawTitle)
+        ? undefined
+        : normalizedSummary,
   };
+}
+
+function normalizeTitleSource(
+  value: unknown
+): AppServerThreadTitleSource | undefined {
+  return value === "explicit" || value === "derived" || value === "fallback"
+    ? value
+    : undefined;
 }
 
 async function resolveLinkedDirectories(
@@ -127,6 +155,7 @@ function extractThreadSummaryList(value: unknown): RawThreadSummary[] {
         {
           threadId,
           title: typeof record.title === "string" ? record.title : undefined,
+          titleSource: normalizeTitleSource(record.titleSource),
           summary: typeof record.summary === "string" ? record.summary : undefined,
           projectKey:
             typeof record.projectKey === "string"
@@ -409,15 +438,19 @@ export class GrokAppServerClient {
 
     const result = await this.getServer().request("thread/list", {});
     return await Promise.all(
-      extractThreadSummaryList(result).map(async (thread) => ({
-        id: thread.threadId,
-        title: normalizeThreadSummary(thread).title ?? "Untitled thread",
-        summary: normalizeThreadSummary(thread).summary,
-        createdAt: thread.createdAt,
-        updatedAt: thread.updatedAt,
-        linkedDirectories: await this.directoryResolver(thread.projectKey),
-        source: "grok" as const,
-      }))
+      extractThreadSummaryList(result).map(async (thread) => {
+        const normalized = normalizeThreadSummary(thread);
+        return {
+          id: thread.threadId,
+          title: normalized.title ?? "Untitled thread",
+          titleSource: normalized.titleSource ?? "fallback",
+          summary: normalized.summary,
+          createdAt: thread.createdAt,
+          updatedAt: thread.updatedAt,
+          linkedDirectories: await this.directoryResolver(thread.projectKey),
+          source: "grok" as const,
+        };
+      })
     );
   }
 

@@ -87,6 +87,7 @@ describe("ThreadView", () => {
         selectedThread={{
           id: "thread-2",
           title: "Plan the app-server protocol",
+          titleSource: "explicit",
           summary: "Inspect Codex thread/read output and normalize it for desktop.",
           source: "codex",
           executionMode: "default",

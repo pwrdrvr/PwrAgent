@@ -185,6 +185,24 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     });
   }, [desktopApi, refresh]);
 
+  useEffect(() => {
+    if (!desktopApi?.onAgentEvent) {
+      return;
+    }
+
+    return desktopApi.onAgentEvent((event) => {
+      const method = event.notification.method;
+      if (
+        method === "thread/name/updated" ||
+        method === "turn/completed" ||
+        method === "turn/failed" ||
+        method === "turn/cancelled"
+      ) {
+        void refresh();
+      }
+    });
+  }, [desktopApi, refresh]);
+
   const threads = useMemo(() => {
     const currentThreads = state.response?.threads ?? [];
     if (!optimisticThread) {
@@ -291,6 +309,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         const nextOptimisticThread: NavigationThreadSummary = {
           id: response.threadId,
           title: "Untitled thread",
+          titleSource: "fallback",
           summary: undefined,
           source: response.backend,
           executionMode: response.executionMode,
