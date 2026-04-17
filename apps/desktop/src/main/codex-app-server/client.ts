@@ -652,7 +652,11 @@ function extractThreadIdFromValue(value: unknown): string | undefined {
     return undefined;
   }
 
-  return pickString(record, ["threadId", "thread_id", "id"]);
+  const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
+  return (
+    pickString(record, ["threadId", "thread_id", "conversationId", "conversation_id"]) ??
+    pickString(threadRecord ?? {}, ["id", "threadId", "thread_id", "conversationId"])
+  );
 }
 
 function extractSkillSummary(value: unknown): AppServerSkillSummary | undefined {
@@ -715,7 +719,11 @@ function extractRunIdFromValue(value: unknown): string | undefined {
     return undefined;
   }
 
-  return pickString(record, ["runId", "run_id", "id"]);
+  const turnRecord = asRecord(record.turn) ?? asRecord(record.run);
+  return (
+    pickString(record, ["turnId", "turn_id", "runId", "run_id"]) ??
+    pickString(turnRecord ?? {}, ["id", "turnId", "turn_id", "runId", "run_id"])
+  );
 }
 
 function extractThreadRecords(value: unknown): Record<string, unknown>[] {
@@ -905,6 +913,22 @@ function buildThreadDiscoveryPayloads(filter?: string): unknown[] {
   ];
 }
 
+function buildThreadResumePayloads(params: {
+  threadId: string;
+  model?: string;
+}): Array<Record<string, unknown>> {
+  const base: Record<string, unknown> = {
+    threadId: params.threadId,
+    persistExtendedHistory: false
+  };
+
+  if (params.model?.trim()) {
+    base.model = params.model.trim();
+  }
+
+  return [base];
+}
+
 async function requestWithFallbacks(params: {
   client: JsonRpcConnection;
   methods: string[];
@@ -1074,6 +1098,16 @@ export class CodexAppServerClient {
   }): Promise<{ threadId: string; runId: string }> {
     await this.ensureInitialized();
 
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads({
+        threadId: params.threadId,
+        model: params.model
+      }),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    }).catch(() => undefined);
+
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["turn/start"],
@@ -1081,11 +1115,8 @@ export class CodexAppServerClient {
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
-    const threadId = extractThreadIdFromValue(result);
-    const runId = extractRunIdFromValue(result);
-    if (!threadId || !runId) {
-      throw new Error("codex app server turn/start did not return threadId and runId");
-    }
+    const threadId = extractThreadIdFromValue(result) ?? params.threadId;
+    const runId = extractRunIdFromValue(result) ?? `pending:${threadId}`;
 
     return { threadId, runId };
   }

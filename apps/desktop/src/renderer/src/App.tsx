@@ -49,8 +49,7 @@ export function App() {
             !backendSummaries.backends.some(
               (backend) =>
                 backend.kind === navigation.selectedThread?.source &&
-                backend.available &&
-                backend.capabilities.startTurn
+                backend.available
             )
           }
           desktopApi={desktopApi}

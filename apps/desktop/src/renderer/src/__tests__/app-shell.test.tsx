@@ -35,13 +35,13 @@ describe("App", () => {
               kind: "codex",
               label: "Codex app server",
               available: true,
-              methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+              methods: ["thread/list", "thread/read", "skills/list"],
               capabilities: {
                 listThreads: true,
                 createThread: false,
                 resumeThread: true,
                 readThread: true,
-                startTurn: true,
+                startTurn: false,
                 interruptTurn: false,
                 steerTurn: false,
                 transcriptPagination: true,
@@ -233,6 +233,9 @@ describe("App", () => {
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByText("darwin")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
+    expect(
+      screen.queryByText("This thread's backend is read-only right now. You can keep drafting, but send is unavailable.")
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 });

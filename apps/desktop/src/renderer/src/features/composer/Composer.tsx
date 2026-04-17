@@ -160,7 +160,7 @@ export function Composer(props: ComposerProps) {
           ref={inputRef}
           id="thread-composer"
           className="composer__input"
-          disabled={props.disabled || sending}
+          disabled={sending}
           placeholder="Reply to this thread"
           value={draft}
           onChange={(event) => {
@@ -232,6 +232,11 @@ export function Composer(props: ComposerProps) {
       {sendError ? <p className="composer__meta composer__meta--error">{sendError}</p> : null}
       {!props.skillError && props.skillLoading ? (
         <p className="composer__meta">Loading skills…</p>
+      ) : null}
+      {props.disabled ? (
+        <p className="composer__meta">
+          This thread's backend is unavailable right now. You can keep drafting, but send is unavailable.
+        </p>
       ) : null}
       {activeRunId ? <p className="composer__meta">Waiting for the app server…</p> : null}
 
