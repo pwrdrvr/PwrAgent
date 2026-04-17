@@ -775,6 +775,15 @@ function isAlreadyInitializedError(error: unknown): boolean {
   return text.toLowerCase().includes("already initialized");
 }
 
+function isUnmaterializedThreadError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes("not materialized yet") &&
+    normalized.includes("includeturns is unavailable before first user message")
+  );
+}
+
 async function runGit(projectKey: string, args: string[]): Promise<string> {
   const result = await execFile("git", ["-C", projectKey, ...args], {
     env: process.env
@@ -1049,19 +1058,35 @@ export class CodexAppServerClient {
   }): Promise<AppServerThreadReplay> {
     await this.ensureInitialized();
 
-    const result = await requestWithFallbacks({
-      client: this.connection,
-      methods: ["thread/read"],
-      payloads: [
-        {
-          threadId: params.threadId,
-          includeTurns: true,
-          before: params.before,
-          limit: params.limit
+    let result: unknown;
+    try {
+      result = await requestWithFallbacks({
+        client: this.connection,
+        methods: ["thread/read"],
+        payloads: [
+          {
+            threadId: params.threadId,
+            includeTurns: true,
+            before: params.before,
+            limit: params.limit
+          }
+        ],
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      });
+    } catch (error) {
+      if (!isUnmaterializedThreadError(error)) {
+        throw error;
+      }
+
+      return {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false
         }
-      ],
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-    });
+      };
+    }
 
     return extractThreadReplayFromReadResult(result);
   }

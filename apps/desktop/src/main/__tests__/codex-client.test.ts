@@ -3,6 +3,7 @@ import type { JsonRpcTransport } from "../codex-app-server/json-rpc";
 
 class MockTransport implements JsonRpcTransport {
   static instances: MockTransport[] = [];
+  static readThreadErrorByThreadId = new Map<string, { code: number; message: string }>();
   static threadStartResult: unknown = {
     thread: {
       id: "thread-3",
@@ -97,6 +98,21 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/read") {
+      const threadId = (JSON.parse(message) as { params?: { threadId?: string } }).params?.threadId;
+      const readThreadError = threadId
+        ? MockTransport.readThreadErrorByThreadId.get(threadId)
+        : undefined;
+      if (readThreadError) {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            error: readThreadError
+          })
+        );
+        return;
+      }
+
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -269,6 +285,7 @@ vi.mock("../codex-app-server/stdio-transport", () => {
 describe("CodexAppServerClient", () => {
   beforeEach(() => {
     MockTransport.instances.length = 0;
+    MockTransport.readThreadErrorByThreadId.clear();
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-3",
@@ -504,6 +521,35 @@ describe("CodexAppServerClient", () => {
 
     expect(created).toEqual({
       threadId: "thread-3"
+    });
+
+    await client.close();
+  });
+
+  it("treats unmaterialized new threads as empty transcripts", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadErrorByThreadId.set("thread-empty", {
+      code: -32600,
+      message:
+        "thread 019d9901-ad06-7173-8df9-cd35c38d42ff is not materialized yet; includeTurns is unavailable before first user message"
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-empty"
+    });
+
+    expect(replay).toEqual({
+      entries: [],
+      messages: [],
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false
+      }
     });
 
     await client.close();
