@@ -252,4 +252,30 @@ describe("test harness helpers", () => {
 
     await temp.cleanup();
   });
+
+  it("ignores inline comments in TOML config values", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const configPath = defaultGrokAppServerConfigPath({ homeDir: temp.path });
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      [
+        'xai_api_key = "comment-key" # default key',
+        'xai_base_url = "https://api.example.test/v1" # sandbox',
+        'grok_model = "grok-4.20-fast" # default model',
+        "",
+      ].join("\n"),
+    );
+
+    const runtimeConfig = resolveGrokAppServerRuntimeConfig({
+      homeDir: temp.path,
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(runtimeConfig.apiKey).toBe("comment-key");
+    expect(runtimeConfig.baseUrl).toBe("https://api.example.test/v1");
+    expect(runtimeConfig.model).toBe("grok-4.20-fast");
+
+    await temp.cleanup();
+  });
 });

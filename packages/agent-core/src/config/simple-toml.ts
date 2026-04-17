@@ -4,7 +4,7 @@ export function parseFlatToml(contents: string, filePath: string): Record<string
   const values: Record<string, TomlValue> = {};
 
   for (const [index, rawLine] of contents.split(/\r?\n/).entries()) {
-    const line = rawLine.trim();
+    const line = stripInlineComment(rawLine).trim();
     if (!line || line.startsWith("#")) {
       continue;
     }
@@ -52,6 +52,32 @@ function parseValue(value: string, filePath: string, lineNumber: number): TomlVa
   }
 
   return value;
+}
+
+function stripInlineComment(line: string): string {
+  let inQuotedString = false;
+  let escaped = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = inQuotedString;
+      continue;
+    }
+    if (character === "\"") {
+      inQuotedString = !inQuotedString;
+      continue;
+    }
+    if (character === "#" && !inQuotedString) {
+      return line.slice(0, index);
+    }
+  }
+
+  return line;
 }
 
 function unescapeQuotedString(

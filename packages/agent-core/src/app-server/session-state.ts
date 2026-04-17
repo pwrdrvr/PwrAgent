@@ -38,6 +38,10 @@ export class AppServerSessionState {
   private readonly threads = new Map<string, ThreadState>();
   private readonly messages = new Map<string, StoredMessage[]>();
   private readonly items = new Map<string, ThreadReplayItem[]>();
+  private readonly itemOccurrences = new Map<
+    string,
+    Map<string, { resolvedId: string; lastMessageCount: number }>
+  >();
   private readonly responseIds = new Map<string, string>();
   private readonly runs = new Map<string, ActiveRunRecord>();
   private lastTimestamp = 0;
@@ -68,6 +72,7 @@ export class AppServerSessionState {
     this.threads.set(thread.threadId, thread);
     this.messages.set(thread.threadId, []);
     this.items.set(thread.threadId, []);
+    this.itemOccurrences.set(thread.threadId, new Map());
     this.persistThread(thread.threadId);
     return thread;
   }
@@ -152,22 +157,30 @@ export class AppServerSessionState {
   upsertItem(threadId: string, item: ThreadReplayItem): ThreadReplayItem {
     const items = this.items.get(threadId) ?? [];
     const normalized = normalizeReplayItem(item);
-    const index = items.findIndex((entry) => entry.id === normalized.id);
-    if (index >= 0) {
-      items[index] = {
-        ...items[index],
-        ...normalized,
+    const resolvedId = this.resolveReplayItemId(threadId, normalized.id);
+    const normalizedWithResolvedId =
+      resolvedId === normalized.id
+        ? normalized
+        : normalizeReplayItem({
+            ...normalized,
+            id: resolvedId,
+          });
+    const resolvedIndex = items.findIndex((entry) => entry.id === normalizedWithResolvedId.id);
+    if (resolvedIndex >= 0) {
+      items[resolvedIndex] = {
+        ...items[resolvedIndex],
+        ...normalizedWithResolvedId,
       };
     } else {
-      items.push(normalized);
+      items.push(normalizedWithResolvedId);
     }
     this.items.set(threadId, items);
     this.touchThread(threadId);
     this.store?.appendItem({
       threadId,
-      item: normalized,
+      item: normalizedWithResolvedId,
     });
-    return normalized;
+    return normalizedWithResolvedId;
   }
 
   appendItemTextDelta(
@@ -349,12 +362,23 @@ export class AppServerSessionState {
   private hydrate(data: HydratedSessionState): void {
     for (const thread of data.threads) {
       this.threads.set(thread.threadId, thread);
+      this.itemOccurrences.set(thread.threadId, new Map());
     }
     for (const [threadId, messages] of Object.entries(data.messagesByThread)) {
       this.messages.set(threadId, [...messages]);
     }
     for (const [threadId, items] of Object.entries(data.itemsByThread)) {
       this.items.set(threadId, [...items]);
+      const occurrences = this.itemOccurrences.get(threadId) ?? new Map();
+      const lastMessageCount = this.messages.get(threadId)?.length ?? 0;
+      for (const item of items) {
+        const baseId = stripReplayItemSuffix(item.id);
+        occurrences.set(baseId, {
+          resolvedId: item.id,
+          lastMessageCount,
+        });
+      }
+      this.itemOccurrences.set(threadId, occurrences);
     }
     for (const [threadId, responseId] of Object.entries(data.responseIds)) {
       this.responseIds.set(threadId, responseId);
@@ -362,10 +386,52 @@ export class AppServerSessionState {
     this.itemSequence = data.itemSequence;
     this.lastTimestamp = data.lastTimestamp;
   }
+
+  private resolveReplayItemId(threadId: string, baseId: string): string {
+    const currentMessageCount = this.messages.get(threadId)?.length ?? 0;
+    const occurrences = this.itemOccurrences.get(threadId) ?? new Map();
+    const existing = occurrences.get(baseId);
+    if (!existing) {
+      occurrences.set(baseId, {
+        resolvedId: baseId,
+        lastMessageCount: currentMessageCount,
+      });
+      this.itemOccurrences.set(threadId, occurrences);
+      return baseId;
+    }
+
+    if (existing.lastMessageCount < currentMessageCount) {
+      const resolvedId = nextReplayItemOccurrenceId(baseId, this.items.get(threadId) ?? []);
+      occurrences.set(baseId, {
+        resolvedId,
+        lastMessageCount: currentMessageCount,
+      });
+      this.itemOccurrences.set(threadId, occurrences);
+      return resolvedId;
+    }
+
+    existing.lastMessageCount = currentMessageCount;
+    return existing.resolvedId;
+  }
 }
 
 function normalizeReplayItem(item: ThreadReplayItem): ThreadReplayItem {
   return Object.fromEntries(
     Object.entries(item).filter(([, value]) => value !== undefined),
   ) as ThreadReplayItem;
+}
+
+function nextReplayItemOccurrenceId(baseId: string, items: ThreadReplayItem[]): string {
+  const takenIds = new Set(items.map((item) => item.id));
+  for (let index = 2; ; index += 1) {
+    const candidate = `${baseId}#${index}`;
+    if (!takenIds.has(candidate)) {
+      return candidate;
+    }
+  }
+}
+
+function stripReplayItemSuffix(id: string): string {
+  const match = /^(.*)#\d+$/.exec(id);
+  return match?.[1] ?? id;
 }

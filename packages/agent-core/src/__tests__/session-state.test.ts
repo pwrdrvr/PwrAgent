@@ -157,4 +157,62 @@ describe("AppServerSessionState", () => {
       await temp.cleanup();
     }
   });
+
+  it("keeps repeated tool ids from separate turns as distinct replay items", () => {
+    const state = new AppServerSessionState();
+
+    state.createThread({ threadId: "thread-1", cwd: "/repo/workspace" });
+    state.appendInput("thread-1", [{ type: "text", text: "First turn" }]);
+    state.upsertItem("thread-1", {
+      id: "tool-1",
+      type: "dynamicToolCall",
+      status: "completed",
+      text: "first result",
+    });
+    state.appendAssistant("thread-1", "Done.");
+
+    state.appendInput("thread-1", [{ type: "text", text: "Second turn" }]);
+    state.upsertItem("thread-1", {
+      id: "tool-1",
+      type: "dynamicToolCall",
+      status: "completed",
+      text: "second result",
+    });
+
+    expect(state.readThread("thread-1").items).toEqual([
+      {
+        id: expect.any(String),
+        type: "userMessage",
+        status: "completed",
+        role: "user",
+        text: "First turn",
+      },
+      {
+        id: "tool-1",
+        type: "dynamicToolCall",
+        status: "completed",
+        text: "first result",
+      },
+      {
+        id: expect.any(String),
+        type: "agentMessage",
+        status: "completed",
+        role: "assistant",
+        text: "Done.",
+      },
+      {
+        id: expect.any(String),
+        type: "userMessage",
+        status: "completed",
+        role: "user",
+        text: "Second turn",
+      },
+      {
+        id: "tool-1#2",
+        type: "dynamicToolCall",
+        status: "completed",
+        text: "second result",
+      },
+    ]);
+  });
 });

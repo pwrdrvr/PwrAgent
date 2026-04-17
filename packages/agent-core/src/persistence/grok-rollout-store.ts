@@ -207,6 +207,8 @@ function readRolloutFile(filePath: string): {
   const messages: StoredMessage[] = [];
   const itemOrder: string[] = [];
   const itemMap = new Map<string, ThreadReplayItem>();
+  const itemOccurrences = new Map<string, { resolvedId: string; lastMessageCount: number }>();
+  let messageCount = 0;
 
   for (const [index, rawLine] of fs.readFileSync(filePath, "utf8").split(/\r?\n/).entries()) {
     const line = rawLine.trim();
@@ -226,14 +228,28 @@ function readRolloutFile(filePath: string): {
         role: record.role,
         text: record.text,
       });
+      messageCount += 1;
       continue;
     }
 
     const item = normalizeReplayItem(record.item);
-    if (!itemMap.has(item.id)) {
-      itemOrder.push(item.id);
+    const resolvedId = resolveReplayItemOccurrenceId(
+      item.id,
+      itemOccurrences,
+      itemMap,
+      messageCount,
+    );
+    const normalizedItem =
+      resolvedId === item.id
+        ? item
+        : normalizeReplayItem({
+            ...item,
+            id: resolvedId,
+          });
+    if (!itemMap.has(normalizedItem.id)) {
+      itemOrder.push(normalizedItem.id);
     }
-    itemMap.set(item.id, item);
+    itemMap.set(normalizedItem.id, normalizedItem);
   }
 
   return {
@@ -248,6 +264,46 @@ function readRolloutFile(filePath: string): {
 function trailingSequence(value: string): number {
   const match = /(\d+)$/.exec(value);
   return match ? Number(match[1]) : 0;
+}
+
+function resolveReplayItemOccurrenceId(
+  baseId: string,
+  occurrences: Map<string, { resolvedId: string; lastMessageCount: number }>,
+  itemMap: Map<string, ThreadReplayItem>,
+  currentMessageCount: number,
+): string {
+  const existing = occurrences.get(baseId);
+  if (!existing) {
+    occurrences.set(baseId, {
+      resolvedId: baseId,
+      lastMessageCount: currentMessageCount,
+    });
+    return baseId;
+  }
+
+  if (existing.lastMessageCount < currentMessageCount) {
+    const resolvedId = nextReplayItemOccurrenceId(baseId, itemMap);
+    occurrences.set(baseId, {
+      resolvedId,
+      lastMessageCount: currentMessageCount,
+    });
+    return resolvedId;
+  }
+
+  existing.lastMessageCount = currentMessageCount;
+  return existing.resolvedId;
+}
+
+function nextReplayItemOccurrenceId(
+  baseId: string,
+  itemMap: Map<string, ThreadReplayItem>,
+): string {
+  for (let index = 2; ; index += 1) {
+    const candidate = `${baseId}#${index}`;
+    if (!itemMap.has(candidate)) {
+      return candidate;
+    }
+  }
 }
 
 function asRequiredString(

@@ -116,4 +116,51 @@ describe("GrokRolloutStore", () => {
       await temp.cleanup();
     }
   });
+
+  it("preserves repeated tool ids from separate turns after hydration", async () => {
+    const temp = await createTemporaryTestDirectory();
+
+    try {
+      const state = new AppServerSessionState({
+        store: new GrokRolloutStore(temp.path),
+      });
+      state.createThread({
+        threadId: "thread-1",
+      });
+      state.appendInput("thread-1", [{ type: "text", text: "First turn" }]);
+      state.upsertItem("thread-1", {
+        id: "tool-1",
+        type: "dynamicToolCall",
+        status: "completed",
+        text: "first result",
+      });
+      state.appendAssistant("thread-1", "Done.");
+      state.appendInput("thread-1", [{ type: "text", text: "Second turn" }]);
+      state.upsertItem("thread-1", {
+        id: "tool-1",
+        type: "dynamicToolCall",
+        status: "completed",
+        text: "second result",
+      });
+
+      const hydrated = new AppServerSessionState({
+        store: new GrokRolloutStore(temp.path),
+      });
+
+      expect(hydrated.readThread("thread-1").items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "tool-1",
+            text: "first result",
+          }),
+          expect.objectContaining({
+            id: "tool-1#2",
+            text: "second result",
+          }),
+        ]),
+      );
+    } finally {
+      await temp.cleanup();
+    }
+  });
 });
