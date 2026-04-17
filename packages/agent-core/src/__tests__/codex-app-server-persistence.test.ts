@@ -55,6 +55,7 @@ describe("CodexAppServer persistence", () => {
           {
             threadId: "thread-1",
             title: "OpenClaw parity",
+            titleSource: "explicit",
             summary: "Done.",
             projectKey: "/repo/workspace",
             model: "grok-4.20-reasoning",

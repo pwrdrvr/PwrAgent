@@ -343,6 +343,7 @@ describe("GrokAppServerClient", () => {
         {
           id: "thread-1",
           title: "Untitled thread",
+          titleSource: "fallback",
           summary: undefined,
           createdAt: expect.any(Number),
           updatedAt: expect.any(Number),

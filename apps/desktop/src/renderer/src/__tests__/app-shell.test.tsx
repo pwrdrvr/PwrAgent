@@ -1,9 +1,21 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 
 describe("App", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   it("renders the live thread shell with transcript history", async () => {
     const copyText = vi.fn(async () => undefined);
     const interruptTurn = vi.fn(async () => ({
@@ -369,6 +381,11 @@ describe("App", () => {
       configurable: true,
       value: {
         ping: () => "pong",
+        listSkills: async () => ({
+          backend: "codex",
+          fetchedAt: Date.now(),
+          data: []
+        }),
         listBackends: async () => ({
           fetchedAt: Date.now(),
           backends: [
@@ -913,7 +930,20 @@ describe("App", () => {
                 toolUse: false,
                 approvalRequests: false,
                 multiDirectoryThreads: true
-              }
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true
+                },
+                {
+                  mode: "full-access",
+                  label: "Full Access",
+                  available: true
+                }
+              ]
             }
           ]
         }),
@@ -980,7 +1010,11 @@ describe("App", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Create thread with Codex" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Create thread with Codex in Default Access"
+      })
+    );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: {

@@ -175,7 +175,8 @@ describe("AppServerSessionState", () => {
       expect(hydratedState.listThreads()).toEqual([
         {
           threadId: "thread-1",
-          title: undefined,
+          title: "Untitled thread",
+          titleSource: "fallback",
           summary: "Done.",
           projectKey: "/repo/workspace",
           model: "grok-4.20-fast",
