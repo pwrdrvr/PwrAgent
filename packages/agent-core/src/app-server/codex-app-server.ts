@@ -31,6 +31,7 @@ type ServerOptions = {
   provider: AppServerProvider;
   threadIdGenerator?: () => string;
   runIdGenerator?: () => string;
+  sessionState?: AppServerSessionState;
 };
 
 const SUPPORTED_METHODS = [
@@ -61,7 +62,7 @@ function createId(prefix: string): string {
 
 export class CodexAppServer {
   private readonly provider: AppServerProvider;
-  private readonly state = new AppServerSessionState();
+  private readonly state: AppServerSessionState;
   private readonly metadata = new AppServerMetadataService();
   private readonly notificationHandlers = new Set<NotificationHandler>();
   private readonly requestHandlers = new Set<RequestHandler>();
@@ -74,6 +75,7 @@ export class CodexAppServer {
 
   constructor(options: ServerOptions) {
     this.provider = options.provider;
+    this.state = options.sessionState ?? new AppServerSessionState();
     this.toolExecutor = new LocalToolExecutor(createDefaultToolRegistry());
     this.createThreadId = options.threadIdGenerator ?? (() => createId("thread"));
     this.createRunId = options.runIdGenerator ?? (() => createId("turn"));

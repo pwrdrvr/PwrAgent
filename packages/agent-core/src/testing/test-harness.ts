@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AppServerNotification, AppServerTurnInputItem, ThreadState } from "../app-server/protocol.js";
 import { CodexAppServer } from "../app-server/codex-app-server.js";
+import { AppServerSessionState } from "../app-server/session-state.js";
 import type {
   AppServerProvider,
   ProviderActiveTurn,
@@ -89,12 +90,14 @@ export class FakeProvider implements AppServerProvider {
 export function createTestHarness(options?: {
   provider?: AppServerProvider;
   requestHandler?: (method: string, params: Record<string, unknown>) => Promise<unknown> | unknown;
+  sessionState?: AppServerSessionState;
 }) {
   const provider = options?.provider ?? new FakeProvider();
   const notifications: AppServerNotification[] = [];
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   const server = new CodexAppServer({
     provider,
+    sessionState: options?.sessionState,
     threadIdGenerator: (() => {
       let index = 0;
       return () => `thread-${++index}`;

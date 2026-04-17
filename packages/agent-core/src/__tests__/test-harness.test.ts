@@ -3,15 +3,25 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTemporaryTestDirectory } from "../testing/test-harness.js";
 import {
+  defaultGrokAppServerConfigPath,
+  defaultGrokAppServerStateDir,
   defaultGrokAppServerConfigPaths,
+  resolveGrokAppServerRuntimeConfig,
   defaultLocalEnvPath,
   loadGrokAppServerConfig,
   loadLocalEnv,
-} from "../testing/load-local-env.js";
+} from "../index.js";
+import { stringifyFlatToml } from "../config/simple-toml.js";
 
 const originalHome = process.env.HOME;
 const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
-const tempEnvKeys = ["XAI_API_KEY", "GROK_MODEL", "XAI_BASE_URL"];
+const originalXdgStateHome = process.env.XDG_STATE_HOME;
+const tempEnvKeys = [
+  "XAI_API_KEY",
+  "GROK_MODEL",
+  "XAI_BASE_URL",
+  "GROK_APP_SERVER_STATE_ROOT",
+];
 
 afterEach(() => {
   for (const key of tempEnvKeys) {
@@ -26,6 +36,11 @@ afterEach(() => {
     delete process.env.XDG_CONFIG_HOME;
   } else {
     process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+  }
+  if (originalXdgStateHome === undefined) {
+    delete process.env.XDG_STATE_HOME;
+  } else {
+    process.env.XDG_STATE_HOME = originalXdgStateHome;
   }
 });
 
@@ -123,6 +138,77 @@ describe("test harness helpers", () => {
     await temp.cleanup();
   });
 
+  it("resolves TOML config and XDG state paths for runtime startup", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const xdgConfigHome = path.join(temp.path, ".xdg-config");
+    const xdgStateHome = path.join(temp.path, ".xdg-state");
+    const configPath = defaultGrokAppServerConfigPath({
+      homeDir: temp.path,
+      xdgConfigHome,
+    });
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      stringifyFlatToml({
+        xai_api_key: "toml-key",
+        xai_base_url: "https://api.example.test/v1",
+        grok_model: "grok-4.20-fast",
+      }),
+    );
+
+    const runtimeConfig = resolveGrokAppServerRuntimeConfig({
+      homeDir: temp.path,
+      xdgConfigHome,
+      xdgStateHome,
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(runtimeConfig).toEqual({
+      apiKey: "toml-key",
+      baseUrl: "https://api.example.test/v1",
+      model: "grok-4.20-fast",
+      configPath,
+      stateRoot: defaultGrokAppServerStateDir({
+        homeDir: temp.path,
+        xdgStateHome,
+      }),
+    });
+
+    await temp.cleanup();
+  });
+
+  it("prefers explicit env overrides over TOML defaults", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const configPath = defaultGrokAppServerConfigPath({ homeDir: temp.path });
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      stringifyFlatToml({
+        xai_api_key: "toml-key",
+        xai_base_url: "https://api.example.test/v1",
+        grok_model: "grok-4.20-fast",
+        state_root: "/tmp/from-toml",
+      }),
+    );
+
+    const runtimeConfig = resolveGrokAppServerRuntimeConfig({
+      homeDir: temp.path,
+      env: {
+        XAI_API_KEY: "env-key",
+        XAI_BASE_URL: "https://override.example.test/v1",
+        GROK_MODEL: "grok-4.20-reasoning",
+        GROK_APP_SERVER_STATE_ROOT: "/tmp/from-env",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(runtimeConfig.apiKey).toBe("env-key");
+    expect(runtimeConfig.baseUrl).toBe("https://override.example.test/v1");
+    expect(runtimeConfig.model).toBe("grok-4.20-reasoning");
+    expect(runtimeConfig.stateRoot).toBe("/tmp/from-env");
+
+    await temp.cleanup();
+  });
+
   it("does not override existing env values with Grok app-server config defaults", async () => {
     const temp = await createTemporaryTestDirectory();
     process.env.HOME = temp.path;
@@ -147,6 +233,48 @@ describe("test harness helpers", () => {
     await fs.writeFile(envPath, "XAI_API_KEY\n");
 
     expect(() => loadLocalEnv({ envPath })).toThrow(`Invalid env line 1 in ${envPath}`);
+
+    await temp.cleanup();
+  });
+
+  it("throws a helpful error for malformed TOML config", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const configPath = defaultGrokAppServerConfigPath({ homeDir: temp.path });
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, "[thread]\nname = \"bad\"\n");
+
+    expect(() =>
+      resolveGrokAppServerRuntimeConfig({
+        homeDir: temp.path,
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toThrow(`Unsupported TOML table on line 1 in ${configPath}`);
+
+    await temp.cleanup();
+  });
+
+  it("ignores inline comments in TOML config values", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const configPath = defaultGrokAppServerConfigPath({ homeDir: temp.path });
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      [
+        'xai_api_key = "comment-key" # default key',
+        'xai_base_url = "https://api.example.test/v1" # sandbox',
+        'grok_model = "grok-4.20-fast" # default model',
+        "",
+      ].join("\n"),
+    );
+
+    const runtimeConfig = resolveGrokAppServerRuntimeConfig({
+      homeDir: temp.path,
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(runtimeConfig.apiKey).toBe("comment-key");
+    expect(runtimeConfig.baseUrl).toBe("https://api.example.test/v1");
+    expect(runtimeConfig.model).toBe("grok-4.20-fast");
 
     await temp.cleanup();
   });

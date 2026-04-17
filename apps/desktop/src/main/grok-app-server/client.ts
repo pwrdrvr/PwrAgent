@@ -1,9 +1,11 @@
 import path from "node:path";
 import {
+  AppServerSessionState,
   CodexAppServer,
+  GrokRolloutStore,
   GrokProvider,
-  loadGrokAppServerConfig,
   loadLocalEnv,
+  resolveGrokAppServerRuntimeConfig,
 } from "@pwragnt/agent-core";
 import type {
   AppServerNotification,
@@ -37,6 +39,7 @@ type GrokClientOptions = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  stateRoot?: string;
   directoryResolver?: (
     projectKey?: string
   ) => Promise<LinkedDirectorySummary[]>;
@@ -154,51 +157,50 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
     messages?: Array<{ role?: unknown; text?: unknown }>;
   };
 
-  const fallbackMessages = [
-    typeof record.lastUserMessage === "string"
-      ? {
-          id: "message-1",
-          role: "user" as const,
-          text: record.lastUserMessage,
-        }
-      : undefined,
-    typeof record.lastAssistantMessage === "string"
-      ? {
-          id:
-            typeof record.lastUserMessage === "string"
-              ? "message-2"
-              : "message-1",
-          role: "assistant" as const,
-          text: record.lastAssistantMessage,
-        }
-      : undefined,
-  ].filter((message): message is { id: string; role: "user" | "assistant"; text: string } =>
-    Boolean(message)
-  );
+  const rawMessages = Array.isArray(record.messages) ? record.messages : [];
+  if (rawMessages.length === 0) {
+    const fallbackMessages = [
+      typeof record.lastUserMessage === "string"
+        ? {
+            id: "message-1",
+            role: "user" as const,
+            text: record.lastUserMessage,
+          }
+        : undefined,
+      typeof record.lastAssistantMessage === "string"
+        ? {
+            id:
+              typeof record.lastUserMessage === "string"
+                ? "message-2"
+                : "message-1",
+            role: "assistant" as const,
+            text: record.lastAssistantMessage,
+          }
+        : undefined,
+    ].filter((message): message is { id: string; role: "user" | "assistant"; text: string } =>
+      Boolean(message)
+    );
 
-  if (
-    typeof record.lastUserMessage === "string" ||
-    typeof record.lastAssistantMessage === "string"
-  ) {
-    return {
-      entries: fallbackMessages.map((message) => ({
-        type: "message" as const,
-        ...message,
-      })),
-      messages: fallbackMessages,
-      lastUserMessage:
-        typeof record.lastUserMessage === "string"
-          ? record.lastUserMessage
-          : undefined,
-      lastAssistantMessage:
-        typeof record.lastAssistantMessage === "string"
-          ? record.lastAssistantMessage
-          : undefined,
-      pagination,
-    };
+    if (fallbackMessages.length > 0) {
+      return {
+        entries: fallbackMessages.map((message) => ({
+          type: "message" as const,
+          ...message,
+        })),
+        messages: fallbackMessages,
+        lastUserMessage:
+          typeof record.lastUserMessage === "string"
+            ? record.lastUserMessage
+            : undefined,
+        lastAssistantMessage:
+          typeof record.lastAssistantMessage === "string"
+            ? record.lastAssistantMessage
+            : undefined,
+        pagination,
+      };
+    }
   }
 
-  const rawMessages = Array.isArray(record.messages) ? record.messages : [];
   const messages = rawMessages.flatMap((message, index) => {
     if (!message || typeof message !== "object") {
       return [];
@@ -499,20 +501,26 @@ export class GrokAppServerClient {
     }
 
     loadLocalEnv({ override: false });
-    loadGrokAppServerConfig({ override: false });
-    const apiKey = this.options.apiKey?.trim() || process.env.XAI_API_KEY?.trim();
+    const runtimeConfig = resolveGrokAppServerRuntimeConfig();
+    const apiKey = this.options.apiKey?.trim() || runtimeConfig.apiKey;
     if (!apiKey) {
       throw new Error("grok app server unavailable: XAI_API_KEY is not set");
     }
 
     const provider = new GrokProvider({
       apiKey,
-      baseUrl: this.options.baseUrl?.trim() || process.env.XAI_BASE_URL?.trim(),
-      model: this.options.model?.trim() || process.env.GROK_MODEL?.trim(),
+      baseUrl: this.options.baseUrl?.trim() || runtimeConfig.baseUrl,
+      model: this.options.model?.trim() || runtimeConfig.model,
+    });
+    const sessionState = new AppServerSessionState({
+      store: new GrokRolloutStore(
+        this.options.stateRoot?.trim() || runtimeConfig.stateRoot,
+      ),
     });
 
     this.server = new CodexAppServer({
       provider,
+      sessionState,
       threadIdGenerator: this.options.threadIdGenerator,
       runIdGenerator: this.options.runIdGenerator,
     });
