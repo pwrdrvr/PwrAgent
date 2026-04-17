@@ -33,6 +33,8 @@ type DirectoryIdentity =
       label: string;
     };
 
+const DIRECTORY_THREAD_AGE_OUT_MS = 30 * 24 * 60 * 60 * 1000;
+
 export function DirectoriesList(props: DirectoriesListProps) {
   const groups = groupThreadsByDirectory(props.threads);
 
@@ -97,9 +99,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
 function groupThreadsByDirectory(threads: NavigationThreadSummary[]): DirectoryGroup[] {
   const groups = new Map<string, DirectoryGroup>();
-  const stablePathByLabel = collectStablePathByLabel(threads);
+  const visibleThreads = threads.filter((thread) => shouldShowThreadInDirectories(thread));
+  const stablePathByLabel = collectStablePathByLabel(visibleThreads);
 
-  for (const thread of threads) {
+  for (const thread of visibleThreads) {
     if (thread.linkedDirectories.length === 0) {
       const unlinked = groups.get("unlinked");
       if (unlinked) {
@@ -131,6 +134,18 @@ function groupThreadsByDirectory(threads: NavigationThreadSummary[]): DirectoryG
   }
 
   return [...groups.values()].sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function shouldShowThreadInDirectories(thread: NavigationThreadSummary): boolean {
+  if (thread.inbox.inInbox) {
+    return true;
+  }
+
+  if (!thread.updatedAt) {
+    return true;
+  }
+
+  return Date.now() - thread.updatedAt < DIRECTORY_THREAD_AGE_OUT_MS;
 }
 
 function collectStablePathByLabel(

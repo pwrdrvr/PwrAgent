@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragnt/shared";
 import { Sidebar } from "../Sidebar";
 
@@ -97,6 +97,10 @@ const sharedThread = {
     }
   ]
 };
+
+afterEach(() => {
+  cleanup();
+});
 
 describe("Sidebar", () => {
   it("keeps Inbox first and groups a thread under each linked directory lens", () => {
@@ -302,6 +306,79 @@ describe("Sidebar", () => {
 
     expect(screen.getAllByRole("heading", { level: 3, name: "web-app" })).toHaveLength(1);
     expect(screen.getByText("3 threads")).toBeInTheDocument();
+  });
+
+  it("ages old non-inbox threads out of directory groups", () => {
+    const now = new Date("2026-04-17T13:00:00.000Z").getTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    try {
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="directories"
+          createThreadError={undefined}
+          fetchedAt={now}
+          inboxThreads={[]}
+          loading={false}
+          creatingThread={undefined}
+          refreshing={false}
+          selectedThreadKey={undefined}
+          threads={[
+            {
+              id: "thread-recent",
+              title: "Check web API proxy support",
+              titleSource: "explicit",
+              summary: undefined,
+              source: "codex",
+              updatedAt: now - 5 * 24 * 60 * 60 * 1000,
+              inbox: {
+                inInbox: false
+              },
+              linkedDirectories: [
+                {
+                  id: "web-app-root",
+                  label: "web-app",
+                  path: "/Users/huntharo/GIPHY/web-app",
+                  kind: "local"
+                }
+              ]
+            },
+            {
+              id: "thread-old",
+              title: "Explain web app login flow",
+              titleSource: "explicit",
+              summary: undefined,
+              source: "codex",
+              updatedAt: now - 38 * 24 * 60 * 60 * 1000,
+              inbox: {
+                inInbox: false
+              },
+              linkedDirectories: [
+                {
+                  id: "web-app-root-2",
+                  label: "web-app",
+                  path: "/Users/huntharo/GIPHY/web-app",
+                  kind: "local"
+                }
+              ]
+            }
+          ]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onRefresh={async () => undefined}
+          onSelectThread={() => undefined}
+        />
+      );
+
+      expect(screen.getByRole("heading", { level: 3, name: "web-app" })).toBeInTheDocument();
+      expect(screen.getByText("1 thread")).toBeInTheDocument();
+      expect(screen.getByText("Check web API proxy support")).toBeInTheDocument();
+      expect(screen.queryByText("Explain web app login flow")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("copies a linked directory path from the recents chip", () => {

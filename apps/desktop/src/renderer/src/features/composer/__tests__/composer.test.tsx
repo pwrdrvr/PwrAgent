@@ -1,7 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Composer } from "../Composer";
+
+afterEach(() => {
+  cleanup();
+});
 
 describe("Composer", () => {
   it("inserts skill markdown from autocomplete and sends it through startTurn", async () => {
