@@ -4,6 +4,7 @@ import type {
   AppServerSkillSummary,
   AppServerThreadReplayPagination
 } from "@pwragnt/shared";
+import { ThinkingScanner } from "./ThinkingScanner";
 import { TranscriptActivity } from "./TranscriptActivity";
 import { TranscriptMessage } from "./TranscriptMessage";
 
@@ -195,7 +196,8 @@ export function TranscriptList(props: TranscriptListProps) {
         )}
         {props.pendingStatusText ? (
           <div className="transcript-list__pending" role="status">
-            {props.pendingStatusText}
+            <ThinkingScanner />
+            <span>{props.pendingStatusText}</span>
           </div>
         ) : null}
       </div>

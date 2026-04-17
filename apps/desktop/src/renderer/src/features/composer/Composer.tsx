@@ -114,7 +114,7 @@ export function Composer(props: ComposerProps) {
 
     setSendError(undefined);
     setSending(true);
-    props.onPendingStatusChange?.("Waiting for the app server…");
+    props.onPendingStatusChange?.("Thinking");
     const optimisticMessageId = props.addOptimisticUserMessage?.(text);
     setActiveOptimisticMessageId(optimisticMessageId);
 

@@ -200,6 +200,7 @@ describe("TranscriptList", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent("Waiting for the app server…");
+    expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
   });
 
   it("anchors a freshly loaded transcript to the newest entry", () => {

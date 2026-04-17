@@ -249,9 +249,10 @@ describe("App", () => {
         screen.getByText("what can this skill do").closest("article")
       ).toHaveClass("transcript-message--user");
     });
-    expect(screen.getByRole("status")).toHaveTextContent("Waiting for the app server…");
+    expect(screen.getByRole("status")).toHaveTextContent("Thinking");
+    expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
     expect(
-      screen.queryByText("Waiting for the app server…", {
+      screen.queryByText("Thinking", {
         selector: ".composer__meta"
       })
     ).not.toBeInTheDocument();

@@ -712,10 +712,56 @@ textarea {
 
 .transcript-list__pending {
   width: min(100%, 760px);
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
   padding: 2px 0 0;
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.45;
+}
+
+@keyframes pwragnt-kitt-scan {
+  0% { transform: translateX(0); }
+  50% { transform: translateX(44px); }
+  100% { transform: translateX(0); }
+}
+
+@keyframes pwragnt-kitt-glow {
+  0%, 100% { opacity: 0.72; }
+  50% { opacity: 1; }
+}
+
+.thinking-scanner {
+  position: relative;
+  width: 62px;
+  height: 6px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(95, 14, 14, 0.56);
+  box-shadow: inset 0 0 0 1px rgba(255, 106, 94, 0.14);
+}
+
+.thinking-scanner__beam {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 18px;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 88, 72, 0.2) 0%,
+    rgba(255, 122, 112, 0.95) 48%,
+    rgba(255, 88, 72, 0.2) 100%
+  );
+  box-shadow:
+    0 0 10px rgba(255, 106, 94, 0.55),
+    0 0 18px rgba(255, 78, 68, 0.28);
+  animation:
+    pwragnt-kitt-scan 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite,
+    pwragnt-kitt-glow 0.7s ease-in-out infinite;
 }
 
 .transcript-activity__header {
