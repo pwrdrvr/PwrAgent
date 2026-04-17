@@ -1,5 +1,4 @@
-import { app, ipcMain } from "electron";
-import path from "node:path";
+import { ipcMain } from "electron";
 import { OverlayStore } from "@pwragnt/agent-core";
 import type {
   AppServerBackendScope,
@@ -18,6 +17,7 @@ import {
   disposeDesktopBackendRegistry,
   getDesktopBackendRegistry,
 } from "../app-server/backend-registry";
+import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
@@ -37,8 +37,6 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
 }
 
 class DesktopAppServerService {
-  private overlayStore: OverlayStore | null = null;
-
   async listThreads(
     request: AppServerListThreadsRequest = {}
   ): Promise<AppServerListThreadsResponse> {
@@ -159,15 +157,7 @@ class DesktopAppServerService {
   }
 
   private getOverlayStore(): OverlayStore {
-    if (this.overlayStore) {
-      return this.overlayStore;
-    }
-
-    this.overlayStore = new OverlayStore(
-      path.join(app.getPath("userData"), "overlay-state.json"),
-    );
-
-    return this.overlayStore;
+    return getDesktopOverlayStore();
   }
 }
 

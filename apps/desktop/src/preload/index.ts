@@ -5,6 +5,8 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  SetThreadExecutionModeRequest,
+  SetThreadExecutionModeResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
@@ -19,12 +21,16 @@ import type {
   StartThreadResponse,
   StartTurnRequest,
   StartTurnResponse,
+  SubmitServerRequestRequest,
+  SubmitServerRequestResponse,
 } from "@pwragnt/shared";
 import {
   AGENT_EVENT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
+  AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_TURN_CHANNEL,
+  AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
@@ -73,6 +79,14 @@ const desktopApi = Object.freeze({
     request: InterruptTurnRequest
   ): Promise<InterruptTurnResponse> =>
     await ipcRenderer.invoke(AGENT_INTERRUPT_TURN_CHANNEL, request),
+  setThreadExecutionMode: async (
+    request: SetThreadExecutionModeRequest
+  ): Promise<SetThreadExecutionModeResponse> =>
+    await ipcRenderer.invoke(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL, request),
+  submitServerRequest: async (
+    request: SubmitServerRequestRequest
+  ): Promise<SubmitServerRequestResponse> =>
+    await ipcRenderer.invoke(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL, request),
   getNavigationSnapshot: async (
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> =>

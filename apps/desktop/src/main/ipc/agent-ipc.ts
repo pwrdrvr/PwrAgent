@@ -5,17 +5,23 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  SetThreadExecutionModeRequest,
+  SetThreadExecutionModeResponse,
   StartThreadRequest,
   StartThreadResponse,
   StartTurnRequest,
   StartTurnResponse,
+  SubmitServerRequestRequest,
+  SubmitServerRequestResponse,
 } from "@pwragnt/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
   AGENT_EVENT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
+  AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_TURN_CHANNEL,
+  AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   BACKEND_LIST_CHANNEL,
 } from "../../shared/ipc";
 
@@ -86,6 +92,28 @@ export function registerAgentIpcHandlers(): void {
       return await registry.interruptTurn(request);
     },
   );
+
+  ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
+  ipcMain.handle(
+    AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
+    async (
+      _event,
+      request: SetThreadExecutionModeRequest
+    ): Promise<SetThreadExecutionModeResponse> => {
+      return await registry.setThreadExecutionMode(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL);
+  ipcMain.handle(
+    AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
+    async (
+      _event,
+      request: SubmitServerRequestRequest
+    ): Promise<SubmitServerRequestResponse> => {
+      return await registry.submitServerRequest(request);
+    },
+  );
 }
 
 export function disposeAgentIpcHandlers(): void {
@@ -95,4 +123,6 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_START_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
+  ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
+  ipcMain.removeHandler(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL);
 }

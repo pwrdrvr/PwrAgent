@@ -6,6 +6,7 @@ import type {
   LinkedDirectorySummary,
   MarkThreadSeenResponse,
   NavigationSnapshot,
+  ThreadExecutionMode,
   ThreadOverlayState,
 } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
@@ -39,6 +40,8 @@ export class OverlayStore {
           data.threads[threadKey] = {
             backend: thread.source,
             threadId: thread.id,
+            executionMode:
+              data.threads[threadKey]?.executionMode ?? thread.executionMode ?? "default",
             lastSeenAt: params.fetchedAt,
             lastSeenUpdatedAt: thread.updatedAt,
             extraLinkedDirectories:
@@ -98,6 +101,7 @@ export class OverlayStore {
       data.threads[threadKey] = {
         backend: params.backend,
         threadId: params.threadId,
+        executionMode: current?.executionMode ?? "default",
         dismissedAt: current?.dismissedAt,
         snoozedUntil: current?.snoozedUntil,
         lastSeenAt: seenAt,
@@ -124,6 +128,7 @@ export class OverlayStore {
       const current = data.threads[threadKey] ?? {
         backend: params.backend,
         threadId: params.threadId,
+        executionMode: "default",
         extraLinkedDirectories: [],
       };
 
@@ -137,6 +142,47 @@ export class OverlayStore {
       const nextState: ThreadOverlayState = {
         ...current,
         extraLinkedDirectories: nextDirectories,
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
+  }
+
+  async getThreadExecutionMode(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<ThreadExecutionMode> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      return data.threads[threadKey]?.executionMode ?? "default";
+    });
+  }
+
+  async getThreadOverlayState(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<ThreadOverlayState | undefined> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      return data.threads[threadKey];
+    });
+  }
+
+  async setThreadExecutionMode(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    executionMode: ThreadExecutionMode;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        extraLinkedDirectories: [],
+      };
+      const nextState: ThreadOverlayState = {
+        ...current,
+        executionMode: params.executionMode,
       };
       data.threads[threadKey] = nextState;
       return nextState;

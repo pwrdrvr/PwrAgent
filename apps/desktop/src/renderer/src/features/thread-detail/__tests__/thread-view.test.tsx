@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
 import { ThreadView } from "../ThreadView";
 
 describe("ThreadView", () => {
@@ -25,7 +26,20 @@ describe("ThreadView", () => {
               toolUse: false,
               approvalRequests: false,
               multiDirectoryThreads: true
-            }
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+              {
+                mode: "full-access",
+                label: "Full Access",
+                available: true,
+              },
+            ],
           },
           {
             kind: "grok",
@@ -45,6 +59,15 @@ describe("ThreadView", () => {
               approvalRequests: false,
               multiDirectoryThreads: false
             },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: false,
+                isDefault: true,
+                unavailableReason: "XAI_API_KEY is not set",
+              },
+            ],
             unavailableReason: "XAI_API_KEY is not set"
           }
         ]}
@@ -66,6 +89,7 @@ describe("ThreadView", () => {
           title: "Plan the app-server protocol",
           summary: "Inspect Codex thread/read output and normalize it for desktop.",
           source: "codex",
+          executionMode: "default",
           updatedAt: Date.now(),
           linkedDirectories: [],
           inbox: {
@@ -134,6 +158,7 @@ describe("ThreadView", () => {
     expect(screen.getByRole("button", { name: "Pin context rail" })).toBeInTheDocument();
     expect(screen.getByText("Codex app server")).toBeInTheDocument();
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    expect(screen.getByLabelText("Reply")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 });

@@ -1,5 +1,6 @@
 import type { NavigationThreadSummary } from "@pwragnt/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
+import { formatExecutionModeLabel } from "../../lib/execution-mode";
 
 type ThreadHeaderProps = {
   fetchedAt?: number;
@@ -15,6 +16,9 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           <p className="eyebrow">Thread detail</p>
           <span className="thread-row__chip thread-row__chip--backend">
             {formatBackendLabel(props.thread.source)}
+          </span>
+          <span className="thread-row__chip thread-row__chip--mode">
+            {formatExecutionModeLabel(props.thread.executionMode)}
           </span>
         </div>
         <h2 className="thread-header__title">{props.thread.title}</h2>

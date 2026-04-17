@@ -13,6 +13,7 @@ type ComposerProps = {
   addOptimisticUserMessage?: (text: string) => string;
   desktopApi?: DesktopApi;
   disabled?: boolean;
+  pendingRequestActive?: boolean;
   onPendingStatusChange?: (status?: string) => void;
   onRefresh: () => Promise<void>;
   removeOptimisticMessage?: (id: string) => void;
@@ -264,6 +265,10 @@ export function Composer(props: ComposerProps) {
       {props.disabled ? (
         <p className="composer__meta">
           This thread's backend is unavailable right now. You can keep drafting, but send is unavailable.
+        </p>
+      ) : props.pendingRequestActive ? (
+        <p className="composer__meta">
+          Waiting for approval before this turn can continue.
         </p>
       ) : null}
 

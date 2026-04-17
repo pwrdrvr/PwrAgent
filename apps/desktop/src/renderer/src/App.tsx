@@ -29,7 +29,7 @@ export function App() {
         fetchedAt={navigation.snapshot?.fetchedAt}
         inboxThreads={navigation.inboxThreads}
         loading={navigation.loading}
-        creatingThreadBackend={navigation.creatingThreadBackend}
+        creatingThread={navigation.creatingThread}
         refreshing={navigation.refreshing}
         selectedThreadKey={navigation.selectedThreadKey}
         threads={navigation.threads}
@@ -59,13 +59,24 @@ export function App() {
           desktopApi={desktopApi}
           platform={desktopApi?.platform}
           selectedThread={navigation.selectedThread}
+          setExecutionModeError={navigation.setThreadExecutionModeError}
           skillError={skills.error}
           skillLoading={skills.loading}
           skills={skills.skills}
           transcriptError={transcript.error}
           transcriptEntries={transcript.entries}
           transcriptPagination={transcript.response?.replay.pagination}
+          updatingExecutionMode={navigation.updatingThreadExecutionMode}
           onLoadOlder={transcript.loadOlder}
+          onSetExecutionMode={
+            navigation.selectedThread
+              ? async (executionMode) =>
+                  await navigation.setThreadExecutionMode(
+                    navigation.selectedThread!,
+                    executionMode
+                  )
+              : undefined
+          }
           removeOptimisticMessage={transcript.removeOptimisticMessage}
           onRefresh={transcript.refresh}
         />

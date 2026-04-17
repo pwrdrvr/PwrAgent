@@ -1,5 +1,6 @@
 export type AppServerBackendKind = "codex" | "grok";
 export type AppServerBackendScope = AppServerBackendKind | "all";
+export type ThreadExecutionMode = "default" | "full-access";
 
 export type ThreadIdentifier = string;
 
@@ -49,6 +50,7 @@ export type AppServerThreadSummary = {
   linkedDirectories: LinkedDirectorySummary[];
   gitBranch?: string;
   source: AppServerBackendKind;
+  executionMode?: ThreadExecutionMode;
 };
 
 export type AppServerThreadMessage = {
@@ -156,6 +158,18 @@ export type AppServerListSkillsResponse = {
   }>;
 };
 
+export type AppServerPendingRequestNotification = {
+  method: string;
+  params: {
+    threadId: string;
+    runId?: string;
+    requestId: string;
+    prompt?: string;
+    options?: string[];
+    [key: string]: unknown;
+  };
+};
+
 export type AppServerNotification =
   | {
       method: "turn/completed";
@@ -237,6 +251,10 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "turn/requestApproval" | "review/requestApproval";
+      params: AppServerPendingRequestNotification["params"];
+    }
+  | {
       method: "serverRequest/resolved";
       params: {
         threadId: string;
@@ -250,4 +268,5 @@ export type AppServerNotification =
         threadId: string;
         itemId?: string;
       };
-    };
+    }
+  | AppServerPendingRequestNotification;

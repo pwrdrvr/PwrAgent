@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
+  AppServerPendingRequestNotification,
   AppServerThreadEntry,
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
   BackendSummary,
-  NavigationThreadSummary
+  NavigationThreadSummary,
+  ThreadExecutionMode,
 } from "@pwragnt/shared";
 import { Composer } from "../composer/Composer";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -24,21 +26,108 @@ type ThreadViewProps = {
   messageCount: number;
   platform?: string;
   selectedThread?: NavigationThreadSummary;
+  setExecutionModeError?: string;
   skillError?: string;
   skillLoading?: boolean;
   skills: AppServerSkillSummary[];
   transcriptError?: string;
   transcriptEntries: AppServerThreadEntry[];
   transcriptPagination?: AppServerThreadReplayPagination;
+  updatingExecutionMode?: ThreadExecutionMode;
   onLoadOlder: () => Promise<void>;
+  onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
   removeOptimisticMessage: (id: string) => void;
   onRefresh: () => Promise<void>;
 };
 
 export function ThreadView(props: ThreadViewProps) {
   const [pendingStatusText, setPendingStatusText] = useState<string>();
+  const [pendingRequest, setPendingRequest] =
+    useState<AppServerPendingRequestNotification>();
+  const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
+  const [pendingRequestError, setPendingRequestError] = useState<string>();
 
-  if (!props.selectedThread) {
+  useEffect(() => {
+    setPendingRequest(undefined);
+    setPendingRequestBusy(false);
+    setPendingRequestError(undefined);
+  }, [props.selectedThread?.id, props.selectedThread?.source]);
+
+  const selectedThread = props.selectedThread;
+
+  useEffect(() => {
+    if (!props.desktopApi?.onAgentEvent || !selectedThread) {
+      return;
+    }
+
+    return props.desktopApi.onAgentEvent((event) => {
+      if (
+        event.backend !== selectedThread.source ||
+        event.notification.params.threadId !== selectedThread.id
+      ) {
+        return;
+      }
+
+      if (
+        event.notification.method === "turn/requestApproval" ||
+        event.notification.method === "review/requestApproval"
+      ) {
+        setPendingRequest(event.notification);
+        setPendingRequestBusy(false);
+        setPendingRequestError(undefined);
+        setPendingStatusText("Waiting for approval");
+        return;
+      }
+
+      if (
+        event.notification.method === "serverRequest/resolved" &&
+        "requestId" in event.notification.params
+      ) {
+        const requestId = event.notification.params.requestId;
+        setPendingRequest((current) =>
+          current?.params.requestId === requestId ? undefined : current
+        );
+        setPendingRequestBusy(false);
+        setPendingRequestError(undefined);
+        setPendingStatusText("Thinking");
+      }
+    });
+  }, [props.desktopApi, selectedThread]);
+
+  async function respondToPendingRequest(
+    decision: "approve" | "decline" | "cancel"
+  ): Promise<void> {
+    if (!props.desktopApi?.submitServerRequest || !selectedThread || !pendingRequest) {
+      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
+      return;
+    }
+
+    setPendingRequestBusy(true);
+    setPendingRequestError(undefined);
+
+    try {
+      await props.desktopApi.submitServerRequest({
+        backend: selectedThread.source,
+        threadId: selectedThread.id,
+        runId:
+          typeof pendingRequest.params.runId === "string"
+            ? pendingRequest.params.runId
+            : undefined,
+        requestId: pendingRequest.params.requestId,
+        response: { decision },
+      });
+      setPendingStatusText(decision === "approve" ? "Thinking" : undefined);
+      if (decision !== "approve") {
+        setPendingRequest(undefined);
+      }
+    } catch (error) {
+      setPendingRequestError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPendingRequestBusy(false);
+    }
+  }
+
+  if (!selectedThread) {
     return (
       <section className="thread-empty-state">
         <p className="eyebrow">Thread detail</p>
@@ -56,7 +145,7 @@ export function ThreadView(props: ThreadViewProps) {
       <ThreadHeader
         fetchedAt={props.fetchedAt}
         messageCount={props.messageCount}
-        thread={props.selectedThread}
+        thread={selectedThread}
       />
 
       <div className="thread-view__layout">
@@ -84,19 +173,28 @@ export function ThreadView(props: ThreadViewProps) {
             entries={props.transcriptEntries}
             loading={props.loading}
             loadingMore={props.loadingMore}
+            pendingRequest={pendingRequest}
+            pendingRequestBusy={pendingRequestBusy}
             pendingStatusText={pendingStatusText}
             pagination={props.transcriptPagination}
-            threadId={props.selectedThread.id}
+            threadId={selectedThread.id}
             skills={props.skills}
+            onRespondToPendingRequest={respondToPendingRequest}
             onLoadOlder={props.onLoadOlder}
           />
+          {pendingRequestError ? (
+            <p className="transcript-error">{pendingRequestError}</p>
+          ) : null}
         </section>
 
         <ThreadContextPanel
           backendError={props.backendError}
           backends={props.backends}
           platform={props.platform}
-          thread={props.selectedThread}
+          setExecutionModeError={props.setExecutionModeError}
+          thread={selectedThread}
+          updatingExecutionMode={props.updatingExecutionMode}
+          onSetExecutionMode={props.onSetExecutionMode}
         />
       </div>
 
@@ -104,13 +202,14 @@ export function ThreadView(props: ThreadViewProps) {
         addOptimisticUserMessage={props.addOptimisticUserMessage}
         desktopApi={props.desktopApi}
         disabled={props.composerDisabled}
+        pendingRequestActive={Boolean(pendingRequest)}
         onPendingStatusChange={setPendingStatusText}
         onRefresh={props.onRefresh}
         removeOptimisticMessage={props.removeOptimisticMessage}
         skillError={props.skillError}
         skillLoading={props.skillLoading}
         skills={props.skills}
-        thread={props.selectedThread}
+        thread={selectedThread}
       />
     </section>
   );

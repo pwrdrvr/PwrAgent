@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
+  AppServerPendingRequestNotification,
   AppServerThreadEntry,
   AppServerSkillSummary,
   AppServerThreadReplayPagination
@@ -13,10 +14,13 @@ type TranscriptListProps = {
   error?: string;
   loading: boolean;
   loadingMore: boolean;
+  pendingRequest?: AppServerPendingRequestNotification;
+  pendingRequestBusy?: boolean;
   pendingStatusText?: string;
   pagination?: AppServerThreadReplayPagination;
   threadId?: string;
   skills?: AppServerSkillSummary[];
+  onRespondToPendingRequest?: (decision: "approve" | "decline" | "cancel") => Promise<void>;
   onLoadOlder: () => Promise<void>;
 };
 
@@ -52,7 +56,10 @@ export function TranscriptList(props: TranscriptListProps) {
 
     const firstMessageId = props.entries[0]?.id;
     const lastMessageId = props.entries[props.entries.length - 1]?.id;
-    const itemCount = props.entries.length + (props.pendingStatusText ? 1 : 0);
+    const itemCount =
+      props.entries.length +
+      (props.pendingStatusText ? 1 : 0) +
+      (props.pendingRequest ? 1 : 0);
     const distanceFromBottom = Math.max(
       container.scrollHeight - container.clientHeight - container.scrollTop,
       0
@@ -128,7 +135,10 @@ export function TranscriptList(props: TranscriptListProps) {
         previousSnapshot.firstMessageId === firstMessageId &&
         (previousSnapshot.lastMessageId !== lastMessageId ||
           previousSnapshot.pendingStatusText !== props.pendingStatusText ||
-          previousSnapshot.itemCount < props.entries.length + (props.pendingStatusText ? 1 : 0))
+          previousSnapshot.itemCount <
+            props.entries.length +
+              (props.pendingStatusText ? 1 : 0) +
+              (props.pendingRequest ? 1 : 0))
     );
 
     if (hasPrependedMessages && previousSnapshot) {
@@ -151,7 +161,14 @@ export function TranscriptList(props: TranscriptListProps) {
     }
 
     syncScrollState();
-  }, [props.entries, props.pendingStatusText, props.threadId, scrollToBottom, syncScrollState]);
+  }, [
+    props.entries,
+    props.pendingRequest,
+    props.pendingStatusText,
+    props.threadId,
+    scrollToBottom,
+    syncScrollState,
+  ]);
 
   if (props.loading && props.entries.length === 0) {
     return <p className="transcript-empty">Loading transcript…</p>;
@@ -198,6 +215,55 @@ export function TranscriptList(props: TranscriptListProps) {
           <div className="transcript-list__pending" role="status">
             <ThinkingScanner />
             <span>{props.pendingStatusText}</span>
+          </div>
+        ) : null}
+        {props.pendingRequest ? (
+          <div className="transcript-request" role="group" aria-label="Pending approval">
+            <div className="transcript-request__header">
+              <span className="thread-row__chip thread-row__chip--mode">
+                Approval needed
+              </span>
+              <span className="transcript-message__time">
+                {props.pendingRequest.method}
+              </span>
+            </div>
+            <p className="transcript-request__prompt">
+              {typeof props.pendingRequest.params.prompt === "string"
+                ? props.pendingRequest.params.prompt
+                : "This turn is waiting for approval before it can continue."}
+            </p>
+            <div className="transcript-request__actions">
+              <button
+                className="button button--primary"
+                disabled={props.pendingRequestBusy}
+                type="button"
+                onClick={() => {
+                  void props.onRespondToPendingRequest?.("approve");
+                }}
+              >
+                Approve
+              </button>
+              <button
+                className="button button--ghost"
+                disabled={props.pendingRequestBusy}
+                type="button"
+                onClick={() => {
+                  void props.onRespondToPendingRequest?.("decline");
+                }}
+              >
+                Decline
+              </button>
+              <button
+                className="button button--ghost"
+                disabled={props.pendingRequestBusy}
+                type="button"
+                onClick={() => {
+                  void props.onRespondToPendingRequest?.("cancel");
+                }}
+              >
+                Cancel turn
+              </button>
+            </div>
           </div>
         ) : null}
       </div>

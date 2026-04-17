@@ -1,7 +1,7 @@
 ---
 title: feat: Add Codex access-mode toggle to desktop threads
 type: feat
-status: active
+status: completed
 date: 2026-04-16
 origin: docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md
 ---
@@ -73,7 +73,7 @@ OpenClaw already solved the server-side shape we need to mirror. Its `CodexAppSe
 
 - Keep `backend` and `executionMode` separate. `codex` remains one backend; `default` and `full-access` are routing profiles underneath it. This avoids duplicate thread identities and keeps existing navigation semantics intact.
 - Persist mode in the desktop overlay store keyed by `backend + threadId`. The Codex thread list does not currently return access mode, so overlay persistence is the only reliable desktop-visible source of truth.
-- List Codex threads through the default Codex client only. Both profiles are expected to view the same underlying thread universe, so dual listing would create duplicate rows without adding information.
+- Aggregate Codex thread discovery across the default and full-access clients, then de-duplicate by thread id while preferring any persisted overlay mode. This keeps full-access-only threads visible without leaking duplicate rows into navigation.
 - Route Codex `startThread`, `readThread`, `startTurn`, and `interruptTurn` through the persisted execution mode when one is known, falling back to `default` when no overlay state exists yet.
 - Expose execution-mode availability in backend summaries. The UI needs to distinguish “Full Access is supported and selectable” from “this Codex Desktop session only has the default profile available.”
 - Use the OpenClaw permission mapping verbatim: `default -> approvalPolicy: "on-request", sandbox: "workspace-write"` and `full-access -> approvalPolicy: "never", sandbox: "danger-full-access"`.
@@ -127,7 +127,7 @@ flowchart TB
 
 | Operation | Backend | Mode source | Expected route |
 |---|---|---|---|
-| List Codex threads | `codex` | none | default Codex client only |
+| List Codex threads | `codex` | overlay mode when present | aggregate both Codex profiles, de-duplicate by thread id, and prefer the persisted mode |
 | Create Codex thread | `codex` | sidebar selection | chosen Codex profile, then persist overlay mode |
 | Toggle existing Codex thread | `codex` | user action | chosen Codex profile plus permission mapping, then persist overlay mode |
 | Read / start / interrupt Codex thread | `codex` | overlay execution mode | stored profile, default fallback when unknown |
@@ -136,7 +136,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Add execution-mode contracts and persistence**
+- [x] **Unit 1: Add execution-mode contracts and persistence**
 
 **Goal:** Model per-thread execution mode explicitly across shared contracts, navigation snapshots, and overlay persistence so the renderer and main process can speak about the same state.
 
@@ -176,7 +176,7 @@ flowchart TB
 **Verification:**
 - Shared desktop contracts and overlay persistence can describe thread mode and backend mode availability without inventing a second backend identity.
 
-- [ ] **Unit 2: Route Codex work through default and full-access clients**
+- [x] **Unit 2: Route Codex work through default and full-access clients**
 
 **Goal:** Teach the main process to launch and use two Codex App Server profiles, persist the selected mode, and route later Codex operations through the correct instance.
 
@@ -233,7 +233,7 @@ flowchart TB
 **Verification:**
 - The main process can describe, create, update, and route Codex threads by execution mode without duplicating thread identities or hiding profile-availability problems.
 
-- [ ] **Unit 3: Surface mode choice in the renderer**
+- [x] **Unit 3: Surface mode choice in the renderer**
 
 **Goal:** Let users choose `Default Access` or `Full Access` in the desktop UI, see the current thread mode, and change it from thread detail when the backend supports it.
 

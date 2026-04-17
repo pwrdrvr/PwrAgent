@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   AppServerBackendKind,
   NavigationSnapshot,
-  NavigationThreadSummary
+  NavigationThreadSummary,
+  ThreadExecutionMode,
 } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
 import type { DesktopApi } from "./desktop-api";
@@ -18,9 +19,15 @@ type NavigationState = {
 
 export function useThreadNavigation(desktopApi?: DesktopApi): {
   browseMode: BrowseMode;
-  createThread: (backend: AppServerBackendKind) => Promise<void>;
+  createThread: (
+    backend: AppServerBackendKind,
+    executionMode?: ThreadExecutionMode
+  ) => Promise<void>;
   createThreadError?: string;
-  creatingThreadBackend?: AppServerBackendKind;
+  creatingThread?: {
+    backend: AppServerBackendKind;
+    executionMode: ThreadExecutionMode;
+  };
   error?: string;
   inboxThreads: NavigationThreadSummary[];
   loading: boolean;
@@ -28,6 +35,12 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   refresh: () => Promise<void>;
   selectedThread?: NavigationThreadSummary;
   selectedThreadKey?: string;
+  setThreadExecutionMode: (
+    thread: NavigationThreadSummary,
+    executionMode: ThreadExecutionMode
+  ) => Promise<void>;
+  setThreadExecutionModeError?: string;
+  updatingThreadExecutionMode?: ThreadExecutionMode;
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
   snapshot?: NavigationSnapshot;
@@ -35,13 +48,20 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
 } {
   const markThreadSeen = desktopApi?.markThreadSeen;
   const startThread = desktopApi?.startThread;
+  const setThreadExecutionMode = desktopApi?.setThreadExecutionMode;
   const [browseMode, setBrowseMode] = useState<BrowseMode>("recents");
   const [selectedThreadKey, setSelectedThreadKey] = useState<string>();
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
   const [optimisticThread, setOptimisticThread] = useState<NavigationThreadSummary>();
-  const [creatingThreadBackend, setCreatingThreadBackend] =
-    useState<AppServerBackendKind>();
+  const [creatingThread, setCreatingThread] = useState<{
+    backend: AppServerBackendKind;
+    executionMode: ThreadExecutionMode;
+  }>();
   const [createThreadError, setCreateThreadError] = useState<string>();
+  const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
+    useState<ThreadExecutionMode>();
+  const [setThreadExecutionModeError, setSetThreadExecutionModeError] =
+    useState<string>();
   const [state, setState] = useState<NavigationState>({
     loading: true,
     refreshing: false
@@ -246,22 +266,26 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const selectThread = useCallback((thread: NavigationThreadSummary): void => {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
     setCreateThreadError(undefined);
+    setSetThreadExecutionModeError(undefined);
     setSelectedThreadKey(threadKey);
     setPendingSeenThreadKey(threadKey);
   }, []);
 
   const createThread = useCallback(
-    async (backend: AppServerBackendKind): Promise<void> => {
+    async (
+      backend: AppServerBackendKind,
+      executionMode: ThreadExecutionMode = "default"
+    ): Promise<void> => {
       if (!startThread) {
         setCreateThreadError("Desktop bridge is missing startThread().");
         return;
       }
 
-      setCreatingThreadBackend(backend);
+      setCreatingThread({ backend, executionMode });
       setCreateThreadError(undefined);
 
       try {
-        const response = await startThread({ backend });
+        const response = await startThread({ backend, executionMode });
         const optimisticUpdatedAt = Date.now();
         const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
         const nextOptimisticThread: NavigationThreadSummary = {
@@ -269,6 +293,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           title: "Untitled thread",
           summary: undefined,
           source: response.backend,
+          executionMode: response.executionMode,
           linkedDirectories: [],
           updatedAt: optimisticUpdatedAt,
           inbox: {
@@ -283,17 +308,69 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
       } finally {
-        setCreatingThreadBackend(undefined);
+        setCreatingThread(undefined);
       }
     },
     [refresh, startThread],
+  );
+
+  const updateThreadExecutionMode = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      executionMode: ThreadExecutionMode
+    ): Promise<void> => {
+      if (!setThreadExecutionMode) {
+        setSetThreadExecutionModeError(
+          "Desktop bridge is missing setThreadExecutionMode()."
+        );
+        return;
+      }
+
+      setUpdatingThreadExecutionMode(executionMode);
+      setSetThreadExecutionModeError(undefined);
+      setOptimisticThread((current) =>
+        current && current.id === thread.id && current.source === thread.source
+          ? { ...current, executionMode }
+          : current
+      );
+      setState((current) =>
+        current.response
+          ? {
+              ...current,
+              response: {
+                ...current.response,
+                threads: current.response.threads.map((candidate) =>
+                  candidate.id === thread.id && candidate.source === thread.source
+                    ? { ...candidate, executionMode }
+                    : candidate
+                ),
+              },
+            }
+          : current
+      );
+
+      try {
+        await setThreadExecutionMode({
+          backend: thread.source,
+          threadId: thread.id,
+          executionMode,
+        });
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      } catch (error) {
+        setSetThreadExecutionModeError(error instanceof Error ? error.message : String(error));
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      } finally {
+        setUpdatingThreadExecutionMode(undefined);
+      }
+    },
+    [refresh, setThreadExecutionMode]
   );
 
   return {
     browseMode,
     createThread,
     createThreadError,
-    creatingThreadBackend,
+    creatingThread,
     error: state.error,
     inboxThreads,
     loading: state.loading,
@@ -301,6 +378,9 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     refresh,
     selectedThread,
     selectedThreadKey,
+    setThreadExecutionMode: updateThreadExecutionMode,
+    setThreadExecutionModeError,
+    updatingThreadExecutionMode,
     setBrowseMode,
     selectThread,
     snapshot: state.response,
