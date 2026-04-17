@@ -1,7 +1,7 @@
 ---
 title: feat: Render plan progress in the desktop thread transcript
 type: feat
-status: active
+status: completed
 date: 2026-04-17
 origin: docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md
 ---
@@ -142,7 +142,7 @@ Ship a dedicated transcript plan component, styling, and regression coverage for
 
 ## Implementation Units
 
-- [ ] **Unit 1: Extend transcript contracts and replay normalization for plans**
+- [x] **Unit 1: Extend transcript contracts and replay normalization for plans**
 
 **Goal:** Preserve plan/task-list artifacts when the desktop main process converts backend thread history into transcript entries.
 
@@ -176,7 +176,7 @@ Ship a dedicated transcript plan component, styling, and regression coverage for
 **Verification:**
 - `readThread(...)` returns replay entries that include plan artifacts instead of dropping them.
 
-- [ ] **Unit 2: Add live plan progress state for the selected thread**
+- [x] **Unit 2: Add live plan progress state for the selected thread**
 
 **Goal:** Let the open thread update immediately when a running turn emits structured plan progress.
 
@@ -209,7 +209,7 @@ Ship a dedicated transcript plan component, styling, and regression coverage for
 **Verification:**
 - A running turn can show evolving plan state in the thread detail view before the next manual refresh.
 
-- [ ] **Unit 3: Build the transcript-native plan card and lock down renderer regressions**
+- [x] **Unit 3: Build the transcript-native plan card and lock down renderer regressions**
 
 **Goal:** Present plan progress in a compact desktop transcript surface that matches the existing shell tone and remains testable.
 

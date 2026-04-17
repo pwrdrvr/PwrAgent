@@ -4,6 +4,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
+  AppServerThreadPlanEntry,
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
   BackendSummary,
@@ -23,6 +24,24 @@ function formatRendererLogPayload(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function arePlanEntriesEquivalent(
+  left: AppServerThreadPlanEntry,
+  right: AppServerThreadPlanEntry
+): boolean {
+  if ((left.explanation ?? "").trim() !== (right.explanation ?? "").trim()) {
+    return false;
+  }
+
+  if (left.steps.length !== right.steps.length) {
+    return false;
+  }
+
+  return left.steps.every((step, index) => {
+    const other = right.steps[index];
+    return other?.status === step.status && other.step === step.step;
+  });
 }
 
 type ThreadViewProps = {
@@ -55,6 +74,8 @@ export function ThreadView(props: ThreadViewProps) {
   const [pendingStatusText, setPendingStatusText] = useState<string>();
   const [pendingAssistantMessage, setPendingAssistantMessage] =
     useState<AppServerThreadMessageEntry>();
+  const [pendingPlanEntry, setPendingPlanEntry] =
+    useState<AppServerThreadPlanEntry>();
   const [pendingRequest, setPendingRequest] =
     useState<AppServerPendingRequestNotification>();
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
@@ -63,6 +84,7 @@ export function ThreadView(props: ThreadViewProps) {
 
   useEffect(() => {
     setPendingAssistantMessage(undefined);
+    setPendingPlanEntry(undefined);
     setPendingRequest(undefined);
     setPendingRequestBusy(false);
     setPendingRequestError(undefined);
@@ -70,6 +92,20 @@ export function ThreadView(props: ThreadViewProps) {
   }, [props.selectedThread?.id, props.selectedThread?.source]);
 
   const selectedThread = props.selectedThread;
+
+  useEffect(() => {
+    if (!pendingPlanEntry) {
+      return;
+    }
+
+    const persistedPlan = props.transcriptEntries.find(
+      (entry): entry is AppServerThreadPlanEntry =>
+        entry.type === "plan" && arePlanEntriesEquivalent(entry, pendingPlanEntry)
+    );
+    if (persistedPlan) {
+      setPendingPlanEntry(undefined);
+    }
+  }, [pendingPlanEntry, props.transcriptEntries]);
 
   useEffect(() => {
     if (!props.desktopApi?.onAgentEvent || !selectedThread) {
@@ -83,6 +119,15 @@ export function ThreadView(props: ThreadViewProps) {
         typeof event.notification.params.status === "object" &&
         event.notification.params.status !== null
           ? (event.notification.params.status as { type?: unknown })
+          : undefined;
+      const planRecord =
+        method === "turn/plan/updated" &&
+        typeof event.notification.params.plan === "object" &&
+        event.notification.params.plan !== null
+          ? (event.notification.params.plan as {
+              explanation?: unknown;
+              steps?: unknown;
+            })
           : undefined;
       if (
         event.backend !== selectedThread.source ||
@@ -101,6 +146,29 @@ export function ThreadView(props: ThreadViewProps) {
         setPendingRequestBusy(false);
         setPendingRequestError(undefined);
         setPendingStatusText("Waiting for approval");
+        return;
+      }
+
+      if (
+        method === "turn/plan/updated" &&
+        Array.isArray(planRecord?.steps)
+      ) {
+        const explanation =
+          typeof planRecord.explanation === "string" &&
+          planRecord.explanation.trim()
+            ? planRecord.explanation.trim()
+            : undefined;
+        setPendingPlanEntry({
+          type: "plan",
+          id: `live-plan-${
+            typeof event.notification.params.runId === "string"
+              ? event.notification.params.runId
+              : selectedThread.id
+          }`,
+          createdAt: Date.now(),
+          ...(explanation ? { explanation } : {}),
+          steps: planRecord.steps
+        });
         return;
       }
 
@@ -236,6 +304,7 @@ export function ThreadView(props: ThreadViewProps) {
             loading={props.loading}
             loadingMore={props.loadingMore}
             pendingAssistantMessage={pendingAssistantMessage}
+            pendingPlanEntry={pendingPlanEntry}
             pendingRequest={pendingRequest}
             pendingRequestBusy={pendingRequestBusy}
             pendingStatusText={pendingStatusText}

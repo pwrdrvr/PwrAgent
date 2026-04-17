@@ -55,6 +55,16 @@ describe("App", () => {
             text: "Open the desktop plan and build the Codex client."
           },
           {
+            type: "plan",
+            id: "plan-1",
+            explanation: "Track the desktop transcript work in three steps.",
+            steps: [
+              { step: "Normalize replay", status: "pending" },
+              { step: "Render plan card", status: "pending" },
+              { step: "Verify with tests", status: "pending" }
+            ]
+          },
+          {
             type: "activity",
             id: "activity-1",
             summary: "Explored 2 files, ran 1 command",
@@ -286,6 +296,8 @@ describe("App", () => {
     expect(
       screen.getByText("The Codex client is wired and the thread browser is live.")
     ).toBeInTheDocument();
+    expect(screen.getByText("0 out of 3 tasks completed")).toBeInTheDocument();
+    expect(screen.getByText("Render plan card")).toBeInTheDocument();
     expect(screen.getByText("Explored 2 files, ran 1 command")).toBeInTheDocument();
     const openContextButton = screen.getByRole("button", { name: "Open context rail" });
     openContextButton.click();

@@ -295,6 +295,44 @@ describe("TranscriptList", () => {
     expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
   });
 
+  it("renders replayed plan progress inline in the transcript", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Show the desktop task list."
+          },
+          {
+            type: "plan",
+            id: "plan-1",
+            explanation: "Keep the renderer and replay contract aligned.",
+            steps: [
+              { step: "Normalize replay", status: "pending" },
+              { step: "Render transcript plan card", status: "pending" },
+              { step: "Verify with tests", status: "pending" }
+            ]
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByText("0 out of 3 tasks completed")).toBeInTheDocument();
+    expect(
+      screen.getByText("Keep the renderer and replay contract aligned.")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Normalize replay")).toBeInTheDocument();
+    expect(screen.getByText("Render transcript plan card")).toBeInTheDocument();
+    expect(screen.getByText("Verify with tests")).toBeInTheDocument();
+    expect(screen.getAllByText("Pending")).toHaveLength(3);
+  });
+
   it("renders a live assistant message before the turn is persisted", () => {
     render(
       <TranscriptList

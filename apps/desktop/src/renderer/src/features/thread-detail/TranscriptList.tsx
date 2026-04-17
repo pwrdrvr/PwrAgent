@@ -4,12 +4,14 @@ import type {
   AppServerThreadEntry,
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
+  AppServerThreadPlanEntry,
   AppServerSkillSummary,
   AppServerThreadReplayPagination
 } from "@pwragnt/shared";
 import { ThinkingScanner } from "./ThinkingScanner";
 import { TranscriptActivity } from "./TranscriptActivity";
 import { TranscriptMessage } from "./TranscriptMessage";
+import { TranscriptPlan } from "./TranscriptPlan";
 
 type TranscriptListProps = {
   entries: AppServerThreadEntry[];
@@ -17,6 +19,7 @@ type TranscriptListProps = {
   loading: boolean;
   loadingMore: boolean;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
+  pendingPlanEntry?: AppServerThreadPlanEntry;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingRequestBusy?: boolean;
   pendingStatusText?: string;
@@ -63,6 +66,7 @@ export function TranscriptList(props: TranscriptListProps) {
     const itemCount =
       props.entries.length +
       (props.pendingAssistantMessage ? 1 : 0) +
+      (props.pendingPlanEntry ? 1 : 0) +
       (props.pendingStatusText ? 1 : 0) +
       (props.pendingRequest ? 1 : 0);
     const distanceFromBottom = Math.max(
@@ -84,6 +88,7 @@ export function TranscriptList(props: TranscriptListProps) {
   }, [
     props.entries,
     props.pendingAssistantMessage,
+    props.pendingPlanEntry,
     props.pendingRequest,
     props.pendingStatusText,
     props.threadId
@@ -149,6 +154,7 @@ export function TranscriptList(props: TranscriptListProps) {
           previousSnapshot.itemCount <
             props.entries.length +
               (props.pendingAssistantMessage ? 1 : 0) +
+              (props.pendingPlanEntry ? 1 : 0) +
               (props.pendingStatusText ? 1 : 0) +
               (props.pendingRequest ? 1 : 0))
     );
@@ -176,6 +182,7 @@ export function TranscriptList(props: TranscriptListProps) {
   }, [
     props.entries,
     props.pendingAssistantMessage,
+    props.pendingPlanEntry,
     props.pendingRequest,
     props.pendingStatusText,
     props.threadId,
@@ -220,6 +227,8 @@ export function TranscriptList(props: TranscriptListProps) {
         {props.entries.map((entry) =>
           entry.type === "activity" ? (
             <TranscriptActivity key={entry.id} entry={entry} />
+          ) : entry.type === "plan" ? (
+            <TranscriptPlan key={entry.id} entry={entry} />
           ) : (
             <TranscriptMessage
               key={entry.id}
@@ -229,6 +238,9 @@ export function TranscriptList(props: TranscriptListProps) {
             />
           )
         )}
+        {props.pendingPlanEntry ? (
+          <TranscriptPlan key={props.pendingPlanEntry.id} entry={props.pendingPlanEntry} />
+        ) : null}
         {props.pendingAssistantMessage ? (
           <TranscriptMessage
             key={props.pendingAssistantMessage.id}
