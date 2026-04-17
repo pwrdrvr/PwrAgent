@@ -75,6 +75,29 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/list") {
+      const params = JSON.parse(message) as { params?: { archived?: boolean } };
+      if (params.params?.archived === true) {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data: [
+                {
+                  id: "thread-archive",
+                  name: "Spud up the thread",
+                  preview:
+                    "Name this thread something funny and spunky. Something about potatoes.",
+                  updatedAt: 1_763_500_500,
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                }
+              ]
+            }
+          })
+        );
+        return;
+      }
+
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -362,9 +385,12 @@ describe("CodexAppServerClient", () => {
     });
 
     const threads = await client.listThreads();
+    const primaryThread = threads.find((thread) => thread.id === "thread-2");
+    const derivedThread = threads.find((thread) => thread.id === "thread-1");
+    const archivedThread = threads.find((thread) => thread.id === "thread-archive");
 
-    expect(threads).toHaveLength(2);
-    expect(threads[0]).toMatchObject({
+    expect(threads).toHaveLength(3);
+    expect(primaryThread).toMatchObject({
       id: "thread-2",
       title: "Ship desktop shell",
       titleSource: "explicit",
@@ -379,11 +405,16 @@ describe("CodexAppServerClient", () => {
         }
       ]
     });
-    expect(threads[1]?.title).toBe(
+    expect(derivedThread?.title).toBe(
       "A bedtime story about Nvidia and building AI through programmable...",
     );
-    expect(threads[1]?.titleSource).toBe("derived");
-    expect(threads[1]?.summary).toBeUndefined();
+    expect(derivedThread?.titleSource).toBe("derived");
+    expect(derivedThread?.summary).toBeUndefined();
+    expect(archivedThread).toMatchObject({
+      id: "thread-archive",
+      title: "Spud up the thread",
+      titleSource: "explicit",
+    });
 
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
@@ -431,8 +462,45 @@ describe("CodexAppServerClient", () => {
     });
 
     const threads = await client.listThreads();
+    const derivedThread = threads.find((thread) => thread.id === "thread-1");
 
-    expect(threads[1]?.summary).toBeUndefined();
+    expect(derivedThread?.summary).toBeUndefined();
+
+    await client.close();
+  });
+
+  it("hydrates archived threads so persisted explicit names survive reload", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async (projectKey) =>
+        projectKey
+          ? [
+              {
+                id: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                label: "PwrAgnt",
+                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                kind: "local"
+              }
+            ]
+          : []
+    });
+
+    const threads = await client.listThreads();
+
+    expect(threads.find((thread) => thread.id === "thread-archive")).toMatchObject({
+      id: "thread-archive",
+      title: "Spud up the thread",
+      titleSource: "explicit",
+      source: "codex",
+    });
+
+    const threadListRequests = MockTransport.instances[0]?.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: { archived?: boolean } })
+      .filter((message) => message.method === "thread/list");
+    expect(threadListRequests?.some((message) => message.params?.archived === false)).toBe(true);
+    expect(threadListRequests?.some((message) => message.params?.archived === true)).toBe(true);
 
     await client.close();
   });

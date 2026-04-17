@@ -1036,24 +1036,75 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
   );
 }
 
-function buildThreadDiscoveryPayloads(filter?: string): unknown[] {
-  const normalizedFilter = filter?.trim();
-
-  if (!normalizedFilter) {
-    return [{}];
-  }
+function buildThreadDiscoveryPayloads(
+  filter?: string,
+  archived?: boolean
+): unknown[] {
+  const searchTerm = filter?.trim() || undefined;
 
   return [
     {
-      query: normalizedFilter,
+      searchTerm,
+      archived,
       limit: 100
     },
     {
-      filter: normalizedFilter,
+      query: searchTerm,
+      archived,
+      limit: 100
+    },
+    {
+      filter: searchTerm,
+      archived,
+      limit: 100
+    },
+    {
+      archived,
       limit: 100
     },
     {}
   ];
+}
+
+function threadTitleSourcePriority(
+  titleSource: AppServerThreadTitleSource
+): number {
+  switch (titleSource) {
+    case "explicit":
+      return 2;
+    case "derived":
+      return 1;
+    case "fallback":
+    default:
+      return 0;
+  }
+}
+
+function mergeThreadSummaries(
+  threads: RawCodexThreadSummary[]
+): RawCodexThreadSummary[] {
+  const merged = new Map<string, RawCodexThreadSummary>();
+
+  for (const thread of threads) {
+    const current = merged.get(thread.id);
+    if (!current) {
+      merged.set(thread.id, thread);
+      continue;
+    }
+
+    const currentPriority = threadTitleSourcePriority(current.titleSource);
+    const nextPriority = threadTitleSourcePriority(thread.titleSource);
+    const preferNext =
+      nextPriority > currentPriority ||
+      (nextPriority === currentPriority &&
+        (thread.updatedAt ?? 0) > (current.updatedAt ?? 0));
+
+    merged.set(thread.id, preferNext ? thread : current);
+  }
+
+  return [...merged.values()].sort(
+    (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
+  );
 }
 
 function buildThreadResumePayloads(params: {
@@ -1226,15 +1277,28 @@ export class CodexAppServerClient {
   async listThreads(params?: { filter?: string }): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
-    const result = await requestWithFallbacks({
+    const requestParams = {
       client: this.connection,
-      methods: ["thread/list", "thread/loaded/list"],
-      payloads: buildThreadDiscoveryPayloads(params?.filter),
+      methods: ["thread/list", "thread/loaded/list"] as string[],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-    });
+    };
+    const [activeResult, archivedResult] = await Promise.all([
+      requestWithFallbacks({
+        ...requestParams,
+        payloads: buildThreadDiscoveryPayloads(params?.filter, false),
+      }),
+      requestWithFallbacks({
+        ...requestParams,
+        payloads: buildThreadDiscoveryPayloads(params?.filter, true),
+      }).catch(() => undefined),
+    ]);
+    const threads = mergeThreadSummaries([
+      ...extractThreadsFromValue(activeResult),
+      ...extractThreadsFromValue(archivedResult),
+    ]);
 
     return await Promise.all(
-      extractThreadsFromValue(result).map(async (thread) => ({
+      threads.map(async (thread) => ({
         ...thread,
         linkedDirectories: await this.directoryResolver(thread.projectKey),
         source: "codex"

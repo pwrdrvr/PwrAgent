@@ -839,4 +839,217 @@ describe("App", () => {
       ).toBeInTheDocument();
     });
   });
+
+  it("applies explicit thread names from thread/name/updated notifications", async () => {
+    const startThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-new"
+    }));
+    const agentEventListeners = new Set<
+      (event: {
+        backend: "codex" | "grok";
+        notification: {
+          method: string;
+          params: Record<string, unknown>;
+        };
+      }) => void
+    >();
+    let navigationSnapshot: any = {
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-existing"],
+      threads: [
+        {
+          id: "thread-existing",
+          title: "Existing Codex thread",
+          titleSource: "explicit" as const,
+          summary: "Already in the list",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread" as const
+          },
+          updatedAt: Date.now()
+        }
+      ]
+    };
+    const startTurn = vi.fn(
+      async ({
+        backend,
+        threadId
+      }: {
+        backend: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend,
+        threadId,
+        runId: "turn-1"
+      })
+    );
+
+    Object.defineProperty(window, "pwragnt", {
+      configurable: true,
+      value: {
+        ping: () => "pong",
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: true,
+                steerTurn: false,
+                transcriptPagination: true,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: true
+              }
+            }
+          ]
+        }),
+        getNavigationSnapshot: async () => navigationSnapshot,
+        markThreadSeen: async ({
+          backend,
+          threadId
+        }: {
+          backend: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend,
+          threadId,
+          seenAt: Date.now()
+        }),
+        onAgentEvent: (
+          listener: (event: {
+            backend: "codex" | "grok";
+            notification: {
+              method: string;
+              params: Record<string, unknown>;
+            };
+          }) => void
+        ) => {
+          agentEventListeners.add(listener);
+          return () => {
+            agentEventListeners.delete(listener);
+          };
+        },
+        onWindowFocus: () => () => undefined,
+        readThread: async ({
+          backend,
+          threadId
+        }: {
+          backend: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend,
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [],
+            messages: [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false
+            }
+          }
+        }),
+        startThread,
+        startTurn,
+        platform: "darwin",
+        versions: {
+          electron: "41.2.1"
+        }
+      }
+    });
+
+    render(<App />);
+
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Existing Codex thread"
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "New thread" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Create thread with Codex" }));
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: {
+        value: "Name this thread something funny and spunky. Something about potatoes."
+      }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    navigationSnapshot = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-new"],
+      threads: [
+        {
+          id: "thread-new",
+          title: "Name this thread something funny and spunky. Something about potatoes.",
+          titleSource: "derived",
+          summary: undefined,
+          source: "codex",
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread"
+          },
+          updatedAt: Date.now()
+        }
+      ]
+    };
+
+    await act(async () => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-new",
+              runId: "turn-1",
+            },
+          },
+        });
+      }
+    });
+
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Name this thread something funny and spunky. Something about potatoes."
+    });
+
+    await act(async () => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/name/updated",
+            params: {
+              threadId: "thread-new",
+              threadName: "Spud up the thread",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { level: 2, name: "Spud up the thread" })
+      ).toBeInTheDocument();
+    });
+  });
 });
