@@ -124,6 +124,89 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
+  it("preserves the full Grok message sequence when last-message summaries are also present", async () => {
+    const provider = new FakeProvider();
+    const server = new CodexAppServer({
+      provider,
+      threadIdGenerator: () => "thread-1",
+      runIdGenerator: (() => {
+        let index = 0;
+        return () => `turn-${++index}`;
+      })(),
+    });
+
+    const client = new GrokAppServerClient({ server });
+
+    await client.startThread({
+      model: "grok-4.20-reasoning",
+    });
+
+    await client.startTurn({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Who are you?" }],
+    });
+    provider.runs[0]?.deferred.resolve({
+      assistantText: "I'm Grok 4, built by xAI.",
+      providerResponseId: "resp_1",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await client.startTurn({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "What model are you?" }],
+    });
+    await Promise.resolve();
+
+    await expect(client.readThread({ threadId: "thread-1" })).resolves.toEqual({
+      entries: [
+        {
+          type: "message",
+          id: "message-1",
+          role: "user",
+          text: "Who are you?",
+        },
+        {
+          type: "message",
+          id: "message-2",
+          role: "assistant",
+          text: "I'm Grok 4, built by xAI.",
+        },
+        {
+          type: "message",
+          id: "message-3",
+          role: "user",
+          text: "What model are you?",
+        },
+      ],
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          text: "Who are you?",
+        },
+        {
+          id: "message-2",
+          role: "assistant",
+          text: "I'm Grok 4, built by xAI.",
+        },
+        {
+          id: "message-3",
+          role: "user",
+          text: "What model are you?",
+        },
+      ],
+      lastUserMessage: "What model are you?",
+      lastAssistantMessage: "I'm Grok 4, built by xAI.",
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+    });
+
+    await client.close();
+  });
+
   it("initializes from ~/.config/grok-app-server when env vars are absent", async () => {
     const originalHome = process.env.HOME;
     const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;

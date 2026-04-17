@@ -157,51 +157,50 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
     messages?: Array<{ role?: unknown; text?: unknown }>;
   };
 
-  const fallbackMessages = [
-    typeof record.lastUserMessage === "string"
-      ? {
-          id: "message-1",
-          role: "user" as const,
-          text: record.lastUserMessage,
-        }
-      : undefined,
-    typeof record.lastAssistantMessage === "string"
-      ? {
-          id:
-            typeof record.lastUserMessage === "string"
-              ? "message-2"
-              : "message-1",
-          role: "assistant" as const,
-          text: record.lastAssistantMessage,
-        }
-      : undefined,
-  ].filter((message): message is { id: string; role: "user" | "assistant"; text: string } =>
-    Boolean(message)
-  );
+  const rawMessages = Array.isArray(record.messages) ? record.messages : [];
+  if (rawMessages.length === 0) {
+    const fallbackMessages = [
+      typeof record.lastUserMessage === "string"
+        ? {
+            id: "message-1",
+            role: "user" as const,
+            text: record.lastUserMessage,
+          }
+        : undefined,
+      typeof record.lastAssistantMessage === "string"
+        ? {
+            id:
+              typeof record.lastUserMessage === "string"
+                ? "message-2"
+                : "message-1",
+            role: "assistant" as const,
+            text: record.lastAssistantMessage,
+          }
+        : undefined,
+    ].filter((message): message is { id: string; role: "user" | "assistant"; text: string } =>
+      Boolean(message)
+    );
 
-  if (
-    typeof record.lastUserMessage === "string" ||
-    typeof record.lastAssistantMessage === "string"
-  ) {
-    return {
-      entries: fallbackMessages.map((message) => ({
-        type: "message" as const,
-        ...message,
-      })),
-      messages: fallbackMessages,
-      lastUserMessage:
-        typeof record.lastUserMessage === "string"
-          ? record.lastUserMessage
-          : undefined,
-      lastAssistantMessage:
-        typeof record.lastAssistantMessage === "string"
-          ? record.lastAssistantMessage
-          : undefined,
-      pagination,
-    };
+    if (fallbackMessages.length > 0) {
+      return {
+        entries: fallbackMessages.map((message) => ({
+          type: "message" as const,
+          ...message,
+        })),
+        messages: fallbackMessages,
+        lastUserMessage:
+          typeof record.lastUserMessage === "string"
+            ? record.lastUserMessage
+            : undefined,
+        lastAssistantMessage:
+          typeof record.lastAssistantMessage === "string"
+            ? record.lastAssistantMessage
+            : undefined,
+        pagination,
+      };
+    }
   }
 
-  const rawMessages = Array.isArray(record.messages) ? record.messages : [];
   const messages = rawMessages.flatMap((message, index) => {
     if (!message || typeof message !== "object") {
       return [];
