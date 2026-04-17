@@ -970,13 +970,19 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
 }
 
 function buildThreadDiscoveryPayloads(filter?: string): unknown[] {
+  const normalizedFilter = filter?.trim();
+
+  if (!normalizedFilter) {
+    return [{}];
+  }
+
   return [
     {
-      query: filter?.trim() || undefined,
+      query: normalizedFilter,
       limit: 100
     },
     {
-      filter: filter?.trim() || undefined,
+      filter: normalizedFilter,
       limit: 100
     },
     {}

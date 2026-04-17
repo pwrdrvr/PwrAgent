@@ -169,7 +169,9 @@ textarea {
 }
 
 .sidebar__scroll-region {
+  display: flex;
   flex: 1;
+  flex-direction: column;
   min-height: 0;
   overflow: hidden;
 }
@@ -289,6 +291,8 @@ textarea {
   overflow-y: auto;
   min-height: 0;
   padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(168, 176, 187, 0.4) rgba(255, 255, 255, 0.04);
 }
 
 .directory-groups {
@@ -296,6 +300,33 @@ textarea {
   min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(168, 176, 187, 0.4) rgba(255, 255, 255, 0.04);
+}
+
+.sidebar-list--dense::-webkit-scrollbar,
+.directory-groups::-webkit-scrollbar {
+  width: 10px;
+}
+
+.sidebar-list--dense::-webkit-scrollbar-track,
+.directory-groups::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+.sidebar-list--dense::-webkit-scrollbar-thumb,
+.directory-groups::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(168, 176, 187, 0.4);
+  background-clip: padding-box;
+}
+
+.sidebar-list--dense::-webkit-scrollbar-thumb:hover,
+.directory-groups::-webkit-scrollbar-thumb:hover {
+  background: rgba(168, 176, 187, 0.58);
+  background-clip: padding-box;
 }
 
 .sidebar-list--compact {

@@ -379,6 +379,40 @@ describe("CodexAppServerClient", () => {
     });
     expect(threads[1]?.title).toBe("Plan Codex compatibility");
 
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    const threadListRequest = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "thread/list");
+
+    expect(threadListRequest?.params).toEqual({});
+
+    await client.close();
+  });
+
+  it("uses query payloads when filtering the codex thread list", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.listThreads({ filter: "web-app" });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    const threadListRequest = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "thread/list");
+
+    expect(threadListRequest?.params).toEqual({
+      query: "web-app",
+      limit: 100
+    });
+
     await client.close();
   });
 
