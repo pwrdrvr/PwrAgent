@@ -115,6 +115,14 @@ describe("TranscriptList", () => {
       screen.getByText("pnpm test -- --project desktop-renderer").closest("article")
     ).toHaveClass("transcript-message--assistant");
     expect(screen.getByText("Explored 2 files, ran 1 command")).toBeInTheDocument();
+    expect(screen.queryByText("Read TranscriptList.tsx")).not.toBeInTheDocument();
+    expect(screen.queryByText("Read ThreadView.tsx")).not.toBeInTheDocument();
+    expect(screen.queryByText("pwd && rg --files")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Explored 2 files, ran 1 command/i })
+    );
+
     expect(screen.getByText("Read TranscriptList.tsx")).toBeInTheDocument();
     expect(screen.getByText("Read ThreadView.tsx")).toBeInTheDocument();
     expect(screen.getByText("pwd && rg --files")).toBeInTheDocument();
@@ -177,6 +185,57 @@ describe("TranscriptList", () => {
       behavior: "auto",
       top: 480
     });
+  });
+
+  it("collapses activity details by default and toggles them inline", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "activity",
+            id: "activity-1",
+            summary: "Explored 3 files",
+            details: [
+              {
+                id: "detail-1",
+                kind: "read",
+                label: "Read TranscriptActivity.tsx"
+              },
+              {
+                id: "detail-2",
+                kind: "read",
+                label: "Read TranscriptList.tsx"
+              },
+              {
+                id: "detail-3",
+                kind: "command",
+                label: "Searched transcript-activity"
+              }
+            ]
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const toggle = screen.getByRole("button", { name: /Explored 3 files/i });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Read TranscriptActivity.tsx")).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Read TranscriptActivity.tsx")).toBeInTheDocument();
+    expect(screen.getByText("Read TranscriptList.tsx")).toBeInTheDocument();
+    expect(screen.getByText("Searched transcript-activity")).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Read TranscriptActivity.tsx")).not.toBeInTheDocument();
   });
 
   it("preserves the reader position when older messages are prepended", () => {
