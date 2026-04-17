@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type {
   AppServerPendingRequestNotification,
   AppServerThreadEntry,
+  AppServerThreadMessageEntry,
   AppServerSkillSummary,
   AppServerThreadReplayPagination
 } from "@pwragnt/shared";
@@ -14,6 +15,7 @@ type TranscriptListProps = {
   error?: string;
   loading: boolean;
   loadingMore: boolean;
+  pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingRequestBusy?: boolean;
   pendingStatusText?: string;
@@ -58,6 +60,7 @@ export function TranscriptList(props: TranscriptListProps) {
     const lastMessageId = props.entries[props.entries.length - 1]?.id;
     const itemCount =
       props.entries.length +
+      (props.pendingAssistantMessage ? 1 : 0) +
       (props.pendingStatusText ? 1 : 0) +
       (props.pendingRequest ? 1 : 0);
     const distanceFromBottom = Math.max(
@@ -76,7 +79,13 @@ export function TranscriptList(props: TranscriptListProps) {
       scrollTop: container.scrollTop,
       threadId: props.threadId
     };
-  }, [props.entries, props.pendingStatusText, props.threadId]);
+  }, [
+    props.entries,
+    props.pendingAssistantMessage,
+    props.pendingRequest,
+    props.pendingStatusText,
+    props.threadId
+  ]);
 
   const syncScrollState = useCallback(() => {
     const snapshot = captureSnapshot();
@@ -137,6 +146,7 @@ export function TranscriptList(props: TranscriptListProps) {
           previousSnapshot.pendingStatusText !== props.pendingStatusText ||
           previousSnapshot.itemCount <
             props.entries.length +
+              (props.pendingAssistantMessage ? 1 : 0) +
               (props.pendingStatusText ? 1 : 0) +
               (props.pendingRequest ? 1 : 0))
     );
@@ -163,6 +173,7 @@ export function TranscriptList(props: TranscriptListProps) {
     syncScrollState();
   }, [
     props.entries,
+    props.pendingAssistantMessage,
     props.pendingRequest,
     props.pendingStatusText,
     props.threadId,
@@ -211,6 +222,13 @@ export function TranscriptList(props: TranscriptListProps) {
             <TranscriptMessage key={entry.id} message={entry} skills={skills} />
           )
         )}
+        {props.pendingAssistantMessage ? (
+          <TranscriptMessage
+            key={props.pendingAssistantMessage.id}
+            message={props.pendingAssistantMessage}
+            skills={skills}
+          />
+        ) : null}
         {props.pendingStatusText ? (
           <div className="transcript-list__pending" role="status">
             <ThinkingScanner />

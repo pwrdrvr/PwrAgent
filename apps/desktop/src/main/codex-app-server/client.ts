@@ -58,6 +58,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "turn/completed",
   "turn/failed",
   "turn/cancelled",
+  "item/agentMessage/delta",
   "item/started",
   "item/completed",
   "item/plan/delta",

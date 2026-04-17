@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type {
   AppServerPendingRequestNotification,
   AppServerThreadEntry,
+  AppServerThreadMessageEntry,
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
   BackendSummary,
@@ -50,12 +51,15 @@ type ThreadViewProps = {
 
 export function ThreadView(props: ThreadViewProps) {
   const [pendingStatusText, setPendingStatusText] = useState<string>();
+  const [pendingAssistantMessage, setPendingAssistantMessage] =
+    useState<AppServerThreadMessageEntry>();
   const [pendingRequest, setPendingRequest] =
     useState<AppServerPendingRequestNotification>();
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
   const [pendingRequestError, setPendingRequestError] = useState<string>();
 
   useEffect(() => {
+    setPendingAssistantMessage(undefined);
     setPendingRequest(undefined);
     setPendingRequestBusy(false);
     setPendingRequestError(undefined);
@@ -70,6 +74,12 @@ export function ThreadView(props: ThreadViewProps) {
 
     return props.desktopApi.onAgentEvent((event) => {
       const method = event.notification.method;
+      const statusRecord =
+        method === "thread/status/changed" &&
+        typeof event.notification.params.status === "object" &&
+        event.notification.params.status !== null
+          ? (event.notification.params.status as { type?: unknown })
+          : undefined;
       if (
         event.backend !== selectedThread.source ||
         event.notification.params.threadId !== selectedThread.id
@@ -91,6 +101,22 @@ export function ThreadView(props: ThreadViewProps) {
       }
 
       if (
+        method === "item/agentMessage/delta" &&
+        "itemId" in event.notification.params &&
+        typeof event.notification.params.itemId === "string" &&
+        typeof event.notification.params.delta === "string"
+      ) {
+        const { itemId, delta } = event.notification.params;
+        setPendingAssistantMessage((current) => ({
+          type: "message",
+          id: itemId,
+          role: "assistant",
+          text: current?.id === itemId ? `${current.text}${delta}` : delta,
+        }));
+        return;
+      }
+
+      if (
         method === "serverRequest/resolved" &&
         "requestId" in event.notification.params
       ) {
@@ -102,6 +128,15 @@ export function ThreadView(props: ThreadViewProps) {
         setPendingRequestError(undefined);
         setPendingStatusText("Thinking");
         return;
+      }
+
+      if (
+        method === "turn/completed" ||
+        method === "turn/failed" ||
+        method === "turn/cancelled" ||
+        (method === "thread/status/changed" && statusRecord?.type === "idle")
+      ) {
+        setPendingAssistantMessage(undefined);
       }
 
       if (method.includes("/request")) {
@@ -196,6 +231,7 @@ export function ThreadView(props: ThreadViewProps) {
             entries={props.transcriptEntries}
             loading={props.loading}
             loadingMore={props.loadingMore}
+            pendingAssistantMessage={pendingAssistantMessage}
             pendingRequest={pendingRequest}
             pendingRequestBusy={pendingRequestBusy}
             pendingStatusText={pendingStatusText}

@@ -183,6 +183,15 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "item/agentMessage/delta";
+      params: {
+        threadId: string;
+        turnId?: string;
+        itemId: string;
+        delta: string;
+      };
+    }
+  | {
       method: "turn/completed";
       params: {
         threadId: string;
