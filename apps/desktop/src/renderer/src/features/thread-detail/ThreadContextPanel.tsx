@@ -137,6 +137,39 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                   </li>
                 ))}
               </ul>
+            ) : props.thread.projectKey?.trim() ? (
+              <>
+                <ul className="context-list">
+                  <li className="context-list__item">
+                    <button
+                      aria-label="Copy recorded working directory"
+                      className="context-list__label path-copy-target tooltip-target"
+                      data-tooltip={formatCopyTooltip(props.thread.projectKey)}
+                      type="button"
+                      onClick={(event) => {
+                        void handleCopyPath(event, props.thread.projectKey!);
+                      }}
+                    >
+                      <span aria-hidden="true" className="context-list__icon">
+                        📁
+                      </span>
+                      {pathBaseName(props.thread.projectKey)}
+                    </button>
+                    <button
+                      aria-label="Copy missing working directory path"
+                      className="context-list__meta path-copy-target tooltip-target"
+                      data-tooltip={formatCopyTooltip(props.thread.projectKey)}
+                      type="button"
+                      onClick={(event) => {
+                        void handleCopyPath(event, props.thread.projectKey!);
+                      }}
+                    >
+                      missing
+                    </button>
+                  </li>
+                </ul>
+                <p className="context-empty">Recorded working directory is no longer available.</p>
+              </>
             ) : (
               <p className="context-empty">No linked directory</p>
             )}
@@ -148,6 +181,22 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               <div>
                 <dt>Backend</dt>
                 <dd>{props.thread.source}</dd>
+              </div>
+              <div>
+                <dt>Thread ID</dt>
+                <dd>
+                  <button
+                    aria-label="Copy thread id"
+                    className="context-grid__copy context-grid__mono path-copy-target tooltip-target"
+                    data-tooltip={formatCopyTooltip(props.thread.id, 48)}
+                    type="button"
+                    onClick={(event) => {
+                      void handleCopyPath(event, props.thread.id);
+                    }}
+                  >
+                    {props.thread.id}
+                  </button>
+                </dd>
               </div>
               <div>
                 <dt>Access</dt>
@@ -257,4 +306,10 @@ function formatTimestamp(timestamp: number): string {
     hour: "numeric",
     minute: "2-digit"
   }).format(timestamp);
+}
+
+function pathBaseName(pathname: string): string {
+  const normalized = pathname.replace(/[\\/]+$/, "");
+  const segments = normalized.split(/[\\/]/).filter(Boolean);
+  return segments.at(-1) ?? pathname;
 }

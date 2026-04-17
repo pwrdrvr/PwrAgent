@@ -1361,6 +1361,14 @@ textarea {
   font-size: 14px;
 }
 
+.context-grid__copy {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
 .context-mode-switch {
   margin-top: 16px;
 }

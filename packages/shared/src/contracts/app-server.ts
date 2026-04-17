@@ -48,6 +48,7 @@ export type AppServerThreadSummary = {
   title: string;
   titleSource: AppServerThreadTitleSource;
   summary?: string;
+  projectKey?: string;
   createdAt?: number;
   updatedAt?: number;
   linkedDirectories: LinkedDirectorySummary[];

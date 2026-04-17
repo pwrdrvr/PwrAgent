@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
@@ -51,6 +51,7 @@ type RawCodexThreadSummary = Omit<
   "source" | "linkedDirectories"
 > & {
   projectKey?: string;
+  rolloutPath?: string;
 };
 
 type SkillCatalogEntry = {
@@ -232,6 +233,10 @@ function normalizeThreadSummary(value: string | undefined): string | undefined {
   return trimmed;
 }
 
+function isLikelyCodexWorktreePath(value: string): boolean {
+  return /[\\/]\.codex[\\/]worktrees[\\/]/.test(value);
+}
+
 function getThreadTitleInfo(record: Record<string, unknown>): {
   title: string;
   titleSource: AppServerThreadTitleSource;
@@ -268,6 +273,66 @@ function getThreadTitleInfo(record: Record<string, unknown>): {
     title: "Untitled thread",
     titleSource: "fallback",
   };
+}
+
+async function extractProjectKeyFromRollout(
+  rolloutPath: string | undefined
+): Promise<string | undefined> {
+  if (!rolloutPath || !(await pathExists(rolloutPath))) {
+    return undefined;
+  }
+
+  let fallbackPath: string | undefined;
+
+  try {
+    const contents = await readFile(rolloutPath, "utf8");
+
+    for (const line of contents.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      const record = asRecord(JSON.parse(trimmed));
+      if (record?.type !== "session_meta") {
+        continue;
+      }
+
+      const payload = asRecord(record.payload);
+      const cwd = pickString(payload ?? {}, ["cwd"]);
+      if (!cwd) {
+        continue;
+      }
+
+      if (await pathExists(cwd)) {
+        return cwd;
+      }
+
+      if (!fallbackPath && !isLikelyCodexWorktreePath(cwd)) {
+        fallbackPath = cwd;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+
+  return fallbackPath;
+}
+
+async function resolveThreadProjectKey(
+  thread: RawCodexThreadSummary
+): Promise<string | undefined> {
+  const projectKey = thread.projectKey?.trim();
+  if (projectKey && await pathExists(projectKey)) {
+    return projectKey;
+  }
+
+  const rolloutProjectKey = await extractProjectKeyFromRollout(thread.rolloutPath);
+  if (rolloutProjectKey) {
+    return rolloutProjectKey;
+  }
+
+  return projectKey;
 }
 
 function normalizeConversationRole(
@@ -1029,6 +1094,9 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
           ? undefined
           : summary,
       projectKey,
+      rolloutPath:
+        pickString(record, ["path", "rolloutPath", "rollout_path"]) ??
+        pickString(sessionRecord ?? {}, ["path", "rolloutPath", "rollout_path"]),
       createdAt: normalizeEpochTimestamp(
         pickNumber(record, ["createdAt", "created_at"]) ??
           pickNumber(sessionRecord ?? {}, ["createdAt", "created_at"])
@@ -1119,6 +1187,26 @@ function mergeThreadSummaries(
   return [...merged.values()].sort(
     (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
   );
+}
+
+function mergeArchivedThreadMetadata(params: {
+  activeThreads: RawCodexThreadSummary[];
+  archivedThreads: RawCodexThreadSummary[];
+}): RawCodexThreadSummary[] {
+  const archivedById = new Map(
+    params.archivedThreads.map((thread) => [thread.id, thread] as const)
+  );
+
+  return params.activeThreads
+    .map((thread) => {
+      const archived = archivedById.get(thread.id);
+      if (!archived) {
+        return thread;
+      }
+
+      return mergeThreadSummaries([thread, archived])[0] ?? thread;
+    })
+    .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
 }
 
 function buildThreadResumePayloads(params: {
@@ -1306,17 +1394,21 @@ export class CodexAppServerClient {
         payloads: buildThreadDiscoveryPayloads(params?.filter, true),
       }).catch(() => undefined),
     ]);
-    const threads = mergeThreadSummaries([
-      ...extractThreadsFromValue(activeResult),
-      ...extractThreadsFromValue(archivedResult),
-    ]);
+    const threads = mergeArchivedThreadMetadata({
+      activeThreads: extractThreadsFromValue(activeResult),
+      archivedThreads: extractThreadsFromValue(archivedResult),
+    });
 
     return await Promise.all(
-      threads.map(async (thread) => ({
-        ...thread,
-        linkedDirectories: await this.directoryResolver(thread.projectKey),
-        source: "codex"
-      }))
+      threads.map(async (thread) => {
+        const projectKey = await resolveThreadProjectKey(thread);
+        return {
+          ...thread,
+          projectKey,
+          linkedDirectories: await this.directoryResolver(projectKey),
+          source: "codex"
+        };
+      })
     );
   }
 

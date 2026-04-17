@@ -381,6 +381,58 @@ describe("Sidebar", () => {
     }
   });
 
+  it("does not place unresolved worktree threads under No linked directory", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        fetchedAt={Date.now()}
+        inboxThreads={[]}
+        loading={false}
+        creatingThread={undefined}
+        refreshing={false}
+        selectedThreadKey={undefined}
+        threads={[
+          {
+            id: "thread-missing-cwd",
+            title: "Plan Slidev theme extraction",
+            titleSource: "explicit",
+            summary: undefined,
+            source: "codex",
+            projectKey: "/Users/huntharo/.codex/worktrees/be87/search-product",
+            updatedAt: Date.now(),
+            inbox: {
+              inInbox: false
+            },
+            linkedDirectories: []
+          },
+          {
+            id: "thread-unlinked",
+            title: "Untitled thread",
+            titleSource: "explicit",
+            summary: undefined,
+            source: "grok",
+            updatedAt: Date.now(),
+            inbox: {
+              inInbox: false
+            },
+            linkedDirectories: []
+          }
+        ]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onRefresh={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("heading", { level: 3, name: "No linked directory" })).toBeInTheDocument();
+    expect(screen.getByText("1 thread")).toBeInTheDocument();
+    expect(screen.getByText("Untitled thread")).toBeInTheDocument();
+    expect(screen.queryByText("Plan Slidev theme extraction")).not.toBeInTheDocument();
+  });
+
   it("copies a linked directory path from the recents chip", () => {
     const copyText = vi.fn(async () => undefined);
     Object.defineProperty(window, "pwragnt", {

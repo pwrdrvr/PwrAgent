@@ -38,6 +38,10 @@ const DIRECTORY_THREAD_AGE_OUT_MS = 30 * 24 * 60 * 60 * 1000;
 export function DirectoriesList(props: DirectoriesListProps) {
   const groups = groupThreadsByDirectory(props.threads);
 
+  if (groups.length === 0) {
+    return <p className="sidebar-empty">No directory-linked threads.</p>;
+  }
+
   return (
     <div className="directory-groups">
       {groups.map((group) => (
@@ -104,6 +108,10 @@ function groupThreadsByDirectory(threads: NavigationThreadSummary[]): DirectoryG
 
   for (const thread of visibleThreads) {
     if (thread.linkedDirectories.length === 0) {
+      if (thread.projectKey?.trim()) {
+        continue;
+      }
+
       const unlinked = groups.get("unlinked");
       if (unlinked) {
         unlinked.threads.push(thread);
