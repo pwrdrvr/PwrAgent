@@ -1,18 +1,18 @@
 import type {
   AppServerItemStatus,
-  AppServerRole,
   AppServerTurnInputItem,
   ThreadReplay,
   ThreadReplayItem,
   ThreadState,
   ThreadSummary,
 } from "./protocol.js";
+import type {
+  AppServerSessionStore,
+  HydratedSessionState,
+  StoredMessage,
+} from "../persistence/grok-rollout-store.js";
 import type { ProviderActiveTurn } from "../providers/provider-contract.js";
 
-type StoredMessage = {
-  role: AppServerRole;
-  text: string;
-};
 type ActiveRunRecord = {
   runId: string;
   threadId: string;
@@ -34,6 +34,7 @@ type CreateThreadParams = {
 type ThreadMutation = Partial<Omit<ThreadState, "threadId" | "createdAt">>;
 
 export class AppServerSessionState {
+  private readonly store?: AppServerSessionStore;
   private readonly threads = new Map<string, ThreadState>();
   private readonly messages = new Map<string, StoredMessage[]>();
   private readonly items = new Map<string, ThreadReplayItem[]>();
@@ -41,6 +42,13 @@ export class AppServerSessionState {
   private readonly runs = new Map<string, ActiveRunRecord>();
   private lastTimestamp = 0;
   private itemSequence = 0;
+
+  constructor(options?: { store?: AppServerSessionStore }) {
+    this.store = options?.store;
+    if (this.store) {
+      this.hydrate(this.store.load());
+    }
+  }
 
   createThread(params: CreateThreadParams): ThreadState {
     const timestamp = this.nextTimestamp();
@@ -60,6 +68,7 @@ export class AppServerSessionState {
     this.threads.set(thread.threadId, thread);
     this.messages.set(thread.threadId, []);
     this.items.set(thread.threadId, []);
+    this.persistThread(thread.threadId);
     return thread;
   }
 
@@ -100,6 +109,7 @@ export class AppServerSessionState {
       updatedAt: this.nextTimestamp(),
     };
     this.threads.set(threadId, next);
+    this.persistThread(threadId);
     return next;
   }
 
@@ -153,6 +163,10 @@ export class AppServerSessionState {
     }
     this.items.set(threadId, items);
     this.touchThread(threadId);
+    this.store?.appendItem({
+      threadId,
+      item: normalized,
+    });
     return normalized;
   }
 
@@ -191,6 +205,11 @@ export class AppServerSessionState {
     items.push(item);
     this.items.set(threadId, items);
     this.touchThread(threadId);
+    this.store?.appendMessage({
+      threadId,
+      message,
+      item,
+    });
   }
 
   readThread(threadId: string): ThreadReplay {
@@ -303,6 +322,7 @@ export class AppServerSessionState {
       return;
     }
     thread.updatedAt = this.nextTimestamp();
+    this.persistThread(threadId);
   }
 
   private nextTimestamp(): number {
@@ -313,6 +333,34 @@ export class AppServerSessionState {
   private nextItemId(prefix: string): string {
     this.itemSequence += 1;
     return `${prefix}-${this.itemSequence}`;
+  }
+
+  private persistThread(threadId: string): void {
+    const thread = this.threads.get(threadId);
+    if (!thread) {
+      return;
+    }
+    this.store?.persistThread({
+      thread,
+      previousResponseId: this.responseIds.get(threadId),
+    });
+  }
+
+  private hydrate(data: HydratedSessionState): void {
+    for (const thread of data.threads) {
+      this.threads.set(thread.threadId, thread);
+    }
+    for (const [threadId, messages] of Object.entries(data.messagesByThread)) {
+      this.messages.set(threadId, [...messages]);
+    }
+    for (const [threadId, items] of Object.entries(data.itemsByThread)) {
+      this.items.set(threadId, [...items]);
+    }
+    for (const [threadId, responseId] of Object.entries(data.responseIds)) {
+      this.responseIds.set(threadId, responseId);
+    }
+    this.itemSequence = data.itemSequence;
+    this.lastTimestamp = data.lastTimestamp;
   }
 }
 

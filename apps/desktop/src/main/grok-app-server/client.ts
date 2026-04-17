@@ -1,9 +1,11 @@
 import path from "node:path";
 import {
+  AppServerSessionState,
   CodexAppServer,
+  GrokRolloutStore,
   GrokProvider,
-  loadGrokAppServerConfig,
   loadLocalEnv,
+  resolveGrokAppServerRuntimeConfig,
 } from "@pwragnt/agent-core";
 import type {
   AppServerNotification,
@@ -37,6 +39,7 @@ type GrokClientOptions = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  stateRoot?: string;
   directoryResolver?: (
     projectKey?: string
   ) => Promise<LinkedDirectorySummary[]>;
@@ -499,20 +502,26 @@ export class GrokAppServerClient {
     }
 
     loadLocalEnv({ override: false });
-    loadGrokAppServerConfig({ override: false });
-    const apiKey = this.options.apiKey?.trim() || process.env.XAI_API_KEY?.trim();
+    const runtimeConfig = resolveGrokAppServerRuntimeConfig();
+    const apiKey = this.options.apiKey?.trim() || runtimeConfig.apiKey;
     if (!apiKey) {
       throw new Error("grok app server unavailable: XAI_API_KEY is not set");
     }
 
     const provider = new GrokProvider({
       apiKey,
-      baseUrl: this.options.baseUrl?.trim() || process.env.XAI_BASE_URL?.trim(),
-      model: this.options.model?.trim() || process.env.GROK_MODEL?.trim(),
+      baseUrl: this.options.baseUrl?.trim() || runtimeConfig.baseUrl,
+      model: this.options.model?.trim() || runtimeConfig.model,
+    });
+    const sessionState = new AppServerSessionState({
+      store: new GrokRolloutStore(
+        this.options.stateRoot?.trim() || runtimeConfig.stateRoot,
+      ),
     });
 
     this.server = new CodexAppServer({
       provider,
+      sessionState,
       threadIdGenerator: this.options.threadIdGenerator,
       runIdGenerator: this.options.runIdGenerator,
     });

@@ -5,6 +5,7 @@ import {
   CodexAppServer,
   FakeProvider,
   createTemporaryTestDirectory,
+  defaultGrokAppServerConfigPath,
   defaultGrokAppServerConfigPaths,
 } from "@pwragnt/agent-core";
 import { GrokAppServerClient } from "../grok-app-server/client";
@@ -162,6 +163,99 @@ describe("GrokAppServerClient", () => {
       } else {
         process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
       }
+      await temp.cleanup();
+    }
+  });
+
+  it("initializes from config.toml when env vars are absent", async () => {
+    const originalHome = process.env.HOME;
+    const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+    delete process.env.XAI_API_KEY;
+    delete process.env.GROK_MODEL;
+    delete process.env.XAI_BASE_URL;
+    delete process.env.XDG_CONFIG_HOME;
+
+    const temp = await createTemporaryTestDirectory();
+    process.env.HOME = temp.path;
+    const configPath = defaultGrokAppServerConfigPath({ homeDir: temp.path });
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      [
+        'xai_api_key = "config-key"',
+        'grok_model = "grok-4.20-fast"',
+        'xai_base_url = "https://api.example.test/v1"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      const client = new GrokAppServerClient();
+      await expect(client.getInitializeResult()).resolves.toEqual(
+        expect.objectContaining({
+          serverInfo: expect.objectContaining({
+            name: "@pwragnt/grok-app-server",
+          }),
+        }),
+      );
+      await client.close();
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalXdgConfigHome === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+      }
+      await temp.cleanup();
+    }
+  });
+
+  it("reloads persisted Grok thread metadata after client recreation", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const stateRoot = path.join(temp.path, "state");
+
+    try {
+      const firstClient = new GrokAppServerClient({
+        apiKey: "test-key",
+        stateRoot,
+        threadIdGenerator: () => "thread-1",
+      });
+      await firstClient.startThread({
+        model: "grok-4.20-fast",
+      });
+      await firstClient.close();
+
+      const secondClient = new GrokAppServerClient({
+        apiKey: "test-key",
+        stateRoot,
+      });
+
+      await expect(secondClient.listThreads()).resolves.toEqual([
+        {
+          id: "thread-1",
+          title: "Untitled thread",
+          summary: undefined,
+          createdAt: expect.any(Number),
+          updatedAt: expect.any(Number),
+          linkedDirectories: [],
+          source: "grok",
+        },
+      ]);
+      await expect(secondClient.readThread({ threadId: "thread-1" })).resolves.toEqual({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      });
+      await secondClient.close();
+    } finally {
       await temp.cleanup();
     }
   });

@@ -1,4 +1,5 @@
 export { CodexAppServer } from "./app-server/codex-app-server.js";
+export { AppServerSessionState } from "./app-server/session-state.js";
 export type {
   AccountSummary,
   AppServerInitializeResult,
@@ -39,6 +40,12 @@ export {
   type FakeProviderRun,
 } from "./testing/test-harness.js";
 export {
+  defaultGrokAppServerConfigPath,
+  defaultGrokAppServerStateDir,
+  resolveGrokAppServerRuntimeConfig,
+  type GrokAppServerRuntimeConfig,
+} from "./config/grok-app-server-config.js";
+export {
   defaultGrokAppServerConfigDir,
   defaultGrokAppServerConfigPaths,
   defaultLocalEnvPath,
@@ -47,6 +54,12 @@ export {
   type LocalEnvLoadResult,
 } from "./testing/load-local-env.js";
 export { OverlayStore } from "./persistence/overlay-store.js";
+export {
+  GrokRolloutStore,
+  type AppServerSessionStore,
+  type HydratedSessionState,
+  type StoredMessage,
+} from "./persistence/grok-rollout-store.js";
 export {
   asObjectArguments,
   readOptionalBoolean,

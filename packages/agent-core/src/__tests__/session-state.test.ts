@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AppServerSessionState } from "../app-server/session-state.js";
-import { Deferred } from "../testing/test-harness.js";
+import { GrokRolloutStore } from "../persistence/grok-rollout-store.js";
+import { Deferred, createTemporaryTestDirectory } from "../testing/test-harness.js";
 import type { ProviderActiveTurn } from "../providers/provider-contract.js";
 
 function createActiveTurn(): ProviderActiveTurn {
@@ -88,5 +89,72 @@ describe("AppServerSessionState", () => {
       lastAssistantMessage: "Done.",
     });
     expect(replay.thread.updatedAt).toBeGreaterThanOrEqual(created.updatedAt ?? 0);
+  });
+
+  it("hydrates persisted threads from the rollout store on startup", async () => {
+    const temp = await createTemporaryTestDirectory();
+
+    try {
+      const initialState = new AppServerSessionState({
+        store: new GrokRolloutStore(temp.path),
+      });
+      initialState.createThread({
+        threadId: "thread-1",
+        cwd: "/repo/workspace",
+        model: "grok-4.20-fast",
+      });
+      initialState.appendInput("thread-1", [{ type: "text", text: "Ship it" }]);
+      initialState.appendAssistant("thread-1", "Done.");
+      initialState.setPreviousResponseId("thread-1", "resp_1");
+
+      const hydratedState = new AppServerSessionState({
+        store: new GrokRolloutStore(temp.path),
+      });
+
+      expect(hydratedState.listThreads()).toEqual([
+        {
+          threadId: "thread-1",
+          title: undefined,
+          summary: "Done.",
+          projectKey: "/repo/workspace",
+          model: "grok-4.20-fast",
+          createdAt: expect.any(Number),
+          updatedAt: expect.any(Number),
+        },
+      ]);
+      expect(hydratedState.readThread("thread-1")).toEqual({
+        threadId: "thread-1",
+        thread: expect.objectContaining({
+          threadId: "thread-1",
+          cwd: "/repo/workspace",
+          model: "grok-4.20-fast",
+        }),
+        messages: [
+          { role: "user", text: "Ship it" },
+          { role: "assistant", text: "Done." },
+        ],
+        items: [
+          {
+            id: expect.any(String),
+            type: "userMessage",
+            status: "completed",
+            role: "user",
+            text: "Ship it",
+          },
+          {
+            id: expect.any(String),
+            type: "agentMessage",
+            status: "completed",
+            role: "assistant",
+            text: "Done.",
+          },
+        ],
+        lastUserMessage: "Ship it",
+        lastAssistantMessage: "Done.",
+      });
+      expect(hydratedState.getPreviousResponseId("thread-1")).toBe("resp_1");
+    } finally {
+      await temp.cleanup();
+    }
   });
 });
