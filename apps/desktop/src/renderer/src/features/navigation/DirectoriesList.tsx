@@ -17,6 +17,22 @@ type DirectoryGroup = {
   threads: NavigationThreadSummary[];
 };
 
+type DirectoryGroupDescriptor = Omit<DirectoryGroup, "threads">;
+type DirectoryIdentity =
+  | {
+      kind: "scratch-workspaces";
+      path: string;
+    }
+  | {
+      kind: "stable";
+      label: string;
+      path: string;
+    }
+  | {
+      kind: "codex-worktree";
+      label: string;
+    };
+
 export function DirectoriesList(props: DirectoriesListProps) {
   const groups = groupThreadsByDirectory(props.threads);
 
@@ -81,6 +97,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
 function groupThreadsByDirectory(threads: NavigationThreadSummary[]): DirectoryGroup[] {
   const groups = new Map<string, DirectoryGroup>();
+  const stablePathByLabel = collectStablePathByLabel(threads);
 
   for (const thread of threads) {
     if (thread.linkedDirectories.length === 0) {
@@ -99,7 +116,7 @@ function groupThreadsByDirectory(threads: NavigationThreadSummary[]): DirectoryG
     }
 
     for (const directory of thread.linkedDirectories) {
-      const descriptor = getDirectoryGroupDescriptor(directory);
+      const descriptor = getDirectoryGroupDescriptor(directory, stablePathByLabel);
       const existing = groups.get(descriptor.id);
       if (existing) {
         existing.threads.push(thread);
@@ -116,28 +133,117 @@ function groupThreadsByDirectory(threads: NavigationThreadSummary[]): DirectoryG
   return [...groups.values()].sort((left, right) => left.label.localeCompare(right.label));
 }
 
-function getDirectoryGroupDescriptor(
-  directory: LinkedDirectorySummary
-): Omit<DirectoryGroup, "threads"> {
-  const scratchWorkspaceMatch = directory.path.match(
-    /^(.*[\\/]\.pwragnt[\\/]projects)[\\/][^\\/]+$/
-  );
+function collectStablePathByLabel(
+  threads: NavigationThreadSummary[]
+): Map<string, string | undefined> {
+  const pathsByLabel = new Map<string, Set<string>>();
 
-  if (scratchWorkspaceMatch) {
+  for (const thread of threads) {
+    for (const directory of thread.linkedDirectories) {
+      const identity = classifyDirectory(directory);
+      if (identity.kind !== "stable") {
+        continue;
+      }
+
+      const paths = pathsByLabel.get(identity.label) ?? new Set<string>();
+      paths.add(identity.path);
+      pathsByLabel.set(identity.label, paths);
+    }
+  }
+
+  return new Map(
+    [...pathsByLabel.entries()].map(([label, paths]) => [
+      label,
+      paths.size === 1 ? [...paths][0] : undefined
+    ])
+  );
+}
+
+function getDirectoryGroupDescriptor(
+  directory: LinkedDirectorySummary,
+  stablePathByLabel: Map<string, string | undefined>
+): DirectoryGroupDescriptor {
+  const identity = classifyDirectory(directory);
+
+  if (identity.kind === "scratch-workspaces") {
     return {
-      id: `workspaces:${scratchWorkspaceMatch[1]}`,
+      id: `workspaces:${identity.path}`,
       icon: "📁",
       label: "Workspaces",
-      path: scratchWorkspaceMatch[1]
+      path: identity.path
+    };
+  }
+
+  if (identity.kind === "codex-worktree") {
+    const stablePath = stablePathByLabel.get(identity.label);
+    if (stablePath) {
+      return {
+        id: `directory:${stablePath}`,
+        icon: "📁",
+        label: identity.label,
+        path: stablePath
+      };
+    }
+
+    return {
+      id: `codex-worktree:${identity.label}`,
+      icon: "📁",
+      label: identity.label
     };
   }
 
   return {
-    id: directory.id,
+    id: `directory:${identity.path}`,
     icon: "📁",
+    label: identity.label,
+    path: identity.path
+  };
+}
+
+function classifyDirectory(directory: LinkedDirectorySummary): DirectoryIdentity {
+  const scratchWorkspaceMatch = directory.path.match(
+    /^(.*[\\/]\.pwragnt[\\/]projects)[\\/][^\\/]+$/
+  );
+  if (scratchWorkspaceMatch) {
+    return {
+      kind: "scratch-workspaces",
+      path: scratchWorkspaceMatch[1]
+    };
+  }
+
+  const repoWorktreeMatch = directory.path.match(
+    /^(.*)[\\/]\.worktrees[\\/][^\\/]+(?:[\\/].*)?$/
+  );
+  if (repoWorktreeMatch) {
+    const canonicalPath = repoWorktreeMatch[1];
+    return {
+      kind: "stable",
+      label: pathBaseName(canonicalPath),
+      path: canonicalPath
+    };
+  }
+
+  const codexWorktreeMatch = directory.path.match(
+    /^[\\/].*[\\/]\.codex[\\/]worktrees[\\/][^\\/]+[\\/]([^\\/]+)(?:[\\/].*)?$/
+  );
+  if (codexWorktreeMatch) {
+    return {
+      kind: "codex-worktree",
+      label: codexWorktreeMatch[1]
+    };
+  }
+
+  return {
+    kind: "stable",
     label: directory.label,
     path: directory.path
   };
+}
+
+function pathBaseName(pathname: string): string {
+  const normalized = pathname.replace(/[\\/]+$/, "");
+  const segments = normalized.split(/[\\/]/).filter(Boolean);
+  return segments.at(-1) ?? pathname;
 }
 
 function formatRelativeTime(timestamp?: number): string {

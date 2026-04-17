@@ -196,6 +196,85 @@ describe("Sidebar", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("merges stale codex worktree paths into the stable repo directory group", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        fetchedAt={Date.now()}
+        inboxThreads={[]}
+        loading={false}
+        creatingThreadBackend={undefined}
+        refreshing={false}
+        selectedThreadKey={undefined}
+        threads={[
+          {
+            id: "thread-5",
+            title: "Check web API proxy support",
+            summary: undefined,
+            source: "codex",
+            updatedAt: Date.now(),
+            inbox: {
+              inInbox: false
+            },
+            linkedDirectories: [
+              {
+                id: "web-app-root",
+                label: "web-app",
+                path: "/Users/huntharo/GIPHY/web-app",
+                kind: "local"
+              }
+            ]
+          },
+          {
+            id: "thread-6",
+            title: "Explain web app login flow",
+            summary: undefined,
+            source: "codex",
+            updatedAt: Date.now(),
+            inbox: {
+              inInbox: false
+            },
+            linkedDirectories: [
+              {
+                id: "web-app-worktree-1",
+                label: "web-app",
+                path: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+                kind: "local"
+              }
+            ]
+          },
+          {
+            id: "thread-7",
+            title: "Investigate chunk file errors",
+            summary: undefined,
+            source: "codex",
+            updatedAt: Date.now(),
+            inbox: {
+              inInbox: false
+            },
+            linkedDirectories: [
+              {
+                id: "web-app-worktree-2",
+                label: "web-app",
+                path: "/Users/huntharo/.codex/worktrees/1f9a/web-app",
+                kind: "local"
+              }
+            ]
+          }
+        ]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onRefresh={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    expect(screen.getAllByRole("heading", { level: 3, name: "web-app" })).toHaveLength(1);
+    expect(screen.getByText("3 threads")).toBeInTheDocument();
+  });
+
   it("copies a linked directory path from the recents chip", () => {
     const copyText = vi.fn(async () => undefined);
     Object.defineProperty(window, "pwragnt", {
