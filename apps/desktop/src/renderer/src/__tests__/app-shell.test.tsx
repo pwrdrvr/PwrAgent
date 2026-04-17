@@ -6,6 +6,88 @@ import { App } from "../App";
 describe("App", () => {
   it("renders the live thread shell with transcript history", async () => {
     const copyText = vi.fn(async () => undefined);
+    let readThreadCalls = 0;
+    let resolveRefreshRead:
+      | ((value: {
+          backend: "codex";
+          fetchedAt: number;
+          threadId: string;
+          replay: {
+            entries: Array<Record<string, unknown>>;
+            messages: Array<Record<string, unknown>>;
+            lastUserMessage?: string;
+            lastAssistantMessage?: string;
+            pagination: {
+              supportsPagination: boolean;
+              hasPreviousPage: boolean;
+            };
+          };
+        }) => void)
+      | undefined;
+
+    const transcriptResponse = {
+      backend: "codex" as const,
+      fetchedAt: Date.now(),
+      threadId: "thread-1",
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Open the desktop plan and build the Codex client."
+          },
+          {
+            type: "activity",
+            id: "activity-1",
+            summary: "Explored 2 files, ran 1 command",
+            details: [
+              {
+                id: "detail-1",
+                kind: "read",
+                label: "Read TranscriptList.tsx"
+              },
+              {
+                id: "detail-2",
+                kind: "read",
+                label: "Read ThreadView.tsx"
+              },
+              {
+                id: "detail-3",
+                kind: "command",
+                label: "pwd && rg --files"
+              }
+            ]
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "The Codex client is wired and the thread browser is live."
+          }
+        ],
+        messages: [
+          {
+            id: "message-1",
+            role: "user",
+            text: "Open the desktop plan and build the Codex client."
+          },
+          {
+            id: "message-2",
+            role: "assistant",
+            text: "The Codex client is wired and the thread browser is live."
+          }
+        ],
+        lastUserMessage: "Open the desktop plan and build the Codex client.",
+        lastAssistantMessage:
+          "The Codex client is wired and the thread browser is live.",
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false
+        }
+      }
+    };
+
     Object.defineProperty(window, "pwragnt", {
       configurable: true,
       value: {
@@ -106,68 +188,16 @@ describe("App", () => {
           seenAt: Date.now(),
         }),
         onWindowFocus: () => () => undefined,
-        readThread: async () => ({
-          backend: "codex",
-          fetchedAt: Date.now(),
-          threadId: "thread-1",
-          replay: {
-            entries: [
-              {
-                type: "message",
-                id: "message-1",
-                role: "user",
-                text: "Open the desktop plan and build the Codex client."
-              },
-              {
-                type: "activity",
-                id: "activity-1",
-                summary: "Explored 2 files, ran 1 command",
-                details: [
-                  {
-                    id: "detail-1",
-                    kind: "read",
-                    label: "Read TranscriptList.tsx"
-                  },
-                  {
-                    id: "detail-2",
-                    kind: "read",
-                    label: "Read ThreadView.tsx"
-                  },
-                  {
-                    id: "detail-3",
-                    kind: "command",
-                    label: "pwd && rg --files"
-                  }
-                ]
-              },
-              {
-                type: "message",
-                id: "message-2",
-                role: "assistant",
-                text: "The Codex client is wired and the thread browser is live."
-              }
-            ],
-            messages: [
-              {
-                id: "message-1",
-                role: "user",
-                text: "Open the desktop plan and build the Codex client."
-              },
-              {
-                id: "message-2",
-                role: "assistant",
-                text: "The Codex client is wired and the thread browser is live."
-              }
-            ],
-            lastUserMessage: "Open the desktop plan and build the Codex client.",
-            lastAssistantMessage:
-              "The Codex client is wired and the thread browser is live.",
-            pagination: {
-              supportsPagination: false,
-              hasPreviousPage: false
-            }
+        readThread: async () => {
+          readThreadCalls += 1;
+          if (readThreadCalls === 1) {
+            return transcriptResponse;
           }
-        }),
+
+          return await new Promise((resolve) => {
+            resolveRefreshRead = resolve;
+          });
+        },
         platform: "darwin",
         startTurn: async () => ({
           backend: "codex",
@@ -249,6 +279,9 @@ describe("App", () => {
         screen.getByText("what can this skill do").closest("article")
       ).toHaveClass("transcript-message--user");
     });
+    expect(
+      screen.getByText("The Codex client is wired and the thread browser is live.")
+    ).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Thinking");
     expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
     expect(
@@ -258,5 +291,7 @@ describe("App", () => {
     ).not.toBeInTheDocument();
     expect(screen.getAllByText("$frontend-design").length).toBeGreaterThan(0);
     expect(screen.getByText("3 messages")).toBeInTheDocument();
+
+    resolveRefreshRead?.(transcriptResponse);
   });
 });

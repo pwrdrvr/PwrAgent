@@ -71,7 +71,9 @@ export function useThreadTranscript(params: {
 
     setLoading(true);
     setError(undefined);
-    setResponse(undefined);
+    setResponse((current) =>
+      current?.threadId === threadId ? current : undefined
+    );
 
     try {
       const nextResponse = await desktopApi.readThread({
