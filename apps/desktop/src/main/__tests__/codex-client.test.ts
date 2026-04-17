@@ -3,6 +3,13 @@ import type { JsonRpcTransport } from "../codex-app-server/json-rpc";
 
 class MockTransport implements JsonRpcTransport {
   static instances: MockTransport[] = [];
+  static threadStartResult: unknown = {
+    thread: {
+      id: "thread-3",
+      cwd: "/Users/huntharo/.pwragnt/projects/2026-04-16-ab12cd"
+    },
+    model: "gpt-5.4"
+  };
   static threadResumeResult: unknown = {
     threadId: "thread-2",
     threadName: "Ship desktop shell",
@@ -177,6 +184,17 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/start") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.threadStartResult
+        })
+      );
+      return;
+    }
+
     if (payload.method === "thread/resume") {
       this.messageHandler(
         JSON.stringify({
@@ -251,6 +269,13 @@ vi.mock("../codex-app-server/stdio-transport", () => {
 describe("CodexAppServerClient", () => {
   beforeEach(() => {
     MockTransport.instances.length = 0;
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "thread-3",
+        cwd: "/Users/huntharo/.pwragnt/projects/2026-04-16-ab12cd"
+      },
+      model: "gpt-5.4"
+    };
     MockTransport.threadResumeResult = {
       threadId: "thread-2",
       threadName: "Ship desktop shell",
@@ -461,6 +486,25 @@ describe("CodexAppServerClient", () => {
         ],
       },
     ]);
+
+    await client.close();
+  });
+
+  it("extracts thread ids from nested thread results when creating a thread", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const created = await client.startThread({
+      cwd: "/Users/huntharo/.pwragnt/projects/2026-04-16-ab12cd"
+    });
+
+    expect(created).toEqual({
+      threadId: "thread-3"
+    });
 
     await client.close();
   });

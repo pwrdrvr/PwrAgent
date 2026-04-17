@@ -84,8 +84,32 @@ describe("GrokAppServerClient", () => {
 
     const replay = await client.readThread({ threadId: "thread-1" });
     expect(replay).toEqual({
-      entries: [],
-      messages: [],
+      entries: [
+        {
+          type: "message",
+          id: "message-1",
+          role: "user",
+          text: "Ship Unit 3",
+        },
+        {
+          type: "message",
+          id: "message-2",
+          role: "assistant",
+          text: "Done.",
+        },
+      ],
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          text: "Ship Unit 3",
+        },
+        {
+          id: "message-2",
+          role: "assistant",
+          text: "Done.",
+        },
+      ],
       lastUserMessage: "Ship Unit 3",
       lastAssistantMessage: "Done.",
       pagination: {
