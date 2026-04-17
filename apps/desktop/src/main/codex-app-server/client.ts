@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
+import { access } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
@@ -894,6 +895,15 @@ async function runGit(projectKey: string, args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parseGitWorktrees(output: string): string[] {
   return output
     .split("\n")
@@ -929,8 +939,12 @@ async function resolveLinkedDirectories(
     return [];
   }
 
+  const currentPath = path.resolve(normalizedPath);
+  if (!(await pathExists(currentPath))) {
+    return [];
+  }
+
   try {
-    const currentPath = path.resolve(normalizedPath);
     const repoRoot = await runGit(normalizedPath, ["rev-parse", "--show-toplevel"]);
     const worktreeList = await runGit(normalizedPath, ["worktree", "list", "--porcelain"]);
     const worktreePaths = parseGitWorktrees(worktreeList);

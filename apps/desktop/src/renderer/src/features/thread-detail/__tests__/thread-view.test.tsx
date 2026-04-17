@@ -244,6 +244,7 @@ describe("ThreadView", () => {
         selectedThread={{
           id: "thread-2",
           title: "Plan the app-server protocol",
+          titleSource: "explicit",
           source: "codex",
           updatedAt: Date.now(),
           linkedDirectories: [],

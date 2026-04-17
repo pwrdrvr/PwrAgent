@@ -75,7 +75,34 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/list") {
-      const params = JSON.parse(message) as { params?: { archived?: boolean } };
+      const params = JSON.parse(message) as {
+        params?: { archived?: boolean; searchTerm?: string; query?: string; filter?: string };
+      };
+      const searchTerm =
+        params.params?.searchTerm ?? params.params?.query ?? params.params?.filter;
+
+      if (searchTerm === "missing-worktree") {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data: params.params?.archived
+                ? []
+                : [
+                    {
+                      id: "thread-missing-worktree",
+                      name: "Investigate chunk file errors",
+                      updatedAt: 1_776_000_000,
+                      cwd: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+                    }
+                  ]
+            }
+          })
+        );
+        return;
+      }
+
       if (params.params?.archived === true) {
         this.messageHandler(
           JSON.stringify({
@@ -419,11 +446,26 @@ describe("CodexAppServerClient", () => {
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
 
-    const threadListRequest = transport!.sentMessages
+    const threadListRequests = transport!.sentMessages
       .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
-      .find((payload) => payload.method === "thread/list");
+      .filter((payload) => payload.method === "thread/list");
 
-    expect(threadListRequest?.params).toEqual({});
+    expect(threadListRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: {
+            archived: false,
+            limit: 100
+          }
+        }),
+        expect.objectContaining({
+          params: {
+            archived: true,
+            limit: 100
+          }
+        })
+      ])
+    );
 
     await client.close();
   });
@@ -441,16 +483,77 @@ describe("CodexAppServerClient", () => {
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
 
-    const threadListRequest = transport!.sentMessages
+    const threadListRequests = transport!.sentMessages
       .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
-      .find((payload) => payload.method === "thread/list");
+      .filter((payload) => payload.method === "thread/list");
 
-    expect(threadListRequest?.params).toEqual({
-      query: "web-app",
-      limit: 100
-    });
+    expect(threadListRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: {
+            searchTerm: "web-app",
+            archived: false,
+            limit: 100
+          }
+        }),
+        expect.objectContaining({
+          params: {
+            searchTerm: "web-app",
+            archived: true,
+            limit: 100
+          }
+        })
+      ])
+    );
 
     await client.close();
+  });
+
+  it("ignores missing worktree cwd paths when deriving linked directories", async () => {
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      access: vi.fn(async (targetPath: string) => {
+        if (targetPath === "/Users/huntharo/.codex/worktrees/0cb4/web-app") {
+          throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        }
+      })
+    }));
+    vi.doMock("node:child_process", () => ({
+      execFile: vi.fn(
+        (
+          _file: string,
+          _args: string[],
+          _options: unknown,
+          callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void
+        ) => {
+          callback(null, { stdout: "", stderr: "" });
+        }
+      )
+    }));
+
+    try {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+      const client = new CodexAppServerClient({
+        command: "codex"
+      });
+
+      const threads = await client.listThreads({ filter: "missing-worktree" });
+
+      expect(threads).toEqual([
+        expect.objectContaining({
+          id: "thread-missing-worktree",
+          projectKey: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+          linkedDirectories: []
+        })
+      ]);
+
+      await client.close();
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+    }
   });
 
   it("does not synthesize summaries from raw conversation text", async () => {

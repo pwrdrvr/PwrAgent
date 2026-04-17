@@ -169,6 +169,7 @@ describe("Sidebar", () => {
           {
             id: "thread-3",
             title: "Untitled thread",
+            titleSource: "explicit",
             summary: undefined,
             source: "codex",
             updatedAt: Date.now(),
@@ -187,6 +188,7 @@ describe("Sidebar", () => {
           {
             id: "thread-4",
             title: "Second untitled thread",
+            titleSource: "explicit",
             summary: undefined,
             source: "codex",
             updatedAt: Date.now(),
@@ -220,7 +222,7 @@ describe("Sidebar", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("merges stale codex worktree paths into the stable repo directory group", () => {
+  it("merges codex worktree paths into the stable repo directory group", () => {
     render(
       <Sidebar
         backends={backends}
@@ -236,6 +238,7 @@ describe("Sidebar", () => {
           {
             id: "thread-5",
             title: "Check web API proxy support",
+            titleSource: "explicit",
             summary: undefined,
             source: "codex",
             updatedAt: Date.now(),
@@ -254,6 +257,7 @@ describe("Sidebar", () => {
           {
             id: "thread-6",
             title: "Explain web app login flow",
+            titleSource: "explicit",
             summary: undefined,
             source: "codex",
             updatedAt: Date.now(),
@@ -272,6 +276,7 @@ describe("Sidebar", () => {
           {
             id: "thread-7",
             title: "Investigate chunk file errors",
+            titleSource: "explicit",
             summary: undefined,
             source: "codex",
             updatedAt: Date.now(),
