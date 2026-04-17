@@ -38,6 +38,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const [browseMode, setBrowseMode] = useState<BrowseMode>("recents");
   const [selectedThreadKey, setSelectedThreadKey] = useState<string>();
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
+  const [optimisticThread, setOptimisticThread] = useState<NavigationThreadSummary>();
   const [creatingThreadBackend, setCreatingThreadBackend] =
     useState<AppServerBackendKind>();
   const [createThreadError, setCreateThreadError] = useState<string>();
@@ -46,7 +47,10 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     refreshing: false
   });
 
-  const refresh = useCallback(async (preferredThreadKey?: string): Promise<void> => {
+  const refresh = useCallback(async (
+    preferredThreadKey?: string,
+    preferredOptimisticThread?: NavigationThreadSummary
+  ): Promise<void> => {
     if (!desktopApi?.getNavigationSnapshot) {
       setState({
         loading: false,
@@ -66,6 +70,25 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
 
     try {
       const response = await desktopApi.getNavigationSnapshot();
+      const optimisticSelection = preferredOptimisticThread ?? optimisticThread;
+      const optimisticThreadKey = optimisticSelection
+        ? buildThreadIdentityKey(optimisticSelection.source, optimisticSelection.id)
+        : undefined;
+      const hasPreferredThread = Boolean(
+        preferredThreadKey &&
+          response.threads.some(
+            (thread) =>
+              buildThreadIdentityKey(thread.source, thread.id) === preferredThreadKey,
+          )
+      );
+      const hasOptimisticThread = Boolean(
+        optimisticThreadKey &&
+          response.threads.some(
+            (thread) =>
+              buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey,
+          )
+      );
+
       setState((current) => {
         if (current.response && response.unchanged) {
           return {
@@ -84,26 +107,35 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         };
       });
 
+      if (hasOptimisticThread) {
+        setOptimisticThread(undefined);
+      }
+
       if (!response.unchanged || preferredThreadKey) {
         setSelectedThreadKey((current) => {
           if (
             preferredThreadKey &&
-            response.threads.some(
-              (thread) =>
-                buildThreadIdentityKey(thread.source, thread.id) === preferredThreadKey,
-            )
+            (hasPreferredThread || preferredThreadKey === optimisticThreadKey)
           ) {
             return preferredThreadKey;
           }
 
           if (
             current &&
-            response.threads.some(
-              (thread) => buildThreadIdentityKey(thread.source, thread.id) === current,
+            (
+              response.threads.some(
+                (thread) => buildThreadIdentityKey(thread.source, thread.id) === current,
+              ) ||
+              current === optimisticThreadKey
             )
           ) {
             return current;
           }
+
+          if (optimisticThreadKey) {
+            return optimisticThreadKey;
+          }
+
           return response.threads[0]
             ? buildThreadIdentityKey(response.threads[0].source, response.threads[0].id)
             : undefined;
@@ -117,11 +149,11 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         error: error instanceof Error ? error.message : String(error)
       }));
     }
-  }, [desktopApi]);
+  }, [desktopApi, optimisticThread]);
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [desktopApi, refresh]);
 
   useEffect(() => {
     if (!desktopApi?.onWindowFocus) {
@@ -133,11 +165,33 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     });
   }, [desktopApi, refresh]);
 
-  const threads = state.response?.threads ?? [];
+  const threads = useMemo(() => {
+    const currentThreads = state.response?.threads ?? [];
+    if (!optimisticThread) {
+      return currentThreads;
+    }
+
+    const optimisticThreadKey = buildThreadIdentityKey(
+      optimisticThread.source,
+      optimisticThread.id
+    );
+
+    if (
+      currentThreads.some(
+        (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+      )
+    ) {
+      return currentThreads;
+    }
+
+    return [optimisticThread, ...currentThreads];
+  }, [optimisticThread, state.response?.threads]);
+
   const inboxThreads = useMemo(() => {
     const inboxThreadKeys = new Set(state.response?.inboxThreadKeys ?? []);
     return threads.filter((thread) =>
-      inboxThreadKeys.has(buildThreadIdentityKey(thread.source, thread.id)),
+      inboxThreadKeys.has(buildThreadIdentityKey(thread.source, thread.id)) ||
+      thread.inbox.inInbox,
     );
   }, [state.response?.inboxThreadKeys, threads]);
 
@@ -208,10 +262,24 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
 
       try {
         const response = await startThread({ backend });
+        const optimisticUpdatedAt = Date.now();
         const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
+        const nextOptimisticThread: NavigationThreadSummary = {
+          id: response.threadId,
+          title: "Untitled thread",
+          summary: undefined,
+          source: response.backend,
+          linkedDirectories: [],
+          updatedAt: optimisticUpdatedAt,
+          inbox: {
+            inInbox: true,
+            reason: "new-thread"
+          }
+        };
+        setOptimisticThread(nextOptimisticThread);
         setSelectedThreadKey(nextThreadKey);
         setPendingSeenThreadKey(nextThreadKey);
-        await refresh(nextThreadKey);
+        await refresh(nextThreadKey, nextOptimisticThread);
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
       } finally {
