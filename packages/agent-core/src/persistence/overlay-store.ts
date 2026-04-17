@@ -1,13 +1,14 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
-  AppServerBackendKind,
+  AppServerBackendScope,
   AppServerThreadSummary,
   LinkedDirectorySummary,
   MarkThreadSeenResponse,
   NavigationSnapshot,
   ThreadOverlayState,
 } from "@pwragnt/shared";
+import { buildThreadIdentityKey } from "@pwragnt/shared";
 import {
   buildNavigationSnapshot,
   buildNavigationSnapshotHash,
@@ -24,37 +25,41 @@ export class OverlayStore {
   constructor(private readonly filePath: string) {}
 
   async reconcileNavigationSnapshot(params: {
-    backend: AppServerBackendKind;
+    backend: AppServerBackendScope;
     fetchedAt: number;
     threads: AppServerThreadSummary[];
   }): Promise<NavigationSnapshot> {
     return await this.withData(async (data) => {
       const backendState = data.backends[params.backend];
       const firstSnapshot = !backendState?.lastSnapshotHash;
-      const overlayByThreadId = Object.fromEntries(
-        params.threads.map((thread) => [thread.id, data.threads[thread.id]]),
-      );
 
       if (firstSnapshot) {
         for (const thread of params.threads) {
-          data.threads[thread.id] = {
+          const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+          data.threads[threadKey] = {
+            backend: thread.source,
             threadId: thread.id,
             lastSeenAt: params.fetchedAt,
             lastSeenUpdatedAt: thread.updatedAt,
             extraLinkedDirectories:
-              data.threads[thread.id]?.extraLinkedDirectories ?? [],
+              data.threads[threadKey]?.extraLinkedDirectories ?? [],
           };
         }
       }
+
+      const overlayByThreadKey = Object.fromEntries(
+        params.threads.map((thread) => {
+          const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+          return [threadKey, data.threads[threadKey]];
+        }),
+      );
 
       const snapshot = buildNavigationSnapshot({
         backend: params.backend,
         fetchedAt: params.fetchedAt,
         firstSnapshot,
-        overlayByThreadId: Object.fromEntries(
-          params.threads.map((thread) => [thread.id, data.threads[thread.id]]),
-        ),
-        previousKnownThreadIds: backendState?.knownThreadIds ?? [],
+        overlayByThreadKey,
+        previousKnownThreadKeys: backendState?.knownThreadKeys ?? [],
         threads: params.threads,
         unchanged: false,
       });
@@ -66,7 +71,9 @@ export class OverlayStore {
       const unchanged = backendState?.lastSnapshotHash === nextHash;
 
       data.backends[params.backend] = {
-        knownThreadIds: params.threads.map((thread) => thread.id),
+        knownThreadKeys: params.threads.map((thread) =>
+          buildThreadIdentityKey(thread.source, thread.id),
+        ),
         lastSnapshotHash: nextHash,
       };
 
@@ -78,16 +85,18 @@ export class OverlayStore {
   }
 
   async markThreadSeen(params: {
-    backend: AppServerBackendKind;
+    backend: ThreadOverlayState["backend"];
     seenAt?: number;
     seenUpdatedAt?: number;
     threadId: string;
   }): Promise<MarkThreadSeenResponse> {
     return await this.withData(async (data) => {
-      const current = data.threads[params.threadId];
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey];
       const seenAt = params.seenAt ?? Date.now();
 
-      data.threads[params.threadId] = {
+      data.threads[threadKey] = {
+        backend: params.backend,
         threadId: params.threadId,
         dismissedAt: current?.dismissedAt,
         snoozedUntil: current?.snoozedUntil,
@@ -106,11 +115,14 @@ export class OverlayStore {
   }
 
   async addLinkedDirectory(params: {
+    backend: ThreadOverlayState["backend"];
     directory: LinkedDirectorySummary;
     threadId: string;
   }): Promise<ThreadOverlayState> {
     return await this.withData(async (data) => {
-      const current = data.threads[params.threadId] ?? {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
         threadId: params.threadId,
         extraLinkedDirectories: [],
       };
@@ -126,7 +138,7 @@ export class OverlayStore {
         ...current,
         extraLinkedDirectories: nextDirectories,
       };
-      data.threads[params.threadId] = nextState;
+      data.threads[threadKey] = nextState;
       return nextState;
     });
   }

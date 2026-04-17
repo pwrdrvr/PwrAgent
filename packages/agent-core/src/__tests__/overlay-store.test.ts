@@ -54,10 +54,14 @@ describe("OverlayStore", () => {
     const raw = JSON.parse(
       await readFile(path.join(tempDirs[0]!, "overlay-state.json"), "utf8"),
     ) as {
-      threads: Record<string, { lastSeenAt?: number; lastSeenUpdatedAt?: number }>;
+      threads: Record<
+        string,
+        { backend?: string; lastSeenAt?: number; lastSeenUpdatedAt?: number }
+      >;
     };
 
-    expect(raw.threads["thread-1"]).toMatchObject({
+    expect(raw.threads["codex:thread-1"]).toMatchObject({
+      backend: "codex",
       lastSeenAt: 2000,
       lastSeenUpdatedAt: 1000,
     });
@@ -67,6 +71,7 @@ describe("OverlayStore", () => {
     const store = await createStore();
 
     await store.addLinkedDirectory({
+      backend: "grok",
       threadId: "thread-2",
       directory: {
         id: "/Users/huntharo/pwrdrvr/openclaw",
@@ -79,11 +84,54 @@ describe("OverlayStore", () => {
     const raw = JSON.parse(
       await readFile(path.join(tempDirs[0]!, "overlay-state.json"), "utf8"),
     ) as {
-      threads: Record<string, { extraLinkedDirectories: Array<{ label: string }> }>;
+      threads: Record<
+        string,
+        { backend?: string; extraLinkedDirectories: Array<{ label: string }> }
+      >;
     };
 
-    expect(raw.threads["thread-2"]?.extraLinkedDirectories).toEqual([
+    expect(raw.threads["grok:thread-2"]).toMatchObject({
+      backend: "grok",
+    });
+    expect(raw.threads["grok:thread-2"]?.extraLinkedDirectories).toEqual([
       expect.objectContaining({ label: "openclaw" }),
     ]);
+  });
+
+  it("keeps backend-qualified overlay state separate for duplicate thread ids", async () => {
+    const store = await createStore();
+
+    await store.markThreadSeen({
+      backend: "codex",
+      threadId: "thread-1",
+      seenAt: 2000,
+      seenUpdatedAt: 1000,
+    });
+    await store.markThreadSeen({
+      backend: "grok",
+      threadId: "thread-1",
+      seenAt: 3000,
+      seenUpdatedAt: 2500,
+    });
+
+    const raw = JSON.parse(
+      await readFile(path.join(tempDirs[0]!, "overlay-state.json"), "utf8"),
+    ) as {
+      threads: Record<
+        string,
+        { backend?: string; lastSeenAt?: number; lastSeenUpdatedAt?: number }
+      >;
+    };
+
+    expect(raw.threads["codex:thread-1"]).toMatchObject({
+      backend: "codex",
+      lastSeenAt: 2000,
+      lastSeenUpdatedAt: 1000,
+    });
+    expect(raw.threads["grok:thread-1"]).toMatchObject({
+      backend: "grok",
+      lastSeenAt: 3000,
+      lastSeenUpdatedAt: 2500,
+    });
   });
 });

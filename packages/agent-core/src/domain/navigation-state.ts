@@ -1,12 +1,13 @@
 import type {
-  AppServerBackendKind,
+  AppServerBackendScope,
   AppServerThreadSummary,
   LinkedDirectorySummary,
   NavigationSnapshot,
   NavigationThreadSummary,
   ThreadOverlayState,
 } from "@pwragnt/shared";
-import { deriveInboxState, rankInboxThreadIds } from "./inbox";
+import { buildThreadIdentityKey } from "@pwragnt/shared";
+import { deriveInboxState, rankInboxThreadKeys } from "./inbox";
 
 function dedupeLinkedDirectories(
   directories: LinkedDirectorySummary[],
@@ -25,14 +26,15 @@ function dedupeLinkedDirectories(
 export function materializeNavigationThreads(params: {
   firstSnapshot: boolean;
   now?: number;
-  overlayByThreadId: Record<string, ThreadOverlayState | undefined>;
-  previousKnownThreadIds: string[];
+  overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
+  previousKnownThreadKeys: string[];
   threads: AppServerThreadSummary[];
 }): NavigationThreadSummary[] {
-  const previousKnownThreadIds = new Set(params.previousKnownThreadIds);
+  const previousKnownThreadKeys = new Set(params.previousKnownThreadKeys);
 
   return params.threads.map((thread) => {
-    const overlay = params.overlayByThreadId[thread.id];
+    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const overlay = params.overlayByThreadKey[threadKey];
     const linkedDirectories = dedupeLinkedDirectories([
       ...thread.linkedDirectories,
       ...(overlay?.extraLinkedDirectories ?? []),
@@ -43,7 +45,7 @@ export function materializeNavigationThreads(params: {
       linkedDirectories,
       inbox: deriveInboxState({
         firstSnapshot: params.firstSnapshot,
-        isNewThread: !previousKnownThreadIds.has(thread.id),
+        isNewThread: !previousKnownThreadKeys.has(threadKey),
         now: params.now,
         overlay,
         thread,
@@ -53,20 +55,20 @@ export function materializeNavigationThreads(params: {
 }
 
 export function buildNavigationSnapshot(params: {
-  backend: AppServerBackendKind;
+  backend: AppServerBackendScope;
   fetchedAt: number;
   firstSnapshot: boolean;
   now?: number;
-  overlayByThreadId: Record<string, ThreadOverlayState | undefined>;
-  previousKnownThreadIds: string[];
+  overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
+  previousKnownThreadKeys: string[];
   threads: AppServerThreadSummary[];
   unchanged: boolean;
 }): NavigationSnapshot {
   const threads = materializeNavigationThreads({
     firstSnapshot: params.firstSnapshot,
     now: params.now,
-    overlayByThreadId: params.overlayByThreadId,
-    previousKnownThreadIds: params.previousKnownThreadIds,
+    overlayByThreadKey: params.overlayByThreadKey,
+    previousKnownThreadKeys: params.previousKnownThreadKeys,
     threads: params.threads,
   });
 
@@ -75,17 +77,18 @@ export function buildNavigationSnapshot(params: {
     fetchedAt: params.fetchedAt,
     unchanged: params.unchanged,
     threads,
-    inboxThreadIds: rankInboxThreadIds(threads),
+    inboxThreadKeys: rankInboxThreadKeys(threads),
   };
 }
 
 export function buildNavigationSnapshotHash(params: {
-  backend: AppServerBackendKind;
+  backend: AppServerBackendScope;
   threads: NavigationThreadSummary[];
 }): string {
   return JSON.stringify({
     backend: params.backend,
     threads: params.threads.map((thread) => ({
+      source: thread.source,
       id: thread.id,
       updatedAt: thread.updatedAt ?? null,
       gitBranch: thread.gitBranch ?? null,

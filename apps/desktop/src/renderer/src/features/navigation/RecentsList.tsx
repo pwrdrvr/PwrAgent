@@ -1,8 +1,10 @@
 import type { NavigationThreadSummary } from "@pwragnt/shared";
+import { buildThreadIdentityKey } from "@pwragnt/shared";
+import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 
 type RecentsListProps = {
-  selectedThreadId?: string;
+  selectedThreadKey?: string;
   threads: NavigationThreadSummary[];
   onSelectThread: (thread: NavigationThreadSummary) => void;
 };
@@ -11,10 +13,11 @@ export function RecentsList(props: RecentsListProps) {
   return (
     <div className="sidebar-list sidebar-list--dense" role="list">
       {props.threads.map((thread) => {
-        const selected = thread.id === props.selectedThreadId;
+        const selected =
+          buildThreadIdentityKey(thread.source, thread.id) === props.selectedThreadKey;
         return (
           <button
-            key={thread.id}
+            key={buildThreadIdentityKey(thread.source, thread.id)}
             aria-pressed={selected}
             className={`thread-row${selected ? " is-selected" : ""}`}
             type="button"
@@ -32,6 +35,10 @@ export function RecentsList(props: RecentsListProps) {
             ) : null}
 
             <span className="thread-row__meta">
+              <span className="thread-row__chip thread-row__chip--backend">
+                {formatBackendLabel(thread.source)}
+              </span>
+
               {thread.linkedDirectories.length > 0 ? (
                 thread.linkedDirectories.map((directory) => (
                   <span

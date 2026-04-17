@@ -14,6 +14,7 @@ import type {
 } from "@pwragnt/shared";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { GrokAppServerClient } from "../grok-app-server/client";
+import { createScratchProjectDirectory } from "./scratch-projects";
 
 type BackendClient = {
   close(): Promise<void>;
@@ -63,14 +64,18 @@ const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
 
 function buildCapabilities(methods: string[], backend: AppServerBackendKind): BackendCapabilities {
   const supported = new Set(methods);
+  const assumeCodexAppServerSurface = backend === "codex" && methods.length === 0;
 
   return {
     listThreads:
       supported.has("thread/list") || supported.has("thread/loaded/list"),
-    createThread: supported.has("thread/start") || supported.has("thread/new"),
+    createThread:
+      supported.has("thread/start") ||
+      supported.has("thread/new") ||
+      assumeCodexAppServerSurface,
     resumeThread: supported.has("thread/resume"),
     readThread: supported.has("thread/read"),
-    startTurn: supported.has("turn/start"),
+    startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
     interruptTurn: supported.has("turn/interrupt"),
     steerTurn: supported.has("turn/steer"),
     transcriptPagination: false,
@@ -83,6 +88,7 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
   private readonly grokClient: BackendClient;
+  private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
   >();
@@ -91,9 +97,12 @@ export class DesktopBackendRegistry {
   constructor(options?: {
     codexClient?: BackendClient;
     grokClient?: BackendClient;
+    createScratchProjectDirectory?: () => Promise<string>;
   }) {
     this.codexClient = options?.codexClient ?? new CodexAppServerClient();
     this.grokClient = options?.grokClient ?? new GrokAppServerClient();
+    this.createScratchProjectDirectory =
+      options?.createScratchProjectDirectory ?? createScratchProjectDirectory;
 
     this.unsubscribers.push(
       this.codexClient.onNotification(async (notification) => {
@@ -195,9 +204,17 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string }> {
-    const result = await this.getClient(params.backend).startThread(params);
+    const { backend, ...request } = params;
+    const cwd =
+      backend === "codex" && !request.cwd?.trim()
+        ? await this.createScratchProjectDirectory()
+        : request.cwd;
+    const result = await this.getClient(backend).startThread({
+      ...request,
+      cwd,
+    });
     return {
-      backend: params.backend,
+      backend,
       threadId: result.threadId,
     };
   }

@@ -1,4 +1,5 @@
 export type AppServerBackendKind = "codex" | "grok";
+export type AppServerBackendScope = AppServerBackendKind | "all";
 
 export type ThreadIdentifier = string;
 
@@ -121,7 +122,7 @@ export type AppServerListThreadsRequest = {
 };
 
 export type AppServerListThreadsResponse = {
-  backend: AppServerBackendKind;
+  backend: AppServerBackendScope;
   fetchedAt: number;
   threads: AppServerThreadSummary[];
 };

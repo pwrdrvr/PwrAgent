@@ -2,6 +2,8 @@ import type {
   AgentEvent,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
+  AppServerListThreadsRequest,
+  AppServerListThreadsResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   GetNavigationSnapshotRequest,
@@ -37,6 +39,9 @@ export type DesktopApi = {
   listBackends?: (
     request?: ListBackendsRequest
   ) => Promise<ListBackendsResponse>;
+  listThreads?: (
+    request?: AppServerListThreadsRequest
+  ) => Promise<AppServerListThreadsResponse>;
   markThreadSeen?: (request: MarkThreadSeenRequest) => Promise<unknown>;
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
   onWindowFocus?: (callback: () => void) => () => void;

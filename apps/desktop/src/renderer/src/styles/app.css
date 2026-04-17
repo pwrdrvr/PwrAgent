@@ -76,6 +76,65 @@ textarea {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.sidebar__masthead-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.sidebar__new-thread {
+  position: relative;
+}
+
+.sidebar__menu {
+  display: flex;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  min-width: 208px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: rgba(16, 20, 28, 0.98);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.32);
+}
+
+.sidebar__menu-item {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.sidebar__menu-item:hover {
+  background: var(--bg-panel-hover);
+}
+
+.sidebar__menu-item[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.sidebar__menu-item-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sidebar__menu-item-detail {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .eyebrow {
   margin: 0 0 8px;
   color: var(--accent);
@@ -329,6 +388,17 @@ textarea {
   white-space: nowrap;
 }
 
+.thread-row__chip--backend {
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.path-copy-target {
+  position: relative;
+}
+
 .tooltip-target {
   position: relative;
 }
@@ -465,6 +535,10 @@ textarea {
   line-height: 1.45;
 }
 
+.sidebar-error--masthead {
+  margin-top: 12px;
+}
+
 .app-main {
   display: flex;
   min-height: 0;
@@ -485,6 +559,12 @@ textarea {
 .thread-header__title {
   font-size: 40px;
   font-weight: 700;
+}
+
+.thread-header__eyebrow-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .thread-header__stats {
@@ -1343,6 +1423,12 @@ textarea {
 .composer__actions {
   display: flex;
   justify-content: flex-end;
+}
+
+.composer__error {
+  margin: 0 16px;
+  color: var(--danger-text);
+  font-size: 13px;
 }
 
 .thread-empty-state {

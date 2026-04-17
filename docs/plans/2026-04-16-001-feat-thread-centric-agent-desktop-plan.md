@@ -4,17 +4,18 @@ type: feat
 status: active
 date: 2026-04-16
 origin: docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md
+deepened: 2026-04-16
 ---
 
 # feat: Thread-centric agent desktop foundation
 
 ## Overview
 
-Build the first real version of a desktop coding agent whose differentiator is thread navigation rather than repo-first attachment. The milestone should ship a runnable Electron app with a real provider/harness path, desktop-owned overlay state, Inbox plus Recents plus Directories navigation, multi-directory thread associations, and enough plugin/wiki infrastructure that the product already feels accumulative instead of stateless.
+Build the first real version of a desktop coding agent whose differentiator is thread navigation rather than repo-first attachment. The milestone should ship a runnable Electron app with a real provider/harness path, desktop-owned overlay state, Inbox plus Recents plus Directories navigation, multi-directory thread associations, backend-aware thread creation, and enough plugin/wiki infrastructure that the product already feels accumulative instead of stateless.
 
 ## Problem Frame
 
-The origin requirements define a thread-first product surface where users can start from a blank thread, attach repos later, and find important work from Inbox before drilling into Recents or Directories (see origin: `docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md`). The technical plan must preserve that product behavior while creating the repo structure, desktop-owned overlay state, IPC boundaries, and provider abstraction needed for a credible interview-ready demo.
+The origin requirements define a thread-first product surface where users can start from a blank thread, attach repos later, and find important work from Inbox before drilling into Recents or Directories (see origin: `docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md`). The current desktop code now has real Codex and Grok backend integration, but the renderer still loads navigation and transcripts as Codex-only and exposes no shipped "New thread" entrypoint. This plan update closes that gap by making backend choice explicit at thread creation time and by making backend provenance visible in thread lists without turning backend choice into a new primary navigation lens.
 
 ## Requirements Trace
 
@@ -24,6 +25,7 @@ The origin requirements define a thread-first product surface where users can st
 - R16-R19. Support guarded versus full-access execution modes with a risk-based approval layer.
 - R20-R22. Provide a real Grok-first but provider-agnostic agent harness and core coding loop.
 - R23-R26. Include real skills/plugins and wiki memory foundations with lexical and semantic search paths.
+- User-request refinement on R1, R10, R21, and R22. Users can start a thread against either Codex or Grok, and every thread-list row should expose that backend relationship at a glance through compact chip metadata.
 
 ## Scope Boundaries
 
@@ -36,8 +38,11 @@ The origin requirements define a thread-first product surface where users can st
 
 ### Relevant Code and Patterns
 
-- The repo is currently greenfield aside from the brainstorm document.
-- There are no local implementation patterns yet, so Unit 1 must establish the workspace, testing, typing, and package boundaries that later units follow.
+- `apps/desktop/src/main/app-server/backend-registry.ts` already normalizes Codex and Grok clients behind one desktop registry and exposes per-backend capabilities plus `startThread`, `startTurn`, and `readThread`.
+- `packages/shared/src/contracts/app-server.ts` and `packages/shared/src/contracts/navigation.ts` already carry per-thread backend/source metadata, so the renderer can show backend provenance without inventing a second model.
+- `apps/desktop/src/renderer/src/lib/useThreadNavigation.ts` and `apps/desktop/src/renderer/src/lib/useThreadTranscript.ts` still hard-code `backend: "codex"` for snapshot reads, mark-seen writes, and transcript loads.
+- `packages/agent-core/src/persistence/overlay-store.ts` and `packages/agent-core/src/persistence/migrations.ts` currently key overlay state by bare `threadId`, which is acceptable for single-backend snapshots but unsafe once Codex and Grok threads can coexist in one navigation surface.
+- `apps/desktop/src/renderer/src/features/navigation/RecentsList.tsx`, `InboxList.tsx`, and `DirectoriesList.tsx` already use shared chip styling (`thread-row__chip`), which gives the plan a local pattern for adding a backend pill without new visual primitives.
 
 ### Institutional Learnings
 
@@ -55,11 +60,15 @@ The origin requirements define a thread-first product surface where users can st
 - Use a `pnpm` workspace from day one so the Electron app, shared contracts, agent runtime, plugin runtime, and wiki services can evolve without immediate repo surgery.
 - Keep privileged orchestration in the Electron main process, expose only typed preload APIs to the renderer, and treat renderer code as unprivileged UI per Electron's process and preload model.
 - Use TypeScript across the workspace so IPC contracts, persisted thread models, provider interfaces, and plugin manifests share one type system.
-- Persist thread, directory, execution-mode, inbox-state, and message/event data in a local relational store so many-to-many thread-to-directory navigation remains queryable.
+- Persist desktop-owned navigation data in a local store, starting with the file-backed overlay state already shipped for inbox and refresh reconciliation, and defer heavier relational storage until thread, project, or wiki features truly need it.
 - Keep Git roots and working directories as separate persisted concepts so local mode and worktree mode can share one thread model.
 - Start with one internal plugin/skill registration path that the app itself consumes, then generalize only after the first milestone proves the shape.
 - Treat semantic wiki search as a service boundary, not a UI trick, so the first milestone can start with a pluggable indexer and avoid hard-coding one search backend into the renderer.
 - For Grok-based desktop integration, target the OpenClaw-consumed Codex App Server subset rather than a turn-only proof of concept, so the desktop can rely on one existing client contract for thread discovery, turn control, review, and compaction.
+- Treat sidebar navigation as a mixed-backend surface by default. Backend is provenance metadata on each thread row, not a replacement for Inbox, Recents, or Directories as the primary browsing lenses.
+- Put the first shipped "New thread" action in the sidebar masthead, because the style guide expects global actions at the top of the operating rail and the current shell already reserves that space beside refresh.
+- Qualify desktop overlay identity by backend plus thread id rather than bare thread id so seen state, inbox reconciliation, and extra linked directories cannot bleed across Codex and Grok threads that happen to share ids.
+- Render backend provenance from the stable thread `source` field using compact title-case chips (`Codex`, `Grok`) in thread rows. Do not depend on verbose backend status labels like "Codex app server" for row metadata.
 
 ## Open Questions
 
@@ -67,14 +76,18 @@ The origin requirements define a thread-first product surface where users can st
 
 - Workspace shape: use a single workspace repo with one Electron app and a small number of packages rather than one large app folder.
 - Process split: place agent runtime, git/project services, approvals, plugin loading, and wiki indexing behind main-process services; renderer consumes them through typed preload APIs.
-- Persistence model: use a relational local store for thread navigation and directory associations instead of file-name-driven discovery or ad hoc JSON blobs.
+- Persistence model: keep the current file-backed overlay store for desktop-only navigation state, and introduce heavier storage only when later units need richer cross-feature queries.
 - Milestone emphasis: prioritize thread navigation and agent/provider reality first; credential mediation stays deferred.
+- Mixed-backend thread browsing: navigation should merge available Codex and Grok threads into one recents or inbox surface, sorted by activity, with backend chips used for provenance.
+- Backend-picker scope: the first shipped picker should offer only currently available backends that advertise `createThread`, rather than introducing a broader model picker or provider settings surface.
+- Backend row labeling: use compact backend-kind chips in list rows and header metadata, while keeping the fuller backend availability list in the context rail.
 
 ### Deferred to Implementation
 
 - Exact scoring weights for Inbox ordering should be tuned while wiring real event flows rather than guessed fully in the plan.
 - Exact semantic-search backend can be finalized once the first wiki corpus and performance envelope are known.
 - Exact provider adapter edge cases, especially tool streaming and interruption behavior, should be finalized while integrating the first real provider.
+- The exact interaction pattern for the backend picker can settle during implementation as long as it stays in the sidebar masthead and exposes only available create-thread targets with clear disabled-state copy.
 
 ## High-Level Technical Design
 
@@ -310,7 +323,69 @@ flowchart TB
 
 **Status note:** Completed, with the originally planned end-to-end Playwright spec still deferred. The renderer now ships Inbox-first navigation, Recents and Directories lenses, thread detail, transcript history with pagination-aware loading, and context/sidebar refinements that make multi-directory thread work legible.
 
-- [ ] **Unit 5: Add project attachment, worktree awareness, and repo-status enrichment**
+- [x] **Unit 5: Add backend-aware thread creation and backend provenance in navigation**
+
+**Goal:** Let users create a new thread on either Codex or Grok from the existing sidebar shell, and make mixed-backend threads legible in Inbox, Recents, and Directories without opening thread detail.
+
+**Requirements:** R1-R4, R10, R21-R22
+
+**Dependencies:** Unit 4
+
+**Files:**
+- Modify: `packages/shared/src/contracts/navigation.ts`
+- Modify: `packages/agent-core/src/domain/navigation-state.ts`
+- Modify: `packages/agent-core/src/persistence/overlay-store.ts`
+- Modify: `packages/agent-core/src/persistence/migrations.ts`
+- Modify: `packages/agent-core/src/__tests__/overlay-store.test.ts`
+- Modify: `packages/agent-core/src/__tests__/refresh-reconciliation.test.ts`
+- Modify: `apps/desktop/src/main/ipc/app-server.ts`
+- Modify: `apps/desktop/src/preload/index.ts`
+- Modify: `apps/desktop/src/renderer/src/lib/desktop-api.ts`
+- Modify: `apps/desktop/src/renderer/src/App.tsx`
+- Modify: `apps/desktop/src/renderer/src/lib/useThreadNavigation.ts`
+- Modify: `apps/desktop/src/renderer/src/lib/useThreadTranscript.ts`
+- Modify: `apps/desktop/src/renderer/src/features/navigation/Sidebar.tsx`
+- Modify: `apps/desktop/src/renderer/src/features/navigation/InboxList.tsx`
+- Modify: `apps/desktop/src/renderer/src/features/navigation/RecentsList.tsx`
+- Modify: `apps/desktop/src/renderer/src/features/navigation/DirectoriesList.tsx`
+- Modify: `apps/desktop/src/renderer/src/features/thread-detail/ThreadHeader.tsx`
+- Modify: `apps/desktop/src/renderer/src/styles/app.css`
+- Test: `apps/desktop/src/main/__tests__/agent-ipc.test.ts`
+- Test: `apps/desktop/src/main/__tests__/app-server-ipc.test.ts`
+- Test: `apps/desktop/src/renderer/src/features/navigation/__tests__/sidebar.test.tsx`
+- Test: `apps/desktop/src/renderer/src/features/thread-detail/__tests__/thread-view.test.tsx`
+- Test: `apps/desktop/src/renderer/src/__tests__/app-shell.test.tsx`
+
+**Approach:**
+- Change desktop navigation from a Codex-only fetch to an aggregated snapshot that can contain threads from every available backend, while preserving `thread.source` as the read or write routing key for later transcript and run actions.
+- Update overlay persistence and migration logic so desktop-only state is keyed by backend-qualified thread identity instead of bare `threadId`; this avoids collisions when Codex and Grok emit the same thread id value.
+- Reuse the existing `AGENT_START_THREAD_CHANNEL` path and backend capability metadata for the new thread action rather than inventing a second create-thread transport.
+- Add a compact backend picker in the sidebar masthead. It should list only available backends that advertise `createThread`, surface disabled or unavailable reasons clearly, and select the new thread immediately after creation.
+- Reuse the existing thread-row chip pattern for backend provenance in Inbox, Recents, and Directories. The chip should stay compact and secondary to thread title, summary, directory chips, and branch metadata.
+- Route transcript reads, mark-seen writes, and future thread-scoped actions from the selected thread's backend source instead of assuming Codex everywhere.
+- Keep backend status and capability detail in the context rail; the list-row chip should answer only "which backend owns this thread?"
+
+**Patterns to follow:**
+- Typed preload and IPC boundaries from Units 1 and 3.
+- Existing `thread-row__chip` styling and compact sidebar metadata treatment from Unit 4.
+- Existing backend capability summaries from `apps/desktop/src/main/app-server/backend-registry.ts`.
+
+**Test scenarios:**
+- Happy path: the sidebar masthead exposes a "New thread" action that offers both Codex and Grok when both are available and create-thread capable.
+- Happy path: choosing Grok creates a Grok-backed thread, selects it immediately, reads transcript history through Grok, and shows a `Grok` chip in Inbox, Recents, and Directories.
+- Happy path: choosing Codex creates a Codex-backed thread and preserves the same selection and transcript-loading behavior.
+- Happy path: a mixed Codex/Grok snapshot sorts threads together by `updatedAt` while keeping backend provenance visible on every row.
+- Edge case: a backend that is unavailable or lacks `createThread` is visibly disabled in the picker and cannot be selected accidentally.
+- Edge case: Codex and Grok threads sharing the same `threadId` keep separate seen state, inbox membership, and extra linked-directory overlays after the migration.
+- Error path: create-thread failure leaves the existing selection intact and surfaces an actionable error near the sidebar action instead of wedging the shell.
+- Integration: selecting a Grok-backed thread and marking it seen no longer writes to Codex overlay state or falls back to Codex transcript reads.
+
+**Verification:**
+- A user can create a thread on either backend from the sidebar and can distinguish mixed-backend threads at a glance everywhere they browse them.
+
+**Status note:** Completed. The desktop now loads aggregated thread navigation across backends, keys overlay state by backend-qualified thread identity, lets users start a new Codex or Grok thread from the sidebar masthead, and shows backend chips in Inbox, Recents, Directories, and thread detail.
+
+- [ ] **Unit 6: Add project attachment, worktree awareness, and repo-status enrichment**
 
 **Goal:** Let threads attach projects after creation, distinguish Git roots from working directories, and surface branch/PR/worktree context cleanly.
 
@@ -350,7 +425,7 @@ flowchart TB
 **Verification:**
 - Users can start vague, then concretize a thread into one or more repos without reopening or recreating the thread.
 
-- [ ] **Unit 6: Introduce the first real plugin and skill runtime**
+- [ ] **Unit 7: Introduce the first real plugin and skill runtime**
 
 **Goal:** Make extensibility real enough that internal and future external capabilities can register tools, prompts, and metadata without hard-coding everything into the harness.
 
@@ -387,13 +462,13 @@ flowchart TB
 **Verification:**
 - The app can prove that capabilities are discovered through a registry rather than hard-coded directly into the renderer or harness.
 
-- [ ] **Unit 7: Add the maintained wiki and searchable memory foundation**
+- [ ] **Unit 8: Add the maintained wiki and searchable memory foundation**
 
 **Goal:** Create a first-class memory/wiki subsystem that the product maintains and the user can browse, search, and lightly edit.
 
 **Requirements:** R24-R26
 
-**Dependencies:** Unit 6
+**Dependencies:** Unit 7
 
 **Files:**
 - Create: `packages/shared/src/contracts/wiki.ts`
@@ -415,7 +490,7 @@ flowchart TB
 - Expose the wiki in the UI as inspectable and lightly editable system memory rather than a hidden settings blob.
 
 **Patterns to follow:**
-- Registry/service patterns from Units 2, 3, and 6.
+- Registry/service patterns from Units 2, 3, and 7.
 
 **Test scenarios:**
 - Happy path: creating a wiki entry makes it retrievable through lexical search.
@@ -430,10 +505,10 @@ flowchart TB
 ## System-Wide Impact
 
 - **Interaction graph:** renderer -> preload -> main IPC -> agent core services -> local store/provider/git/plugin/wiki services.
-- **Error propagation:** provider, git, search, or plugin failures should surface as thread or feature-level state without crashing the renderer or corrupting persisted thread state.
-- **State lifecycle risks:** thread runs, approvals, and directory attachments can race with navigation updates; the overlay store must remain the source of truth for desktop-only inbox and refresh state, while the app server remains the source of truth for transcript and run history.
+- **Error propagation:** provider, git, search, plugin, or create-thread failures should surface as thread or feature-level state without crashing the renderer or corrupting persisted thread state.
+- **State lifecycle risks:** thread runs, approvals, backend selection, and directory attachments can race with navigation updates; the overlay store must remain the source of truth for desktop-only inbox and refresh state, while the app server remains the source of truth for transcript and run history.
 - **API surface parity:** provider adapters, plugin manifests, wiki search interfaces, and thread IPC payloads all depend on stable shared contracts in `packages/shared`.
-- **Integration coverage:** cross-layer tests are required for provider event flow, project attachment flow, and wiki edit/search flow because unit tests alone will not prove IPC and persistence behavior.
+- **Integration coverage:** cross-layer tests are required for provider event flow, mixed-backend thread creation, project attachment flow, and wiki edit/search flow because unit tests alone will not prove IPC and persistence behavior.
 - **Unchanged invariants:** credential mediation stays out of scope; thread-first navigation remains the hero even as plugins and wiki memory are added.
 
 ## Risk Analysis & Mitigation
@@ -444,6 +519,7 @@ flowchart TB
 | Electron IPC boundary becomes ad hoc and insecure | Medium | High | Centralize typed preload APIs and IPC contracts in shared packages from Unit 1 onward |
 | Many-to-many directory modeling becomes confusing in UI | Medium | High | Treat persisted thread identity as canonical and add list/detail visibility tests for multi-directory cases |
 | Provider abstraction collapses into Grok-specific behavior | Medium | High | Implement a second responses-style adapter in the same milestone to force normalization early |
+| Mixed-backend overlay migration corrupts seen state or extra directory links | Medium | High | Migrate to backend-qualified overlay identity, add collision-focused tests, and preserve legacy Codex-only records during upgrade |
 | Inbox becomes noisy and fails the product promise | High | Medium | Persist explicit inbox signals and keep ranking logic isolated and testable rather than buried in UI components |
 | Wiki semantic search becomes a rabbit hole | Medium | Medium | Keep semantic search behind an interface and ship lexical search as the guaranteed fallback |
 
@@ -451,11 +527,16 @@ flowchart TB
 
 - Add onboarding/setup instructions to the root `README.md` as Unit 1 lands.
 - Add a short architecture note once Units 2 and 3 land, covering process boundaries and shared contracts.
-- Add user-facing documentation for plugin discovery and wiki behavior once Units 6 and 7 land.
+- Document the desktop navigation contract once Unit 5 lands, especially mixed-backend thread identity and backend-qualified overlay keys.
+- Add user-facing documentation for plugin discovery and wiki behavior once Units 7 and 8 land.
 
 ## Sources & References
 
 - **Origin document:** [docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md](../brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md)
+- Related code: `apps/desktop/src/main/app-server/backend-registry.ts`
+- Related code: `apps/desktop/src/renderer/src/lib/useThreadNavigation.ts`
+- Related code: `apps/desktop/src/renderer/src/lib/useThreadTranscript.ts`
+- Related code: `packages/agent-core/src/persistence/overlay-store.ts`
 - External docs: [Electron process model](https://www.electronjs.org/docs/latest/tutorial/process-model)
 - External docs: [Electron preload](https://www.electronjs.org/docs/latest/tutorial/tutorial-preload)
 - External docs: [Electron IPC](https://www.electronjs.org/docs/latest/tutorial/ipc)

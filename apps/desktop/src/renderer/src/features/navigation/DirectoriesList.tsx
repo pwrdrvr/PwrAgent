@@ -1,8 +1,10 @@
 import type { NavigationThreadSummary } from "@pwragnt/shared";
+import { buildThreadIdentityKey } from "@pwragnt/shared";
+import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 
 type DirectoriesListProps = {
-  selectedThreadId?: string;
+  selectedThreadKey?: string;
   threads: NavigationThreadSummary[];
   onSelectThread: (thread: NavigationThreadSummary) => void;
 };
@@ -48,10 +50,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
           <div className="sidebar-list sidebar-list--compact" role="list">
             {group.threads.map((thread) => {
-              const selected = thread.id === props.selectedThreadId;
+              const selected =
+                buildThreadIdentityKey(thread.source, thread.id) === props.selectedThreadKey;
               return (
                 <button
-                  key={`${group.id}:${thread.id}`}
+                  key={`${group.id}:${buildThreadIdentityKey(thread.source, thread.id)}`}
                   aria-pressed={selected}
                   className={`thread-row thread-row--compact${selected ? " is-selected" : ""}`}
                   type="button"
@@ -59,6 +62,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 >
                   <span className="thread-row__header">
                     <span className="thread-row__title">{thread.title}</span>
+                    <span className="thread-row__chip thread-row__chip--backend">
+                      {formatBackendLabel(thread.source)}
+                    </span>
                     <span className="thread-row__time">
                       {formatRelativeTime(thread.updatedAt)}
                     </span>

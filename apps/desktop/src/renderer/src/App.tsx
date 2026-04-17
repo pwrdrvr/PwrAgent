@@ -11,9 +11,8 @@ export function App() {
   const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);
   const transcript = useThreadTranscript({
-    backend: navigation.selectedThread?.source,
     desktopApi,
-    threadId: navigation.selectedThread?.id
+    thread: navigation.selectedThread
   });
   const skills = useThreadSkills({
     desktopApi,
@@ -24,14 +23,18 @@ export function App() {
     <div className="app-shell">
       <Sidebar
         browseMode={navigation.browseMode}
+        backends={backendSummaries.backends}
+        createThreadError={navigation.createThreadError}
         error={navigation.error}
         fetchedAt={navigation.snapshot?.fetchedAt}
         inboxThreads={navigation.inboxThreads}
         loading={navigation.loading}
+        creatingThreadBackend={navigation.creatingThreadBackend}
         refreshing={navigation.refreshing}
-        selectedThreadId={navigation.selectedThread?.id}
+        selectedThreadKey={navigation.selectedThreadKey}
         threads={navigation.threads}
         onBrowseModeChange={navigation.setBrowseMode}
+        onCreateThread={navigation.createThread}
         onRefresh={navigation.refresh}
         onSelectThread={navigation.selectThread}
       />

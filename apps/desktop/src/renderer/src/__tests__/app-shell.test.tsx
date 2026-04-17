@@ -104,11 +104,11 @@ describe("App", () => {
                   name: "frontend-design",
                   description: "Design and verify renderer UI work.",
                   path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
-                  enabled: true,
-                },
-              ],
-            },
-          ],
+                  enabled: true
+                }
+              ]
+            }
+          ]
         }),
         listBackends: async () => ({
           fetchedAt: Date.now(),
@@ -117,13 +117,13 @@ describe("App", () => {
               kind: "codex",
               label: "Codex app server",
               available: true,
-              methods: ["thread/list", "thread/read", "skills/list"],
+              methods: ["thread/list", "thread/read", "skills/list", "turn/start"],
               capabilities: {
                 listThreads: true,
                 createThread: false,
                 resumeThread: true,
                 readThread: true,
-                startTurn: false,
+                startTurn: true,
                 interruptTurn: false,
                 steerTurn: false,
                 transcriptPagination: true,
@@ -154,10 +154,10 @@ describe("App", () => {
           ]
         }),
         getNavigationSnapshot: async () => ({
-          backend: "codex",
+          backend: "all",
           fetchedAt: Date.now(),
           unchanged: false,
-          inboxThreadIds: ["thread-1"],
+          inboxThreadKeys: ["codex:thread-1"],
           threads: [
             {
               id: "thread-1",
@@ -176,7 +176,7 @@ describe("App", () => {
               ],
               inbox: {
                 inInbox: true,
-                reason: "new-thread",
+                reason: "new-thread"
               },
               updatedAt: Date.now()
             }
@@ -185,7 +185,7 @@ describe("App", () => {
         markThreadSeen: async () => ({
           backend: "codex",
           threadId: "thread-1",
-          seenAt: Date.now(),
+          seenAt: Date.now()
         }),
         onWindowFocus: () => () => undefined,
         readThread: async () => {
@@ -202,7 +202,7 @@ describe("App", () => {
         startTurn: async () => ({
           backend: "codex",
           threadId: "thread-1",
-          runId: "turn-1",
+          runId: "turn-1"
         }),
         onAgentEvent: () => () => undefined,
         versions: {
@@ -225,6 +225,7 @@ describe("App", () => {
     expect(
       screen.getByRole("button", { name: "Refresh threads" })
     ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New thread" })).toBeInTheDocument();
     expect(
       await screen.findByRole("heading", {
         level: 2,
@@ -264,7 +265,7 @@ describe("App", () => {
     expect(screen.getByText("darwin")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(
-      screen.queryByText("This thread's backend is read-only right now. You can keep drafting, but send is unavailable.")
+      screen.queryByText("This thread's backend is unavailable right now. You can keep drafting, but send is unavailable.")
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 
@@ -293,5 +294,383 @@ describe("App", () => {
     expect(screen.getByText("3 messages")).toBeInTheDocument();
 
     resolveRefreshRead?.(transcriptResponse);
+  });
+
+  it("creates and sends on a new Grok thread", async () => {
+    const startThread = vi.fn(async ({ backend }: { backend: "codex" | "grok" }) => ({
+      backend,
+      threadId: "thread-2"
+    }));
+    const startTurn = vi.fn(
+      async ({
+        backend,
+        threadId
+      }: {
+        backend: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend,
+        threadId,
+        runId: "turn-1"
+      })
+    );
+    let navigationCallCount = 0;
+
+    Object.defineProperty(window, "pwragnt", {
+      configurable: true,
+      value: {
+        ping: () => "pong",
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read"],
+              capabilities: {
+                listThreads: true,
+                createThread: false,
+                resumeThread: true,
+                readThread: true,
+                startTurn: false,
+                interruptTurn: false,
+                steerTurn: false,
+                transcriptPagination: true,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: true
+              }
+            },
+            {
+              kind: "grok",
+              label: "Grok app server",
+              available: true,
+              methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: true,
+                steerTurn: true,
+                transcriptPagination: false,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: false
+              }
+            }
+          ]
+        }),
+        getNavigationSnapshot: async () => {
+          navigationCallCount += 1;
+
+          if (navigationCallCount < 2) {
+            return {
+              backend: "all",
+              fetchedAt: Date.now(),
+              unchanged: false,
+              inboxThreadKeys: ["codex:thread-1"],
+              threads: [
+                {
+                  id: "thread-1",
+                  title: "Build Codex client",
+                  summary: "Wire the app-server transport and list threads",
+                  source: "codex",
+                  gitBranch: "codex/build-codex-client",
+                  linkedDirectories: [],
+                  inbox: {
+                    inInbox: true,
+                    reason: "new-thread"
+                  },
+                  updatedAt: Date.now()
+                }
+              ]
+            };
+          }
+
+          return {
+            backend: "all",
+            fetchedAt: Date.now(),
+            unchanged: false,
+            inboxThreadKeys: ["grok:thread-2"],
+            threads: [
+              {
+                id: "thread-2",
+                title: "Investigate Grok thread",
+                summary: "Start a new thread on Grok",
+                source: "grok",
+                linkedDirectories: [],
+                inbox: {
+                  inInbox: true,
+                  reason: "new-thread"
+                },
+                updatedAt: Date.now()
+              },
+              {
+                id: "thread-1",
+                title: "Build Codex client",
+                summary: "Wire the app-server transport and list threads",
+                source: "codex",
+                linkedDirectories: [],
+                inbox: {
+                  inInbox: false
+                },
+                updatedAt: Date.now() - 1000
+              }
+            ]
+          };
+        },
+        markThreadSeen: async ({
+          backend,
+          threadId
+        }: {
+          backend: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend,
+          threadId,
+          seenAt: Date.now()
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        readThread: async ({
+          backend,
+          threadId
+        }: {
+          backend: "codex" | "grok";
+          threadId: string;
+        }) => {
+          const userText =
+            backend === "grok"
+              ? "Start a Grok-backed thread from the sidebar."
+              : "Open the desktop plan and build the Codex client.";
+          const assistantText =
+            backend === "grok"
+              ? "The Grok thread is live and selected."
+              : "The Codex client is wired and the thread browser is live.";
+
+          return {
+            backend,
+            fetchedAt: Date.now(),
+            threadId,
+            replay: {
+              entries: [
+                {
+                  type: "message",
+                  id: "message-1",
+                  role: "user",
+                  text: userText
+                },
+                {
+                  type: "activity",
+                  id: "activity-1",
+                  summary: "Explored 2 files, ran 1 command",
+                  details: []
+                },
+                {
+                  type: "message",
+                  id: "message-2",
+                  role: "assistant",
+                  text: assistantText
+                }
+              ],
+              messages: [
+                {
+                  id: "message-1",
+                  role: "user",
+                  text: userText
+                },
+                {
+                  id: "message-2",
+                  role: "assistant",
+                  text: assistantText
+                }
+              ],
+              pagination: {
+                supportsPagination: false,
+                hasPreviousPage: false
+              }
+            }
+          };
+        },
+        startThread,
+        startTurn,
+        platform: "darwin",
+        versions: {
+          electron: "41.2.1"
+        }
+      }
+    });
+
+    render(<App />);
+
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Build Codex client"
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "New thread" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Create thread with Grok" }));
+
+    expect(startThread).toHaveBeenCalledWith({ backend: "grok" });
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "Investigate Grok thread" })
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Grok").length).toBeGreaterThan(0);
+    expect(
+      await screen.findByText("The Grok thread is live and selected.")
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: {
+        value: "Can you check the plugin sdk boundary?"
+      }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(startTurn).toHaveBeenCalledWith({
+      backend: "grok",
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Can you check the plugin sdk boundary?" }]
+    });
+  });
+
+  it("keeps a newly created Codex thread selected when thread/list lags behind creation", async () => {
+    const startThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-new"
+    }));
+    const startTurn = vi.fn(
+      async ({
+        backend,
+        threadId
+      }: {
+        backend: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend,
+        threadId,
+        runId: "turn-1"
+      })
+    );
+
+    Object.defineProperty(window, "pwragnt", {
+      configurable: true,
+      value: {
+        ping: () => "pong",
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: true,
+                steerTurn: false,
+                transcriptPagination: true,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: true
+              }
+            }
+          ]
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all",
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:thread-existing"],
+          threads: [
+            {
+              id: "thread-existing",
+              title: "Existing Codex thread",
+              summary: "Already in the list",
+              source: "codex",
+              linkedDirectories: [],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread"
+              },
+              updatedAt: Date.now()
+            }
+          ]
+        }),
+        markThreadSeen: async ({
+          backend,
+          threadId
+        }: {
+          backend: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend,
+          threadId,
+          seenAt: Date.now()
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        readThread: async ({
+          backend,
+          threadId
+        }: {
+          backend: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend,
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [],
+            messages: [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false
+            }
+          }
+        }),
+        startThread,
+        startTurn,
+        platform: "darwin",
+        versions: {
+          electron: "41.2.1"
+        }
+      }
+    });
+
+    render(<App />);
+
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Existing Codex thread"
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "New thread" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Create thread with Codex" }));
+
+    expect(startThread).toHaveBeenCalledWith({ backend: "codex" });
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "Untitled thread" })
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: {
+        value: "hello new codex thread"
+      }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(startTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-new",
+      input: [{ type: "text", text: "hello new codex thread" }]
+    });
   });
 });

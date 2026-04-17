@@ -121,6 +121,7 @@ describe("ThreadView", () => {
     expect(
       screen.getByRole("heading", { level: 2, name: "Plan the app-server protocol" })
     ).toBeInTheDocument();
+    expect(screen.getByText("Codex")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open context rail" }));
 
     expect(screen.getByText("No linked directory")).toBeInTheDocument();

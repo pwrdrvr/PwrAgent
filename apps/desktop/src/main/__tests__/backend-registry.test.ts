@@ -18,6 +18,14 @@ class MockBackendClient {
     before?: string;
     limit?: number;
   };
+  lastStartThreadParams?: {
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+  };
 
   constructor(
     private readonly options: {
@@ -80,7 +88,15 @@ class MockBackendClient {
     };
   }
 
-  async startThread(): Promise<{ threadId: string }> {
+  async startThread(params?: {
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+  }): Promise<{ threadId: string }> {
+    this.lastStartThreadParams = params;
     return { threadId: "thread-1" };
   }
 
@@ -158,6 +174,60 @@ describe("DesktopBackendRegistry", () => {
         unavailableReason: "grok app server unavailable: XAI_API_KEY is not set",
       },
     ]);
+
+    await registry.close();
+  });
+
+  it("assumes Codex can create threads when initialize omits methods", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: {
+          serverInfo: { name: "Codex App Server", version: "0.120.0" },
+        },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+    });
+
+    const response = await registry.listBackends({ includeUnavailable: true });
+
+    expect(response.backends[0]).toMatchObject({
+      kind: "codex",
+      available: true,
+      methods: [],
+      capabilities: {
+        createThread: true,
+        startTurn: true,
+      },
+    });
+
+    await registry.close();
+  });
+
+  it("creates a scratch workspace for Codex thread creation when cwd is omitted", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      createScratchProjectDirectory: async () => "/Users/test/.pwragnt/projects/2026-04-16-a1b2c3",
+    });
+
+    const response = await registry.startThread({
+      backend: "codex",
+    });
+
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(codexClient.lastStartThreadParams).toEqual({
+      cwd: "/Users/test/.pwragnt/projects/2026-04-16-a1b2c3",
+    });
 
     await registry.close();
   });

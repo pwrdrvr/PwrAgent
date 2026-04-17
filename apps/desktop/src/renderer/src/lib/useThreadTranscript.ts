@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
-  AppServerBackendKind,
   AppServerReadThreadResponse,
   AppServerThreadEntry,
+  AppServerThreadMessage,
   AppServerThreadMessageEntry,
-  AppServerThreadMessage
+  NavigationThreadSummary
 } from "@pwragnt/shared";
 import type { DesktopApi } from "./desktop-api";
 
@@ -22,9 +22,8 @@ function mergeItems<T extends { id: string }>(
 }
 
 export function useThreadTranscript(params: {
-  backend?: AppServerBackendKind;
   desktopApi?: DesktopApi;
-  threadId?: string;
+  thread?: NavigationThreadSummary;
 }): {
   addOptimisticUserMessage: (text: string) => string;
   error?: string;
@@ -37,7 +36,7 @@ export function useThreadTranscript(params: {
   refresh: () => Promise<void>;
   response?: AppServerReadThreadResponse;
 } {
-  const { backend, desktopApi, threadId } = params;
+  const { desktopApi, thread } = params;
   const [response, setResponse] = useState<AppServerReadThreadResponse>();
   const [optimisticEntries, setOptimisticEntries] = useState<AppServerThreadMessageEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -47,10 +46,10 @@ export function useThreadTranscript(params: {
 
   useEffect(() => {
     setOptimisticEntries([]);
-  }, [threadId]);
+  }, [thread?.id]);
 
   const loadLatest = useCallback(async (): Promise<void> => {
-    if (!threadId) {
+    if (!thread) {
       setResponse(undefined);
       setError(undefined);
       setLoading(false);
@@ -72,13 +71,13 @@ export function useThreadTranscript(params: {
     setLoading(true);
     setError(undefined);
     setResponse((current) =>
-      current?.threadId === threadId ? current : undefined
+      current?.threadId === thread.id ? current : undefined
     );
 
     try {
       const nextResponse = await desktopApi.readThread({
-        backend,
-        threadId
+        backend: thread.source,
+        threadId: thread.id
       });
       if (requestVersionRef.current !== requestVersion) {
         return;
@@ -95,7 +94,7 @@ export function useThreadTranscript(params: {
         setLoading(false);
       }
     }
-  }, [backend, desktopApi, threadId]);
+  }, [desktopApi, thread]);
 
   useEffect(() => {
     void loadLatest();
@@ -103,7 +102,7 @@ export function useThreadTranscript(params: {
 
   const loadOlder = useCallback(async (): Promise<void> => {
     if (
-      !threadId ||
+      !thread ||
       !desktopApi?.readThread ||
       !response?.replay.pagination.supportsPagination ||
       !response.replay.pagination.hasPreviousPage ||
@@ -118,8 +117,8 @@ export function useThreadTranscript(params: {
 
     try {
       const olderResponse = await desktopApi.readThread({
-        backend,
-        threadId,
+        backend: thread.source,
+        threadId: thread.id,
         before: response.replay.pagination.previousCursor
       });
       if (requestVersionRef.current !== requestVersion) {
@@ -149,7 +148,7 @@ export function useThreadTranscript(params: {
         setLoadingMore(false);
       }
     }
-  }, [backend, desktopApi, response, threadId]);
+  }, [desktopApi, response, thread]);
 
   const addOptimisticUserMessage = useCallback((text: string): string => {
     const id = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
