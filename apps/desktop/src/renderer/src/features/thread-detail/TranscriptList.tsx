@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type {
   AppServerPendingRequestNotification,
   AppServerThreadEntry,
+  AppServerThreadImagePart,
   AppServerThreadMessageEntry,
   AppServerSkillSummary,
   AppServerThreadReplayPagination
@@ -22,6 +23,7 @@ type TranscriptListProps = {
   pagination?: AppServerThreadReplayPagination;
   threadId?: string;
   skills?: AppServerSkillSummary[];
+  onOpenImage?: (image: AppServerThreadImagePart) => void;
   onRespondToPendingRequest?: (decision: "approve" | "decline" | "cancel") => Promise<void>;
   onLoadOlder: () => Promise<void>;
 };
@@ -219,7 +221,12 @@ export function TranscriptList(props: TranscriptListProps) {
           entry.type === "activity" ? (
             <TranscriptActivity key={entry.id} entry={entry} />
           ) : (
-            <TranscriptMessage key={entry.id} message={entry} skills={skills} />
+            <TranscriptMessage
+              key={entry.id}
+              message={entry}
+              skills={skills}
+              onOpenImage={props.onOpenImage}
+            />
           )
         )}
         {props.pendingAssistantMessage ? (
@@ -227,6 +234,7 @@ export function TranscriptList(props: TranscriptListProps) {
             key={props.pendingAssistantMessage.id}
             message={props.pendingAssistantMessage}
             skills={skills}
+            onOpenImage={props.onOpenImage}
           />
         ) : null}
         {props.pendingStatusText ? (

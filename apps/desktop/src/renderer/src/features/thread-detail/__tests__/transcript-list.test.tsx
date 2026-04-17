@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptList } from "../TranscriptList";
 
@@ -45,6 +45,7 @@ describe("TranscriptList", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -178,6 +179,64 @@ describe("TranscriptList", () => {
     expect(
       screen.getByText("$frontend-design").closest("article")
     ).toHaveClass("transcript-message--user");
+  });
+
+  it("renders inline image previews and opens them on demand", () => {
+    const onOpenImage = vi.fn();
+
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Describe this image",
+            parts: [
+              {
+                type: "text",
+                text: "Describe this image"
+              },
+              {
+                type: "image",
+                url: "file:///tmp/screenshot.png",
+                alt: "Transcript screenshot"
+              }
+            ]
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "",
+            parts: [
+              {
+                type: "image",
+                url: "https://example.com/thread-image.png",
+                alt: "Assistant image"
+              }
+            ]
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onOpenImage={onOpenImage}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByText("Describe this image")).toBeInTheDocument();
+    expect(screen.getByAltText("Transcript screenshot")).toBeInTheDocument();
+    expect(screen.getByAltText("Assistant image")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByAltText("Transcript screenshot").closest("button")!);
+
+    expect(onOpenImage).toHaveBeenCalledWith({
+      type: "image",
+      url: "file:///tmp/screenshot.png",
+      alt: "Transcript screenshot"
+    });
   });
 
   it("renders pending status inside the transcript list", () => {

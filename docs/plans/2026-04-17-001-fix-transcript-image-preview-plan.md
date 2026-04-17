@@ -1,7 +1,7 @@
 ---
 title: fix: Render transcript image previews in desktop chat
 type: fix
-status: active
+status: completed
 date: 2026-04-17
 ---
 
@@ -104,7 +104,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Extend transcript normalization to preserve image parts**
+- [x] **Unit 1: Extend transcript normalization to preserve image parts**
 
 **Goal:** Keep image-bearing Codex transcript messages in the replay instead of flattening them to text-only or dropping them outright.
 
@@ -138,7 +138,7 @@ flowchart TB
 **Verification:**
 - `readThread()` returns stable transcript entries for image-bearing Codex turns, and image-only messages no longer disappear from replay data.
 
-- [ ] **Unit 2: Render inline image previews inside transcript messages**
+- [x] **Unit 2: Render inline image previews inside transcript messages**
 
 **Goal:** Show image parts inside transcript bubbles without regressing existing text, markdown-like formatting, or skill-chip behavior.
 
@@ -173,7 +173,7 @@ flowchart TB
 **Verification:**
 - Transcript rows visibly include image previews wherever the normalized replay contains image parts, while text-only messages continue to render unchanged.
 
-- [ ] **Unit 3: Add thread-scoped image expansion and dismissal behavior**
+- [x] **Unit 3: Add thread-scoped image expansion and dismissal behavior**
 
 **Goal:** Let users enlarge transcript images from thread detail without leaving the conversation or destabilizing transcript state.
 
