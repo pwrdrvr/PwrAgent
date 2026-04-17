@@ -198,6 +198,7 @@ describe("DesktopBackendRegistry", () => {
       methods: [],
       capabilities: {
         createThread: true,
+        startTurn: true,
       },
     });
 

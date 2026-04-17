@@ -1425,6 +1425,12 @@ textarea {
   justify-content: flex-end;
 }
 
+.composer__error {
+  margin: 0 16px;
+  color: var(--danger-text);
+  font-size: 13px;
+}
+
 .thread-empty-state {
   display: flex;
   flex-direction: column;

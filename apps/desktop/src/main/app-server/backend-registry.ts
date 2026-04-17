@@ -64,7 +64,7 @@ const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
 
 function buildCapabilities(methods: string[], backend: AppServerBackendKind): BackendCapabilities {
   const supported = new Set(methods);
-  const assumeCodexCreateThread = backend === "codex" && methods.length === 0;
+  const assumeCodexAppServerSurface = backend === "codex" && methods.length === 0;
 
   return {
     listThreads:
@@ -72,10 +72,10 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     createThread:
       supported.has("thread/start") ||
       supported.has("thread/new") ||
-      assumeCodexCreateThread,
+      assumeCodexAppServerSurface,
     resumeThread: supported.has("thread/resume"),
     readThread: supported.has("thread/read"),
-    startTurn: supported.has("turn/start"),
+    startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
     interruptTurn: supported.has("turn/interrupt"),
     steerTurn: supported.has("turn/steer"),
     transcriptPagination: false,
