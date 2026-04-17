@@ -45,6 +45,7 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
+    expect(screen.getByLabelText("Reply")).toHaveValue("Use $frontend-design");
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 

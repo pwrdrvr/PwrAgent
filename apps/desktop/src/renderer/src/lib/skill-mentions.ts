@@ -13,12 +13,23 @@ export type SkillMentionPart =
     };
 
 const SKILL_MENTION_PATTERN = /\[(\$[^\]\r\n]+)\]\(([^)\r\n]+)\)/g;
+const SKILL_TOKEN_BOUNDARY = "(?=$|\\s|[.,!?;:])";
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function buildSkillLabelToken(
+  skill: Pick<AppServerSkillSummary, "name">
+): string {
+  return `$${skill.name}`;
+}
 
 export function buildSkillMentionMarkdown(
   skill: Pick<AppServerSkillSummary, "name" | "path">
 ): string {
   if (!skill.path) {
-    return `$${skill.name}`;
+    return buildSkillLabelToken(skill);
   }
 
   return `[$${skill.name}](${skill.path})`;
@@ -73,19 +84,13 @@ export function listMentionedSkills(
   text: string,
   skills: AppServerSkillSummary[]
 ): AppServerSkillSummary[] {
-  const skillsByPath = new Map(
-    skills
-      .filter((skill): skill is AppServerSkillSummary & { path: string } => Boolean(skill.path))
-      .map((skill) => [skill.path, skill])
-  );
-
   const mentioned = new Map<string, AppServerSkillSummary>();
   for (const part of parseSkillMentionParts(text)) {
     if (part.type !== "skill") {
       continue;
     }
 
-    const existing = skillsByPath.get(part.path);
+    const existing = skills.find((skill) => skill.path === part.path);
     const key = part.path || part.name;
     mentioned.set(
       key,
@@ -94,6 +99,16 @@ export function listMentionedSkills(
         path: part.path,
       }
     );
+  }
+
+  for (const skill of skills) {
+    const token = buildSkillLabelToken(skill);
+    const pattern = new RegExp(`(^|\\s)${escapeRegExp(token)}${SKILL_TOKEN_BOUNDARY}`);
+    if (!pattern.test(text)) {
+      continue;
+    }
+
+    mentioned.set(skill.path ?? skill.name, skill);
   }
 
   return [...mentioned.values()];
@@ -118,9 +133,9 @@ export function findSkillTrigger(text: string, caret: number): {
   };
 }
 
-export function insertSkillMention(params: {
+export function insertSkillLabel(params: {
   draft: string;
-  skill: Pick<AppServerSkillSummary, "name" | "path">;
+  skill: Pick<AppServerSkillSummary, "name">;
   selectionEnd: number;
   selectionStart: number;
 }): {
@@ -132,7 +147,7 @@ export function insertSkillMention(params: {
     return undefined;
   }
 
-  const mention = buildSkillMentionMarkdown(params.skill);
+  const mention = buildSkillLabelToken(params.skill);
   const before = params.draft.slice(0, trigger.start);
   const after = params.draft.slice(Math.max(trigger.end, params.selectionEnd));
   const needsTrailingSpace = after.length > 0 && !/^\s/.test(after);
@@ -142,6 +157,30 @@ export function insertSkillMention(params: {
     nextDraft,
     nextSelection: before.length + mention.length + (needsTrailingSpace ? 1 : 0),
   };
+}
+
+export function hydrateSkillLabelsWithMarkdown(
+  text: string,
+  skills: AppServerSkillSummary[]
+): string {
+  let output = text;
+
+  for (const skill of skills) {
+    if (!skill.path) {
+      continue;
+    }
+
+    const token = buildSkillLabelToken(skill);
+    const pattern = new RegExp(
+      `(^|\\s)${escapeRegExp(token)}${SKILL_TOKEN_BOUNDARY}`,
+      "g"
+    );
+    output = output.replace(pattern, (_match, prefix: string) => {
+      return `${prefix}${buildSkillMentionMarkdown(skill)}`;
+    });
+  }
+
+  return output;
 }
 
 export function buildSkillTooltip(skill: AppServerSkillSummary): string {

@@ -3,7 +3,8 @@ import type { AppServerSkillSummary, NavigationThreadSummary } from "@pwragnt/sh
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   findSkillTrigger,
-  insertSkillMention,
+  hydrateSkillLabelsWithMarkdown,
+  insertSkillLabel,
   listMentionedSkills,
 } from "../../lib/skill-mentions";
 import { SkillChip } from "./SkillChip";
@@ -88,7 +89,7 @@ export function Composer(props: ComposerProps) {
   }, [props.desktopApi, props.onRefresh, props.thread]);
 
   const submitTurn = async (): Promise<void> => {
-    const text = draft.trim();
+    const text = hydrateSkillLabelsWithMarkdown(draft.trim(), mentionedSkills);
     if (!text || !props.thread || !props.desktopApi?.startTurn || props.disabled) {
       return;
     }
@@ -113,11 +114,11 @@ export function Composer(props: ComposerProps) {
   };
 
   const applySkill = (skill: AppServerSkillSummary): void => {
-    if (!inputRef.current || !skill.path) {
+    if (!inputRef.current) {
       return;
     }
 
-    const inserted = insertSkillMention({
+    const inserted = insertSkillLabel({
       draft,
       skill,
       selectionStart: inputRef.current.selectionStart ?? draft.length,

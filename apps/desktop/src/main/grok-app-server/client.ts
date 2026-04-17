@@ -368,11 +368,6 @@ export class GrokAppServerClient {
     );
   }
 
-  async readThread(params: {
-    threadId: string;
-    before?: string;
-    limit?: number;
-  }): Promise<AppServerThreadReplay> {
   async listSkills(params?: {
     cwd?: string;
     cwds?: string[];

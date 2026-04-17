@@ -1,5 +1,6 @@
-import type { AppServerThreadMessageEntry } from "@pwragnt/shared";
+import type {
   AppServerSkillSummary,
+  AppServerThreadMessageEntry,
 } from "@pwragnt/shared";
 import { SkillChip } from "../composer/SkillChip";
 import { parseSkillMentionParts } from "../../lib/skill-mentions";
