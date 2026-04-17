@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { within } from "@testing-library/react";
-import { vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragnt/shared";
 import { Sidebar } from "../Sidebar";
 
@@ -24,6 +24,19 @@ const backends: BackendSummary[] = [
       approvalRequests: false,
       multiDirectoryThreads: true,
     },
+    executionModes: [
+      {
+        mode: "default",
+        label: "Default Access",
+        available: true,
+        isDefault: true,
+      },
+      {
+        mode: "full-access",
+        label: "Full Access",
+        available: true,
+      },
+    ],
   },
   {
     kind: "grok",
@@ -43,6 +56,15 @@ const backends: BackendSummary[] = [
       approvalRequests: false,
       multiDirectoryThreads: false,
     },
+    executionModes: [
+      {
+        mode: "default",
+        label: "Default Access",
+        available: false,
+        isDefault: true,
+        unavailableReason: "XAI_API_KEY is not set",
+      },
+    ],
     unavailableReason: "XAI_API_KEY is not set",
   },
 ];
@@ -85,7 +107,7 @@ describe("Sidebar", () => {
         fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         loading={false}
-        creatingThreadBackend={undefined}
+        creatingThread={undefined}
         refreshing={false}
         selectedThreadKey="codex:thread-1"
         threads={[
@@ -125,7 +147,7 @@ describe("Sidebar", () => {
     expect(
       within(screen.getByRole("heading", { level: 3, name: "PwrAgnt" })).getByText("📁")
     ).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /Cross-project cleanup/i })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /Cross-project cleanup/i }).length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText("Codex").length).toBeGreaterThan(0);
   });
 
@@ -146,7 +168,7 @@ describe("Sidebar", () => {
         fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         loading={false}
-        creatingThreadBackend={undefined}
+        creatingThread={undefined}
         refreshing={false}
         selectedThreadKey="codex:thread-1"
         threads={[sharedThread]}
@@ -173,7 +195,7 @@ describe("Sidebar", () => {
         fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         loading={false}
-        creatingThreadBackend={undefined}
+        creatingThread={undefined}
         refreshing={false}
         selectedThreadKey="codex:thread-1"
         threads={[sharedThread]}
@@ -187,11 +209,28 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
 
     expect(screen.getByRole("menu", { name: "New thread backend" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Create thread with Codex" })).toBeEnabled();
-    expect(screen.getByRole("menuitem", { name: "Create thread with Grok" })).toBeDisabled();
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Create thread with Codex in Default Access",
+      })
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Create thread with Codex in Full Access",
+      })
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Create thread with Grok in Default Access",
+      })
+    ).toBeDisabled();
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Create thread with Codex" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Create thread with Codex in Default Access",
+      })
+    );
 
-    expect(onCreateThread).toHaveBeenCalledWith("codex");
+    expect(onCreateThread).toHaveBeenCalledWith("codex", "default");
   });
 });

@@ -13,6 +13,7 @@ type ComposerProps = {
   addOptimisticUserMessage?: (text: string) => string;
   desktopApi?: DesktopApi;
   disabled?: boolean;
+  pendingRequestActive?: boolean;
   onPendingStatusChange?: (status?: string) => void;
   onRefresh: () => Promise<void>;
   removeOptimisticMessage?: (id: string) => void;
@@ -24,14 +25,21 @@ type ComposerProps = {
 
 export function Composer(props: ComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const activeRunIdRef = useRef<string | undefined>(undefined);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [interrupting, setInterrupting] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | undefined>(undefined);
   const [sendError, setSendError] = useState<string>();
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
 
   const selectionStart = inputRef.current?.selectionStart ?? draft.length;
   const selectionEnd = inputRef.current?.selectionEnd ?? draft.length;
+  const updateActiveRunId = (nextRunId?: string): void => {
+    activeRunIdRef.current = nextRunId;
+    setActiveRunId(nextRunId);
+  };
   const trigger = findSkillTrigger(draft, selectionStart);
   const filteredSkills = useMemo(() => {
     if (!trigger) {
@@ -66,17 +74,49 @@ export function Composer(props: ComposerProps) {
   }, [trigger?.query, props.thread?.id]);
 
   useEffect(() => {
+    setSending(false);
+    setInterrupting(false);
+    updateActiveRunId(undefined);
+    setActiveOptimisticMessageId(undefined);
+  }, [props.thread?.id, props.thread?.source]);
+
+  useEffect(() => {
     if (!props.desktopApi?.onAgentEvent || !props.thread) {
       return;
     }
 
     return props.desktopApi.onAgentEvent((event) => {
+      const notificationThreadId =
+        "threadId" in event.notification.params &&
+        typeof event.notification.params.threadId === "string"
+          ? event.notification.params.threadId
+          : undefined;
+      const statusRecord =
+        event.notification.method === "thread/status/changed" &&
+        typeof event.notification.params.status === "object" &&
+        event.notification.params.status !== null
+          ? (event.notification.params.status as { type?: unknown })
+          : undefined;
+      const startedTurnRecord =
+        event.notification.method === "turn/started" &&
+        typeof event.notification.params.turn === "object" &&
+        event.notification.params.turn !== null
+          ? (event.notification.params.turn as { id?: unknown })
+          : undefined;
+
       if (event.backend !== props.thread?.source) {
         return;
       }
 
-      if (event.notification.params.threadId !== props.thread.id) {
+      if (notificationThreadId !== props.thread.id) {
         return;
+      }
+
+      if (
+        event.notification.method === "turn/started" &&
+        typeof startedTurnRecord?.id === "string"
+      ) {
+        updateActiveRunId(startedTurnRecord.id);
       }
 
       if (
@@ -93,6 +133,21 @@ export function Composer(props: ComposerProps) {
         }
         props.onPendingStatusChange?.(undefined);
         setSending(false);
+        setInterrupting(false);
+        updateActiveRunId(undefined);
+        setActiveOptimisticMessageId(undefined);
+        void props.onRefresh();
+        return;
+      }
+
+      if (
+        event.notification.method === "thread/status/changed" &&
+        statusRecord?.type === "idle"
+      ) {
+        props.onPendingStatusChange?.(undefined);
+        setSending(false);
+        setInterrupting(false);
+        updateActiveRunId(undefined);
         setActiveOptimisticMessageId(undefined);
         void props.onRefresh();
       }
@@ -124,6 +179,7 @@ export function Composer(props: ComposerProps) {
         threadId: props.thread.id,
         input: [{ type: "text", text }],
       });
+      updateActiveRunId(response.runId);
       setDraft("");
       await props.onRefresh();
     } catch (error) {
@@ -132,7 +188,39 @@ export function Composer(props: ComposerProps) {
       }
       props.onPendingStatusChange?.(undefined);
       setSending(false);
+      setInterrupting(false);
+      updateActiveRunId(undefined);
       setActiveOptimisticMessageId(undefined);
+      setSendError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const stopTurn = async (): Promise<void> => {
+    const runId = activeRunIdRef.current;
+    if (
+      !props.thread ||
+      !runId ||
+      !props.desktopApi?.interruptTurn ||
+      interrupting
+    ) {
+      return;
+    }
+
+    setSendError(undefined);
+    setInterrupting(true);
+    props.onPendingStatusChange?.("Stopping");
+
+    try {
+      await props.desktopApi.interruptTurn({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        runId,
+      });
+    } catch (error) {
+      setInterrupting(false);
+      props.onPendingStatusChange?.(
+        props.pendingRequestActive ? "Waiting for approval" : "Thinking"
+      );
       setSendError(error instanceof Error ? error.message : String(error));
     }
   };
@@ -265,9 +353,25 @@ export function Composer(props: ComposerProps) {
         <p className="composer__meta">
           This thread's backend is unavailable right now. You can keep drafting, but send is unavailable.
         </p>
+      ) : props.pendingRequestActive ? (
+        <p className="composer__meta">
+          Waiting for approval before this turn can continue.
+        </p>
       ) : null}
 
       <div className="composer__actions">
+        {activeRunId ? (
+          <button
+            className="button button--ghost"
+            disabled={props.disabled || interrupting}
+            type="button"
+            onClick={() => {
+              void stopTurn();
+            }}
+          >
+            {interrupting ? "Stopping…" : "Stop"}
+          </button>
+        ) : null}
         <button
           className="button button--primary"
           disabled={props.disabled || sending || !draft.trim()}

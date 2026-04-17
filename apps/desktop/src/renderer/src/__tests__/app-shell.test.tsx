@@ -1,11 +1,16 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 
 describe("App", () => {
   it("renders the live thread shell with transcript history", async () => {
     const copyText = vi.fn(async () => undefined);
+    const interruptTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      runId: "turn-1",
+    }));
     let readThreadCalls = 0;
     let resolveRefreshRead:
       | ((value: {
@@ -130,7 +135,20 @@ describe("App", () => {
                 toolUse: false,
                 approvalRequests: false,
                 multiDirectoryThreads: true
-              }
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+                {
+                  mode: "full-access",
+                  label: "Full Access",
+                  available: true,
+                },
+              ],
             },
             {
               kind: "grok",
@@ -149,7 +167,15 @@ describe("App", () => {
                 toolUse: false,
                 approvalRequests: false,
                 multiDirectoryThreads: false
-              }
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+              ],
             }
           ]
         }),
@@ -164,6 +190,7 @@ describe("App", () => {
               title: "Build Codex client",
               summary: "Wire the app-server transport and list threads",
               source: "codex",
+              executionMode: "default",
               gitBranch: "codex/build-codex-client",
               linkedDirectories: [
                 {
@@ -204,6 +231,7 @@ describe("App", () => {
           threadId: "thread-1",
           runId: "turn-1"
         }),
+        interruptTurn,
         onAgentEvent: () => () => undefined,
         versions: {
           electron: "41.2.1"
@@ -285,6 +313,7 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Thinking");
     expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     expect(
       screen.queryByText("Thinking", {
         selector: ".composer__meta"
@@ -293,14 +322,33 @@ describe("App", () => {
     expect(screen.getAllByText("$frontend-design").length).toBeGreaterThan(0);
     expect(screen.getByText("3 messages")).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    await waitFor(() => {
+      expect(interruptTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        runId: "turn-1",
+      });
+    });
+
     resolveRefreshRead?.(transcriptResponse);
   });
 
   it("creates and sends on a new Grok thread", async () => {
-    const startThread = vi.fn(async ({ backend }: { backend: "codex" | "grok" }) => ({
-      backend,
-      threadId: "thread-2"
-    }));
+    const startThread = vi.fn(
+      async ({
+        backend,
+        executionMode,
+      }: {
+        backend: "codex" | "grok";
+        executionMode?: "default" | "full-access";
+      }) => ({
+        backend,
+        threadId: "thread-2",
+        executionMode: executionMode ?? "default",
+      })
+    );
     const startTurn = vi.fn(
       async ({
         backend,
@@ -340,7 +388,20 @@ describe("App", () => {
                 toolUse: false,
                 approvalRequests: false,
                 multiDirectoryThreads: true
-              }
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+                {
+                  mode: "full-access",
+                  label: "Full Access",
+                  available: true,
+                },
+              ],
             },
             {
               kind: "grok",
@@ -359,7 +420,15 @@ describe("App", () => {
                 toolUse: false,
                 approvalRequests: false,
                 multiDirectoryThreads: false
-              }
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+              ],
             }
           ]
         }),
@@ -378,6 +447,7 @@ describe("App", () => {
                   title: "Build Codex client",
                   summary: "Wire the app-server transport and list threads",
                   source: "codex",
+                  executionMode: "default",
                   gitBranch: "codex/build-codex-client",
                   linkedDirectories: [],
                   inbox: {
@@ -401,6 +471,7 @@ describe("App", () => {
                 title: "Investigate Grok thread",
                 summary: "Start a new thread on Grok",
                 source: "grok",
+                executionMode: "default",
                 linkedDirectories: [],
                 inbox: {
                   inInbox: true,
@@ -413,6 +484,7 @@ describe("App", () => {
                 title: "Build Codex client",
                 summary: "Wire the app-server transport and list threads",
                 source: "codex",
+                executionMode: "default",
                 linkedDirectories: [],
                 inbox: {
                   inInbox: false
@@ -512,9 +584,13 @@ describe("App", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Create thread with Grok" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Create thread with Grok in Default Access",
+      })
+    );
 
-    expect(startThread).toHaveBeenCalledWith({ backend: "grok" });
+    expect(startThread).toHaveBeenCalledWith({ backend: "grok", executionMode: "default" });
     expect(
       await screen.findByRole("heading", { level: 2, name: "Investigate Grok thread" })
     ).toBeInTheDocument();
@@ -540,7 +616,8 @@ describe("App", () => {
   it("keeps a newly created Codex thread selected when thread/list lags behind creation", async () => {
     const startThread = vi.fn(async () => ({
       backend: "codex" as const,
-      threadId: "thread-new"
+      threadId: "thread-new",
+      executionMode: "default" as const,
     }));
     const startTurn = vi.fn(
       async ({
@@ -580,7 +657,20 @@ describe("App", () => {
                 toolUse: false,
                 approvalRequests: false,
                 multiDirectoryThreads: true
-              }
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+                {
+                  mode: "full-access",
+                  label: "Full Access",
+                  available: true,
+                },
+              ],
             }
           ]
         }),
@@ -595,6 +685,7 @@ describe("App", () => {
               title: "Existing Codex thread",
               summary: "Already in the list",
               source: "codex",
+              executionMode: "default",
               linkedDirectories: [],
               inbox: {
                 inInbox: true,
@@ -653,9 +744,13 @@ describe("App", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Create thread with Codex" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Create thread with Codex in Default Access",
+      })
+    );
 
-    expect(startThread).toHaveBeenCalledWith({ backend: "codex" });
+    expect(startThread).toHaveBeenCalledWith({ backend: "codex", executionMode: "default" });
     expect(
       await screen.findByRole("heading", { level: 2, name: "Untitled thread" })
     ).toBeInTheDocument();

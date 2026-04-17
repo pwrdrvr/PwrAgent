@@ -9,6 +9,7 @@ import {
 } from "@pwragnt/agent-core";
 import type {
   AppServerNotification,
+  AppServerPendingRequestNotification,
   AppServerThreadEntry,
   AppServerSkillSummary,
   AppServerThreadReplay,
@@ -32,6 +33,12 @@ type GrokServerLike = {
   notify?(method: string, params?: unknown): Promise<void>;
   onNotification(
     handler: (notification: AppServerNotification) => void | Promise<void>
+  ): () => void;
+  onRequest?(
+    handler: (
+      method: string,
+      params?: Record<string, unknown>
+    ) => Promise<unknown> | unknown
   ): () => void;
 };
 
@@ -347,7 +354,13 @@ export class GrokAppServerClient {
   private readonly notificationListeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
   >();
+  private readonly requestListeners = new Set<
+    (
+      request: AppServerPendingRequestNotification
+    ) => Promise<unknown> | unknown
+  >();
   private unsubscribeNotification?: () => void;
+  private unsubscribeRequest?: () => void;
 
   constructor(private readonly options: GrokClientOptions = {}) {
     this.directoryResolver = options.directoryResolver ?? resolveLinkedDirectories;
@@ -360,6 +373,8 @@ export class GrokAppServerClient {
   async close(): Promise<void> {
     this.unsubscribeNotification?.();
     this.unsubscribeNotification = undefined;
+    this.unsubscribeRequest?.();
+    this.unsubscribeRequest = undefined;
     this.initialized = false;
     this.initializeResult = null;
   }
@@ -370,6 +385,17 @@ export class GrokAppServerClient {
     this.notificationListeners.add(listener);
     return () => {
       this.notificationListeners.delete(listener);
+    };
+  }
+
+  onRequest(
+    listener: (
+      request: AppServerPendingRequestNotification
+    ) => Promise<unknown> | unknown
+  ): () => void {
+    this.requestListeners.add(listener);
+    return () => {
+      this.requestListeners.delete(listener);
     };
   }
 
@@ -478,6 +504,23 @@ export class GrokAppServerClient {
     return { threadId, runId };
   }
 
+  async setThreadPermissions(params: {
+    threadId: string;
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await this.getServer().request("thread/resume", params);
+    return {
+      threadId: extractThreadId(result) ?? params.threadId,
+    };
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;
@@ -534,6 +577,24 @@ export class GrokAppServerClient {
       for (const listener of this.notificationListeners) {
         await listener(notification);
       }
+    });
+    this.unsubscribeRequest?.();
+    this.unsubscribeRequest = server.onRequest?.(async (method, params) => {
+      const request = {
+        method,
+        params: (params ?? {}) as AppServerPendingRequestNotification["params"],
+      } satisfies AppServerPendingRequestNotification;
+
+      const listeners = [...this.requestListeners];
+      if (listeners.length === 0) {
+        throw new Error(`No desktop request handler registered for ${method}`);
+      }
+
+      for (const listener of listeners) {
+        return await listener(request);
+      }
+
+      throw new Error(`No desktop request handler registered for ${method}`);
     });
   }
 }

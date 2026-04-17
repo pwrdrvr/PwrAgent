@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { ThreadView } from "../ThreadView";
 
 describe("ThreadView", () => {
@@ -25,7 +26,20 @@ describe("ThreadView", () => {
               toolUse: false,
               approvalRequests: false,
               multiDirectoryThreads: true
-            }
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+              {
+                mode: "full-access",
+                label: "Full Access",
+                available: true,
+              },
+            ],
           },
           {
             kind: "grok",
@@ -45,6 +59,15 @@ describe("ThreadView", () => {
               approvalRequests: false,
               multiDirectoryThreads: false
             },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: false,
+                isDefault: true,
+                unavailableReason: "XAI_API_KEY is not set",
+              },
+            ],
             unavailableReason: "XAI_API_KEY is not set"
           }
         ]}
@@ -66,6 +89,7 @@ describe("ThreadView", () => {
           title: "Plan the app-server protocol",
           summary: "Inspect Codex thread/read output and normalize it for desktop.",
           source: "codex",
+          executionMode: "default",
           updatedAt: Date.now(),
           linkedDirectories: [],
           inbox: {
@@ -134,6 +158,167 @@ describe("ThreadView", () => {
     expect(screen.getByRole("button", { name: "Pin context rail" })).toBeInTheDocument();
     expect(screen.getByText("Codex app server")).toBeInTheDocument();
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    expect(screen.getByLabelText("Reply")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("renders live assistant commentary from item/agentMessage/delta notifications", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification:
+            | {
+                method: "item/agentMessage/delta";
+                params: {
+                  threadId: string;
+                  itemId: string;
+                  delta: string;
+                };
+              }
+            | {
+                method: "turn/completed";
+                params: {
+                  threadId: string;
+                  runId: string;
+                  turn: {
+                    id: string;
+                    status: "completed";
+                    output: Array<{
+                      type: "text";
+                      text: string;
+                    }>;
+                  };
+                };
+              };
+        }) => void)
+      | undefined;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            runId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "thread-2",
+          title: "Plan the app-server protocol",
+          source: "codex",
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false
+          }
+        }}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Run npm view dive"
+          }
+        ]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        onRefresh={vi.fn(async () => undefined)}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-2",
+            itemId: "msg-1",
+            delta: "I ran ",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-2",
+            itemId: "msg-1",
+            delta: "`npm view dive`",
+          },
+        },
+      });
+    });
+
+    expect(screen.getByText("I ran")).toBeInTheDocument();
+    expect(screen.getByText("npm view dive")).toBeInTheDocument();
+    expect(screen.getByText("I ran").closest("article")).toHaveClass(
+      "transcript-message--assistant"
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-2",
+            runId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [
+                {
+                  type: "text",
+                  text: "done",
+                },
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    expect(screen.queryByText("I ran")).not.toBeInTheDocument();
   });
 });

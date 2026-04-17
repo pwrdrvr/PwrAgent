@@ -1,11 +1,12 @@
 import type {
   AppServerBackendKind,
   AppServerBackendScope,
+  ThreadExecutionMode,
   ThreadOverlayState,
 } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
 
-export const CURRENT_OVERLAY_STORE_VERSION = 2;
+export const CURRENT_OVERLAY_STORE_VERSION = 3;
 
 export type OverlayStoreData = {
   version: number;
@@ -70,6 +71,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function normalizeExecutionMode(value: unknown): ThreadExecutionMode {
+  return value === "full-access" ? "full-access" : "default";
+}
+
 export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
   const record = asRecord(raw);
   if (!record) {
@@ -104,6 +109,7 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
           {
             backend,
             threadId,
+            executionMode: normalizeExecutionMode(threadRecord.executionMode),
             lastSeenAt:
               typeof threadRecord.lastSeenAt === "number"
                 ? threadRecord.lastSeenAt

@@ -24,6 +24,15 @@ class MockTransport implements JsonRpcTransport {
       id: "turn-1"
     }
   };
+  static turnInterruptResult: unknown = {
+    thread: {
+      id: "thread-2"
+    },
+    turn: {
+      id: "turn-1"
+    }
+  };
+  static turnInterruptResponseMode: "success" | "timeout" = "success";
 
   readonly sentMessages: string[] = [];
   private messageHandler: (message: string) => void = () => undefined;
@@ -233,6 +242,21 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "turn/interrupt") {
+      if (MockTransport.turnInterruptResponseMode === "timeout") {
+        return;
+      }
+
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.turnInterruptResult
+        })
+      );
+      return;
+    }
+
     if (payload.method === "skills/list") {
       this.messageHandler(
         JSON.stringify({
@@ -306,6 +330,15 @@ describe("CodexAppServerClient", () => {
         id: "turn-1"
       }
     };
+    MockTransport.turnInterruptResult = {
+      thread: {
+        id: "thread-2"
+      },
+      turn: {
+        id: "turn-1"
+      }
+    };
+    MockTransport.turnInterruptResponseMode = "success";
   });
 
   it("initializes once and normalizes thread/list results", async () => {
@@ -611,6 +644,66 @@ describe("CodexAppServerClient", () => {
     expect(result).toEqual({
       threadId: "thread-2",
       runId: "pending:thread-2"
+    });
+
+    await client.close();
+  });
+
+  it("best-effort resumes an existing thread before interrupting a turn", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const result = await client.interruptTurn({
+      threadId: "thread-2",
+      runId: "turn-1"
+    });
+
+    expect(result).toEqual({
+      threadId: "thread-2",
+      runId: "turn-1"
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    const rpcMethods = transport!.sentMessages.map((message) => {
+      const payload = JSON.parse(message) as { method?: string };
+      return payload.method;
+    });
+
+    expect(rpcMethods).toContain("thread/resume");
+    expect(rpcMethods).toContain("turn/interrupt");
+
+    const resumeIndex = rpcMethods.indexOf("thread/resume");
+    const interruptIndex = rpcMethods.indexOf("turn/interrupt");
+    expect(resumeIndex).toBeGreaterThan(-1);
+    expect(interruptIndex).toBeGreaterThan(resumeIndex);
+
+    await client.close();
+  });
+
+  it("treats turn/interrupt timeouts as a best-effort success", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.turnInterruptResponseMode = "timeout";
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+      requestTimeoutMs: 10
+    });
+
+    await expect(
+      client.interruptTurn({
+        threadId: "thread-2",
+        runId: "turn-1"
+      })
+    ).resolves.toEqual({
+      threadId: "thread-2",
+      runId: "turn-1"
     });
 
     await client.close();

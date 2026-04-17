@@ -203,6 +203,37 @@ describe("TranscriptList", () => {
     expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
   });
 
+  it("renders a live assistant message before the turn is persisted", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Run npm view dive"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "pending-assistant-1",
+          role: "assistant",
+          text: "I ran `npm view dive`"
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByText("I ran")).toBeInTheDocument();
+    expect(screen.getByText("npm view dive")).toBeInTheDocument();
+    expect(screen.getByText("I ran").closest("article")).toHaveClass(
+      "transcript-message--assistant"
+    );
+  });
+
   it("anchors a freshly loaded transcript to the newest entry", () => {
     render(
       <TranscriptList

@@ -3,6 +3,7 @@ import type {
   AppServerBackendKind,
   AppServerThreadSummary,
   LinkedDirectorySummary,
+  ThreadExecutionMode,
   ThreadIdentifier,
 } from "./app-server";
 
@@ -56,6 +57,7 @@ export type MarkThreadSeenResponse = {
 export type ThreadOverlayState = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  executionMode?: ThreadExecutionMode;
   lastSeenAt?: number;
   lastSeenUpdatedAt?: number;
   dismissedAt?: number;

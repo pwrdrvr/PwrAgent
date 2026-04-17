@@ -13,10 +13,14 @@ import type {
   ListBackendsResponse,
   MarkThreadSeenRequest,
   NavigationSnapshot,
+  SetThreadExecutionModeRequest,
+  SetThreadExecutionModeResponse,
   StartThreadRequest,
   StartThreadResponse,
   StartTurnRequest,
-  StartTurnResponse
+  StartTurnResponse,
+  SubmitServerRequestRequest,
+  SubmitServerRequestResponse,
 } from "@pwragnt/shared";
 
 export type DesktopApi = {
@@ -33,6 +37,12 @@ export type DesktopApi = {
   interruptTurn?: (
     request: InterruptTurnRequest
   ) => Promise<InterruptTurnResponse>;
+  setThreadExecutionMode?: (
+    request: SetThreadExecutionModeRequest
+  ) => Promise<SetThreadExecutionModeResponse>;
+  submitServerRequest?: (
+    request: SubmitServerRequestRequest
+  ) => Promise<SubmitServerRequestResponse>;
   getNavigationSnapshot?: (
     request?: GetNavigationSnapshotRequest
   ) => Promise<NavigationSnapshot>;

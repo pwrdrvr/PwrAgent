@@ -1,4 +1,4 @@
-import type { AppServerBackendKind } from "./app-server";
+import type { AppServerBackendKind, ThreadExecutionMode } from "./app-server";
 
 export type BackendCapabilities = {
   listThreads: boolean;
@@ -22,6 +22,13 @@ export type BackendSummary = {
   serverVersion?: string;
   methods: string[];
   capabilities: BackendCapabilities;
+  executionModes: Array<{
+    mode: ThreadExecutionMode;
+    label: string;
+    available: boolean;
+    isDefault?: boolean;
+    unavailableReason?: string;
+  }>;
   unavailableReason?: string;
 };
 

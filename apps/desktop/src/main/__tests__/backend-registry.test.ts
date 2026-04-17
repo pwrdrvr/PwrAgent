@@ -9,6 +9,26 @@ import type {
 } from "@pwragnt/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 
+function createOverlayStoreMock() {
+  return {
+    getThreadOverlayState: async () => undefined,
+    setThreadExecutionMode: async ({
+      backend,
+      threadId,
+      executionMode,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      executionMode: "default" | "full-access";
+    }) => ({
+      backend,
+      threadId,
+      executionMode,
+      extraLinkedDirectories: [],
+    }),
+  } as unknown as InstanceType<typeof import("@pwragnt/agent-core").OverlayStore>;
+}
+
 class MockBackendClient {
   private readonly listeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
@@ -124,9 +144,16 @@ describe("DesktopBackendRegistry", () => {
           methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
         },
       }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: {
+          serverInfo: { name: "Codex App Server", version: "1.0.0" },
+          methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+        },
+      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      overlayStore: createOverlayStoreMock(),
     });
 
     const response = await registry.listBackends({ includeUnavailable: true });
@@ -149,9 +176,22 @@ describe("DesktopBackendRegistry", () => {
           steerTurn: false,
           transcriptPagination: false,
           toolUse: false,
-          approvalRequests: false,
+          approvalRequests: true,
           multiDirectoryThreads: true,
         },
+        executionModes: [
+          {
+            mode: "default",
+            label: "Default Access",
+            available: true,
+            isDefault: true,
+          },
+          {
+            mode: "full-access",
+            label: "Full Access",
+            available: true,
+          },
+        ],
       },
       {
         kind: "grok",
@@ -168,9 +208,18 @@ describe("DesktopBackendRegistry", () => {
           steerTurn: false,
           transcriptPagination: false,
           toolUse: false,
-          approvalRequests: false,
+          approvalRequests: true,
           multiDirectoryThreads: false,
         },
+        executionModes: [
+          {
+            mode: "default",
+            label: "Default Access",
+            available: false,
+            isDefault: true,
+            unavailableReason: "grok app server unavailable: XAI_API_KEY is not set",
+          },
+        ],
         unavailableReason: "grok app server unavailable: XAI_API_KEY is not set",
       },
     ]);
@@ -185,9 +234,15 @@ describe("DesktopBackendRegistry", () => {
           serverInfo: { name: "Codex App Server", version: "0.120.0" },
         },
       }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: {
+          serverInfo: { name: "Codex App Server", version: "0.120.0" },
+        },
+      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      overlayStore: createOverlayStoreMock(),
     });
 
     const response = await registry.listBackends({ includeUnavailable: true });
@@ -211,9 +266,13 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      overlayStore: createOverlayStoreMock(),
       createScratchProjectDirectory: async () => "/Users/test/.pwragnt/projects/2026-04-16-a1b2c3",
     });
 
@@ -224,9 +283,12 @@ describe("DesktopBackendRegistry", () => {
     expect(response).toEqual({
       backend: "codex",
       threadId: "thread-1",
+      executionMode: "default",
     });
     expect(codexClient.lastStartThreadParams).toEqual({
       cwd: "/Users/test/.pwragnt/projects/2026-04-16-a1b2c3",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
     });
 
     await registry.close();
@@ -240,7 +302,11 @@ describe("DesktopBackendRegistry", () => {
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
       }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+      }),
       grokClient,
+      overlayStore: createOverlayStoreMock(),
     });
     const events: AgentEvent[] = [];
     const unsubscribe = registry.onEvent((event) => {
@@ -288,9 +354,13 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/read"] },
+      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      overlayStore: createOverlayStoreMock(),
     });
 
     await registry.readThread({
