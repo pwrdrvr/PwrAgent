@@ -238,6 +238,61 @@ describe("TranscriptList", () => {
     expect(screen.queryByText("Read TranscriptActivity.tsx")).not.toBeInTheDocument();
   });
 
+  it("renders write diffs zoomed out by default and expands them on demand", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "activity",
+            id: "activity-1",
+            summary: "Edited 1 file",
+            details: [
+              {
+                id: "detail-1",
+                kind: "write",
+                label: "Update TranscriptList.tsx",
+                path: "/repo/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
+                fileDiff: {
+                  kind: "update",
+                  additions: 1,
+                  removals: 1,
+                  diff: [
+                    "--- a/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
+                    "+++ b/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
+                    "@@ -10,6 +10,6 @@",
+                    " export function TranscriptList() {",
+                    "   const a = 1;",
+                    "   const b = 2;",
+                    "   const c = 3;",
+                    "-  return a + b;",
+                    "+  return a + b + c;",
+                    " }"
+                  ].join("\n")
+                }
+              }
+            ]
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Edited 1 file/i }));
+
+    expect(screen.getByText("Update TranscriptList.tsx")).toBeInTheDocument();
+    expect(screen.getByText("2 unmodified lines skipped")).toBeInTheDocument();
+    expect(screen.queryByText("const b = 2;")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Zoom in" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+
+    expect(screen.getByText("const b = 2;")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Zoom out" })).toBeInTheDocument();
+  });
+
   it("preserves the reader position when older messages are prepended", () => {
     const { rerender } = render(
       <TranscriptList

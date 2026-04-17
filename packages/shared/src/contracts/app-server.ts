@@ -61,12 +61,22 @@ export type AppServerThreadActivityStatus =
   | "failed"
   | "cancelled";
 
+export type AppServerThreadFileChangeKind = "add" | "delete" | "update";
+
+export type AppServerThreadFileDiff = {
+  kind: AppServerThreadFileChangeKind;
+  diff: string;
+  additions: number;
+  removals: number;
+};
+
 export type AppServerThreadActivityDetail = {
   id: string;
   kind: "read" | "write" | "command";
   label: string;
   path?: string;
   status?: AppServerThreadActivityStatus;
+  fileDiff?: AppServerThreadFileDiff;
 };
 
 export type AppServerThreadActivityEntry = {
