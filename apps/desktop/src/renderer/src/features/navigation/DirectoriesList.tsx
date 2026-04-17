@@ -26,7 +26,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             <h3 className="directory-group__title">
               <button
                 aria-label={`Copy path for ${group.label}`}
-                className="directory-group__button path-copy-target"
+                className="directory-group__button path-copy-target tooltip-target"
                 data-tooltip={group.path ? formatCopyTooltip(group.path) : undefined}
                 type="button"
                 onClick={() => {

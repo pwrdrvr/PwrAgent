@@ -1,16 +1,115 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { vi } from "vitest";
 import { App } from "../App";
 
 describe("App", () => {
   it("renders the live thread shell with transcript history", async () => {
     const copyText = vi.fn(async () => undefined);
+    let readThreadCalls = 0;
+    let resolveRefreshRead:
+      | ((value: {
+          backend: "codex";
+          fetchedAt: number;
+          threadId: string;
+          replay: {
+            entries: Array<Record<string, unknown>>;
+            messages: Array<Record<string, unknown>>;
+            lastUserMessage?: string;
+            lastAssistantMessage?: string;
+            pagination: {
+              supportsPagination: boolean;
+              hasPreviousPage: boolean;
+            };
+          };
+        }) => void)
+      | undefined;
+
+    const transcriptResponse = {
+      backend: "codex" as const,
+      fetchedAt: Date.now(),
+      threadId: "thread-1",
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Open the desktop plan and build the Codex client."
+          },
+          {
+            type: "activity",
+            id: "activity-1",
+            summary: "Explored 2 files, ran 1 command",
+            details: [
+              {
+                id: "detail-1",
+                kind: "read",
+                label: "Read TranscriptList.tsx"
+              },
+              {
+                id: "detail-2",
+                kind: "read",
+                label: "Read ThreadView.tsx"
+              },
+              {
+                id: "detail-3",
+                kind: "command",
+                label: "pwd && rg --files"
+              }
+            ]
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "The Codex client is wired and the thread browser is live."
+          }
+        ],
+        messages: [
+          {
+            id: "message-1",
+            role: "user",
+            text: "Open the desktop plan and build the Codex client."
+          },
+          {
+            id: "message-2",
+            role: "assistant",
+            text: "The Codex client is wired and the thread browser is live."
+          }
+        ],
+        lastUserMessage: "Open the desktop plan and build the Codex client.",
+        lastAssistantMessage:
+          "The Codex client is wired and the thread browser is live.",
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false
+        }
+      }
+    };
+
     Object.defineProperty(window, "pwragnt", {
       configurable: true,
       value: {
         copyText,
         ping: () => "pong",
+        listSkills: async () => ({
+          backend: "codex",
+          fetchedAt: Date.now(),
+          data: [
+            {
+              cwd: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
+              skills: [
+                {
+                  name: "frontend-design",
+                  description: "Design and verify renderer UI work.",
+                  path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+                  enabled: true,
+                },
+              ],
+            },
+          ],
+        }),
         listBackends: async () => ({
           fetchedAt: Date.now(),
           backends: [
@@ -18,7 +117,7 @@ describe("App", () => {
               kind: "codex",
               label: "Codex app server",
               available: true,
-              methods: ["thread/list", "thread/read"],
+              methods: ["thread/list", "thread/read", "skills/list"],
               capabilities: {
                 listThreads: true,
                 createThread: false,
@@ -89,69 +188,23 @@ describe("App", () => {
           seenAt: Date.now(),
         }),
         onWindowFocus: () => () => undefined,
-        readThread: async () => ({
-          backend: "codex",
-          fetchedAt: Date.now(),
-          threadId: "thread-1",
-          replay: {
-            entries: [
-              {
-                type: "message",
-                id: "message-1",
-                role: "user",
-                text: "Open the desktop plan and build the Codex client."
-              },
-              {
-                type: "activity",
-                id: "activity-1",
-                summary: "Explored 2 files, ran 1 command",
-                details: [
-                  {
-                    id: "detail-1",
-                    kind: "read",
-                    label: "Read TranscriptList.tsx"
-                  },
-                  {
-                    id: "detail-2",
-                    kind: "read",
-                    label: "Read ThreadView.tsx"
-                  },
-                  {
-                    id: "detail-3",
-                    kind: "command",
-                    label: "pwd && rg --files"
-                  }
-                ]
-              },
-              {
-                type: "message",
-                id: "message-2",
-                role: "assistant",
-                text: "The Codex client is wired and the thread browser is live."
-              }
-            ],
-            messages: [
-              {
-                id: "message-1",
-                role: "user",
-                text: "Open the desktop plan and build the Codex client."
-              },
-              {
-                id: "message-2",
-                role: "assistant",
-                text: "The Codex client is wired and the thread browser is live."
-              }
-            ],
-            lastUserMessage: "Open the desktop plan and build the Codex client.",
-            lastAssistantMessage:
-              "The Codex client is wired and the thread browser is live.",
-            pagination: {
-              supportsPagination: false,
-              hasPreviousPage: false
-            }
+        readThread: async () => {
+          readThreadCalls += 1;
+          if (readThreadCalls === 1) {
+            return transcriptResponse;
           }
-        }),
+
+          return await new Promise((resolve) => {
+            resolveRefreshRead = resolve;
+          });
+        },
         platform: "darwin",
+        startTurn: async () => ({
+          backend: "codex",
+          threadId: "thread-1",
+          runId: "turn-1",
+        }),
+        onAgentEvent: () => () => undefined,
         versions: {
           electron: "41.2.1"
         }
@@ -209,6 +262,36 @@ describe("App", () => {
     expect(screen.getByText("Codex app server")).toBeInTheDocument();
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByText("darwin")).toBeInTheDocument();
+    expect(screen.getByLabelText("Reply")).toBeEnabled();
+    expect(
+      screen.queryByText("This thread's backend is read-only right now. You can keep drafting, but send is unavailable.")
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    const reply = screen.getByLabelText("Reply");
+    fireEvent.change(reply, {
+      target: { value: "$frontend-design what can this skill do" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("what can this skill do").closest("article")
+      ).toHaveClass("transcript-message--user");
+    });
+    expect(
+      screen.getByText("The Codex client is wired and the thread browser is live.")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Thinking");
+    expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
+    expect(
+      screen.queryByText("Thinking", {
+        selector: ".composer__meta"
+      })
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByText("$frontend-design").length).toBeGreaterThan(0);
+    expect(screen.getByText("3 messages")).toBeInTheDocument();
+
+    resolveRefreshRead?.(transcriptResponse);
   });
 });

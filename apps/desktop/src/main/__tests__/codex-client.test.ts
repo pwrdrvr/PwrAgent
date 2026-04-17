@@ -1,10 +1,29 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonRpcTransport } from "../codex-app-server/json-rpc";
 
 class MockTransport implements JsonRpcTransport {
+  static instances: MockTransport[] = [];
+  static threadResumeResult: unknown = {
+    threadId: "thread-2",
+    threadName: "Ship desktop shell",
+    cwd: "/Users/huntharo/pwrdrvr/PwrAgnt"
+  };
+  static turnStartResult: unknown = {
+    thread: {
+      id: "thread-2"
+    },
+    turn: {
+      id: "turn-1"
+    }
+  };
+
   readonly sentMessages: string[] = [];
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
+
+  constructor() {
+    MockTransport.instances.push(this);
+  }
 
   async connect(): Promise<void> {
     return;
@@ -155,6 +174,56 @@ class MockTransport implements JsonRpcTransport {
           }
         })
       );
+      return;
+    }
+
+    if (payload.method === "thread/resume") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.threadResumeResult
+        })
+      );
+      return;
+    }
+
+    if (payload.method === "turn/start") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.turnStartResult
+        })
+      );
+      return;
+    }
+
+    if (payload.method === "skills/list") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: {
+            data: [
+              {
+                cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                skills: [
+                  {
+                    name: "frontend-design",
+                    description: "Design and verify renderer UI work.",
+                    shortDescription: "Renderer UI design workflow.",
+                    path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+                    scope: "user",
+                    enabled: true,
+                  },
+                ],
+                errors: [],
+              },
+            ],
+          },
+        })
+      );
     }
   }
 
@@ -180,6 +249,23 @@ vi.mock("../codex-app-server/stdio-transport", () => {
 });
 
 describe("CodexAppServerClient", () => {
+  beforeEach(() => {
+    MockTransport.instances.length = 0;
+    MockTransport.threadResumeResult = {
+      threadId: "thread-2",
+      threadName: "Ship desktop shell",
+      cwd: "/Users/huntharo/pwrdrvr/PwrAgnt"
+    };
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-2"
+      },
+      turn: {
+        id: "turn-1"
+      }
+    };
+  });
+
   it("initializes once and normalizes thread/list results", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
@@ -343,6 +429,98 @@ describe("CodexAppServerClient", () => {
         hasPreviousPage: false,
         previousCursor: undefined
       }
+    });
+
+    await client.close();
+  });
+
+  it("normalizes skills/list results for composer autocomplete", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const skills = await client.listSkills({
+      cwds: ["/Users/huntharo/pwrdrvr/PwrAgnt"],
+    });
+
+    expect(skills).toEqual([
+      {
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        skills: [
+          {
+            name: "frontend-design",
+            description: "Design and verify renderer UI work.",
+            shortDescription: "Renderer UI design workflow.",
+            path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+            scope: "user",
+            enabled: true,
+          },
+        ],
+      },
+    ]);
+
+    await client.close();
+  });
+
+  it("best-effort resumes an existing thread before starting a turn", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const result = await client.startTurn({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Reply to the existing thread" }],
+      model: "gpt-5.4"
+    });
+
+    expect(result).toEqual({
+      threadId: "thread-2",
+      runId: "turn-1"
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    const rpcMethods = transport!.sentMessages.map((message) => {
+      const payload = JSON.parse(message) as { method?: string };
+      return payload.method;
+    });
+
+    expect(rpcMethods).toContain("thread/resume");
+    expect(rpcMethods).toContain("turn/start");
+
+    const resumeIndex = rpcMethods.indexOf("thread/resume");
+    const startIndex = rpcMethods.indexOf("turn/start");
+    expect(resumeIndex).toBeGreaterThan(-1);
+    expect(startIndex).toBeGreaterThan(resumeIndex);
+
+    await client.close();
+  });
+
+  it("falls back to the requested thread and a pending run id when turn/start omits ids", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.turnStartResult = {};
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const result = await client.startTurn({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Reply even if turn/start omits ids" }],
+      model: "gpt-5.4"
+    });
+
+    expect(result).toEqual({
+      threadId: "thread-2",
+      runId: "pending:thread-2"
     });
 
     await client.close();

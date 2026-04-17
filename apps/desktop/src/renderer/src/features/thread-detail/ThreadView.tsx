@@ -1,31 +1,43 @@
+import { useState } from "react";
 import type {
   AppServerThreadEntry,
+  AppServerSkillSummary,
   AppServerThreadReplayPagination,
   BackendSummary,
   NavigationThreadSummary
 } from "@pwragnt/shared";
 import { Composer } from "../composer/Composer";
+import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import { ThreadHeader } from "./ThreadHeader";
 import { TranscriptList } from "./TranscriptList";
 
 type ThreadViewProps = {
+  addOptimisticUserMessage: (text: string) => string;
   backendError?: string;
   backends: BackendSummary[];
+  composerDisabled: boolean;
+  desktopApi?: DesktopApi;
   fetchedAt?: number;
   loading: boolean;
   loadingMore: boolean;
   messageCount: number;
   platform?: string;
   selectedThread?: NavigationThreadSummary;
+  skillError?: string;
+  skillLoading?: boolean;
+  skills: AppServerSkillSummary[];
   transcriptError?: string;
   transcriptEntries: AppServerThreadEntry[];
   transcriptPagination?: AppServerThreadReplayPagination;
   onLoadOlder: () => Promise<void>;
+  removeOptimisticMessage: (id: string) => void;
   onRefresh: () => Promise<void>;
 };
 
 export function ThreadView(props: ThreadViewProps) {
+  const [pendingStatusText, setPendingStatusText] = useState<string>();
+
   if (!props.selectedThread) {
     return (
       <section className="thread-empty-state">
@@ -72,8 +84,10 @@ export function ThreadView(props: ThreadViewProps) {
             entries={props.transcriptEntries}
             loading={props.loading}
             loadingMore={props.loadingMore}
+            pendingStatusText={pendingStatusText}
             pagination={props.transcriptPagination}
             threadId={props.selectedThread.id}
+            skills={props.skills}
             onLoadOlder={props.onLoadOlder}
           />
         </section>
@@ -86,7 +100,18 @@ export function ThreadView(props: ThreadViewProps) {
         />
       </div>
 
-      <Composer disabled />
+      <Composer
+        addOptimisticUserMessage={props.addOptimisticUserMessage}
+        desktopApi={props.desktopApi}
+        disabled={props.composerDisabled}
+        onPendingStatusChange={setPendingStatusText}
+        onRefresh={props.onRefresh}
+        removeOptimisticMessage={props.removeOptimisticMessage}
+        skillError={props.skillError}
+        skillLoading={props.skillLoading}
+        skills={props.skills}
+        thread={props.selectedThread}
+      />
     </section>
   );
 }

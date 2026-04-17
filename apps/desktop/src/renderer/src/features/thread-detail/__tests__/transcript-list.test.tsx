@@ -135,6 +135,74 @@ describe("TranscriptList", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("renders skill mentions as chips when present", () => {
+    const loadOlder = vi.fn(async () => undefined);
+
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Load [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)"
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "The desktop shell is live and listing Codex threads."
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pagination={{
+          supportsPagination: true,
+          hasPreviousPage: true,
+          previousCursor: "cursor-1"
+        }}
+        skills={[
+          {
+            name: "frontend-design",
+            description: "Design and verify renderer UI work.",
+            path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+            enabled: true,
+          },
+        ]}
+        threadId="thread-1"
+        onLoadOlder={loadOlder}
+      />
+    );
+
+    expect(screen.getByText("$frontend-design")).toBeInTheDocument();
+    expect(
+      screen.getByText("$frontend-design").closest("article")
+    ).toHaveClass("transcript-message--user");
+  });
+
+  it("renders pending status inside the transcript list", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "What can this skill do?"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingStatusText="Waiting for the app server…"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for the app server…");
+    expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
+  });
+
   it("anchors a freshly loaded transcript to the newest entry", () => {
     render(
       <TranscriptList

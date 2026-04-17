@@ -8,6 +8,7 @@ import {
 import type {
   AppServerNotification,
   AppServerThreadEntry,
+  AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadSummary,
   AppServerTurnInputItem,
@@ -51,6 +52,11 @@ type RawThreadSummary = {
   projectKey?: string;
   createdAt?: number;
   updatedAt?: number;
+};
+
+type SkillCatalogEntry = {
+  cwd?: string;
+  skills: AppServerSkillSummary[];
 };
 
 function normalizeThreadSummary(thread: RawThreadSummary): RawThreadSummary {
@@ -250,6 +256,60 @@ function extractRunId(value: unknown): string | undefined {
       : undefined;
 }
 
+function extractSkillsList(value: unknown): SkillCatalogEntry[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+
+  const data = Array.isArray((value as { data?: unknown }).data)
+    ? ((value as { data: unknown[] }).data)
+    : [];
+
+  return data.flatMap((entry): SkillCatalogEntry[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+
+    const record = entry as Record<string, unknown>;
+    const rawSkills = Array.isArray(record.skills) ? record.skills : [];
+    const skills = rawSkills.flatMap((skill): AppServerSkillSummary[] => {
+      if (!skill || typeof skill !== "object" || Array.isArray(skill)) {
+        return [];
+      }
+
+      const item = skill as Record<string, unknown>;
+      const name = typeof item.name === "string" ? item.name.trim() : "";
+      if (!name) {
+        return [];
+      }
+
+      return [
+        {
+          name,
+          description:
+            typeof item.description === "string" ? item.description : undefined,
+          shortDescription:
+            typeof item.shortDescription === "string"
+              ? item.shortDescription
+              : typeof item.short_description === "string"
+                ? item.short_description
+                : undefined,
+          path: typeof item.path === "string" ? item.path : undefined,
+          scope: typeof item.scope === "string" ? item.scope : undefined,
+          enabled: typeof item.enabled === "boolean" ? item.enabled : undefined,
+        },
+      ];
+    });
+
+    return [
+      {
+        cwd: typeof record.cwd === "string" ? record.cwd : undefined,
+        skills,
+      },
+    ];
+  });
+}
+
 export class GrokAppServerClient {
   private readonly directoryResolver: (
     projectKey?: string
@@ -306,6 +366,17 @@ export class GrokAppServerClient {
         source: "grok" as const,
       }))
     );
+  }
+
+  async listSkills(params?: {
+    cwd?: string;
+    cwds?: string[];
+  }): Promise<SkillCatalogEntry[]> {
+    await this.ensureInitialized();
+
+    const cwds = [...new Set([...(params?.cwds ?? []), params?.cwd].filter(Boolean))];
+    const result = await this.getServer().request("skills/list", { cwds });
+    return extractSkillsList(result);
   }
 
   async readThread(params: {

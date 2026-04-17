@@ -5,6 +5,8 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  AppServerListSkillsRequest,
+  AppServerListSkillsResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
   AppServerReadThreadRequest,
@@ -23,6 +25,7 @@ import {
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_TURN_CHANNEL,
+  APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   BACKEND_LIST_CHANNEL,
@@ -46,6 +49,10 @@ const desktopApi = Object.freeze({
     request?: AppServerListThreadsRequest
   ): Promise<AppServerListThreadsResponse> =>
     await ipcRenderer.invoke(APP_SERVER_LIST_THREADS_CHANNEL, request),
+  listSkills: async (
+    request?: AppServerListSkillsRequest
+  ): Promise<AppServerListSkillsResponse> =>
+    await ipcRenderer.invoke(APP_SERVER_LIST_SKILLS_CHANNEL, request),
   listBackends: async (
     request?: ListBackendsRequest
   ): Promise<ListBackendsResponse> =>

@@ -329,8 +329,11 @@ textarea {
   white-space: nowrap;
 }
 
-.path-copy-target {
+.tooltip-target {
   position: relative;
+}
+
+.path-copy-target {
   cursor: pointer;
 }
 
@@ -338,7 +341,7 @@ textarea {
   filter: brightness(1.06);
 }
 
-.path-copy-target[data-tooltip]::after {
+.tooltip-target[data-tooltip]::after {
   content: attr(data-tooltip);
   position: absolute;
   left: 50%;
@@ -365,24 +368,24 @@ textarea {
     transform 120ms ease;
 }
 
-.path-copy-target[data-tooltip]:hover::after,
-.path-copy-target[data-tooltip]:focus-visible::after {
+.tooltip-target[data-tooltip]:hover::after,
+.tooltip-target[data-tooltip]:focus-visible::after {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
 
-.context-list__meta.path-copy-target[data-tooltip]::after {
+.context-list__meta.tooltip-target[data-tooltip]::after {
   right: 0;
   left: auto;
   transform: translateY(4px);
 }
 
-.context-list__meta.path-copy-target[data-tooltip]:hover::after,
-.context-list__meta.path-copy-target[data-tooltip]:focus-visible::after {
+.context-list__meta.tooltip-target[data-tooltip]:hover::after,
+.context-list__meta.tooltip-target[data-tooltip]:focus-visible::after {
   transform: translateY(0);
 }
 
-.path-copy-target:focus-visible {
+.tooltip-target:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -707,6 +710,60 @@ textarea {
   border-top: 0;
 }
 
+.transcript-list__pending {
+  width: min(100%, 760px);
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  padding: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+@keyframes pwragnt-kitt-scan {
+  0% { transform: translateX(0); }
+  50% { transform: translateX(44px); }
+  100% { transform: translateX(0); }
+}
+
+@keyframes pwragnt-kitt-glow {
+  0%, 100% { opacity: 0.72; }
+  50% { opacity: 1; }
+}
+
+.thinking-scanner {
+  position: relative;
+  width: 62px;
+  height: 6px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(95, 14, 14, 0.56);
+  box-shadow: inset 0 0 0 1px rgba(255, 106, 94, 0.14);
+}
+
+.thinking-scanner__beam {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 18px;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 88, 72, 0.2) 0%,
+    rgba(255, 122, 112, 0.95) 48%,
+    rgba(255, 88, 72, 0.2) 100%
+  );
+  box-shadow:
+    0 0 10px rgba(255, 106, 94, 0.55),
+    0 0 18px rgba(255, 78, 68, 0.28);
+  animation:
+    pwragnt-kitt-scan 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite,
+    pwragnt-kitt-glow 0.7s ease-in-out infinite;
+}
+
 .transcript-activity__header {
   display: flex;
   align-items: baseline;
@@ -927,6 +984,16 @@ textarea {
 
 .transcript-diff__separator {
   background: rgba(255, 255, 255, 0.02);
+}
+
+.transcript-message__text-part {
+  white-space: pre-wrap;
+}
+
+.skill-chip {
+  max-width: 100%;
+  vertical-align: middle;
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .context-rail {
@@ -1201,6 +1268,76 @@ textarea {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.03);
   color: var(--text-primary);
+}
+
+.composer__input-wrap {
+  position: relative;
+}
+
+.composer__mentioned-skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.composer__autocomplete {
+  position: absolute;
+  right: 0;
+  left: 0;
+  bottom: calc(100% + 10px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: rgba(16, 20, 28, 0.98);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.34);
+}
+
+.composer__skill-option {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.composer__skill-option:hover,
+.composer__skill-option.is-active {
+  background: var(--bg-row-active);
+}
+
+.composer__skill-option-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.composer__skill-option-meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.composer__meta {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.composer__meta--error {
+  color: #ffb2a0;
 }
 
 .composer__actions {

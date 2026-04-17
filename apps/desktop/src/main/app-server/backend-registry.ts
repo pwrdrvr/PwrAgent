@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  AppServerListSkillsResponse,
   BackendCapabilities,
   BackendSummary,
   ListBackendsRequest,
@@ -24,6 +25,10 @@ type BackendClient = {
     methods?: string[];
   }>;
   listThreads(params?: { filter?: string }): Promise<AppServerThreadSummary[]>;
+  listSkills(params?: {
+    cwd?: string;
+    cwds?: string[];
+  }): Promise<AppServerListSkillsResponse["data"]>;
   onNotification(
     listener: (notification: AppServerNotification) => void | Promise<void>
   ): () => void;
@@ -147,6 +152,20 @@ export class DesktopBackendRegistry {
     return threadLists
       .flat()
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+  }
+
+  async listSkills(params: {
+    backend?: AppServerBackendKind;
+    cwd?: string;
+    cwds?: string[];
+  } = {}): Promise<Pick<AppServerListSkillsResponse, "data">> {
+    const backend = params.backend ?? "codex";
+    const data = await this.getClient(backend).listSkills({
+      cwd: params.cwd,
+      cwds: params.cwds,
+    });
+
+    return { data };
   }
 
   async readThread(

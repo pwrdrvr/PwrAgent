@@ -8,6 +8,7 @@ import type {
   AppServerThreadActivityStatus,
   AppServerThreadEntry,
   AppServerThreadMessageEntry,
+  AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadReplayPagination,
   AppServerThreadSummary,
@@ -44,6 +45,11 @@ type RawCodexThreadSummary = Omit<
   "source" | "linkedDirectories"
 > & {
   projectKey?: string;
+};
+
+type SkillCatalogEntry = {
+  cwd?: string;
+  skills: AppServerSkillSummary[];
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -646,7 +652,65 @@ function extractThreadIdFromValue(value: unknown): string | undefined {
     return undefined;
   }
 
-  return pickString(record, ["threadId", "thread_id", "id"]);
+  const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
+  return (
+    pickString(record, ["threadId", "thread_id", "conversationId", "conversation_id"]) ??
+    pickString(threadRecord ?? {}, ["id", "threadId", "thread_id", "conversationId"])
+  );
+}
+
+function extractSkillSummary(value: unknown): AppServerSkillSummary | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const name = pickString(record, ["name", "id", "slug"]);
+  if (!name) {
+    return undefined;
+  }
+
+  return {
+    name,
+    description: pickString(record, ["description", "summary"]),
+    shortDescription: pickString(record, ["shortDescription", "short_description"]),
+    path: pickString(record, ["path", "skillPath", "skill_path"]),
+    enabled: pickBoolean(record, ["enabled"]),
+    scope: pickString(record, ["scope"])
+  };
+}
+
+function extractSkillCatalog(value: unknown): SkillCatalogEntry[] {
+  const record = asRecord(value);
+  const data = Array.isArray(record?.data)
+    ? record.data
+    : Array.isArray(value)
+      ? value
+      : [];
+
+  return data.flatMap((entry): SkillCatalogEntry[] => {
+    const entryRecord = asRecord(entry);
+    if (!entryRecord) {
+      return [];
+    }
+
+    const rawSkills = Array.isArray(entryRecord.skills)
+      ? entryRecord.skills
+      : Array.isArray(entryRecord.data)
+        ? entryRecord.data
+        : [];
+    const skills = rawSkills.flatMap((skill) => {
+      const normalized = extractSkillSummary(skill);
+      return normalized ? [normalized] : [];
+    });
+
+    return [
+      {
+        cwd: pickString(entryRecord, ["cwd"]),
+        skills
+      }
+    ];
+  });
 }
 
 function extractRunIdFromValue(value: unknown): string | undefined {
@@ -655,7 +719,11 @@ function extractRunIdFromValue(value: unknown): string | undefined {
     return undefined;
   }
 
-  return pickString(record, ["runId", "run_id", "id"]);
+  const turnRecord = asRecord(record.turn) ?? asRecord(record.run);
+  return (
+    pickString(record, ["turnId", "turn_id", "runId", "run_id"]) ??
+    pickString(turnRecord ?? {}, ["id", "turnId", "turn_id", "runId", "run_id"])
+  );
 }
 
 function extractThreadRecords(value: unknown): Record<string, unknown>[] {
@@ -845,6 +913,22 @@ function buildThreadDiscoveryPayloads(filter?: string): unknown[] {
   ];
 }
 
+function buildThreadResumePayloads(params: {
+  threadId: string;
+  model?: string;
+}): Array<Record<string, unknown>> {
+  const base: Record<string, unknown> = {
+    threadId: params.threadId,
+    persistExtendedHistory: false
+  };
+
+  if (params.model?.trim()) {
+    base.model = params.model.trim();
+  }
+
+  return [base];
+}
+
 async function requestWithFallbacks(params: {
   client: JsonRpcConnection;
   methods: string[];
@@ -941,6 +1025,23 @@ export class CodexAppServerClient {
     );
   }
 
+  async listSkills(params?: {
+    cwd?: string;
+    cwds?: string[];
+  }): Promise<SkillCatalogEntry[]> {
+    await this.ensureInitialized();
+
+    const cwds = [...new Set([...(params?.cwds ?? []), params?.cwd].filter(Boolean))];
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["skills/list"],
+      payloads: [{ cwds }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    return extractSkillCatalog(result);
+  }
+
   async readThread(params: {
     threadId: string;
     before?: string;
@@ -997,6 +1098,16 @@ export class CodexAppServerClient {
   }): Promise<{ threadId: string; runId: string }> {
     await this.ensureInitialized();
 
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads({
+        threadId: params.threadId,
+        model: params.model
+      }),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    }).catch(() => undefined);
+
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["turn/start"],
@@ -1004,11 +1115,8 @@ export class CodexAppServerClient {
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
-    const threadId = extractThreadIdFromValue(result);
-    const runId = extractRunIdFromValue(result);
-    if (!threadId || !runId) {
-      throw new Error("codex app server turn/start did not return threadId and runId");
-    }
+    const threadId = extractThreadIdFromValue(result) ?? params.threadId;
+    const runId = extractRunIdFromValue(result) ?? `pending:${threadId}`;
 
     return { threadId, runId };
   }
