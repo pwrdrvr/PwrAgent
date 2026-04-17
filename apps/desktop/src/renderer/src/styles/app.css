@@ -299,6 +299,7 @@ textarea {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  padding-top: 0;
   padding-right: 4px;
   scrollbar-width: thin;
   scrollbar-color: rgba(168, 176, 187, 0.4) rgba(255, 255, 255, 0.04);
@@ -519,15 +520,21 @@ textarea {
 }
 
 .directory-group:first-child {
-  padding-top: 0;
+  padding-top: 12px;
   border-top: 0;
 }
 
 .directory-group__header {
   display: flex;
+  position: sticky;
+  top: 0;
+  z-index: 2;
   justify-content: space-between;
   gap: 12px;
+  padding-top: 8px;
   padding-bottom: 8px;
+  background: var(--bg-sidebar);
+  box-shadow: 0 1px 0 var(--border-subtle);
 }
 
 .directory-group__title {

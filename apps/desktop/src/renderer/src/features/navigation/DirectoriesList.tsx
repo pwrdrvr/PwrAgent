@@ -1,7 +1,7 @@
 import type { LinkedDirectorySummary, NavigationThreadSummary } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
-import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
+import { ThreadMetaChips } from "./ThreadMetaChips";
 
 type DirectoriesListProps = {
   selectedThreadKey?: string;
@@ -78,19 +78,17 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 <button
                   key={`${group.id}:${buildThreadIdentityKey(thread.source, thread.id)}`}
                   aria-pressed={selected}
-                  className={`thread-row thread-row--compact${selected ? " is-selected" : ""}`}
+                  className={`thread-row${selected ? " is-selected" : ""}`}
                   type="button"
                   onClick={() => props.onSelectThread(thread)}
                 >
                   <span className="thread-row__header">
                     <span className="thread-row__title">{thread.title}</span>
-                    <span className="thread-row__chip thread-row__chip--backend">
-                      {formatBackendLabel(thread.source)}
-                    </span>
                     <span className="thread-row__time">
                       {formatRelativeTime(thread.updatedAt)}
                     </span>
                   </span>
+                  <ThreadMetaChips thread={thread} />
                 </button>
               );
             })}

@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragnt/shared";
 import { Sidebar } from "../Sidebar";
 
@@ -155,6 +155,17 @@ describe("Sidebar", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /Cross-project cleanup/i }).length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText("Codex").length).toBeGreaterThan(0);
+    const pwrAgntSection = screen
+      .getByRole("heading", { level: 3, name: "PwrAgnt" })
+      .closest("section");
+    expect(pwrAgntSection).not.toBeNull();
+    const groupedThread = within(pwrAgntSection as HTMLElement).getByRole("button", {
+      name: /Cross-project cleanup/i,
+    });
+    expect(groupedThread).toHaveClass("thread-row");
+    expect(groupedThread).not.toHaveClass("thread-row--compact");
+    expect(within(groupedThread).getByText("Codex")).toBeInTheDocument();
+    expect(within(groupedThread).getByText("codex/thread-centric-ui")).toBeInTheDocument();
   });
 
   it("lumps scratch workspaces under a shared Workspaces directory group", () => {
@@ -464,6 +475,9 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy path for PwrAgnt" }));
 
     expect(copyText).toHaveBeenCalledWith("/Users/huntharo/pwrdrvr/PwrAgnt");
+    expect(
+      screen.queryByText("Line up the desktop shell with the app server")
+    ).not.toBeInTheDocument();
   });
 
   it("opens a new-thread picker with enabled and disabled backend options", async () => {
