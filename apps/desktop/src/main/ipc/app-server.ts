@@ -2,6 +2,7 @@ import { app, ipcMain } from "electron";
 import path from "node:path";
 import { OverlayStore } from "@pwragnt/agent-core";
 import type {
+  AppServerBackendScope,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
@@ -50,13 +51,13 @@ class DesktopAppServerService {
     logDebug("listThreads", {
       backend: backend ?? "all",
       count: threads.length,
-      threadIds: threads.slice(0, 5).map((thread) => thread.id)
+      threadIds: threads.slice(0, 5).map((thread) => thread.id),
     });
 
     return {
-      backend: backend ?? "codex",
+      backend: backend ?? "all",
       fetchedAt: Date.now(),
-      threads
+      threads,
     };
   }
 
@@ -111,9 +112,9 @@ class DesktopAppServerService {
   async getNavigationSnapshot(
     request: GetNavigationSnapshotRequest = {},
   ): Promise<NavigationSnapshot> {
-    const backend = request.backend ?? "codex";
+    const backend: AppServerBackendScope = request.backend ?? "all";
     const threads = await getDesktopBackendRegistry().listThreads({
-      backend,
+      backend: backend === "all" ? undefined : backend,
       filter: request.filter,
     });
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
@@ -125,7 +126,7 @@ class DesktopAppServerService {
     logDebug("getNavigationSnapshot", {
       backend,
       count: snapshot.threads.length,
-      inboxCount: snapshot.inboxThreadIds.length,
+      inboxCount: snapshot.inboxThreadKeys.length,
       unchanged: snapshot.unchanged,
     });
 
@@ -136,10 +137,6 @@ class DesktopAppServerService {
     request: MarkThreadSeenRequest,
   ): Promise<MarkThreadSeenResponse> {
     const backend = request.backend ?? "codex";
-
-    if (backend !== "codex") {
-      throw new Error(`${backend} app server is not wired yet`);
-    }
 
     const response = await this.getOverlayStore().markThreadSeen({
       backend,
@@ -237,4 +234,5 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   await appServerService.close();
 }
+
 export { APP_SERVER_LIST_THREADS_CHANNEL };

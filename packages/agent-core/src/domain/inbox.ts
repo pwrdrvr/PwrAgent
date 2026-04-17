@@ -1,7 +1,5 @@
-import type {
-  AppServerThreadSummary,
-  ThreadIdentifier,
-} from "@pwragnt/shared";
+import type { AppServerThreadSummary } from "@pwragnt/shared";
+import { buildThreadIdentityKey } from "@pwragnt/shared";
 import type { InboxReason, ThreadInboxState, ThreadOverlayState } from "@pwragnt/shared";
 
 function isSuppressed(
@@ -71,11 +69,12 @@ export function deriveInboxState(params: {
   };
 }
 
-export function rankInboxThreadIds(threads: Array<{
-  id: ThreadIdentifier;
+export function rankInboxThreadKeys(threads: Array<{
+  id: string;
+  source: AppServerThreadSummary["source"];
   inbox: ThreadInboxState;
   updatedAt?: number;
-}>): ThreadIdentifier[] {
+}>): string[] {
   return threads
     .filter((thread) => thread.inbox.inInbox)
     .sort((left, right) => {
@@ -97,5 +96,5 @@ export function rankInboxThreadIds(threads: Array<{
 
       return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
     })
-    .map((thread) => thread.id);
+    .map((thread) => buildThreadIdentityKey(thread.source, thread.id));
 }

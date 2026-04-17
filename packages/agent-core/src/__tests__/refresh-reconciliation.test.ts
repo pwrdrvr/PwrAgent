@@ -45,7 +45,7 @@ describe("refresh reconciliation", () => {
     });
 
     expect(snapshot.unchanged).toBe(false);
-    expect(snapshot.inboxThreadIds).toEqual([]);
+    expect(snapshot.inboxThreadKeys).toEqual([]);
     expect(snapshot.threads[0]?.inbox.inInbox).toBe(false);
   });
 
@@ -65,7 +65,7 @@ describe("refresh reconciliation", () => {
     });
 
     expect(snapshot.unchanged).toBe(false);
-    expect(snapshot.inboxThreadIds).toEqual(["thread-1"]);
+    expect(snapshot.inboxThreadKeys).toEqual(["codex:thread-1"]);
     expect(snapshot.threads[0]?.inbox.reason).toBe("updated-since-seen");
   });
 
@@ -85,5 +85,42 @@ describe("refresh reconciliation", () => {
     });
 
     expect(snapshot.unchanged).toBe(true);
+  });
+
+  it("tracks mixed-backend threads with duplicate ids independently in aggregate snapshots", async () => {
+    const store = await createStore();
+
+    await store.reconcileNavigationSnapshot({
+      backend: "all",
+      fetchedAt: 1000,
+      threads: [
+        buildThread(),
+        buildThread({
+          source: "grok",
+          title: "Desktop App (Grok)",
+          updatedAt: 1000,
+        }),
+      ],
+    });
+
+    const snapshot = await store.reconcileNavigationSnapshot({
+      backend: "all",
+      fetchedAt: 2000,
+      threads: [
+        buildThread({ updatedAt: 3000 }),
+        buildThread({
+          source: "grok",
+          title: "Desktop App (Grok)",
+          updatedAt: 1000,
+        }),
+      ],
+    });
+
+    expect(snapshot.inboxThreadKeys).toEqual(["codex:thread-1"]);
+    expect(snapshot.threads).toHaveLength(2);
+    expect(snapshot.threads.map((thread) => `${thread.source}:${thread.id}`)).toEqual([
+      "codex:thread-1",
+      "grok:thread-1",
+    ]);
   });
 });

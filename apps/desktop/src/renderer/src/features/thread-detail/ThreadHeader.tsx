@@ -1,4 +1,5 @@
 import type { NavigationThreadSummary } from "@pwragnt/shared";
+import { formatBackendLabel } from "../../lib/backend-label";
 
 type ThreadHeaderProps = {
   fetchedAt?: number;
@@ -10,7 +11,12 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   return (
     <header className="thread-header">
       <div>
-        <p className="eyebrow">Thread detail</p>
+        <div className="thread-header__eyebrow-row">
+          <p className="eyebrow">Thread detail</p>
+          <span className="thread-row__chip thread-row__chip--backend">
+            {formatBackendLabel(props.thread.source)}
+          </span>
+        </div>
         <h2 className="thread-header__title">{props.thread.title}</h2>
         {props.thread.summary ? (
           <p className="thread-header__summary">{props.thread.summary}</p>

@@ -1,4 +1,5 @@
 import type {
+  AppServerBackendScope,
   AppServerBackendKind,
   AppServerThreadSummary,
   LinkedDirectorySummary,
@@ -18,16 +19,23 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
 };
 
+export function buildThreadIdentityKey(
+  backend: AppServerBackendKind,
+  threadId: ThreadIdentifier,
+): string {
+  return `${backend}:${threadId}`;
+}
+
 export type NavigationSnapshot = {
-  backend: AppServerBackendKind;
+  backend: AppServerBackendScope;
   fetchedAt: number;
   unchanged: boolean;
   threads: NavigationThreadSummary[];
-  inboxThreadIds: ThreadIdentifier[];
+  inboxThreadKeys: string[];
 };
 
 export type GetNavigationSnapshotRequest = {
-  backend?: AppServerBackendKind;
+  backend?: AppServerBackendScope;
   filter?: string;
 };
 
@@ -46,6 +54,7 @@ export type MarkThreadSeenResponse = {
 };
 
 export type ThreadOverlayState = {
+  backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   lastSeenAt?: number;
   lastSeenUpdatedAt?: number;

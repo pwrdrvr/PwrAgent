@@ -1,6 +1,11 @@
-import type { AppServerBackendKind, ThreadOverlayState } from "@pwragnt/shared";
+import type {
+  AppServerBackendKind,
+  AppServerBackendScope,
+  ThreadOverlayState,
+} from "@pwragnt/shared";
+import { buildThreadIdentityKey } from "@pwragnt/shared";
 
-export const CURRENT_OVERLAY_STORE_VERSION = 1;
+export const CURRENT_OVERLAY_STORE_VERSION = 2;
 
 export type OverlayStoreData = {
   version: number;
@@ -8,13 +13,48 @@ export type OverlayStoreData = {
     Record<
       AppServerBackendKind,
       {
-        knownThreadIds: string[];
+        knownThreadKeys: string[];
         lastSnapshotHash?: string;
       }
-    >
+    > &
+      Partial<
+        Record<
+          Extract<AppServerBackendScope, "all">,
+          {
+            knownThreadKeys: string[];
+            lastSnapshotHash?: string;
+          }
+        >
+      >
   >;
   threads: Record<string, ThreadOverlayState>;
 };
+
+function migrateBackendState(
+  scope: AppServerBackendScope,
+  value: unknown,
+): { knownThreadKeys: string[]; lastSnapshotHash?: string } | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const knownThreadKeys = Array.isArray(record.knownThreadKeys)
+    ? (record.knownThreadKeys as string[])
+    : Array.isArray(record.knownThreadIds)
+      ? (record.knownThreadIds as string[]).map((threadId) =>
+          scope === "all" ? threadId : buildThreadIdentityKey(scope, threadId),
+        )
+      : [];
+
+  return {
+    knownThreadKeys,
+    lastSnapshotHash:
+      typeof record.lastSnapshotHash === "string"
+        ? (record.lastSnapshotHash as string)
+        : undefined,
+  };
+}
 
 const EMPTY_OVERLAY_STORE_DATA: OverlayStoreData = {
   version: CURRENT_OVERLAY_STORE_VERSION,
@@ -44,35 +84,25 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
   return {
     version,
     backends: {
-      codex: asRecord(backendsRecord.codex)
-        ? {
-            knownThreadIds: Array.isArray(asRecord(backendsRecord.codex)?.knownThreadIds)
-              ? (asRecord(backendsRecord.codex)?.knownThreadIds as string[])
-              : [],
-            lastSnapshotHash:
-              typeof asRecord(backendsRecord.codex)?.lastSnapshotHash === "string"
-                ? (asRecord(backendsRecord.codex)?.lastSnapshotHash as string)
-                : undefined,
-          }
-        : undefined,
-      grok: asRecord(backendsRecord.grok)
-        ? {
-            knownThreadIds: Array.isArray(asRecord(backendsRecord.grok)?.knownThreadIds)
-              ? (asRecord(backendsRecord.grok)?.knownThreadIds as string[])
-              : [],
-            lastSnapshotHash:
-              typeof asRecord(backendsRecord.grok)?.lastSnapshotHash === "string"
-                ? (asRecord(backendsRecord.grok)?.lastSnapshotHash as string)
-                : undefined,
-          }
-        : undefined,
+      codex: migrateBackendState("codex", backendsRecord.codex),
+      grok: migrateBackendState("grok", backendsRecord.grok),
+      all: migrateBackendState("all", backendsRecord.all),
     },
     threads: Object.fromEntries(
-      Object.entries(threadsRecord).map(([threadId, value]) => {
+      Object.entries(threadsRecord).map(([rawKey, value]) => {
         const threadRecord = asRecord(value) ?? {};
+        const threadId =
+          typeof threadRecord.threadId === "string" ? threadRecord.threadId : rawKey;
+        const backend =
+          threadRecord.backend === "grok" || threadRecord.backend === "codex"
+            ? (threadRecord.backend as AppServerBackendKind)
+            : "codex";
+        const threadKey = buildThreadIdentityKey(backend, threadId);
+
         return [
-          threadId,
+          threadKey,
           {
+            backend,
             threadId,
             lastSeenAt:
               typeof threadRecord.lastSeenAt === "number"
