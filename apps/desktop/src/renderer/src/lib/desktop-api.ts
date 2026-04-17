@@ -4,6 +4,8 @@ import type {
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
+  FocusedDiffAnalysisRequest,
+  FocusedDiffAnalysisResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   EnsureDirectoryLaunchpadRequest,
@@ -37,6 +39,9 @@ export type DesktopApi = {
   listSkills?: (
     request?: AppServerListSkillsRequest
   ) => Promise<AppServerListSkillsResponse>;
+  analyzeFocusedDiff?: (
+    request: FocusedDiffAnalysisRequest
+  ) => Promise<FocusedDiffAnalysisResponse>;
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;

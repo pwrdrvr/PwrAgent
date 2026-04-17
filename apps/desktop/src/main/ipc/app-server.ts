@@ -10,6 +10,8 @@ import type {
   AppServerReadThreadResponse,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
+  FocusedDiffAnalysisRequest,
+  FocusedDiffAnalysisResponse,
   GetNavigationSnapshotRequest,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
@@ -28,12 +30,14 @@ import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
+  FOCUSED_DIFF_ANALYZE_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
 } from "../../shared/ipc";
+import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 
@@ -46,6 +50,8 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
 }
 
 class DesktopAppServerService {
+  private focusedDiffService: FocusedDiffService | null = null;
+
   async listThreads(
     request: AppServerListThreadsRequest = {}
   ): Promise<AppServerListThreadsResponse> {
@@ -191,12 +197,37 @@ class DesktopAppServerService {
     return await getDesktopBackendRegistry().resetDirectoryLaunchpad(request);
   }
 
+  async analyzeFocusedDiff(
+    request: FocusedDiffAnalysisRequest
+  ): Promise<FocusedDiffAnalysisResponse> {
+    const response = await this.getFocusedDiffService().analyze(request);
+
+    logDebug("analyzeFocusedDiff", {
+      filePath: request.filePath ?? null,
+      hunkCount: request.hunks.length,
+      mode: response.mode,
+      source: response.source,
+      hiddenHunkCount: response.hiddenHunkCount
+    });
+
+    return response;
+  }
+
   async close(): Promise<void> {
     await disposeDesktopBackendRegistry();
   }
 
   private getOverlayStore(): OverlayStore {
     return getDesktopOverlayStore();
+  }
+
+  private getFocusedDiffService(): FocusedDiffService {
+    if (this.focusedDiffService) {
+      return this.focusedDiffService;
+    }
+
+    this.focusedDiffService = new FocusedDiffService();
+    return this.focusedDiffService;
   }
 }
 
@@ -231,6 +262,16 @@ export function registerAppServerIpcHandlers(): void {
       request: AppServerReadThreadRequest
     ): Promise<AppServerReadThreadResponse> => {
       return await appServerService.readThread(request);
+    }
+  );
+  ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
+  ipcMain.handle(
+    FOCUSED_DIFF_ANALYZE_CHANNEL,
+    async (
+      _event,
+      request: FocusedDiffAnalysisRequest
+    ): Promise<FocusedDiffAnalysisResponse> => {
+      return await appServerService.analyzeFocusedDiff(request);
     }
   );
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
@@ -289,6 +330,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
+  ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);

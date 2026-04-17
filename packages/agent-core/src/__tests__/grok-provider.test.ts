@@ -24,7 +24,7 @@ describe("buildXaiInput", () => {
 });
 
 describe("XaiResponsesClient", () => {
-  it("builds a create payload without unsupported instructions", () => {
+  it("builds a create payload with structured-output metadata", () => {
     const client = new XaiResponsesClient({
       apiKey: "test-key",
       model: "grok-4.20-reasoning",
@@ -35,11 +35,33 @@ describe("XaiResponsesClient", () => {
       client.buildCreatePayload({
         input: [{ role: "user", content: [{ type: "input_text", text: "Ship it" }] }],
         previousResponseId: "resp_prev",
+        promptCacheKey: "focused-diff-v1",
+        text: {
+          format: {
+            type: "json_schema",
+            name: "focused_diff_hunk_decisions",
+            schema: {
+              type: "object"
+            },
+            strict: true
+          }
+        }
       }),
     ).toEqual({
       model: "grok-4.20-reasoning",
       input: [{ role: "user", content: [{ type: "input_text", text: "Ship it" }] }],
       previous_response_id: "resp_prev",
+      prompt_cache_key: "focused-diff-v1",
+      text: {
+        format: {
+          type: "json_schema",
+          name: "focused_diff_hunk_decisions",
+          schema: {
+            type: "object"
+          },
+          strict: true
+        }
+      },
       stream: false,
     });
   });
@@ -60,6 +82,34 @@ describe("XaiResponsesClient", () => {
         input: [{ role: "user", content: [{ type: "input_text", text: "Ship it" }] }],
       }),
     ).rejects.toThrow("xAI Responses API request failed (401): Unauthorized");
+  });
+
+  it("forwards custom request headers", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => makeXaiResponse({ text: "{}" }),
+    }));
+    const client = new XaiResponsesClient({
+      apiKey: "test-key",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await client.createResponse({
+      input: [{ role: "user", content: [{ type: "input_text", text: "Ship it" }] }],
+      headers: {
+        "x-grok-conv-id": "focused-diff-v1",
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.x.ai/v1/responses",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer test-key",
+          "x-grok-conv-id": "focused-diff-v1",
+        }),
+      }),
+    );
   });
 });
 

@@ -1,50 +1,84 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { AppServerThreadActivityDetail } from "@pwragnt/shared";
+import {
+  buildDiffView,
+  getFocusedDiffEligibility,
+  parseUnifiedDiff,
+  summarizeHunksForFocus,
+  type DiffView
+} from "../../../../shared/diff-focus";
+import { getDesktopApi } from "../../lib/desktop-api";
 
 type TranscriptDiffProps = {
   detail: AppServerThreadActivityDetail;
 };
 
-type DiffRow =
-  | {
-      kind: "added";
-      newNumber: number;
-      text: string;
-    }
-  | {
-      kind: "context";
-      newNumber: number;
-      oldNumber: number;
-      text: string;
-    }
-  | {
-      kind: "hunk";
-      text: string;
-    }
-  | {
-      kind: "removed";
-      oldNumber: number;
-      text: string;
-    }
-  | {
-      kind: "separator";
-      count: number;
-    };
-
-const CONTEXT_RADIUS = 1;
-
 export function TranscriptDiff(props: TranscriptDiffProps) {
   const [isZoomedIn, setIsZoomedIn] = useState(false);
+  const [focusedView, setFocusedView] = useState<DiffView | null>(null);
   const diff = props.detail.fileDiff;
-  const rows = useMemo(() => parsePatch(diff?.diff ?? ""), [diff?.diff]);
-  const visibleRows = useMemo(
-    () => (isZoomedIn ? rows : condenseRows(rows)),
-    [isZoomedIn, rows]
-  );
+  const desktopApi = getDesktopApi();
+  const parsed = useMemo(() => parseUnifiedDiff(diff?.diff ?? ""), [diff?.diff]);
+  const eligibility = useMemo(() => getFocusedDiffEligibility(parsed), [parsed]);
+  const hunkSummaries = useMemo(() => summarizeHunksForFocus(parsed), [parsed]);
+  const fullView = useMemo(() => buildDiffView(parsed, { mode: "full" }), [parsed]);
 
-  if (!diff || rows.length === 0) {
+  useEffect(() => {
+    setIsZoomedIn(false);
+    setFocusedView(null);
+  }, [diff?.diff, props.detail.path]);
+
+  useEffect(() => {
+    if (!diff || !eligibility.eligible || !desktopApi?.analyzeFocusedDiff) {
+      return;
+    }
+
+    let active = true;
+
+    void desktopApi
+      .analyzeFocusedDiff({
+        filePath: props.detail.path,
+        diff: diff.diff,
+        hunks: hunkSummaries
+      })
+      .then((response) => {
+        if (!active || response.mode !== "focused" || response.hiddenHunkIndices.length === 0) {
+          return;
+        }
+
+        setFocusedView(
+          buildDiffView(parsed, {
+            mode: "condensed",
+            hiddenHunkIndices: response.hiddenHunkIndices
+          })
+        );
+      })
+      .catch(() => {
+        if (!active) {
+          return;
+        }
+        setFocusedView(null);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [desktopApi, diff, eligibility.eligible, hunkSummaries, parsed, props.detail.path]);
+
+  const defaultView = useMemo(() => {
+    if (!eligibility.eligible) {
+      return fullView;
+    }
+
+    return focusedView ?? buildDiffView(parsed, { mode: "condensed" });
+  }, [eligibility.eligible, focusedView, fullView, parsed]);
+  const visibleView = isZoomedIn ? fullView : defaultView;
+
+  if (!diff || fullView.rows.length === 0) {
     return null;
   }
+
+  const hiddenSummary = !isZoomedIn ? formatHiddenSummary(defaultView) : null;
 
   return (
     <div className="transcript-diff">
@@ -55,27 +89,34 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
       ) : null}
 
       <div className="transcript-diff__toolbar">
-        <div className="transcript-diff__stats" aria-label="Diff summary">
-          <span className="transcript-diff__stat transcript-diff__stat--removed">
-            -{diff.removals}
-          </span>
-          <span className="transcript-diff__stat transcript-diff__stat--added">
-            +{diff.additions}
-          </span>
+        <div className="transcript-diff__meta">
+          <div className="transcript-diff__stats" aria-label="Diff summary">
+            <span className="transcript-diff__stat transcript-diff__stat--removed">
+              -{diff.removals}
+            </span>
+            <span className="transcript-diff__stat transcript-diff__stat--added">
+              +{diff.additions}
+            </span>
+          </div>
+          {hiddenSummary ? (
+            <span className="transcript-diff__summary">{hiddenSummary}</span>
+          ) : null}
         </div>
-        <button
-          type="button"
-          className="button button--ghost transcript-diff__toggle"
-          onClick={() => {
-            setIsZoomedIn((current) => !current);
-          }}
-        >
-          {isZoomedIn ? "Zoom out" : "Zoom in"}
-        </button>
+        {defaultView.hasHiddenContent ? (
+          <button
+            type="button"
+            className="button button--ghost transcript-diff__toggle"
+            onClick={() => {
+              setIsZoomedIn((current) => !current);
+            }}
+          >
+            {isZoomedIn ? "Zoom out" : "Zoom in"}
+          </button>
+        ) : null}
       </div>
 
       <div className="transcript-diff__rows" role="table" aria-label={`${props.detail.label} diff`}>
-        {visibleRows.map((row, index) => {
+        {visibleView.rows.map((row, index) => {
           if (row.kind === "separator") {
             return (
               <div
@@ -123,107 +164,25 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
   );
 }
 
-function parsePatch(patch: string): DiffRow[] {
-  const lines = patch.replace(/\r\n?/g, "\n").split("\n");
-  const rows: DiffRow[] = [];
-  let oldLine = 0;
-  let newLine = 0;
-
-  for (const line of lines) {
-    const hunkMatch = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-    if (hunkMatch) {
-      oldLine = Number.parseInt(hunkMatch[1], 10);
-      newLine = Number.parseInt(hunkMatch[2], 10);
-      rows.push({ kind: "hunk", text: line });
-      continue;
-    }
-
-    if (
-      line.startsWith("---") ||
-      line.startsWith("+++") ||
-      line.startsWith("Index:") ||
-      line.startsWith("====") ||
-      line.startsWith("\\")
-    ) {
-      continue;
-    }
-
-    if (line.startsWith("-")) {
-      rows.push({
-        kind: "removed",
-        oldNumber: oldLine,
-        text: line.slice(1)
-      });
-      oldLine += 1;
-      continue;
-    }
-
-    if (line.startsWith("+")) {
-      rows.push({
-        kind: "added",
-        newNumber: newLine,
-        text: line.slice(1)
-      });
-      newLine += 1;
-      continue;
-    }
-
-    if (oldLine > 0 || newLine > 0 || line.length > 0) {
-      rows.push({
-        kind: "context",
-        oldNumber: oldLine,
-        newNumber: newLine,
-        text: line.startsWith(" ") ? line.slice(1) : line
-      });
-      oldLine += 1;
-      newLine += 1;
-    }
-  }
-
-  return rows;
-}
-
-function condenseRows(rows: DiffRow[]): DiffRow[] {
-  const condensed: DiffRow[] = [];
-  let contextBuffer: Extract<DiffRow, { kind: "context" }>[] = [];
-
-  const flushContext = () => {
-    if (contextBuffer.length === 0) {
-      return;
-    }
-
-    if (contextBuffer.length <= CONTEXT_RADIUS * 2) {
-      condensed.push(...contextBuffer);
-      contextBuffer = [];
-      return;
-    }
-
-    condensed.push(...contextBuffer.slice(0, CONTEXT_RADIUS));
-    condensed.push({
-      kind: "separator",
-      count: contextBuffer.length - CONTEXT_RADIUS * 2
-    });
-    condensed.push(...contextBuffer.slice(-CONTEXT_RADIUS));
-    contextBuffer = [];
-  };
-
-  for (const row of rows) {
-    if (row.kind === "context") {
-      contextBuffer.push(row);
-      continue;
-    }
-
-    flushContext();
-    condensed.push(row);
-  }
-
-  flushContext();
-  return condensed;
-}
-
 function formatLineNumber(value: number | undefined): string {
   if (typeof value !== "number") {
     return "";
   }
   return String(value);
+}
+
+function formatHiddenSummary(view: DiffView): string | null {
+  const parts: string[] = [];
+
+  if (view.hiddenHunkCount > 0) {
+    parts.push(`${view.hiddenHunkCount} hunk${view.hiddenHunkCount === 1 ? "" : "s"} hidden`);
+  }
+
+  if (view.hiddenContextLineCount > 0) {
+    parts.push(
+      `${view.hiddenContextLineCount} line${view.hiddenContextLineCount === 1 ? "" : "s"} skipped`
+    );
+  }
+
+  return parts.length > 0 ? parts.join(", ") : null;
 }
