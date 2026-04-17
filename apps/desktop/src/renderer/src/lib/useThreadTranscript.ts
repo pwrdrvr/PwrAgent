@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerReadThreadResponse,
+  AppServerThreadEntry,
   AppServerThreadMessage
 } from "@pwragnt/shared";
 import type { DesktopApi } from "./desktop-api";
 
-function mergeMessages(
-  olderMessages: AppServerThreadMessage[],
-  newerMessages: AppServerThreadMessage[]
-): AppServerThreadMessage[] {
-  const deduped = new Map<string, AppServerThreadMessage>();
+function mergeItems<T extends { id: string }>(
+  olderItems: T[],
+  newerItems: T[]
+): T[] {
+  const deduped = new Map<string, T>();
 
-  for (const message of [...olderMessages, ...newerMessages]) {
-    deduped.set(message.id, message);
+  for (const item of [...olderItems, ...newerItems]) {
+    deduped.set(item.id, item);
   }
 
   return [...deduped.values()];
@@ -23,6 +24,7 @@ export function useThreadTranscript(params: {
   threadId?: string;
 }): {
   error?: string;
+  entries: AppServerThreadEntry[];
   loading: boolean;
   loadingMore: boolean;
   loadOlder: () => Promise<void>;
@@ -121,10 +123,8 @@ export function useThreadTranscript(params: {
           ...olderResponse,
           replay: {
             ...olderResponse.replay,
-            messages: mergeMessages(
-              olderResponse.replay.messages,
-              current.replay.messages
-            )
+            entries: mergeItems(olderResponse.replay.entries, current.replay.entries),
+            messages: mergeItems(olderResponse.replay.messages, current.replay.messages)
           }
         };
       });
@@ -139,12 +139,18 @@ export function useThreadTranscript(params: {
     }
   }, [desktopApi, response, threadId]);
 
+  const entries = useMemo(
+    () => response?.replay.entries ?? [],
+    [response?.replay.entries]
+  );
+
   const messages = useMemo(
     () => response?.replay.messages ?? [],
     [response?.replay.messages]
   );
 
   return {
+    entries,
     error,
     loading,
     loadingMore,

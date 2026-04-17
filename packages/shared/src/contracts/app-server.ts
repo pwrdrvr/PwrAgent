@@ -48,6 +48,40 @@ export type AppServerThreadMessage = {
   createdAt?: number;
 };
 
+export type AppServerTranscriptPhase = "commentary" | "final";
+
+export type AppServerThreadMessageEntry = AppServerThreadMessage & {
+  type: "message";
+  phase?: AppServerTranscriptPhase;
+};
+
+export type AppServerThreadActivityStatus =
+  | "in_progress"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type AppServerThreadActivityDetail = {
+  id: string;
+  kind: "read" | "write" | "command";
+  label: string;
+  path?: string;
+  status?: AppServerThreadActivityStatus;
+};
+
+export type AppServerThreadActivityEntry = {
+  type: "activity";
+  id: string;
+  summary: string;
+  createdAt?: number;
+  status?: AppServerThreadActivityStatus;
+  details: AppServerThreadActivityDetail[];
+};
+
+export type AppServerThreadEntry =
+  | AppServerThreadMessageEntry
+  | AppServerThreadActivityEntry;
+
 export type AppServerThreadReplayPagination = {
   supportsPagination: boolean;
   hasPreviousPage: boolean;
@@ -55,6 +89,7 @@ export type AppServerThreadReplayPagination = {
 };
 
 export type AppServerThreadReplay = {
+  entries: AppServerThreadEntry[];
   messages: AppServerThreadMessage[];
   lastUserMessage?: string;
   lastAssistantMessage?: string;

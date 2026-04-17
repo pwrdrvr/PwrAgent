@@ -3,6 +3,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type {
   AppServerNotification,
+  AppServerThreadActivityDetail,
+  AppServerThreadActivityEntry,
+  AppServerThreadActivityStatus,
+  AppServerThreadEntry,
+  AppServerThreadMessageEntry,
   AppServerThreadReplay,
   AppServerThreadReplayPagination,
   AppServerThreadSummary,
@@ -248,6 +253,276 @@ function extractConversationMessages(
   return output;
 }
 
+function normalizeActivityStatus(
+  value: string | undefined
+): AppServerThreadActivityStatus | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (
+    normalized === "in_progress" ||
+    normalized === "completed" ||
+    normalized === "failed" ||
+    normalized === "cancelled"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function pushActivityDetail(
+  details: AppServerThreadActivityDetail[],
+  detail: AppServerThreadActivityDetail
+): void {
+  const existing = details.find((candidate) => candidate.label === detail.label);
+  if (existing) {
+    if (!existing.status || existing.status === "completed") {
+      existing.status = detail.status ?? existing.status;
+    }
+    return;
+  }
+  details.push(detail);
+}
+
+function formatCommandLabel(command: string | undefined): string {
+  if (!command) {
+    return "Ran command";
+  }
+
+  const stripped = command
+    .replace(/^\/bin\/[a-z]+ -lc /, "")
+    .replace(/^['"]|['"]$/g, "");
+  const collapsed = stripped.replace(/\s+/g, " ").trim();
+  if (!collapsed) {
+    return "Ran command";
+  }
+
+  return collapsed.length > 72 ? `${collapsed.slice(0, 69)}...` : collapsed;
+}
+
+function formatActivitySummary(parts: string[]): string {
+  return parts.join(", ");
+}
+
+function summarizeActivityItems(
+  items: Record<string, unknown>[],
+  createdAt?: number
+): AppServerThreadActivityEntry | undefined {
+  if (items.length === 0) {
+    return undefined;
+  }
+
+  const details: AppServerThreadActivityDetail[] = [];
+  let inspectedFiles = 0;
+  let commandsRun = 0;
+  let changedFiles = 0;
+  let status: AppServerThreadActivityStatus | undefined;
+
+  for (const item of items) {
+    const itemId =
+      pickString(item, ["id", "itemId", "item_id"]) ?? `activity-${details.length + 1}`;
+    const itemStatus = normalizeActivityStatus(pickString(item, ["status"]));
+    if (itemStatus === "failed") {
+      status = "failed";
+    } else if (!status) {
+      status = itemStatus;
+    }
+
+    const itemType = pickString(item, ["type"]);
+    if (itemType === "commandExecution") {
+      const command = pickString(item, ["command"]);
+      const actions = Array.isArray(item.commandActions)
+        ? item.commandActions
+            .map((entry) => asRecord(entry))
+            .filter((entry): entry is Record<string, unknown> => entry !== null)
+        : [];
+
+      if (actions.length === 0) {
+        commandsRun += 1;
+        pushActivityDetail(details, {
+          id: itemId,
+          kind: "command",
+          label: formatCommandLabel(command),
+          status: itemStatus
+        });
+        continue;
+      }
+
+      for (const [index, action] of actions.entries()) {
+        const actionType = pickString(action, ["type"]);
+        const actionPath = pickString(action, ["path"]);
+        const fallbackName = pickString(action, ["name"]);
+        const detailId = `${itemId}-${index + 1}`;
+
+        if (actionType === "read" && actionPath) {
+          inspectedFiles += 1;
+          pushActivityDetail(details, {
+            id: detailId,
+            kind: "read",
+            label: `Read ${path.basename(actionPath) || actionPath}`,
+            path: actionPath,
+            status: itemStatus
+          });
+          continue;
+        }
+
+        if (actionType === "search" && actionPath) {
+          inspectedFiles += 1;
+          pushActivityDetail(details, {
+            id: detailId,
+            kind: "read",
+            label: `Searched ${path.basename(actionPath) || actionPath}`,
+            path: actionPath,
+            status: itemStatus
+          });
+          continue;
+        }
+
+        commandsRun += 1;
+        const label =
+          actionType === "listFiles"
+            ? "Listed files"
+            : actionType === "search"
+              ? "Ran search"
+              : fallbackName?.trim() || formatCommandLabel(command);
+        pushActivityDetail(details, {
+          id: detailId,
+          kind: "command",
+          label,
+          ...(actionPath ? { path: actionPath } : {}),
+          status: itemStatus
+        });
+      }
+      continue;
+    }
+
+    if (itemType === "fileChange") {
+      const changes = Array.isArray(item.changes)
+        ? item.changes
+            .map((entry) => asRecord(entry))
+            .filter((entry): entry is Record<string, unknown> => entry !== null)
+        : [];
+
+      for (const [index, change] of changes.entries()) {
+        const changePath = pickString(change, ["path"]);
+        const changeKind = asRecord(change.kind);
+        const changeType = pickString(changeKind ?? {}, ["type"]) ?? "update";
+        changedFiles += 1;
+        pushActivityDetail(details, {
+          id: `${itemId}-${index + 1}`,
+          kind: "write",
+          label: `${changeType[0]?.toUpperCase() ?? "U"}${changeType.slice(1)} ${
+            changePath ? path.basename(changePath) || changePath : "file"
+          }`,
+          path: changePath,
+          status: itemStatus
+        });
+      }
+    }
+  }
+
+  const summaryParts: string[] = [];
+  if (inspectedFiles > 0) {
+    summaryParts.push(
+      `Explored ${inspectedFiles} file${inspectedFiles === 1 ? "" : "s"}`
+    );
+  }
+  if (commandsRun > 0) {
+    summaryParts.push(`Ran ${commandsRun} command${commandsRun === 1 ? "" : "s"}`);
+  }
+  if (changedFiles > 0) {
+    summaryParts.push(`Edited ${changedFiles} file${changedFiles === 1 ? "" : "s"}`);
+  }
+
+  if (summaryParts.length === 0 && details.length === 0) {
+    return undefined;
+  }
+
+  return {
+    type: "activity",
+    id: `activity-${pickString(items[0] ?? {}, ["id", "itemId", "item_id"]) ?? "1"}`,
+    summary:
+      summaryParts.length > 0
+        ? formatActivitySummary(summaryParts)
+        : `Recorded ${details.length} activity item${details.length === 1 ? "" : "s"}`,
+    createdAt,
+    status,
+    details
+  };
+}
+
+function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
+  const record = asRecord(value);
+  const thread = asRecord(record?.thread);
+  const turns = Array.isArray(thread?.turns)
+    ? thread.turns
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => entry !== null)
+    : [];
+
+  if (turns.length === 0) {
+    return extractConversationMessages(value).map(
+      (message): AppServerThreadMessageEntry => ({
+        type: "message",
+        ...message
+      })
+    );
+  }
+
+  const entries: AppServerThreadEntry[] = [];
+
+  for (const turn of turns) {
+    const createdAt = normalizeEpochTimestamp(
+      pickNumber(turn, ["startedAt", "createdAt", "timestamp", "time"])
+    );
+    const rawItems = Array.isArray(turn.items)
+      ? turn.items
+          .map((entry) => asRecord(entry))
+          .filter((entry): entry is Record<string, unknown> => entry !== null)
+      : [];
+    const pendingActivityItems: Record<string, unknown>[] = [];
+
+    const flushActivityItems = (): void => {
+      const activity = summarizeActivityItems(pendingActivityItems, createdAt);
+      pendingActivityItems.length = 0;
+      if (activity) {
+        entries.push(activity);
+      }
+    };
+
+    for (const item of rawItems) {
+      const itemType = pickString(item, ["type"]);
+      const role = normalizeConversationRole(itemType);
+      if (role) {
+        flushActivityItems();
+        const text = collectMessageText(item);
+        if (!text) {
+          continue;
+        }
+        entries.push({
+          type: "message",
+          id:
+            pickString(item, ["id", "messageId", "message_id", "itemId", "item_id"]) ??
+            `message-${entries.length + 1}`,
+          role,
+          text,
+          createdAt,
+          ...(pickString(item, ["phase"]) === "commentary"
+            ? { phase: "commentary" as const }
+            : {})
+        });
+        continue;
+      }
+
+      if (itemType === "commandExecution" || itemType === "fileChange") {
+        pendingActivityItems.push(item);
+      }
+    }
+
+    flushActivityItems();
+  }
+
+  return entries;
+}
+
 function extractReplayPagination(value: unknown): AppServerThreadReplayPagination {
   const record = asRecord(value);
   const supportsPagination = Boolean(
@@ -272,6 +547,7 @@ function extractReplayPagination(value: unknown): AppServerThreadReplayPaginatio
 }
 
 function extractThreadReplayFromReadResult(value: unknown): AppServerThreadReplay {
+  const entries = extractThreadEntries(value);
   const messages = extractConversationMessages(value);
   let lastUserMessage: string | undefined;
   let lastAssistantMessage: string | undefined;
@@ -290,6 +566,7 @@ function extractThreadReplayFromReadResult(value: unknown): AppServerThreadRepla
   }
 
   return {
+    entries,
     messages,
     lastUserMessage,
     lastAssistantMessage,

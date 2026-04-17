@@ -12,6 +12,11 @@ class MockBackendClient {
   private readonly listeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
   >();
+  lastReadThreadParams?: {
+    threadId: string;
+    before?: string;
+    limit?: number;
+  };
 
   constructor(
     private readonly options: {
@@ -53,8 +58,14 @@ class MockBackendClient {
     };
   }
 
-  async readThread(): Promise<AppServerThreadReplay> {
+  async readThread(_params?: {
+    threadId: string;
+    before?: string;
+    limit?: number;
+  }): Promise<AppServerThreadReplay> {
+    this.lastReadThreadParams = _params;
     return this.options.replay ?? {
+      entries: [],
       messages: [],
       pagination: {
         supportsPagination: false,
@@ -192,6 +203,33 @@ describe("DesktopBackendRegistry", () => {
     ]);
 
     unsubscribe();
+    await registry.close();
+  });
+
+  it("forwards pagination parameters when reading a thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+    });
+
+    await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+      before: "cursor-1",
+      limit: 25,
+    });
+
+    expect(codexClient.lastReadThreadParams).toEqual({
+      threadId: "thread-1",
+      before: "cursor-1",
+      limit: 25,
+    });
+
     await registry.close();
   });
 });

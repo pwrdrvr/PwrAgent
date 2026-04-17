@@ -63,13 +63,32 @@ describe("ThreadView", () => {
             inInbox: false
           }
         }}
-        transcriptMessages={[
+        transcriptEntries={[
           {
+            type: "message",
             id: "message-1",
             role: "user",
             text: "Inspect the app-server output."
           },
           {
+            type: "activity",
+            id: "activity-1",
+            summary: "Explored 2 files",
+            details: [
+              {
+                id: "detail-1",
+                kind: "read",
+                label: "Read TranscriptList.tsx"
+              },
+              {
+                id: "detail-2",
+                kind: "read",
+                label: "Read ThreadView.tsx"
+              }
+            ]
+          },
+          {
+            type: "message",
             id: "message-2",
             role: "assistant",
             text: "The desktop client now reads the full transcript."
@@ -89,6 +108,7 @@ describe("ThreadView", () => {
     expect(
       screen.getByText("The desktop client now reads the full transcript.")
     ).toBeInTheDocument();
+    expect(screen.getByText("Explored 2 files")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 3, name: "Thread details" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pin context rail" })).toBeInTheDocument();
     expect(screen.getByText("Codex app server")).toBeInTheDocument();

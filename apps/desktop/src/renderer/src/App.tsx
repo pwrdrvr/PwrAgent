@@ -41,7 +41,7 @@ export function App() {
           platform={desktopApi?.platform}
           selectedThread={navigation.selectedThread}
           transcriptError={transcript.error}
-          transcriptMessages={transcript.messages}
+          transcriptEntries={transcript.entries}
           transcriptPagination={transcript.response?.replay.pagination}
           onLoadOlder={transcript.loadOlder}
           onRefresh={transcript.refresh}

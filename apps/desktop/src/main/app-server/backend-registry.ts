@@ -27,7 +27,11 @@ type BackendClient = {
   onNotification(
     listener: (notification: AppServerNotification) => void | Promise<void>
   ): () => void;
-  readThread(params: { threadId: string }): Promise<AppServerReadThreadResponse["replay"]>;
+  readThread(params: {
+    threadId: string;
+    before?: string;
+    limit?: number;
+  }): Promise<AppServerReadThreadResponse["replay"]>;
   startThread(params: {
     cwd?: string;
     model?: string;
@@ -151,6 +155,8 @@ export class DesktopBackendRegistry {
     const backend = request.backend ?? "codex";
     const replay = await this.getClient(backend).readThread({
       threadId: request.threadId,
+      before: request.before,
+      limit: request.limit,
     });
 
     return {

@@ -94,6 +94,42 @@ describe("App", () => {
           fetchedAt: Date.now(),
           threadId: "thread-1",
           replay: {
+            entries: [
+              {
+                type: "message",
+                id: "message-1",
+                role: "user",
+                text: "Open the desktop plan and build the Codex client."
+              },
+              {
+                type: "activity",
+                id: "activity-1",
+                summary: "Explored 2 files, ran 1 command",
+                details: [
+                  {
+                    id: "detail-1",
+                    kind: "read",
+                    label: "Read TranscriptList.tsx"
+                  },
+                  {
+                    id: "detail-2",
+                    kind: "read",
+                    label: "Read ThreadView.tsx"
+                  },
+                  {
+                    id: "detail-3",
+                    kind: "command",
+                    label: "pwd && rg --files"
+                  }
+                ]
+              },
+              {
+                type: "message",
+                id: "message-2",
+                role: "assistant",
+                text: "The Codex client is wired and the thread browser is live."
+              }
+            ],
             messages: [
               {
                 id: "message-1",
@@ -155,6 +191,7 @@ describe("App", () => {
     expect(
       screen.getByText("The Codex client is wired and the thread browser is live.")
     ).toBeInTheDocument();
+    expect(screen.getByText("Explored 2 files, ran 1 command")).toBeInTheDocument();
     const openContextButton = screen.getByRole("button", { name: "Open context rail" });
     openContextButton.click();
     expect(
