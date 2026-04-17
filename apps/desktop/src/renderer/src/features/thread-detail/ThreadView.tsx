@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type {
   AppServerThreadEntry,
   AppServerSkillSummary,
@@ -12,6 +13,7 @@ import { ThreadHeader } from "./ThreadHeader";
 import { TranscriptList } from "./TranscriptList";
 
 type ThreadViewProps = {
+  addOptimisticUserMessage: (text: string) => string;
   backendError?: string;
   backends: BackendSummary[];
   composerDisabled: boolean;
@@ -29,10 +31,13 @@ type ThreadViewProps = {
   transcriptEntries: AppServerThreadEntry[];
   transcriptPagination?: AppServerThreadReplayPagination;
   onLoadOlder: () => Promise<void>;
+  removeOptimisticMessage: (id: string) => void;
   onRefresh: () => Promise<void>;
 };
 
 export function ThreadView(props: ThreadViewProps) {
+  const [pendingStatusText, setPendingStatusText] = useState<string>();
+
   if (!props.selectedThread) {
     return (
       <section className="thread-empty-state">
@@ -79,6 +84,7 @@ export function ThreadView(props: ThreadViewProps) {
             entries={props.transcriptEntries}
             loading={props.loading}
             loadingMore={props.loadingMore}
+            pendingStatusText={pendingStatusText}
             pagination={props.transcriptPagination}
             threadId={props.selectedThread.id}
             skills={props.skills}
@@ -95,9 +101,12 @@ export function ThreadView(props: ThreadViewProps) {
       </div>
 
       <Composer
+        addOptimisticUserMessage={props.addOptimisticUserMessage}
         desktopApi={props.desktopApi}
         disabled={props.composerDisabled}
+        onPendingStatusChange={setPendingStatusText}
         onRefresh={props.onRefresh}
+        removeOptimisticMessage={props.removeOptimisticMessage}
         skillError={props.skillError}
         skillLoading={props.skillLoading}
         skills={props.skills}

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { vi } from "vitest";
 import { App } from "../App";
 
@@ -237,5 +237,25 @@ describe("App", () => {
       screen.queryByText("This thread's backend is read-only right now. You can keep drafting, but send is unavailable.")
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    const reply = screen.getByLabelText("Reply");
+    fireEvent.change(reply, {
+      target: { value: "$frontend-design what can this skill do" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("what can this skill do").closest("article")
+      ).toHaveClass("transcript-message--user");
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for the app server…");
+    expect(
+      screen.queryByText("Waiting for the app server…", {
+        selector: ".composer__meta"
+      })
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByText("$frontend-design").length).toBeGreaterThan(0);
+    expect(screen.getByText("3 messages")).toBeInTheDocument();
   });
 });

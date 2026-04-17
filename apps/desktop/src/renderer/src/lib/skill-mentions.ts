@@ -150,7 +150,7 @@ export function insertSkillLabel(params: {
   const mention = buildSkillLabelToken(params.skill);
   const before = params.draft.slice(0, trigger.start);
   const after = params.draft.slice(Math.max(trigger.end, params.selectionEnd));
-  const needsTrailingSpace = after.length > 0 && !/^\s/.test(after);
+  const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
   const nextDraft = `${before}${mention}${needsTrailingSpace ? " " : ""}${after}`;
 
   return {

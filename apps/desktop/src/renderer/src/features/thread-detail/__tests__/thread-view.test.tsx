@@ -6,6 +6,7 @@ describe("ThreadView", () => {
   it("renders a directory-less thread with transcript history and context", () => {
     render(
       <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[
           {
             kind: "codex",
@@ -111,6 +112,7 @@ describe("ThreadView", () => {
           }
         ]}
         onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
         onRefresh={async () => undefined}
         skillLoading={false}
       />

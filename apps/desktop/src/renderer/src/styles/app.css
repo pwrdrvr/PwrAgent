@@ -710,6 +710,14 @@ textarea {
   border-top: 0;
 }
 
+.transcript-list__pending {
+  width: min(100%, 760px);
+  padding: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .transcript-activity__header {
   display: flex;
   align-items: baseline;

@@ -45,7 +45,10 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
-    expect(screen.getByLabelText("Reply")).toHaveValue("Use $frontend-design");
+    expect(screen.getByLabelText("Reply")).toHaveValue("Use $frontend-design ");
+    expect(
+      screen.queryByRole("listbox", { name: "Skills" })
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
@@ -62,5 +65,49 @@ describe("Composer", () => {
       });
     });
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies the focused skill option when activated from the keyboard", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            runId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        onRefresh={async () => undefined}
+        skills={[
+          {
+            name: "ce:plan",
+            description: "Turn feature descriptions into implementation plans.",
+            path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+            enabled: true,
+          },
+        ]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "$ce:pl" } });
+
+    const option = screen.getByRole("button", { name: /\$ce:plan/i });
+    option.focus();
+    fireEvent.click(option);
+
+    expect(screen.getByLabelText("Reply")).toHaveValue("$ce:plan ");
+    expect(
+      screen.queryByRole("listbox", { name: "Skills" })
+    ).not.toBeInTheDocument();
   });
 });

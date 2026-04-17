@@ -10,9 +10,12 @@ import {
 import { SkillChip } from "./SkillChip";
 
 type ComposerProps = {
+  addOptimisticUserMessage?: (text: string) => string;
   desktopApi?: DesktopApi;
   disabled?: boolean;
+  onPendingStatusChange?: (status?: string) => void;
   onRefresh: () => Promise<void>;
+  removeOptimisticMessage?: (id: string) => void;
   skillError?: string;
   skillLoading?: boolean;
   skills: AppServerSkillSummary[];
@@ -25,7 +28,7 @@ export function Composer(props: ComposerProps) {
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string>();
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
-  const [activeRunId, setActiveRunId] = useState<string>();
+  const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
 
   const selectionStart = inputRef.current?.selectionStart ?? draft.length;
   const selectionEnd = inputRef.current?.selectionEnd ?? draft.length;
@@ -81,12 +84,27 @@ export function Composer(props: ComposerProps) {
         event.notification.method === "turn/failed" ||
         event.notification.method === "turn/cancelled"
       ) {
+        if (
+          activeOptimisticMessageId &&
+          (event.notification.method === "turn/failed" ||
+            event.notification.method === "turn/cancelled")
+        ) {
+          props.removeOptimisticMessage?.(activeOptimisticMessageId);
+        }
+        props.onPendingStatusChange?.(undefined);
         setSending(false);
-        setActiveRunId(undefined);
+        setActiveOptimisticMessageId(undefined);
         void props.onRefresh();
       }
     });
-  }, [props.desktopApi, props.onRefresh, props.thread]);
+  }, [
+    activeOptimisticMessageId,
+    props.desktopApi,
+    props.onPendingStatusChange,
+    props.onRefresh,
+    props.removeOptimisticMessage,
+    props.thread
+  ]);
 
   const submitTurn = async (): Promise<void> => {
     const text = hydrateSkillLabelsWithMarkdown(draft.trim(), mentionedSkills);
@@ -96,19 +114,25 @@ export function Composer(props: ComposerProps) {
 
     setSendError(undefined);
     setSending(true);
+    props.onPendingStatusChange?.("Waiting for the app server…");
+    const optimisticMessageId = props.addOptimisticUserMessage?.(text);
+    setActiveOptimisticMessageId(optimisticMessageId);
 
     try {
       const response = await props.desktopApi.startTurn({
         backend: props.thread.source,
         threadId: props.thread.id,
-        input: [{ type: "text", text: draft }],
+        input: [{ type: "text", text }],
       });
       setDraft("");
-      setActiveRunId(response.runId);
       await props.onRefresh();
     } catch (error) {
+      if (optimisticMessageId) {
+        props.removeOptimisticMessage?.(optimisticMessageId);
+      }
+      props.onPendingStatusChange?.(undefined);
       setSending(false);
-      setActiveRunId(undefined);
+      setActiveOptimisticMessageId(undefined);
       setSendError(error instanceof Error ? error.message : String(error));
     }
   };
@@ -215,6 +239,9 @@ export function Composer(props: ComposerProps) {
                   event.preventDefault();
                   applySkill(skill);
                 }}
+                onClick={() => {
+                  applySkill(skill);
+                }}
               >
                 <span className="composer__skill-option-title">
                   <span aria-hidden="true">🧰</span>
@@ -239,7 +266,6 @@ export function Composer(props: ComposerProps) {
           This thread's backend is unavailable right now. You can keep drafting, but send is unavailable.
         </p>
       ) : null}
-      {activeRunId ? <p className="composer__meta">Waiting for the app server…</p> : null}
 
       <div className="composer__actions">
         <button

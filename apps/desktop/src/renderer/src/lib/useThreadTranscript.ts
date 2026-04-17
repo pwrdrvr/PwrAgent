@@ -3,6 +3,7 @@ import type {
   AppServerBackendKind,
   AppServerReadThreadResponse,
   AppServerThreadEntry,
+  AppServerThreadMessageEntry,
   AppServerThreadMessage
 } from "@pwragnt/shared";
 import type { DesktopApi } from "./desktop-api";
@@ -25,21 +26,28 @@ export function useThreadTranscript(params: {
   desktopApi?: DesktopApi;
   threadId?: string;
 }): {
+  addOptimisticUserMessage: (text: string) => string;
   error?: string;
   entries: AppServerThreadEntry[];
   loading: boolean;
   loadingMore: boolean;
   loadOlder: () => Promise<void>;
   messages: AppServerThreadMessage[];
+  removeOptimisticMessage: (id: string) => void;
   refresh: () => Promise<void>;
   response?: AppServerReadThreadResponse;
 } {
   const { backend, desktopApi, threadId } = params;
   const [response, setResponse] = useState<AppServerReadThreadResponse>();
+  const [optimisticEntries, setOptimisticEntries] = useState<AppServerThreadMessageEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string>();
   const requestVersionRef = useRef(0);
+
+  useEffect(() => {
+    setOptimisticEntries([]);
+  }, [threadId]);
 
   const loadLatest = useCallback(async (): Promise<void> => {
     if (!threadId) {
@@ -141,23 +149,59 @@ export function useThreadTranscript(params: {
     }
   }, [backend, desktopApi, response, threadId]);
 
+  const addOptimisticUserMessage = useCallback((text: string): string => {
+    const id = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setOptimisticEntries((current) => [
+      ...current,
+      {
+        type: "message",
+        id,
+        role: "user",
+        text,
+        createdAt: Date.now()
+      }
+    ]);
+    return id;
+  }, []);
+
+  const removeOptimisticMessage = useCallback((id: string): void => {
+    setOptimisticEntries((current) => current.filter((entry) => entry.id !== id));
+  }, []);
+
+  const visibleOptimisticEntries = useMemo(
+    () =>
+      optimisticEntries.filter(
+        (entry) =>
+          !response?.replay.messages.some(
+            (message) => message.role === entry.role && message.text === entry.text
+          )
+      ),
+    [optimisticEntries, response?.replay.messages]
+  );
+
   const entries = useMemo(
-    () => response?.replay.entries ?? [],
-    [response?.replay.entries]
+    () => mergeItems(response?.replay.entries ?? [], visibleOptimisticEntries),
+    [response?.replay.entries, visibleOptimisticEntries]
   );
 
   const messages = useMemo(
-    () => response?.replay.messages ?? [],
-    [response?.replay.messages]
+    () =>
+      mergeItems(
+        response?.replay.messages ?? [],
+        visibleOptimisticEntries.map(({ type: _type, ...message }) => message)
+      ),
+    [response?.replay.messages, visibleOptimisticEntries]
   );
 
   return {
+    addOptimisticUserMessage,
     entries,
     error,
     loading,
     loadingMore,
     loadOlder,
     messages,
+    removeOptimisticMessage,
     refresh: loadLatest,
     response
   };

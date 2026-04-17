@@ -38,6 +38,7 @@ export function App() {
 
       <main className="app-main">
         <ThreadView
+          addOptimisticUserMessage={transcript.addOptimisticUserMessage}
           backendError={backendSummaries.error}
           backends={backendSummaries.backends}
           fetchedAt={transcript.response?.fetchedAt}
@@ -62,6 +63,7 @@ export function App() {
           transcriptEntries={transcript.entries}
           transcriptPagination={transcript.response?.replay.pagination}
           onLoadOlder={transcript.loadOlder}
+          removeOptimisticMessage={transcript.removeOptimisticMessage}
           onRefresh={transcript.refresh}
         />
       </main>

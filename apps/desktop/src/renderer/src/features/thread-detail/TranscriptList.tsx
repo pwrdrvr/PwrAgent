@@ -12,6 +12,7 @@ type TranscriptListProps = {
   error?: string;
   loading: boolean;
   loadingMore: boolean;
+  pendingStatusText?: string;
   pagination?: AppServerThreadReplayPagination;
   threadId?: string;
   skills?: AppServerSkillSummary[];
@@ -22,7 +23,9 @@ type ScrollSnapshot = {
   clientHeight: number;
   distanceFromBottom: number;
   firstMessageId?: string;
+  itemCount: number;
   lastMessageId?: string;
+  pendingStatusText?: string;
   scrollHeight: number;
   scrollTop: number;
   threadId?: string;
@@ -48,6 +51,7 @@ export function TranscriptList(props: TranscriptListProps) {
 
     const firstMessageId = props.entries[0]?.id;
     const lastMessageId = props.entries[props.entries.length - 1]?.id;
+    const itemCount = props.entries.length + (props.pendingStatusText ? 1 : 0);
     const distanceFromBottom = Math.max(
       container.scrollHeight - container.clientHeight - container.scrollTop,
       0
@@ -57,12 +61,14 @@ export function TranscriptList(props: TranscriptListProps) {
       clientHeight: container.clientHeight,
       distanceFromBottom,
       firstMessageId,
+      itemCount,
       lastMessageId,
+      pendingStatusText: props.pendingStatusText,
       scrollHeight: container.scrollHeight,
       scrollTop: container.scrollTop,
       threadId: props.threadId
     };
-  }, [props.entries, props.threadId]);
+  }, [props.entries, props.pendingStatusText, props.threadId]);
 
   const syncScrollState = useCallback(() => {
     const snapshot = captureSnapshot();
@@ -119,7 +125,9 @@ export function TranscriptList(props: TranscriptListProps) {
       previousSnapshot &&
         previousSnapshot.threadId === props.threadId &&
         previousSnapshot.firstMessageId === firstMessageId &&
-        previousSnapshot.lastMessageId !== lastMessageId
+        (previousSnapshot.lastMessageId !== lastMessageId ||
+          previousSnapshot.pendingStatusText !== props.pendingStatusText ||
+          previousSnapshot.itemCount < props.entries.length + (props.pendingStatusText ? 1 : 0))
     );
 
     if (hasPrependedMessages && previousSnapshot) {
@@ -142,7 +150,7 @@ export function TranscriptList(props: TranscriptListProps) {
     }
 
     syncScrollState();
-  }, [props.entries, props.threadId, scrollToBottom, syncScrollState]);
+  }, [props.entries, props.pendingStatusText, props.threadId, scrollToBottom, syncScrollState]);
 
   if (props.loading && props.entries.length === 0) {
     return <p className="transcript-empty">Loading transcript…</p>;
@@ -185,6 +193,11 @@ export function TranscriptList(props: TranscriptListProps) {
             <TranscriptMessage key={entry.id} message={entry} skills={skills} />
           )
         )}
+        {props.pendingStatusText ? (
+          <div className="transcript-list__pending" role="status">
+            {props.pendingStatusText}
+          </div>
+        ) : null}
       </div>
 
       {hasContentBelow ? (

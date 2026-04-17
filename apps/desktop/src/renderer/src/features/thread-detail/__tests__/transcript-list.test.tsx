@@ -180,6 +180,28 @@ describe("TranscriptList", () => {
     ).toHaveClass("transcript-message--user");
   });
 
+  it("renders pending status inside the transcript list", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "What can this skill do?"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingStatusText="Waiting for the app server…"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for the app server…");
+  });
+
   it("anchors a freshly loaded transcript to the newest entry", () => {
     render(
       <TranscriptList
