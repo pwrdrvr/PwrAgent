@@ -14,6 +14,14 @@ import { ThreadContextPanel } from "./ThreadContextPanel";
 import { ThreadHeader } from "./ThreadHeader";
 import { TranscriptList } from "./TranscriptList";
 
+function formatRendererLogPayload(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 type ThreadViewProps = {
   addOptimisticUserMessage: (text: string) => string;
   backendError?: string;
@@ -61,6 +69,7 @@ export function ThreadView(props: ThreadViewProps) {
     }
 
     return props.desktopApi.onAgentEvent((event) => {
+      const method = event.notification.method;
       if (
         event.backend !== selectedThread.source ||
         event.notification.params.threadId !== selectedThread.id
@@ -69,10 +78,12 @@ export function ThreadView(props: ThreadViewProps) {
       }
 
       if (
-        event.notification.method === "turn/requestApproval" ||
-        event.notification.method === "review/requestApproval"
+        method.endsWith("/requestApproval") &&
+        "requestId" in event.notification.params
       ) {
-        setPendingRequest(event.notification);
+        setPendingRequest(
+          event.notification as AppServerPendingRequestNotification
+        );
         setPendingRequestBusy(false);
         setPendingRequestError(undefined);
         setPendingStatusText("Waiting for approval");
@@ -80,7 +91,7 @@ export function ThreadView(props: ThreadViewProps) {
       }
 
       if (
-        event.notification.method === "serverRequest/resolved" &&
+        method === "serverRequest/resolved" &&
         "requestId" in event.notification.params
       ) {
         const requestId = event.notification.params.requestId;
@@ -90,6 +101,18 @@ export function ThreadView(props: ThreadViewProps) {
         setPendingRequestBusy(false);
         setPendingRequestError(undefined);
         setPendingStatusText("Thinking");
+        return;
+      }
+
+      if (method.includes("/request")) {
+        console.error(
+          `[pwragnt:thread-view] unhandled thread request event ${formatRendererLogPayload({
+            backend: event.backend,
+            threadId: selectedThread.id,
+            method,
+            params: event.notification.params,
+          })}`
+        );
       }
     });
   }, [props.desktopApi, selectedThread]);

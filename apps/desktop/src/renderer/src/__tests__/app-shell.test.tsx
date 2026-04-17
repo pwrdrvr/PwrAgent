@@ -6,6 +6,11 @@ import { App } from "../App";
 describe("App", () => {
   it("renders the live thread shell with transcript history", async () => {
     const copyText = vi.fn(async () => undefined);
+    const interruptTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      runId: "turn-1",
+    }));
     let readThreadCalls = 0;
     let resolveRefreshRead:
       | ((value: {
@@ -226,6 +231,7 @@ describe("App", () => {
           threadId: "thread-1",
           runId: "turn-1"
         }),
+        interruptTurn,
         onAgentEvent: () => () => undefined,
         versions: {
           electron: "41.2.1"
@@ -307,6 +313,7 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Thinking");
     expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     expect(
       screen.queryByText("Thinking", {
         selector: ".composer__meta"
@@ -314,6 +321,16 @@ describe("App", () => {
     ).not.toBeInTheDocument();
     expect(screen.getAllByText("$frontend-design").length).toBeGreaterThan(0);
     expect(screen.getByText("3 messages")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    await waitFor(() => {
+      expect(interruptTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        runId: "turn-1",
+      });
+    });
 
     resolveRefreshRead?.(transcriptResponse);
   });

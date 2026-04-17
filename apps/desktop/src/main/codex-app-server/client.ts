@@ -53,6 +53,60 @@ type SkillCatalogEntry = {
   skills: AppServerSkillSummary[];
 };
 
+const KNOWN_NOTIFICATION_METHODS = new Set<string>([
+  "turn/started",
+  "turn/completed",
+  "turn/failed",
+  "turn/cancelled",
+  "item/started",
+  "item/completed",
+  "item/plan/delta",
+  "turn/plan/updated",
+  "serverRequest/resolved",
+  "thread/compacted",
+  "thread/status/changed",
+  "turn/requestApproval",
+  "review/requestApproval",
+  "mcpServer/startupStatus/updated",
+]);
+
+function isApprovalLikeMethod(method: string): boolean {
+  return method.endsWith("/requestApproval");
+}
+
+function isRequestLikeMethod(method: string): boolean {
+  return method.includes("/request");
+}
+
+function logUnhandledCodexMessage(params: {
+  kind: "notification" | "request";
+  method: string;
+  payload: unknown;
+}): void {
+  const prefix = "[pwragnt:codex-client]";
+
+  if (params.kind === "request") {
+    console.error(`${prefix} unhandled inbound codex request`, {
+      method: params.method,
+      payload: params.payload,
+    });
+    return;
+  }
+
+  if (isApprovalLikeMethod(params.method) || isRequestLikeMethod(params.method)) {
+    console.error(`${prefix} unhandled inbound codex notification`, {
+      method: params.method,
+      payload: params.payload,
+    });
+    return;
+  }
+
+  console.warn(`${prefix} unknown codex notification`, {
+    method: params.method,
+    payload: params.payload,
+  });
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -785,6 +839,11 @@ function isUnmaterializedThreadError(error: unknown): boolean {
   );
 }
 
+function isRequestTimeoutError(error: unknown, method: string): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.toLowerCase().includes(`json-rpc timeout: ${method.toLowerCase()}`);
+}
+
 async function runGit(projectKey: string, args: string[]): Promise<string> {
   const result = await execFile("git", ["-C", projectKey, ...args], {
     env: process.env
@@ -1011,6 +1070,14 @@ export class CodexAppServerClient {
     );
     this.directoryResolver = options.directoryResolver ?? resolveLinkedDirectories;
     this.connection.setNotificationHandler(async (method, params) => {
+      if (!KNOWN_NOTIFICATION_METHODS.has(method)) {
+        logUnhandledCodexMessage({
+          kind: "notification",
+          method,
+          payload: params,
+        });
+      }
+
       for (const listener of this.notificationListeners) {
         await listener({
           method: method as AppServerNotification["method"],
@@ -1026,7 +1093,20 @@ export class CodexAppServerClient {
 
       const listeners = [...this.requestListeners];
       if (listeners.length === 0) {
+        logUnhandledCodexMessage({
+          kind: "request",
+          method,
+          payload: params,
+        });
         throw new Error(`No desktop request handler registered for ${method}`);
+      }
+
+      if (!isApprovalLikeMethod(method)) {
+        logUnhandledCodexMessage({
+          kind: "request",
+          method,
+          payload: params,
+        });
       }
 
       for (const listener of listeners) {
@@ -1229,20 +1309,45 @@ export class CodexAppServerClient {
   }): Promise<{ threadId: string; runId: string }> {
     await this.ensureInitialized();
 
-    const result = await requestWithFallbacks({
+    await requestWithFallbacks({
       client: this.connection,
-      methods: ["turn/interrupt"],
-      payloads: [{ threadId: params.threadId, turnId: params.runId }],
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-    });
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads({
+        threadId: params.threadId,
+      }),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    }).catch(() => undefined);
 
-    const threadId = extractThreadIdFromValue(result);
-    const runId = extractRunIdFromValue(result);
-    if (!threadId || !runId) {
-      throw new Error("codex app server turn/interrupt did not return threadId and runId");
+    try {
+      const result = await requestWithFallbacks({
+        client: this.connection,
+        methods: ["turn/interrupt"],
+        payloads: [{ threadId: params.threadId, turnId: params.runId }],
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+
+      return {
+        threadId: extractThreadIdFromValue(result) ?? params.threadId,
+        runId: extractRunIdFromValue(result) ?? params.runId,
+      };
+    } catch (error) {
+      if (!isRequestTimeoutError(error, "turn/interrupt")) {
+        throw error;
+      }
+
+      console.warn(
+        "[pwragnt:codex-client] turn/interrupt timed out; waiting for later status updates",
+        {
+          threadId: params.threadId,
+          runId: params.runId,
+        }
+      );
+
+      return {
+        threadId: params.threadId,
+        runId: params.runId,
+      };
     }
-
-    return { threadId, runId };
   }
 
   private async ensureInitialized(): Promise<void> {

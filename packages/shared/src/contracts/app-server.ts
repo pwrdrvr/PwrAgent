@@ -172,6 +172,17 @@ export type AppServerPendingRequestNotification = {
 
 export type AppServerNotification =
   | {
+      method: "turn/started";
+      params: {
+        threadId: string;
+        runId?: string;
+        turn: {
+          id: string;
+          status?: string;
+        };
+      };
+    }
+  | {
       method: "turn/completed";
       params: {
         threadId: string;
@@ -253,6 +264,15 @@ export type AppServerNotification =
   | {
       method: "turn/requestApproval" | "review/requestApproval";
       params: AppServerPendingRequestNotification["params"];
+    }
+  | {
+      method: "thread/status/changed";
+      params: {
+        threadId: string;
+        status: {
+          type: string;
+        };
+      };
     }
   | {
       method: "serverRequest/resolved";
