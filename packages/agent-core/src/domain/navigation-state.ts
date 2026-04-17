@@ -91,6 +91,10 @@ export function buildNavigationSnapshotHash(params: {
     threads: params.threads.map((thread) => ({
       source: thread.source,
       id: thread.id,
+      title: thread.title,
+      titleSource: thread.titleSource,
+      summary: thread.summary ?? null,
+      projectKey: thread.projectKey ?? null,
       updatedAt: thread.updatedAt ?? null,
       gitBranch: thread.gitBranch ?? null,
       executionMode: thread.executionMode ?? "default",

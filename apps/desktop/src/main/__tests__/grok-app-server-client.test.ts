@@ -55,6 +55,7 @@ describe("GrokAppServerClient", () => {
       {
         id: "thread-1",
         title: "Untitled thread",
+        titleSource: "fallback",
         summary: undefined,
         createdAt: expect.any(Number),
         updatedAt: expect.any(Number),
@@ -82,6 +83,26 @@ describe("GrokAppServerClient", () => {
     });
     await Promise.resolve();
     await Promise.resolve();
+
+    expect(await client.listThreads()).toEqual([
+      {
+        id: "thread-1",
+        title: "Ship Unit 3",
+        titleSource: "derived",
+        summary: "Done.",
+        createdAt: expect.any(Number),
+        updatedAt: expect.any(Number),
+        linkedDirectories: [
+          {
+            id: "/repo/workspace",
+            label: "workspace",
+            path: "/repo/workspace",
+            kind: "local",
+          },
+        ],
+        source: "grok",
+      },
+    ]);
 
     const replay = await client.readThread({ threadId: "thread-1" });
     expect(replay).toEqual({
@@ -322,6 +343,7 @@ describe("GrokAppServerClient", () => {
         {
           id: "thread-1",
           title: "Untitled thread",
+          titleSource: "fallback",
           summary: undefined,
           createdAt: expect.any(Number),
           updatedAt: expect.any(Number),

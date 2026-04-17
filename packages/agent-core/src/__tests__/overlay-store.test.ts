@@ -17,6 +17,7 @@ function buildThread(overrides: Partial<AppServerThreadSummary> = {}): AppServer
   return {
     id: "thread-1",
     title: "Desktop App",
+    titleSource: "explicit",
     source: "codex",
     linkedDirectories: [],
     updatedAt: 1000,

@@ -75,6 +75,86 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/list") {
+      const params = JSON.parse(message) as {
+        params?: { archived?: boolean; searchTerm?: string; query?: string; filter?: string };
+      };
+      const searchTerm =
+        params.params?.searchTerm ?? params.params?.query ?? params.params?.filter;
+
+      if (searchTerm === "missing-worktree") {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data: params.params?.archived
+                ? []
+                : [
+                    {
+                      id: "thread-missing-worktree",
+                      name: "Investigate chunk file errors",
+                      updatedAt: 1_776_000_000,
+                      cwd: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+                    }
+                  ]
+            }
+          })
+        );
+        return;
+      }
+
+      if (searchTerm === "forked-worktree") {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data: params.params?.archived
+                ? []
+                : [
+                    {
+                      id: "thread-forked-worktree",
+                      name: "Plan Slidev theme extraction",
+                      updatedAt: 1_776_100_000,
+                      cwd: "/Users/huntharo/.codex/worktrees/be87/search-product",
+                      path: "/tmp/forked-worktree-rollout.jsonl",
+                    }
+                  ]
+            }
+          })
+        );
+        return;
+      }
+
+      if (params.params?.archived === true) {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data: [
+                {
+                  id: "thread-renamed",
+                  name: "Spud up the thread",
+                  preview:
+                    "Name this thread something funny and spunky. Something about potatoes.",
+                  updatedAt: 1_763_500_500,
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                },
+                {
+                  id: "thread-archive",
+                  name: "Retired archived thread",
+                  preview: "This one should not appear in the active navigation list.",
+                  updatedAt: 1_763_500_250,
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                }
+              ]
+            }
+          })
+        );
+        return;
+      }
+
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -92,11 +172,21 @@ class MockTransport implements JsonRpcTransport {
               },
               {
                 id: "thread-1",
-                title: "Plan Codex compatibility",
+                preview:
+                  "I need a bedtime story about Nvidia and building AI through programmable shaders as an accident.",
                 text: "Do not leak this planning prompt into the thread browser",
                 updatedAt: 1_763_400_000,
                 session: {
                   cwd: "/Users/huntharo/pwrdrvr/openclaw-codex-app-server"
+                }
+              },
+              {
+                id: "thread-renamed",
+                preview:
+                  "Name this thread something funny and spunky. Something about potatoes.",
+                updatedAt: 1_763_500_100,
+                session: {
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgnt"
                 }
               }
             ]
@@ -361,11 +451,16 @@ describe("CodexAppServerClient", () => {
     });
 
     const threads = await client.listThreads();
+    const primaryThread = threads.find((thread) => thread.id === "thread-2");
+    const derivedThread = threads.find((thread) => thread.id === "thread-1");
+    const renamedThread = threads.find((thread) => thread.id === "thread-renamed");
+    const archivedThread = threads.find((thread) => thread.id === "thread-archive");
 
-    expect(threads).toHaveLength(2);
-    expect(threads[0]).toMatchObject({
+    expect(threads).toHaveLength(3);
+    expect(primaryThread).toMatchObject({
       id: "thread-2",
       title: "Ship desktop shell",
+      titleSource: "explicit",
       source: "codex",
       linkedDirectories: [
         {
@@ -377,16 +472,41 @@ describe("CodexAppServerClient", () => {
         }
       ]
     });
-    expect(threads[1]?.title).toBe("Plan Codex compatibility");
+    expect(derivedThread?.title).toBe(
+      "A bedtime story about Nvidia and building AI through programmable...",
+    );
+    expect(derivedThread?.titleSource).toBe("derived");
+    expect(derivedThread?.summary).toBeUndefined();
+    expect(renamedThread).toMatchObject({
+      id: "thread-renamed",
+      title: "Spud up the thread",
+      titleSource: "explicit",
+    });
+    expect(archivedThread).toBeUndefined();
 
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
 
-    const threadListRequest = transport!.sentMessages
+    const threadListRequests = transport!.sentMessages
       .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
-      .find((payload) => payload.method === "thread/list");
+      .filter((payload) => payload.method === "thread/list");
 
-    expect(threadListRequest?.params).toEqual({});
+    expect(threadListRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: {
+            archived: false,
+            limit: 100
+          }
+        }),
+        expect.objectContaining({
+          params: {
+            archived: true,
+            limit: 100
+          }
+        })
+      ])
+    );
 
     await client.close();
   });
@@ -404,16 +524,170 @@ describe("CodexAppServerClient", () => {
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
 
-    const threadListRequest = transport!.sentMessages
+    const threadListRequests = transport!.sentMessages
       .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
-      .find((payload) => payload.method === "thread/list");
+      .filter((payload) => payload.method === "thread/list");
 
-    expect(threadListRequest?.params).toEqual({
-      query: "web-app",
-      limit: 100
-    });
+    expect(threadListRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: {
+            searchTerm: "web-app",
+            archived: false,
+            limit: 100
+          }
+        }),
+        expect.objectContaining({
+          params: {
+            searchTerm: "web-app",
+            archived: true,
+            limit: 100
+          }
+        })
+      ])
+    );
 
     await client.close();
+  });
+
+  it("ignores missing worktree cwd paths when deriving linked directories", async () => {
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      access: vi.fn(async (targetPath: string) => {
+        if (targetPath === "/Users/huntharo/.codex/worktrees/0cb4/web-app") {
+          throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        }
+      })
+    }));
+    vi.doMock("node:child_process", () => ({
+      execFile: vi.fn(
+        (
+          _file: string,
+          _args: string[],
+          _options: unknown,
+          callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void
+        ) => {
+          callback(null, { stdout: "", stderr: "" });
+        }
+      )
+    }));
+
+    try {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+      const client = new CodexAppServerClient({
+        command: "codex"
+      });
+
+      const threads = await client.listThreads({ filter: "missing-worktree" });
+
+      expect(threads).toEqual([
+        expect.objectContaining({
+          id: "thread-missing-worktree",
+          projectKey: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+          linkedDirectories: []
+        })
+      ]);
+
+      await client.close();
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+    }
+  });
+
+  it("recovers the stable repo directory from rollout metadata when codex cwd is a removed worktree", async () => {
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      access: vi.fn(async (targetPath: string) => {
+        if (targetPath === "/Users/huntharo/.codex/worktrees/be87/search-product") {
+          throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        }
+      }),
+      readFile: vi.fn(async (targetPath: string) => {
+        if (targetPath !== "/tmp/forked-worktree-rollout.jsonl") {
+          throw new Error(`Unexpected read: ${targetPath}`);
+        }
+
+        return [
+          JSON.stringify({
+            type: "session_meta",
+            payload: {
+              id: "thread-forked-worktree",
+              forked_from_id: "thread-parent",
+              cwd: "/Users/huntharo/.codex/worktrees/be87/search-product"
+            }
+          }),
+          JSON.stringify({
+            type: "session_meta",
+            payload: {
+              id: "thread-parent",
+              cwd: "/Users/huntharo/GIPHY/search-product"
+            }
+          })
+        ].join("\n");
+      })
+    }));
+    vi.doMock("node:child_process", () => ({
+      execFile: vi.fn(
+        (
+          _file: string,
+          args: string[],
+          _options: unknown,
+          callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void
+        ) => {
+          if (args.includes("rev-parse")) {
+            callback(null, {
+              stdout: "/Users/huntharo/GIPHY/search-product\n",
+              stderr: "",
+            });
+            return;
+          }
+
+          if (args.includes("worktree")) {
+            callback(null, {
+              stdout: "worktree /Users/huntharo/GIPHY/search-product\n",
+              stderr: "",
+            });
+            return;
+          }
+
+          callback(new Error(`Unexpected git invocation: ${args.join(" ")}`));
+        }
+      )
+    }));
+
+    try {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+      const client = new CodexAppServerClient({
+        command: "codex"
+      });
+
+      const threads = await client.listThreads({ filter: "forked-worktree" });
+
+      expect(threads).toEqual([
+        expect.objectContaining({
+          id: "thread-forked-worktree",
+          projectKey: "/Users/huntharo/GIPHY/search-product",
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/GIPHY/search-product",
+              label: "search-product",
+              path: "/Users/huntharo/GIPHY/search-product",
+              kind: "local"
+            }
+          ]
+        })
+      ]);
+
+      await client.close();
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+    }
   });
 
   it("does not synthesize summaries from raw conversation text", async () => {
@@ -425,8 +699,46 @@ describe("CodexAppServerClient", () => {
     });
 
     const threads = await client.listThreads();
+    const derivedThread = threads.find((thread) => thread.id === "thread-1");
 
-    expect(threads[1]?.summary).toBeUndefined();
+    expect(derivedThread?.summary).toBeUndefined();
+
+    await client.close();
+  });
+
+  it("hydrates archived threads so persisted explicit names survive reload", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async (projectKey) =>
+        projectKey
+          ? [
+              {
+                id: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                label: "PwrAgnt",
+                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                kind: "local"
+              }
+            ]
+          : []
+    });
+
+    const threads = await client.listThreads();
+
+    expect(threads.find((thread) => thread.id === "thread-renamed")).toMatchObject({
+      id: "thread-renamed",
+      title: "Spud up the thread",
+      titleSource: "explicit",
+      source: "codex",
+    });
+    expect(threads.find((thread) => thread.id === "thread-archive")).toBeUndefined();
+
+    const threadListRequests = MockTransport.instances[0]?.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: { archived?: boolean } })
+      .filter((message) => message.method === "thread/list");
+    expect(threadListRequests?.some((message) => message.params?.archived === false)).toBe(true);
+    expect(threadListRequests?.some((message) => message.params?.archived === true)).toBe(true);
 
     await client.close();
   });

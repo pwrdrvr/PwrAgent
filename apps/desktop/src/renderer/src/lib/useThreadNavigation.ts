@@ -17,6 +17,41 @@ type NavigationState = {
   response?: NavigationSnapshot;
 };
 
+function applyThreadNameUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: { backend: AppServerBackendKind; threadId: string; threadName?: string }
+): NavigationSnapshot | undefined {
+  const threadName = params.threadName?.trim();
+  if (!snapshot || !threadName) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+
+    if (thread.title === threadName && thread.titleSource === "explicit") {
+      return thread;
+    }
+
+    changed = true;
+    return {
+      ...thread,
+      title: threadName,
+      titleSource: "explicit" as const,
+    };
+  });
+
+  return changed
+    ? {
+        ...snapshot,
+        threads,
+      }
+    : snapshot;
+}
+
 export function useThreadNavigation(desktopApi?: DesktopApi): {
   browseMode: BrowseMode;
   createThread: (
@@ -185,6 +220,55 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     });
   }, [desktopApi, refresh]);
 
+  useEffect(() => {
+    if (!desktopApi?.onAgentEvent) {
+      return;
+    }
+
+    return desktopApi.onAgentEvent((event) => {
+      const method = event.notification.method;
+      if (method === "thread/name/updated") {
+        const { threadId, threadName } = event.notification.params as {
+          threadId: string;
+          threadName?: string;
+        };
+        setState((current) => ({
+          ...current,
+          response: applyThreadNameUpdate(current.response, {
+            backend: event.backend,
+            threadId,
+            threadName,
+          }),
+        }));
+        setOptimisticThread((current) => {
+          if (current?.source !== event.backend || current.id !== threadId) {
+            return current;
+          }
+
+          const nextThreadName = threadName?.trim();
+          if (!nextThreadName) {
+            return current;
+          }
+
+          return {
+            ...current,
+            title: nextThreadName,
+            titleSource: "explicit",
+          };
+        });
+        return;
+      }
+
+      if (
+        method === "turn/completed" ||
+        method === "turn/failed" ||
+        method === "turn/cancelled"
+      ) {
+        void refresh();
+      }
+    });
+  }, [desktopApi, refresh]);
+
   const threads = useMemo(() => {
     const currentThreads = state.response?.threads ?? [];
     if (!optimisticThread) {
@@ -291,6 +375,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         const nextOptimisticThread: NavigationThreadSummary = {
           id: response.threadId,
           title: "Untitled thread",
+          titleSource: "fallback",
           summary: undefined,
           source: response.backend,
           executionMode: response.executionMode,

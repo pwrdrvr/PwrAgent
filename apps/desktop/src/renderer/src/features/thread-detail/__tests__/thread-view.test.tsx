@@ -1,7 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadView } from "../ThreadView";
+
+afterEach(() => {
+  cleanup();
+});
 
 describe("ThreadView", () => {
   it("renders a directory-less thread with transcript history and context", () => {
@@ -87,6 +91,7 @@ describe("ThreadView", () => {
         selectedThread={{
           id: "thread-2",
           title: "Plan the app-server protocol",
+          titleSource: "explicit",
           summary: "Inspect Codex thread/read output and normalize it for desktop.",
           source: "codex",
           executionMode: "default",
@@ -160,6 +165,95 @@ describe("ThreadView", () => {
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("shows missing recorded working directory details and copies the thread id", async () => {
+    const copyText = vi.fn(async () => undefined);
+    Object.defineProperty(window, "pwragnt", {
+      configurable: true,
+      value: {
+        copyText
+      }
+    });
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
+            runId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
+          title: "Plan Slidev theme extraction",
+          titleSource: "explicit",
+          source: "codex",
+          projectKey: "/Users/huntharo/.codex/worktrees/be87/search-product",
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false
+          }
+        }}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "assistant",
+            text: "The thread still loads."
+          }
+        ]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        onRefresh={vi.fn(async () => undefined)}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open context rail" }));
+
+    expect(screen.getByText("Recorded working directory is no longer available.")).toBeInTheDocument();
+    expect(screen.getByText("search-product")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy thread id" }));
+
+    expect(copyText).toHaveBeenCalledWith("019d88a2-0e0b-77f0-bfce-130ae8e37d8f");
   });
 
   it("renders live assistant commentary from item/agentMessage/delta notifications", async () => {
@@ -243,6 +337,7 @@ describe("ThreadView", () => {
         selectedThread={{
           id: "thread-2",
           title: "Plan the app-server protocol",
+          titleSource: "explicit",
           source: "codex",
           updatedAt: Date.now(),
           linkedDirectories: [],

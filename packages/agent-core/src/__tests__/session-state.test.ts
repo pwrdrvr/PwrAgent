@@ -26,6 +26,7 @@ describe("AppServerSessionState", () => {
       {
         threadId: "thread-2",
         title: "Second thread",
+        titleSource: "explicit",
         summary: "latest reply",
         projectKey: "/repo/two",
         model: "grok-4.20-fast",
@@ -35,9 +36,68 @@ describe("AppServerSessionState", () => {
       {
         threadId: "thread-1",
         title: "First thread",
+        titleSource: "explicit",
         summary: "first prompt",
         projectKey: "/repo/one",
         model: "grok-4.20-reasoning",
+        createdAt: expect.any(Number),
+        updatedAt: expect.any(Number),
+      },
+    ]);
+  });
+
+  it("derives the title from the first user message until a real name exists", () => {
+    const state = new AppServerSessionState();
+
+    state.createThread({ threadId: "thread-1", cwd: "/repo/workspace" });
+    state.appendInput("thread-1", [{ type: "text", text: "Ship Unit 3" }]);
+
+    expect(state.listThreads()).toEqual([
+      {
+        threadId: "thread-1",
+        title: "Ship Unit 3",
+        titleSource: "derived",
+        summary: undefined,
+        projectKey: "/repo/workspace",
+        model: undefined,
+        createdAt: expect.any(Number),
+        updatedAt: expect.any(Number),
+      },
+    ]);
+
+    state.appendAssistant("thread-1", "Done.");
+
+    expect(state.listThreads()[0]).toEqual({
+      threadId: "thread-1",
+      title: "Ship Unit 3",
+      titleSource: "derived",
+      summary: "Done.",
+      projectKey: "/repo/workspace",
+      model: undefined,
+      createdAt: expect.any(Number),
+      updatedAt: expect.any(Number),
+    });
+  });
+
+  it("shortens long derived titles without surfacing the full first prompt as summary", () => {
+    const state = new AppServerSessionState();
+
+    state.createThread({ threadId: "thread-1", cwd: "/repo/workspace" });
+    state.appendInput("thread-1", [
+      {
+        type: "text",
+        text: "I need a bedtime story about Nvidia and building AI through programmable shaders as an accident.",
+      },
+    ]);
+
+    expect(state.listThreads()).toEqual([
+      {
+        threadId: "thread-1",
+        title: "A bedtime story about Nvidia and building AI through programmable...",
+        titleSource: "derived",
+        summary: undefined,
+        projectKey: "/repo/workspace",
+        model: undefined,
         createdAt: expect.any(Number),
         updatedAt: expect.any(Number),
       },
@@ -58,6 +118,7 @@ describe("AppServerSessionState", () => {
       threadId: "thread-1",
       thread: expect.objectContaining({
         threadId: "thread-1",
+        firstUserMessage: "Ship it",
         cwd: "/repo/workspace",
         modelProvider: "xai",
         approvalPolicy: "on-request",
@@ -114,7 +175,8 @@ describe("AppServerSessionState", () => {
       expect(hydratedState.listThreads()).toEqual([
         {
           threadId: "thread-1",
-          title: undefined,
+          title: "Untitled thread",
+          titleSource: "fallback",
           summary: "Done.",
           projectKey: "/repo/workspace",
           model: "grok-4.20-fast",

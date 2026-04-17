@@ -17,6 +17,7 @@ function buildThread(overrides: Partial<AppServerThreadSummary> = {}): AppServer
   return {
     id: "thread-1",
     title: "Desktop App",
+    titleSource: "explicit",
     source: "codex",
     linkedDirectories: [],
     updatedAt: 1000,
@@ -85,6 +86,24 @@ describe("refresh reconciliation", () => {
     });
 
     expect(snapshot.unchanged).toBe(true);
+  });
+
+  it("treats title metadata changes as material snapshot changes", async () => {
+    const store = await createStore();
+
+    await store.reconcileNavigationSnapshot({
+      backend: "codex",
+      fetchedAt: 1000,
+      threads: [buildThread()],
+    });
+
+    const snapshot = await store.reconcileNavigationSnapshot({
+      backend: "codex",
+      fetchedAt: 2000,
+      threads: [buildThread({ title: "first prompt", titleSource: "derived" })],
+    });
+
+    expect(snapshot.unchanged).toBe(false);
   });
 
   it("tracks mixed-backend threads with duplicate ids independently in aggregate snapshots", async () => {

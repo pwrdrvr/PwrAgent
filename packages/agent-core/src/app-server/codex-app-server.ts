@@ -224,13 +224,20 @@ export class CodexAppServer {
     return thread;
   }
 
-  private setThreadName(params: Record<string, unknown>): ThreadState {
+  private async setThreadName(params: Record<string, unknown>): Promise<ThreadState> {
     const threadId = asRequiredString(params.threadId, "thread/name/set requires threadId");
     const name = asRequiredString(params.name, "thread/name/set requires name");
     const thread = this.state.setThreadName(threadId, name);
     if (!thread) {
       throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
     }
+    await this.emit({
+      method: "thread/name/updated",
+      params: {
+        threadId,
+        threadName: thread.threadName,
+      },
+    });
     return thread;
   }
 

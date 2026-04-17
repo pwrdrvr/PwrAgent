@@ -1,6 +1,10 @@
 import { execFile as execFileCallback } from "node:child_process";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  shortenDerivedThreadTitle,
+} from "@pwragnt/shared";
 import type {
   AppServerNotification,
   AppServerPendingRequestNotification,
@@ -12,9 +16,10 @@ import type {
   AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadReplayPagination,
+  AppServerThreadTitleSource,
   AppServerThreadSummary,
   AppServerTurnInputItem,
-  LinkedDirectorySummary
+  LinkedDirectorySummary,
 } from "@pwragnt/shared";
 import { JsonRpcConnection } from "./json-rpc";
 import { StdioJsonRpcTransport } from "./stdio-transport";
@@ -46,6 +51,7 @@ type RawCodexThreadSummary = Omit<
   "source" | "linkedDirectories"
 > & {
   projectKey?: string;
+  rolloutPath?: string;
 };
 
 type SkillCatalogEntry = {
@@ -225,6 +231,108 @@ function normalizeThreadSummary(value: string | undefined): string | undefined {
   }
 
   return trimmed;
+}
+
+function isLikelyCodexWorktreePath(value: string): boolean {
+  return /[\\/]\.codex[\\/]worktrees[\\/]/.test(value);
+}
+
+function getThreadTitleInfo(record: Record<string, unknown>): {
+  title: string;
+  titleSource: AppServerThreadTitleSource;
+} {
+  const sessionRecord = asRecord(record.session);
+  const explicitTitle =
+    pickString(record, ["title", "name", "headline"]) ??
+    pickString(sessionRecord ?? {}, ["title", "name", "headline"]);
+
+  if (explicitTitle) {
+    return {
+      title: explicitTitle,
+      titleSource: "explicit",
+    };
+  }
+
+  const derivedTitle =
+    pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
+    pickString(sessionRecord ?? {}, [
+      "preview",
+      "snippet",
+      "firstUserMessage",
+      "first_user_message",
+    ]);
+
+  if (derivedTitle) {
+    return {
+      title: shortenDerivedThreadTitle(derivedTitle) ?? derivedTitle,
+      titleSource: "derived",
+    };
+  }
+
+  return {
+    title: "Untitled thread",
+    titleSource: "fallback",
+  };
+}
+
+async function extractProjectKeyFromRollout(
+  rolloutPath: string | undefined
+): Promise<string | undefined> {
+  if (!rolloutPath || !(await pathExists(rolloutPath))) {
+    return undefined;
+  }
+
+  let fallbackPath: string | undefined;
+
+  try {
+    const contents = await readFile(rolloutPath, "utf8");
+
+    for (const line of contents.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      const record = asRecord(JSON.parse(trimmed));
+      if (record?.type !== "session_meta") {
+        continue;
+      }
+
+      const payload = asRecord(record.payload);
+      const cwd = pickString(payload ?? {}, ["cwd"]);
+      if (!cwd) {
+        continue;
+      }
+
+      if (await pathExists(cwd)) {
+        return cwd;
+      }
+
+      if (!fallbackPath && !isLikelyCodexWorktreePath(cwd)) {
+        fallbackPath = cwd;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+
+  return fallbackPath;
+}
+
+async function resolveThreadProjectKey(
+  thread: RawCodexThreadSummary
+): Promise<string | undefined> {
+  const projectKey = thread.projectKey?.trim();
+  if (projectKey && await pathExists(projectKey)) {
+    return projectKey;
+  }
+
+  const rolloutProjectKey = await extractProjectKeyFromRollout(thread.rolloutPath);
+  if (rolloutProjectKey) {
+    return rolloutProjectKey;
+  }
+
+  return projectKey;
 }
 
 function normalizeConversationRole(
@@ -852,6 +960,15 @@ async function runGit(projectKey: string, args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parseGitWorktrees(output: string): string[] {
   return output
     .split("\n")
@@ -887,8 +1004,12 @@ async function resolveLinkedDirectories(
     return [];
   }
 
+  const currentPath = path.resolve(normalizedPath);
+  if (!(await pathExists(currentPath))) {
+    return [];
+  }
+
   try {
-    const currentPath = path.resolve(normalizedPath);
     const repoRoot = await runGit(normalizedPath, ["rev-parse", "--show-toplevel"]);
     const worktreeList = await runGit(normalizedPath, ["worktree", "list", "--porcelain"]);
     const worktreePaths = parseGitWorktrees(worktreeList);
@@ -936,18 +1057,46 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
     const projectKey =
       pickString(record, ["projectKey", "project_key", "cwd"]) ??
       pickString(sessionRecord ?? {}, ["cwd", "projectKey", "project_key"]);
+    const titleInfo = getThreadTitleInfo(record);
+    const rawDerivedTitle =
+      pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
+      pickString(sessionRecord ?? {}, [
+        "preview",
+        "snippet",
+        "firstUserMessage",
+        "first_user_message",
+      ]);
+    const summary = normalizeThreadSummary(
+      pickString(record, [
+        "summary",
+        "preview",
+        "snippet",
+        "firstUserMessage",
+        "first_user_message",
+      ]) ??
+        pickString(sessionRecord ?? {}, [
+          "summary",
+          "preview",
+          "snippet",
+          "firstUserMessage",
+          "first_user_message",
+        ])
+    );
 
     summaries.set(threadId, {
       id: threadId,
-      title:
-        pickString(record, ["title", "name", "headline"]) ??
-        pickString(sessionRecord ?? {}, ["title", "name"]) ??
-        "Untitled thread",
-      summary: normalizeThreadSummary(
-        pickString(record, ["summary", "preview", "snippet"]) ??
-          pickString(sessionRecord ?? {}, ["summary", "preview", "snippet"])
-      ),
+      title: titleInfo.title,
+      titleSource: titleInfo.titleSource,
+      summary:
+        summary === titleInfo.title ||
+        (titleInfo.titleSource === "derived" &&
+          summary === normalizeThreadSummary(rawDerivedTitle))
+          ? undefined
+          : summary,
       projectKey,
+      rolloutPath:
+        pickString(record, ["path", "rolloutPath", "rollout_path"]) ??
+        pickString(sessionRecord ?? {}, ["path", "rolloutPath", "rollout_path"]),
       createdAt: normalizeEpochTimestamp(
         pickNumber(record, ["createdAt", "created_at"]) ??
           pickNumber(sessionRecord ?? {}, ["createdAt", "created_at"])
@@ -969,24 +1118,95 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
   );
 }
 
-function buildThreadDiscoveryPayloads(filter?: string): unknown[] {
-  const normalizedFilter = filter?.trim();
-
-  if (!normalizedFilter) {
-    return [{}];
-  }
+function buildThreadDiscoveryPayloads(
+  filter?: string,
+  archived?: boolean
+): unknown[] {
+  const searchTerm = filter?.trim() || undefined;
 
   return [
     {
-      query: normalizedFilter,
+      searchTerm,
+      archived,
       limit: 100
     },
     {
-      filter: normalizedFilter,
+      query: searchTerm,
+      archived,
+      limit: 100
+    },
+    {
+      filter: searchTerm,
+      archived,
+      limit: 100
+    },
+    {
+      archived,
       limit: 100
     },
     {}
   ];
+}
+
+function threadTitleSourcePriority(
+  titleSource: AppServerThreadTitleSource
+): number {
+  switch (titleSource) {
+    case "explicit":
+      return 2;
+    case "derived":
+      return 1;
+    case "fallback":
+    default:
+      return 0;
+  }
+}
+
+function mergeThreadSummaries(
+  threads: RawCodexThreadSummary[]
+): RawCodexThreadSummary[] {
+  const merged = new Map<string, RawCodexThreadSummary>();
+
+  for (const thread of threads) {
+    const current = merged.get(thread.id);
+    if (!current) {
+      merged.set(thread.id, thread);
+      continue;
+    }
+
+    const currentPriority = threadTitleSourcePriority(current.titleSource);
+    const nextPriority = threadTitleSourcePriority(thread.titleSource);
+    const preferNext =
+      nextPriority > currentPriority ||
+      (nextPriority === currentPriority &&
+        (thread.updatedAt ?? 0) > (current.updatedAt ?? 0));
+
+    merged.set(thread.id, preferNext ? thread : current);
+  }
+
+  return [...merged.values()].sort(
+    (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
+  );
+}
+
+function mergeArchivedThreadMetadata(params: {
+  activeThreads: RawCodexThreadSummary[];
+  archivedThreads: RawCodexThreadSummary[];
+}): RawCodexThreadSummary[] {
+  const archivedById = new Map(
+    params.archivedThreads.map((thread) => [thread.id, thread] as const)
+  );
+
+  return params.activeThreads
+    .map((thread) => {
+      const archived = archivedById.get(thread.id);
+      if (!archived) {
+        return thread;
+      }
+
+      return mergeThreadSummaries([thread, archived])[0] ?? thread;
+    })
+    .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
 }
 
 function buildThreadResumePayloads(params: {
@@ -1159,19 +1379,36 @@ export class CodexAppServerClient {
   async listThreads(params?: { filter?: string }): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
-    const result = await requestWithFallbacks({
+    const requestParams = {
       client: this.connection,
-      methods: ["thread/list", "thread/loaded/list"],
-      payloads: buildThreadDiscoveryPayloads(params?.filter),
+      methods: ["thread/list", "thread/loaded/list"] as string[],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    };
+    const [activeResult, archivedResult] = await Promise.all([
+      requestWithFallbacks({
+        ...requestParams,
+        payloads: buildThreadDiscoveryPayloads(params?.filter, false),
+      }),
+      requestWithFallbacks({
+        ...requestParams,
+        payloads: buildThreadDiscoveryPayloads(params?.filter, true),
+      }).catch(() => undefined),
+    ]);
+    const threads = mergeArchivedThreadMetadata({
+      activeThreads: extractThreadsFromValue(activeResult),
+      archivedThreads: extractThreadsFromValue(archivedResult),
     });
 
     return await Promise.all(
-      extractThreadsFromValue(result).map(async (thread) => ({
-        ...thread,
-        linkedDirectories: await this.directoryResolver(thread.projectKey),
-        source: "codex"
-      }))
+      threads.map(async (thread) => {
+        const projectKey = await resolveThreadProjectKey(thread);
+        return {
+          ...thread,
+          projectKey,
+          linkedDirectories: await this.directoryResolver(projectKey),
+          source: "codex"
+        };
+      })
     );
   }
 
