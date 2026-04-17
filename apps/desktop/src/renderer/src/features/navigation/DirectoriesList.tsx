@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary } from "@pwragnt/shared";
+import type { LinkedDirectorySummary, NavigationThreadSummary } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
@@ -99,23 +99,45 @@ function groupThreadsByDirectory(threads: NavigationThreadSummary[]): DirectoryG
     }
 
     for (const directory of thread.linkedDirectories) {
-      const existing = groups.get(directory.id);
+      const descriptor = getDirectoryGroupDescriptor(directory);
+      const existing = groups.get(descriptor.id);
       if (existing) {
         existing.threads.push(thread);
         continue;
       }
 
-      groups.set(directory.id, {
-        id: directory.id,
-        icon: "📁",
-        label: directory.label,
-        path: directory.path,
+      groups.set(descriptor.id, {
+        ...descriptor,
         threads: [thread]
       });
     }
   }
 
   return [...groups.values()].sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function getDirectoryGroupDescriptor(
+  directory: LinkedDirectorySummary
+): Omit<DirectoryGroup, "threads"> {
+  const scratchWorkspaceMatch = directory.path.match(
+    /^(.*[\\/]\.pwragnt[\\/]projects)[\\/][^\\/]+$/
+  );
+
+  if (scratchWorkspaceMatch) {
+    return {
+      id: `workspaces:${scratchWorkspaceMatch[1]}`,
+      icon: "📁",
+      label: "Workspaces",
+      path: scratchWorkspaceMatch[1]
+    };
+  }
+
+  return {
+    id: directory.id,
+    icon: "📁",
+    label: directory.label,
+    path: directory.path
+  };
 }
 
 function formatRelativeTime(timestamp?: number): string {
