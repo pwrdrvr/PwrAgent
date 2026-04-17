@@ -282,6 +282,58 @@ function pushActivityDetail(
   details.push(detail);
 }
 
+function normalizeFileChangeKind(
+  value: string | undefined
+): "add" | "delete" | "update" {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "add" || normalized === "delete" || normalized === "update") {
+    return normalized;
+  }
+  return "update";
+}
+
+function extractDiffText(change: Record<string, unknown>): string | undefined {
+  const directDiff = pickString(change, ["diff", "patch", "unifiedDiff", "unified_diff"]);
+  if (directDiff) {
+    return directDiff;
+  }
+
+  const diffRecord = asRecord(change.diff);
+  if (diffRecord) {
+    return pickString(diffRecord, ["text", "patch", "diff", "unifiedDiff", "unified_diff"]);
+  }
+
+  return undefined;
+}
+
+function summarizeDiff(diff: string): { additions: number; removals: number } {
+  let additions = 0;
+  let removals = 0;
+
+  for (const line of diff.split("\n")) {
+    if (
+      !line ||
+      line.startsWith("+++") ||
+      line.startsWith("---") ||
+      line.startsWith("@@") ||
+      line.startsWith("\\")
+    ) {
+      continue;
+    }
+
+    if (line.startsWith("+")) {
+      additions += 1;
+      continue;
+    }
+
+    if (line.startsWith("-")) {
+      removals += 1;
+    }
+  }
+
+  return { additions, removals };
+}
+
 function formatCommandLabel(command: string | undefined): string {
   if (!command) {
     return "Ran command";
@@ -404,7 +456,11 @@ function summarizeActivityItems(
       for (const [index, change] of changes.entries()) {
         const changePath = pickString(change, ["path"]);
         const changeKind = asRecord(change.kind);
-        const changeType = pickString(changeKind ?? {}, ["type"]) ?? "update";
+        const changeType = normalizeFileChangeKind(
+          pickString(changeKind ?? {}, ["type"]) ?? pickString(change, ["kind"])
+        );
+        const diff = extractDiffText(change);
+        const diffSummary = diff ? summarizeDiff(diff) : undefined;
         changedFiles += 1;
         pushActivityDetail(details, {
           id: `${itemId}-${index + 1}`,
@@ -413,7 +469,17 @@ function summarizeActivityItems(
             changePath ? path.basename(changePath) || changePath : "file"
           }`,
           path: changePath,
-          status: itemStatus
+          status: itemStatus,
+          ...(diff && diffSummary
+            ? {
+                fileDiff: {
+                  kind: changeType,
+                  diff,
+                  additions: diffSummary.additions,
+                  removals: diffSummary.removals
+                }
+              }
+            : {})
         });
       }
     }

@@ -130,7 +130,16 @@ class MockTransport implements JsonRpcTransport {
                           path: "/repo/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
                           kind: {
                             type: "update"
-                          }
+                          },
+                          diff: [
+                            "--- a/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
+                            "+++ b/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
+                            "@@ -1,3 +1,4 @@",
+                            " import { useCallback } from \"react\";",
+                            "-import { TranscriptMessage } from \"./TranscriptMessage\";",
+                            "+import { TranscriptActivity } from \"./TranscriptActivity\";",
+                            "+import { TranscriptMessage } from \"./TranscriptMessage\";"
+                          ].join("\n")
                         }
                       ]
                     },
@@ -281,7 +290,21 @@ describe("CodexAppServerClient", () => {
               kind: "write",
               label: "Update TranscriptList.tsx",
               path: "/repo/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
-              status: "completed"
+              status: "completed",
+              fileDiff: {
+                kind: "update",
+                diff: [
+                  "--- a/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
+                  "+++ b/apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx",
+                  "@@ -1,3 +1,4 @@",
+                  " import { useCallback } from \"react\";",
+                  "-import { TranscriptMessage } from \"./TranscriptMessage\";",
+                  "+import { TranscriptActivity } from \"./TranscriptActivity\";",
+                  "+import { TranscriptMessage } from \"./TranscriptMessage\";"
+                ].join("\n"),
+                additions: 2,
+                removals: 1
+              }
             }
           ]
         },
