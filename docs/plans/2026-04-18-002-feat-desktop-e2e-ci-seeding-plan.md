@@ -187,7 +187,7 @@ flowchart TB
 **Verification:**
 - A PR to `main` triggers a distinct `desktop-e2e` CI job that runs the replay-backed Electron suite and exposes artifacts for debugging failures.
 
-- [ ] **Unit 3: Codify the Computer Use capture recipe workflow**
+- [x] **Unit 3: Codify the Computer Use capture recipe workflow**
 
 **Goal:** Make live replay-fixture seeding repeatable by capturing the exact UI recipe a Codex session should follow with Computer Use.
 

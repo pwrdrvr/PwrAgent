@@ -32,6 +32,9 @@ current harness runs the built Electron app in replay mode by pointing
 `PWRAGNT_REPLAY_FIXTURE_PATH` at one of those fixture files. The checked-in
 suite uses curated replay fixtures for deterministic UI regressions, while raw
 captures stay local evidence until they are promoted into a sanitized fixture.
+Computer Use-driven seeding recipes live next to the fixtures under
+`apps/desktop/e2e/fixtures/*/capture-recipe.md`, with shared workflow guidance
+in `apps/desktop/e2e/fixtures/README.md`.
 
 Typical workflow:
 

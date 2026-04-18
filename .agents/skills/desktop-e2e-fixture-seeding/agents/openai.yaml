@@ -1,0 +1,4 @@
+interface:
+  display_name: "Desktop E2E Seeding"
+  short_description: "Capture and promote replay fixtures"
+  default_prompt: "Use $desktop-e2e-fixture-seeding to seed or refresh a desktop replay fixture from a live recorded session."
