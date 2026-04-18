@@ -12,6 +12,8 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadActivityStatus,
   AppServerThreadEntry,
+  AppServerThreadImagePart,
+  AppServerThreadMessagePart,
   AppServerThreadMessageEntry,
   AppServerSkillSummary,
   AppServerThreadReplay,
@@ -352,7 +354,7 @@ function normalizeConversationRole(
   return undefined;
 }
 
-function collectMessageText(record: Record<string, unknown>): string {
+function collectLegacyMessageText(record: Record<string, unknown>): string {
   return (
     dedupeJoinedText([
       ...collectText(record.content),
@@ -364,6 +366,117 @@ function collectMessageText(record: Record<string, unknown>): string {
       ...collectText(record.parts)
     ]) ?? ""
   );
+}
+
+function normalizeRenderableImageUrl(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("https://") ||
+    trimmed.startsWith("file://") ||
+    trimmed.startsWith("data:image/")
+  ) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith("/")) {
+    return `file://${trimmed}`;
+  }
+
+  return undefined;
+}
+
+function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePart[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => extractStructuredMessageParts(entry));
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+
+  const normalizedType = pickString(record, ["type", "contentType", "content_type"])
+    ?.trim()
+    .toLowerCase();
+
+  if (
+    normalizedType === "text" ||
+    normalizedType === "input_text" ||
+    normalizedType === "output_text"
+  ) {
+    const text = pickString(record, ["text", "value", "content"]);
+    return text ? [{ type: "text", text }] : [];
+  }
+
+  const imageUrl = normalizeRenderableImageUrl(
+    pickString(record, [
+      "image_url",
+      "imageUrl",
+      "url",
+      "src",
+      "uri",
+      "path",
+      "localPath",
+      "local_path"
+    ])
+  );
+  if (
+    imageUrl &&
+    (normalizedType === "image" ||
+      normalizedType === "input_image" ||
+      normalizedType === "output_image" ||
+      normalizedType === "image_url" ||
+      "image_url" in record ||
+      "imageUrl" in record)
+  ) {
+    const part: AppServerThreadImagePart = {
+      type: "image",
+      url: imageUrl
+    };
+    const alt = pickString(record, ["alt", "altText", "alt_text", "title", "name"]);
+    if (alt) {
+      part.alt = alt;
+    }
+    return [part];
+  }
+
+  for (const nestedKey of ["content", "parts", "input", "output", "data"]) {
+    const nestedParts = extractStructuredMessageParts(record[nestedKey]);
+    if (nestedParts.length > 0) {
+      return nestedParts;
+    }
+  }
+
+  return [];
+}
+
+function buildMessageContent(record: Record<string, unknown>): {
+  parts?: AppServerThreadMessagePart[];
+  text: string;
+} {
+  const structuredParts = [
+    ...extractStructuredMessageParts(record.content),
+    ...extractStructuredMessageParts(record.parts)
+  ];
+
+  if (structuredParts.length > 0) {
+    const text = dedupeJoinedText(
+      structuredParts.flatMap((part) => (part.type === "text" ? [part.text] : []))
+    ) ?? "";
+
+    return {
+      parts: structuredParts,
+      text
+    };
+  }
+
+  const text = collectLegacyMessageText(record);
+  return { text };
 }
 
 function extractConversationMessages(
@@ -385,14 +498,15 @@ function extractConversationMessages(
     const role = normalizeConversationRole(
       pickString(record, ["role", "author", "speaker", "source", "type"])
     );
-    const text = collectMessageText(record);
-    if (role && text) {
+    const content = buildMessageContent(record);
+    if (role && (content.text || content.parts?.length)) {
       output.push({
         id:
           pickString(record, ["id", "messageId", "message_id", "itemId", "item_id"]) ??
           `message-${output.length + 1}`,
         role,
-        text,
+        text: content.text,
+        ...(content.parts ? { parts: content.parts } : {}),
         createdAt: normalizeEpochTimestamp(
           pickNumber(record, ["createdAt", "created_at", "timestamp", "time"])
         )
@@ -729,8 +843,8 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
       const role = normalizeConversationRole(itemType);
       if (role) {
         flushActivityItems();
-        const text = collectMessageText(item);
-        if (!text) {
+        const content = buildMessageContent(item);
+        if (!content.text && !content.parts?.length) {
           continue;
         }
         entries.push({
@@ -739,7 +853,8 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
             pickString(item, ["id", "messageId", "message_id", "itemId", "item_id"]) ??
             `message-${entries.length + 1}`,
           role,
-          text,
+          text: content.text,
+          ...(content.parts ? { parts: content.parts } : {}),
           createdAt,
           ...(pickString(item, ["phase"]) === "commentary"
             ? { phase: "commentary" as const }

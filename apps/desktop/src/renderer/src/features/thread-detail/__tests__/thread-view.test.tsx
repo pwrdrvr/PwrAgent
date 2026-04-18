@@ -1,10 +1,21 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThreadView } from "../ThreadView";
 
 afterEach(() => {
   cleanup();
+});
+
+beforeEach(() => {
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: vi.fn(() => "blob:expanded-transcript-image")
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: vi.fn()
+  });
 });
 
 describe("ThreadView", () => {
@@ -254,6 +265,207 @@ describe("ThreadView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy thread id" }));
 
     expect(copyText).toHaveBeenCalledWith("019d88a2-0e0b-77f0-bfce-130ae8e37d8f");
+  });
+
+  it("opens transcript image previews in a lightbox and dismisses them with Escape", () => {
+    const dataUrl = "data:image/png;base64,aGVsbG8=";
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-images",
+            runId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "thread-images",
+          title: "Inspect image rendering",
+          titleSource: "explicit",
+          source: "codex",
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false
+          }
+        }}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-image-1",
+            role: "user",
+            text: "",
+            parts: [
+              {
+                type: "image",
+                url: dataUrl,
+                alt: "Transcript screenshot"
+              }
+            ]
+          }
+        ]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        onRefresh={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 1" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Expanded transcript image" });
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByAltText("Transcript screenshot")).toHaveAttribute(
+      "src",
+      "blob:expanded-transcript-image"
+    );
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(
+      screen.queryByRole("dialog", { name: "Expanded transcript image" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("clears an expanded transcript image when the selected thread changes", () => {
+    const viewProps = {
+      addOptimisticUserMessage: (_text: string) => "optimistic-1",
+      backends: [
+        {
+          kind: "codex" as const,
+          label: "Codex app server",
+          available: true,
+          methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+          capabilities: {
+            listThreads: true,
+            createThread: false,
+            resumeThread: true,
+            readThread: true,
+            startTurn: true,
+            interruptTurn: false,
+            steerTurn: false,
+            transcriptPagination: true,
+            toolUse: false,
+            approvalRequests: false,
+            multiDirectoryThreads: true
+          },
+          executionModes: [
+            {
+              mode: "default" as const,
+              label: "Default Access",
+              available: true,
+              isDefault: true,
+            },
+          ],
+        }
+      ],
+      composerDisabled: false,
+      desktopApi: {
+        startTurn: async () => ({
+          backend: "codex" as const,
+          threadId: "thread-images",
+          runId: "turn-1",
+        }),
+      },
+      loading: false,
+      loadingMore: false,
+      messageCount: 1,
+      skills: [],
+      transcriptEntries: [
+        {
+          type: "message" as const,
+          id: "message-image-1",
+          role: "user" as const,
+          text: "",
+          parts: [
+            {
+              type: "image" as const,
+              url: "file:///tmp/screenshot.png",
+              alt: "Transcript screenshot"
+            }
+          ]
+        }
+      ],
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: (_id: string) => undefined,
+      onRefresh: async () => undefined,
+    };
+
+    const { rerender } = render(
+      <ThreadView
+        {...viewProps}
+        selectedThread={{
+          id: "thread-images",
+          title: "Inspect image rendering",
+          titleSource: "explicit",
+          source: "codex",
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false
+          }
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 1" }));
+    expect(screen.getByRole("dialog", { name: "Expanded transcript image" })).toBeInTheDocument();
+
+    rerender(
+      <ThreadView
+        {...viewProps}
+        selectedThread={{
+          id: "thread-next",
+          title: "Another thread",
+          titleSource: "explicit",
+          source: "codex",
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false
+          }
+        }}
+      />
+    );
+
+    expect(
+      screen.queryByRole("dialog", { name: "Expanded transcript image" })
+    ).not.toBeInTheDocument();
   });
 
   it("renders live assistant commentary from item/agentMessage/delta notifications", async () => {

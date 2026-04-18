@@ -61,8 +61,24 @@ export type AppServerThreadMessage = {
   id: string;
   role: "user" | "assistant";
   text: string;
+  parts?: AppServerThreadMessagePart[];
   createdAt?: number;
 };
+
+export type AppServerThreadTextPart = {
+  type: "text";
+  text: string;
+};
+
+export type AppServerThreadImagePart = {
+  type: "image";
+  url: string;
+  alt?: string;
+};
+
+export type AppServerThreadMessagePart =
+  | AppServerThreadTextPart
+  | AppServerThreadImagePart;
 
 export type AppServerTranscriptPhase = "commentary" | "final";
 

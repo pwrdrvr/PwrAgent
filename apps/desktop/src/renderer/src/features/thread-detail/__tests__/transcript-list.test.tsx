@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptList } from "../TranscriptList";
 
@@ -7,6 +7,8 @@ describe("TranscriptList", () => {
   let scrollHeight = 480;
   let clientHeight = 240;
   let scrollToMock: ReturnType<typeof vi.fn>;
+  let createObjectURLMock: ReturnType<typeof vi.fn>;
+  let revokeObjectURLMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     scrollHeight = 480;
@@ -42,9 +44,21 @@ describe("TranscriptList", () => {
       configurable: true,
       value: scrollToMock
     });
+
+    createObjectURLMock = vi.fn(() => "blob:transcript-image");
+    revokeObjectURLMock = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: createObjectURLMock
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: revokeObjectURLMock
+    });
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -178,6 +192,84 @@ describe("TranscriptList", () => {
     expect(
       screen.getByText("$frontend-design").closest("article")
     ).toHaveClass("transcript-message--user");
+  });
+
+  it("renders inline image previews and opens them on demand", () => {
+    const onOpenImage = vi.fn();
+    const dataUrl = "data:image/png;base64,aGVsbG8=";
+    const secondDataUrl = "data:image/png;base64,d29ybGQ=";
+
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Describe this image",
+            parts: [
+              {
+                type: "text",
+                text: "Describe this image"
+              },
+              {
+                type: "image",
+                url: dataUrl,
+                alt: "Transcript screenshot"
+              },
+              {
+                type: "image",
+                url: secondDataUrl,
+                alt: "Second transcript screenshot"
+              }
+            ]
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "",
+            parts: [
+              {
+                type: "image",
+                url: "https://example.com/thread-image.png",
+                alt: "Assistant image"
+              }
+            ]
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onOpenImage={onOpenImage}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByText("Describe this image")).toBeInTheDocument();
+    expect(screen.getByAltText("Transcript screenshot")).toHaveAttribute(
+      "src",
+      "blob:transcript-image"
+    );
+    expect(screen.getByAltText("Second transcript screenshot")).toHaveAttribute(
+      "src",
+      "blob:transcript-image"
+    );
+    expect(screen.getByAltText("Assistant image")).toBeInTheDocument();
+    expect(createObjectURLMock).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByAltText("Transcript screenshot").closest(".transcript-message__image-grid")
+    ).toBe(
+      screen.getByAltText("Second transcript screenshot").closest(".transcript-message__image-grid")
+    );
+
+    fireEvent.click(screen.getByAltText("Transcript screenshot").closest("button")!);
+
+    expect(onOpenImage).toHaveBeenCalledWith({
+      type: "image",
+      url: dataUrl,
+      alt: "Transcript screenshot"
+    });
   });
 
   it("renders pending status inside the transcript list", () => {

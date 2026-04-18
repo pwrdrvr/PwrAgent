@@ -745,6 +745,9 @@ textarea {
 
 .transcript-message__text {
   margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   font-size: 14px;
   line-height: 1.55;
 }
@@ -753,12 +756,26 @@ textarea {
   margin: 0;
 }
 
-.transcript-message__text > * + * {
+.transcript-message__image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 10px;
+}
+
+.transcript-message__text-block > * {
+  margin: 0;
+}
+
+.transcript-message__text-block > * + * {
   margin-top: 10px;
 }
 
 .transcript-message__paragraph {
   white-space: normal;
+}
+
+.transcript-message__text-part {
+  white-space: pre-wrap;
 }
 
 .transcript-message__heading {
@@ -824,6 +841,29 @@ textarea {
   text-decoration-color: currentColor;
 }
 
+.transcript-message__image-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.transcript-message__image-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.transcript-message__image-preview {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+}
+
 .transcript-activity {
   width: min(100%, 760px);
   padding: 12px 0 0;
@@ -855,6 +895,38 @@ textarea {
   border: 1px solid var(--accent-border);
   border-radius: 8px;
   background: rgba(184, 255, 77, 0.08);
+}
+
+.transcript-image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(11, 13, 18, 0.88);
+}
+
+.transcript-image-lightbox__content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  max-width: min(100%, 960px);
+}
+
+.transcript-image-lightbox__close {
+  align-self: flex-end;
+}
+
+.transcript-image-lightbox__image {
+  display: block;
+  max-width: min(100vw - 48px, 960px);
+  max-height: min(100vh - 120px, 800px);
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .transcript-request__header,
@@ -1148,10 +1220,6 @@ textarea {
 
 .transcript-diff__separator {
   background: rgba(255, 255, 255, 0.02);
-}
-
-.transcript-message__text-part {
-  white-space: pre-wrap;
 }
 
 .skill-chip {

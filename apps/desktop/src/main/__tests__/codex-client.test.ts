@@ -212,6 +212,53 @@ class MockTransport implements JsonRpcTransport {
         return;
       }
 
+      if (threadId === "thread-images") {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              thread: {
+                turns: [
+                  {
+                    id: "turn-images",
+                    startedAt: 1_763_500_150,
+                    items: [
+                      {
+                        type: "userMessage",
+                        id: "item-image-1",
+                        content: [
+                          {
+                            type: "input_text",
+                            text: "Describe this image"
+                          },
+                          {
+                            type: "input_image",
+                            image_url: "data:image/png;base64,aGVsbG8="
+                          }
+                        ]
+                      },
+                      {
+                        type: "userMessage",
+                        id: "item-image-2",
+                        content: [
+                          {
+                            type: "input_image",
+                            image_url: "https://example.com/thread-image.png",
+                            alt: "Thread image"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          })
+        );
+        return;
+      }
+
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -762,7 +809,13 @@ describe("CodexAppServerClient", () => {
           id: "item-1",
           role: "user",
           text: "Show me the current desktop thread shell",
-          createdAt: 1_763_500_100_000
+          createdAt: 1_763_500_100_000,
+          parts: [
+            {
+              type: "text",
+              text: "Show me the current desktop thread shell"
+            }
+          ]
         },
         {
           type: "message",
@@ -828,7 +881,13 @@ describe("CodexAppServerClient", () => {
           id: "item-1",
           role: "user",
           text: "Show me the current desktop thread shell",
-          createdAt: undefined
+          createdAt: undefined,
+          parts: [
+            {
+              type: "text",
+              text: "Show me the current desktop thread shell"
+            }
+          ]
         },
         {
           id: "item-2",
@@ -851,6 +910,87 @@ describe("CodexAppServerClient", () => {
         previousCursor: undefined
       }
     });
+
+    await client.close();
+  });
+
+  it("preserves image parts from Codex thread/read messages", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-images"
+    });
+
+    expect(replay.entries).toEqual([
+      {
+        type: "message",
+        id: "item-image-1",
+        role: "user",
+        text: "Describe this image",
+        createdAt: 1_763_500_150_000,
+        parts: [
+          {
+            type: "text",
+            text: "Describe this image"
+          },
+          {
+            type: "image",
+            url: "data:image/png;base64,aGVsbG8="
+          }
+        ]
+      },
+      {
+        type: "message",
+        id: "item-image-2",
+        role: "user",
+        text: "",
+        createdAt: 1_763_500_150_000,
+        parts: [
+          {
+            type: "image",
+            url: "https://example.com/thread-image.png",
+            alt: "Thread image"
+          }
+        ]
+      }
+    ]);
+    expect(replay.messages).toEqual([
+      {
+        id: "item-image-1",
+        role: "user",
+        text: "Describe this image",
+        createdAt: undefined,
+        parts: [
+          {
+            type: "text",
+            text: "Describe this image"
+          },
+          {
+            type: "image",
+            url: "data:image/png;base64,aGVsbG8="
+          }
+        ]
+      },
+      {
+        id: "item-image-2",
+        role: "user",
+        text: "",
+        createdAt: undefined,
+        parts: [
+          {
+            type: "image",
+            url: "https://example.com/thread-image.png",
+            alt: "Thread image"
+          }
+        ]
+      }
+    ]);
+    expect(replay.lastUserMessage).toBe("Describe this image");
 
     await client.close();
   });

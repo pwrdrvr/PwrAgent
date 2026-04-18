@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type {
   AppServerPendingRequestNotification,
   AppServerThreadEntry,
+  AppServerThreadImagePart,
   AppServerThreadMessageEntry,
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
@@ -13,6 +14,7 @@ import { Composer } from "../composer/Composer";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import { ThreadHeader } from "./ThreadHeader";
+import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
 import { TranscriptList } from "./TranscriptList";
 
 function formatRendererLogPayload(value: unknown): string {
@@ -57,12 +59,14 @@ export function ThreadView(props: ThreadViewProps) {
     useState<AppServerPendingRequestNotification>();
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
   const [pendingRequestError, setPendingRequestError] = useState<string>();
+  const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
 
   useEffect(() => {
     setPendingAssistantMessage(undefined);
     setPendingRequest(undefined);
     setPendingRequestBusy(false);
     setPendingRequestError(undefined);
+    setExpandedImage(undefined);
   }, [props.selectedThread?.id, props.selectedThread?.source]);
 
   const selectedThread = props.selectedThread;
@@ -238,6 +242,7 @@ export function ThreadView(props: ThreadViewProps) {
             pagination={props.transcriptPagination}
             threadId={selectedThread.id}
             skills={props.skills}
+            onOpenImage={setExpandedImage}
             onRespondToPendingRequest={respondToPendingRequest}
             onLoadOlder={props.onLoadOlder}
           />
@@ -256,6 +261,15 @@ export function ThreadView(props: ThreadViewProps) {
           onSetExecutionMode={props.onSetExecutionMode}
         />
       </div>
+
+      {expandedImage ? (
+        <TranscriptImageLightbox
+          image={expandedImage}
+          onClose={() => {
+            setExpandedImage(undefined);
+          }}
+        />
+      ) : null}
 
       <Composer
         addOptimisticUserMessage={props.addOptimisticUserMessage}
