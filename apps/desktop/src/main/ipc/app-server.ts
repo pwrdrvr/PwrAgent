@@ -8,10 +8,16 @@ import type {
   AppServerListThreadsResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  EnsureDirectoryLaunchpadRequest,
+  EnsureDirectoryLaunchpadResponse,
   GetNavigationSnapshotRequest,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   NavigationSnapshot,
+  ResetDirectoryLaunchpadRequest,
+  ResetDirectoryLaunchpadResponse,
+  UpdateDirectoryLaunchpadRequest,
+  UpdateDirectoryLaunchpadResponse,
 } from "@pwragnt/shared";
 import {
   disposeDesktopBackendRegistry,
@@ -23,7 +29,10 @@ import {
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
+  NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
+  NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
 } from "../../shared/ipc";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -120,6 +129,12 @@ class DesktopAppServerService {
       fetchedAt: Date.now(),
       threads,
     });
+    const directoryStatuses =
+      await getDesktopBackendRegistry().readDirectoryStatuses(snapshot.directories);
+    const directories = snapshot.directories.map((directory) => ({
+      ...directory,
+      gitStatus: directoryStatuses[directory.key],
+    }));
 
     logDebug("getNavigationSnapshot", {
       backend,
@@ -128,7 +143,13 @@ class DesktopAppServerService {
       unchanged: snapshot.unchanged,
     });
 
-    return snapshot;
+    return {
+      ...snapshot,
+      directories,
+      unchanged:
+        snapshot.unchanged &&
+        !directories.some((directory) => directory.gitStatus !== undefined),
+    };
   }
 
   async markThreadSeen(
@@ -150,6 +171,24 @@ class DesktopAppServerService {
     });
 
     return response;
+  }
+
+  async ensureDirectoryLaunchpad(
+    request: EnsureDirectoryLaunchpadRequest,
+  ): Promise<EnsureDirectoryLaunchpadResponse> {
+    return await getDesktopBackendRegistry().ensureDirectoryLaunchpad(request);
+  }
+
+  async updateDirectoryLaunchpad(
+    request: UpdateDirectoryLaunchpadRequest,
+  ): Promise<UpdateDirectoryLaunchpadResponse> {
+    return await getDesktopBackendRegistry().updateDirectoryLaunchpad(request);
+  }
+
+  async resetDirectoryLaunchpad(
+    request: ResetDirectoryLaunchpadRequest,
+  ): Promise<ResetDirectoryLaunchpadResponse> {
+    return await getDesktopBackendRegistry().resetDirectoryLaunchpad(request);
   }
 
   async close(): Promise<void> {
@@ -214,6 +253,36 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.markThreadSeen(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+    async (
+      _event,
+      request: EnsureDirectoryLaunchpadRequest,
+    ): Promise<EnsureDirectoryLaunchpadResponse> => {
+      return await appServerService.ensureDirectoryLaunchpad(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
+    async (
+      _event,
+      request: UpdateDirectoryLaunchpadRequest,
+    ): Promise<UpdateDirectoryLaunchpadResponse> => {
+      return await appServerService.updateDirectoryLaunchpad(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
+    async (
+      _event,
+      request: ResetDirectoryLaunchpadRequest,
+    ): Promise<ResetDirectoryLaunchpadResponse> => {
+      return await appServerService.resetDirectoryLaunchpad(request);
+    },
+  );
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
@@ -222,6 +291,9 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);
   await appServerService.close();
 }
 

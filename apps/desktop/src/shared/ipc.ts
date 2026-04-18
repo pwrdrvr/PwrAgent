@@ -6,8 +6,16 @@ export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";
 export const AGENT_START_TURN_CHANNEL = "agent:start-turn";
 export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";
 export const AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL = "agent:set-thread-execution-mode";
+export const AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL =
+  "agent:materialize-directory-launchpad";
 export const AGENT_SUBMIT_SERVER_REQUEST_CHANNEL = "agent:submit-server-request";
 export const AGENT_EVENT_CHANNEL = "agent:event";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
+export const NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL =
+  "navigation:ensure-directory-launchpad";
+export const NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL =
+  "navigation:update-directory-launchpad";
+export const NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL =
+  "navigation:reset-directory-launchpad";
 export const WINDOW_FOCUS_SYNC_CHANNEL = "window:focus-sync";

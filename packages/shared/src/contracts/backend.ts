@@ -14,6 +14,21 @@ export type BackendCapabilities = {
   multiDirectoryThreads: boolean;
 };
 
+export type BackendModelOption = {
+  id: string;
+  label?: string;
+  current?: boolean;
+  supportsReasoning?: boolean;
+  supportsFast?: boolean;
+};
+
+export type BackendLaunchpadOptions = {
+  models?: BackendModelOption[];
+  reasoningEfforts?: string[];
+  serviceTiers?: string[];
+  supportsFastMode?: boolean;
+};
+
 export type BackendSummary = {
   kind: AppServerBackendKind;
   label: string;
@@ -29,6 +44,7 @@ export type BackendSummary = {
     isDefault?: boolean;
     unavailableReason?: string;
   }>;
+  launchpadOptions?: BackendLaunchpadOptions;
   unavailableReason?: string;
 };
 

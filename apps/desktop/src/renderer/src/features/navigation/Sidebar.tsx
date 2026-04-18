@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type {
   AppServerBackendKind,
   BackendSummary,
+  NavigationDirectorySummary,
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragnt/shared";
@@ -16,6 +17,7 @@ type SidebarProps = {
   backends: BackendSummary[];
   browseMode: BrowseMode;
   createThreadError?: string;
+  directories: NavigationDirectorySummary[];
   error?: string;
   fetchedAt?: number;
   inboxThreads: NavigationThreadSummary[];
@@ -24,13 +26,18 @@ type SidebarProps = {
     backend: AppServerBackendKind;
     executionMode: ThreadExecutionMode;
   };
+  launchpadError?: string;
   refreshing: boolean;
-  selectedThreadKey?: string;
+  selectedItemKey?: string;
   threads: NavigationThreadSummary[];
   onBrowseModeChange: (browseMode: BrowseMode) => void;
   onCreateThread: (
     backend: AppServerBackendKind,
     executionMode?: ThreadExecutionMode
+  ) => Promise<void>;
+  onOpenLaunchpad: (
+    directory: NavigationDirectorySummary,
+    preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
   onRefresh: () => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
@@ -129,6 +136,8 @@ export function Sidebar(props: SidebarProps) {
 
       {props.createThreadError ? (
         <p className="sidebar-error sidebar-error--masthead">{props.createThreadError}</p>
+      ) : props.launchpadError ? (
+        <p className="sidebar-error sidebar-error--masthead">{props.launchpadError}</p>
       ) : null}
 
       <section className="sidebar__section">
@@ -137,7 +146,7 @@ export function Sidebar(props: SidebarProps) {
           <span className="count-pill">{props.inboxThreads.length}</span>
         </div>
         <InboxList
-          selectedThreadKey={props.selectedThreadKey}
+          selectedThreadKey={props.selectedItemKey}
           threads={props.inboxThreads}
           onSelectThread={props.onSelectThread}
         />
@@ -179,13 +188,15 @@ export function Sidebar(props: SidebarProps) {
             <p className="sidebar-empty">No threads yet.</p>
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
-              selectedThreadKey={props.selectedThreadKey}
+              directories={props.directories}
+              selectedItemKey={props.selectedItemKey}
               threads={props.threads}
+              onOpenLaunchpad={props.onOpenLaunchpad}
               onSelectThread={props.onSelectThread}
             />
           ) : (
             <RecentsList
-              selectedThreadKey={props.selectedThreadKey}
+              selectedThreadKey={props.selectedItemKey}
               threads={props.threads}
               onSelectThread={props.onSelectThread}
             />

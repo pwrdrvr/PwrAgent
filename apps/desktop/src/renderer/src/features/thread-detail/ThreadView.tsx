@@ -8,11 +8,15 @@ import type {
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
   BackendSummary,
+  NavigationDirectorySummary,
+  NavigationLaunchpadDraft,
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragnt/shared";
 import { Composer } from "../composer/Composer";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { formatBackendLabel } from "../../lib/backend-label";
+import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import { ThreadHeader } from "./ThreadHeader";
 import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
@@ -51,10 +55,13 @@ type ThreadViewProps = {
   composerDisabled: boolean;
   desktopApi?: DesktopApi;
   fetchedAt?: number;
+  launchpadError?: string;
   loading: boolean;
   loadingMore: boolean;
   messageCount: number;
   platform?: string;
+  selectedDirectory?: NavigationDirectorySummary;
+  selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
   setExecutionModeError?: string;
   skillError?: string;
@@ -65,7 +72,30 @@ type ThreadViewProps = {
   transcriptPagination?: AppServerThreadReplayPagination;
   updatingExecutionMode?: ThreadExecutionMode;
   onLoadOlder: () => Promise<void>;
+  onMaterializeLaunchpad?: (
+    directoryKey: string,
+    input?: Array<{ type: "text"; text: string }>
+  ) => Promise<void>;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onUpdateLaunchpad?: (
+    directoryKey: string,
+    patch: Partial<
+      Pick<
+        NavigationLaunchpadDraft,
+        | "prompt"
+        | "backend"
+        | "executionMode"
+        | "model"
+        | "reasoningEffort"
+        | "serviceTier"
+        | "fastMode"
+        | "workMode"
+        | "branchName"
+        | "directoryLabel"
+        | "directoryPath"
+      >
+    >
+  ) => Promise<void>;
   removeOptimisticMessage: (id: string) => void;
   onRefresh: () => Promise<void>;
 };
@@ -89,9 +119,10 @@ export function ThreadView(props: ThreadViewProps) {
     setPendingRequestBusy(false);
     setPendingRequestError(undefined);
     setExpandedImage(undefined);
-  }, [props.selectedThread?.id, props.selectedThread?.source]);
+  }, [props.selectedThread?.id, props.selectedThread?.source, props.selectedLaunchpad?.directoryKey]);
 
   const selectedThread = props.selectedThread;
+  const selectedLaunchpad = props.selectedLaunchpad;
 
   useEffect(() => {
     if (!pendingPlanEntry) {
@@ -257,15 +288,117 @@ export function ThreadView(props: ThreadViewProps) {
     }
   }
 
-  if (!selectedThread) {
+  if (!selectedThread && !selectedLaunchpad) {
     return (
       <section className="thread-empty-state">
         <p className="eyebrow">Thread detail</p>
         <h2>Select a thread</h2>
         <p>
           Inbox stays above every other lens. Pick a thread to read the full
-          transcript and inspect its linked directories.
+          transcript, or open a project launchpad from Directories.
         </p>
+      </section>
+    );
+  }
+
+  if (selectedLaunchpad && props.selectedDirectory) {
+    const launchpadBackend = props.backends.find(
+      (backend) => backend.kind === selectedLaunchpad.backend
+    );
+    const syncLabel = formatDirectorySync(props.selectedDirectory);
+
+    return (
+      <section className="thread-view">
+        <header className="thread-header">
+          <div>
+            <div className="thread-header__eyebrow-row">
+              <p className="eyebrow">New thread</p>
+              <span className="thread-row__chip thread-row__chip--backend">
+                {formatBackendLabel(selectedLaunchpad.backend)}
+              </span>
+              <span className="thread-row__chip thread-row__chip--mode">
+                {formatExecutionModeLabel(selectedLaunchpad.executionMode)}
+              </span>
+            </div>
+            <h2 className="thread-header__title">{selectedLaunchpad.directoryLabel}</h2>
+            <p className="thread-header__summary">
+              Start a thread in this directory. Unsent prompt and setup changes stay attached to this launchpad until the first send.
+            </p>
+          </div>
+
+          <div className="thread-header__stats">
+            <div>
+              <span className="thread-header__stat-label">Workspace</span>
+              <strong>
+                {selectedLaunchpad.workMode === "worktree" ? "New worktree" : "Local checkout"}
+              </strong>
+            </div>
+            <div>
+              <span className="thread-header__stat-label">Branch</span>
+              <strong>
+                {selectedLaunchpad.workMode === "worktree"
+                  ? selectedLaunchpad.branchName ?? props.selectedDirectory.gitStatus?.currentBranch ?? "Pick one"
+                  : props.selectedDirectory.gitStatus?.currentBranch ?? "Not attached"}
+              </strong>
+            </div>
+          </div>
+        </header>
+
+        <div className="launchpad-panel">
+          <div className="launchpad-panel__header">
+            <div>
+              <h3>Directory</h3>
+              <p>
+                {props.selectedDirectory.threadKeys.length} thread
+                {props.selectedDirectory.threadKeys.length === 1 ? "" : "s"}
+                {syncLabel ? ` • ${syncLabel}` : ""}
+              </p>
+            </div>
+            <button
+              className="button button--ghost"
+              type="button"
+              onClick={() => {
+                void props.onRefresh();
+              }}
+            >
+              Refresh
+            </button>
+          </div>
+
+          <dl className="launchpad-grid">
+            <div>
+              <dt>Path</dt>
+              <dd>{props.selectedDirectory.path ?? "Not recorded"}</dd>
+            </div>
+            <div>
+              <dt>Current branch</dt>
+              <dd>{props.selectedDirectory.gitStatus?.currentBranch ?? "Not a Git repo"}</dd>
+            </div>
+            <div>
+              <dt>Upstream</dt>
+              <dd>{props.selectedDirectory.gitStatus?.upstreamBranch ?? "Not tracking"}</dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd>{syncLabel ?? "Directory context only"}</dd>
+            </div>
+          </dl>
+        </div>
+
+        <Composer
+          backends={props.backends}
+          desktopApi={props.desktopApi}
+          directory={props.selectedDirectory}
+          disabled={!launchpadBackend?.available}
+          launchpad={selectedLaunchpad}
+          launchpadError={props.launchpadError}
+          onMaterializeLaunchpad={props.onMaterializeLaunchpad}
+          onRefresh={props.onRefresh}
+          onUpdateLaunchpad={props.onUpdateLaunchpad}
+          skillError={props.skillError}
+          skillLoading={props.skillLoading}
+          skills={props.skills}
+        />
       </section>
     );
   }
@@ -275,7 +408,7 @@ export function ThreadView(props: ThreadViewProps) {
       <ThreadHeader
         fetchedAt={props.fetchedAt}
         messageCount={props.messageCount}
-        thread={selectedThread}
+        thread={selectedThread!}
       />
 
       <div className="thread-view__layout">
@@ -309,7 +442,7 @@ export function ThreadView(props: ThreadViewProps) {
             pendingRequestBusy={pendingRequestBusy}
             pendingStatusText={pendingStatusText}
             pagination={props.transcriptPagination}
-            threadId={selectedThread.id}
+            threadId={selectedThread!.id}
             skills={props.skills}
             onOpenImage={setExpandedImage}
             onRespondToPendingRequest={respondToPendingRequest}
@@ -325,7 +458,7 @@ export function ThreadView(props: ThreadViewProps) {
           backends={props.backends}
           platform={props.platform}
           setExecutionModeError={props.setExecutionModeError}
-          thread={selectedThread}
+          thread={selectedThread!}
           updatingExecutionMode={props.updatingExecutionMode}
           onSetExecutionMode={props.onSetExecutionMode}
         />
@@ -351,8 +484,36 @@ export function ThreadView(props: ThreadViewProps) {
         skillError={props.skillError}
         skillLoading={props.skillLoading}
         skills={props.skills}
-        thread={selectedThread}
+        thread={selectedThread!}
       />
     </section>
   );
+}
+
+function formatDirectorySync(directory: NavigationDirectorySummary): string | undefined {
+  const status = directory.gitStatus;
+  if (!status) {
+    return undefined;
+  }
+
+  if (status.syncState === "in-sync") {
+    return "Up to date";
+  }
+  if (status.syncState === "ahead") {
+    return `${status.ahead ?? 0} ahead`;
+  }
+  if (status.syncState === "behind") {
+    return `${status.behind ?? 0} behind`;
+  }
+  if (status.syncState === "diverged") {
+    return `${status.ahead ?? 0} ahead · ${status.behind ?? 0} behind`;
+  }
+  if (status.syncState === "untracked") {
+    return "No upstream";
+  }
+  if (status.syncState === "status-unavailable") {
+    return "Status unavailable";
+  }
+
+  return undefined;
 }

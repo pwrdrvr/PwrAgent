@@ -1,6 +1,8 @@
 import { BrowserWindow, ipcMain } from "electron";
 import type {
   AgentEvent,
+  MaterializeDirectoryLaunchpadRequest,
+  MaterializeDirectoryLaunchpadResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
   ListBackendsRequest,
@@ -18,6 +20,7 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
   AGENT_EVENT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
+  AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_TURN_CHANNEL,
@@ -104,6 +107,17 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL);
+  ipcMain.handle(
+    AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
+    async (
+      _event,
+      request: MaterializeDirectoryLaunchpadRequest
+    ): Promise<MaterializeDirectoryLaunchpadResponse> => {
+      return await registry.materializeDirectoryLaunchpad(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL);
   ipcMain.handle(
     AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
@@ -124,5 +138,6 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
+  ipcMain.removeHandler(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL);
 }

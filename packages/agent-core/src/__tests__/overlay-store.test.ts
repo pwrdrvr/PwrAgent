@@ -135,4 +135,53 @@ describe("OverlayStore", () => {
       lastSeenUpdatedAt: 2500,
     });
   });
+
+  it("persists directory launchpad drafts separately from real threads", async () => {
+    const store = await createStore();
+
+    await store.upsertDirectoryLaunchpad({
+      directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+      directoryKind: "directory",
+      directoryLabel: "PwrAgnt",
+      directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+      backend: "codex",
+      executionMode: "full-access",
+      prompt: "Investigate the directories launchpad flow",
+      workMode: "worktree",
+      branchName: "main",
+      createdAt: 1000,
+      updatedAt: 2000,
+    });
+
+    const raw = JSON.parse(
+      await readFile(path.join(tempDirs[0]!, "overlay-state.json"), "utf8"),
+    ) as {
+      directoryLaunchpads: Record<string, { prompt?: string; executionMode?: string }>;
+      threads: Record<string, unknown>;
+    };
+
+    expect(raw.directoryLaunchpads["directory:/Users/huntharo/pwrdrvr/PwrAgnt"]).toMatchObject({
+      prompt: "Investigate the directories launchpad flow",
+      executionMode: "full-access",
+    });
+    expect(raw.threads).toEqual({});
+  });
+
+  it("persists launchpad defaults for future directory drafts", async () => {
+    const store = await createStore();
+
+    await store.setLaunchpadDefaults({
+      backend: "grok",
+      executionMode: "full-access",
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+
+    expect(await store.getLaunchpadDefaults()).toEqual({
+      backend: "grok",
+      executionMode: "full-access",
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+  });
 });

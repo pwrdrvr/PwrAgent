@@ -20,6 +20,58 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
 };
 
+export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
+export type LaunchpadWorkMode = "local" | "worktree";
+
+export type NavigationLaunchpadDefaults = {
+  backend: AppServerBackendKind;
+  executionMode: ThreadExecutionMode;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  fastMode?: boolean;
+};
+
+export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
+  directoryKey: string;
+  directoryKind: DirectorySummaryKind;
+  directoryLabel: string;
+  directoryPath?: string;
+  prompt: string;
+  workMode: LaunchpadWorkMode;
+  branchName?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type NavigationDirectoryGitStatus = {
+  currentBranch?: string;
+  upstreamBranch?: string;
+  ahead?: number;
+  behind?: number;
+  branches?: string[];
+  syncState?:
+    | "in-sync"
+    | "ahead"
+    | "behind"
+    | "diverged"
+    | "untracked"
+    | "status-unavailable";
+  statusUnavailableReason?: string;
+};
+
+export type NavigationDirectorySummary = {
+  key: string;
+  kind: DirectorySummaryKind;
+  label: string;
+  path?: string;
+  threadKeys: string[];
+  needsAttentionCount: number;
+  latestUpdatedAt?: number;
+  gitStatus?: NavigationDirectoryGitStatus;
+  launchpad?: NavigationLaunchpadDraft;
+};
+
 export function buildThreadIdentityKey(
   backend: AppServerBackendKind,
   threadId: ThreadIdentifier,
@@ -33,6 +85,8 @@ export type NavigationSnapshot = {
   unchanged: boolean;
   threads: NavigationThreadSummary[];
   inboxThreadKeys: string[];
+  directories: NavigationDirectorySummary[];
+  launchpadDefaults: NavigationLaunchpadDefaults;
 };
 
 export type GetNavigationSnapshotRequest = {
@@ -64,3 +118,5 @@ export type ThreadOverlayState = {
   snoozedUntil?: number;
   extraLinkedDirectories: LinkedDirectorySummary[];
 };
+
+export type DirectoryLaunchpadOverlayState = NavigationLaunchpadDraft;

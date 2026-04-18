@@ -37,6 +37,31 @@ const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
   unchanged: false,
   threads: (params as { threads: unknown[] }).threads,
   inboxThreadKeys: ["grok:thread-1"],
+  directories: [
+    {
+      key: "directory:/repo/app",
+      kind: "directory" as const,
+      label: "app",
+      path: "/repo/app",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 1,
+      latestUpdatedAt: 2000,
+    },
+  ],
+  launchpadDefaults: {
+    backend: "codex" as const,
+    executionMode: "default" as const,
+  },
+}));
+const readDirectoryStatuses = vi.fn(async () => ({
+  "directory:/repo/app": {
+    currentBranch: "main",
+    upstreamBranch: "origin/main",
+    ahead: 0,
+    behind: 0,
+    syncState: "in-sync" as const,
+    branches: ["main"],
+  },
 }));
 const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
   backend: request.backend ?? "codex",
@@ -71,6 +96,7 @@ vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => ({
     listThreads,
     readThread,
+    readDirectoryStatuses,
   }),
 }));
 
@@ -80,6 +106,7 @@ describe("app server ipc", () => {
     listThreads.mockClear();
     readThread.mockClear();
     reconcileNavigationSnapshot.mockClear();
+    readDirectoryStatuses.mockClear();
     markThreadSeen.mockClear();
   });
 
@@ -112,6 +139,29 @@ describe("app server ipc", () => {
         expect.objectContaining({ source: "grok", id: "thread-1" }),
       ],
       inboxThreadKeys: ["grok:thread-1"],
+      directories: [
+        {
+          key: "directory:/repo/app",
+          kind: "directory",
+          label: "app",
+          path: "/repo/app",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 1,
+          latestUpdatedAt: 2000,
+          gitStatus: {
+            currentBranch: "main",
+            upstreamBranch: "origin/main",
+            ahead: 0,
+            behind: 0,
+            syncState: "in-sync",
+            branches: ["main"],
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
     });
   });
 

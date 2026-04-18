@@ -6,13 +6,19 @@ import type {
   AppServerListThreadsResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  EnsureDirectoryLaunchpadRequest,
+  EnsureDirectoryLaunchpadResponse,
   GetNavigationSnapshotRequest,
   InterruptTurnRequest,
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  MaterializeDirectoryLaunchpadRequest,
+  MaterializeDirectoryLaunchpadResponse,
   MarkThreadSeenRequest,
   NavigationSnapshot,
+  ResetDirectoryLaunchpadRequest,
+  ResetDirectoryLaunchpadResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   StartThreadRequest,
@@ -21,6 +27,8 @@ import type {
   StartTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  UpdateDirectoryLaunchpadRequest,
+  UpdateDirectoryLaunchpadResponse,
 } from "@pwragnt/shared";
 
 export type DesktopApi = {
@@ -40,6 +48,9 @@ export type DesktopApi = {
   setThreadExecutionMode?: (
     request: SetThreadExecutionModeRequest
   ) => Promise<SetThreadExecutionModeResponse>;
+  materializeDirectoryLaunchpad?: (
+    request: MaterializeDirectoryLaunchpadRequest
+  ) => Promise<MaterializeDirectoryLaunchpadResponse>;
   submitServerRequest?: (
     request: SubmitServerRequestRequest
   ) => Promise<SubmitServerRequestResponse>;
@@ -53,6 +64,15 @@ export type DesktopApi = {
     request?: AppServerListThreadsRequest
   ) => Promise<AppServerListThreadsResponse>;
   markThreadSeen?: (request: MarkThreadSeenRequest) => Promise<unknown>;
+  ensureDirectoryLaunchpad?: (
+    request: EnsureDirectoryLaunchpadRequest
+  ) => Promise<EnsureDirectoryLaunchpadResponse>;
+  updateDirectoryLaunchpad?: (
+    request: UpdateDirectoryLaunchpadRequest
+  ) => Promise<UpdateDirectoryLaunchpadResponse>;
+  resetDirectoryLaunchpad?: (
+    request: ResetDirectoryLaunchpadRequest
+  ) => Promise<ResetDirectoryLaunchpadResponse>;
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
   onWindowFocus?: (callback: () => void) => () => void;
   platform?: string;

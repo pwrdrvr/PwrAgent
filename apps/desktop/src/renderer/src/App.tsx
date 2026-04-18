@@ -16,6 +16,7 @@ export function App() {
   });
   const skills = useThreadSkills({
     desktopApi,
+    launchpad: navigation.selectedLaunchpad,
     thread: navigation.selectedThread,
   });
 
@@ -25,16 +26,19 @@ export function App() {
         browseMode={navigation.browseMode}
         backends={backendSummaries.backends}
         createThreadError={navigation.createThreadError}
+        directories={navigation.directories}
         error={navigation.error}
         fetchedAt={navigation.snapshot?.fetchedAt}
         inboxThreads={navigation.inboxThreads}
+        launchpadError={navigation.launchpadError}
         loading={navigation.loading}
         creatingThread={navigation.creatingThread}
         refreshing={navigation.refreshing}
-        selectedThreadKey={navigation.selectedThreadKey}
+        selectedItemKey={navigation.selectedItemKey}
         threads={navigation.threads}
         onBrowseModeChange={navigation.setBrowseMode}
         onCreateThread={navigation.createThread}
+        onOpenLaunchpad={navigation.openDirectoryLaunchpad}
         onRefresh={navigation.refresh}
         onSelectThread={navigation.selectThread}
       />
@@ -58,6 +62,8 @@ export function App() {
           }
           desktopApi={desktopApi}
           platform={desktopApi?.platform}
+          selectedDirectory={navigation.selectedDirectory}
+          selectedLaunchpad={navigation.selectedLaunchpad}
           selectedThread={navigation.selectedThread}
           setExecutionModeError={navigation.setThreadExecutionModeError}
           skillError={skills.error}
@@ -67,7 +73,9 @@ export function App() {
           transcriptEntries={transcript.entries}
           transcriptPagination={transcript.response?.replay.pagination}
           updatingExecutionMode={navigation.updatingThreadExecutionMode}
+          launchpadError={navigation.launchpadError}
           onLoadOlder={transcript.loadOlder}
+          onMaterializeLaunchpad={navigation.materializeDirectoryLaunchpad}
           onSetExecutionMode={
             navigation.selectedThread
               ? async (executionMode) =>
@@ -77,8 +85,11 @@ export function App() {
                   )
               : undefined
           }
+          onUpdateLaunchpad={navigation.updateDirectoryLaunchpad}
           removeOptimisticMessage={transcript.removeOptimisticMessage}
-          onRefresh={transcript.refresh}
+          onRefresh={
+            navigation.selectedThread ? transcript.refresh : navigation.refresh
+          }
         />
       </main>
     </div>
