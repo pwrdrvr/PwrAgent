@@ -22,9 +22,6 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           </span>
         </div>
         <h2 className="thread-header__title">{props.thread.title}</h2>
-        {props.thread.summary ? (
-          <p className="thread-header__summary">{props.thread.summary}</p>
-        ) : null}
       </div>
 
       <div className="thread-header__stats">
