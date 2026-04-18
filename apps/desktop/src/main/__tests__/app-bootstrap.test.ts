@@ -22,12 +22,20 @@ const resolveHeapMonitorConfigMock = vi.fn<
   (...args: unknown[]) => { enabled: boolean; [key: string]: unknown }
 >(() => ({ enabled: false }));
 const createHeapSessionMock = vi.fn();
-const monitorStartMock = vi.fn();
-const monitorStopMock = vi.fn();
+const rendererMonitorStartMock = vi.fn();
+const rendererMonitorStopMock = vi.fn();
+const mainMonitorStartMock = vi.fn();
+const mainMonitorStopMock = vi.fn();
 const RendererHeapMonitorMock = vi.fn(function RendererHeapMonitor(this: unknown) {
   return {
-    start: monitorStartMock,
-    stop: monitorStopMock,
+    start: rendererMonitorStartMock,
+    stop: rendererMonitorStopMock,
+  };
+});
+const MainProcessHeapMonitorMock = vi.fn(function MainProcessHeapMonitor(this: unknown) {
+  return {
+    start: mainMonitorStartMock,
+    stop: mainMonitorStopMock,
   };
 });
 
@@ -141,6 +149,10 @@ vi.mock("../diagnostics/renderer-heap-monitor", () => ({
   RendererHeapMonitor: RendererHeapMonitorMock
 }));
 
+vi.mock("../diagnostics/main-process-heap-monitor", () => ({
+  MainProcessHeapMonitor: MainProcessHeapMonitorMock
+}));
+
 describe("createMainWindow", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -148,9 +160,12 @@ describe("createMainWindow", () => {
     resolveHeapMonitorConfigMock.mockReset();
     resolveHeapMonitorConfigMock.mockReturnValue({ enabled: false });
     createHeapSessionMock.mockReset();
-    monitorStartMock.mockReset();
-    monitorStopMock.mockReset();
+    rendererMonitorStartMock.mockReset();
+    rendererMonitorStopMock.mockReset();
+    mainMonitorStartMock.mockReset();
+    mainMonitorStopMock.mockReset();
     RendererHeapMonitorMock.mockClear();
+    MainProcessHeapMonitorMock.mockClear();
     windowEventHandlers.clear();
     webContentsEventHandlers.clear();
     webContentsOnceHandlers.clear();
@@ -222,6 +237,7 @@ describe("createMainWindow", () => {
     emitWebContentsEvent("did-finish-load");
     await Promise.resolve();
     await Promise.resolve();
+    await Promise.resolve();
 
     expect(createHeapSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -234,19 +250,23 @@ describe("createMainWindow", () => {
         })
       })
     );
+    expect(MainProcessHeapMonitorMock).toHaveBeenCalledTimes(1);
     expect(RendererHeapMonitorMock).toHaveBeenCalledTimes(1);
-    expect(monitorStartMock).toHaveBeenCalledTimes(1);
+    expect(mainMonitorStartMock).toHaveBeenCalledTimes(1);
+    expect(rendererMonitorStartMock).toHaveBeenCalledTimes(1);
 
     emitWebContentsEvent("render-process-gone", {}, { reason: "oom" });
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(monitorStopMock).toHaveBeenCalledWith("render-process-gone");
+    expect(rendererMonitorStopMock).toHaveBeenCalledWith("render-process-gone");
+    expect(mainMonitorStopMock).toHaveBeenCalledWith("render-process-gone");
 
     emitWindowEvent("closed");
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(monitorStopMock).toHaveBeenCalledWith("window-closed");
+    expect(rendererMonitorStopMock).toHaveBeenCalledWith("window-closed");
+    expect(mainMonitorStopMock).toHaveBeenCalledWith("window-closed");
   });
 });

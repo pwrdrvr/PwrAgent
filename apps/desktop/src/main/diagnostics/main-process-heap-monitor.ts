@@ -1,33 +1,25 @@
 import path from "node:path";
+import { getHeapStatistics, writeHeapSnapshot } from "node:v8";
 import type { HeapMonitorConfig } from "./heap-monitor-config";
 import type { HeapSession, HeapSessionEvent, HeapSessionSample } from "./heap-session";
 import { getMainLogger } from "../log";
 
-const CHROME_DEBUGGER_PROTOCOL_VERSION = "1.3";
 const defaultHeapLogger = getMainLogger("pwragnt:heap");
 
-type RendererHeapUsage = {
-  usedSize: number;
-  totalSize: number;
-  embedderHeapUsedSize?: number;
-  backingStorageSize?: number;
-};
-
-type RendererHeapDebugger = {
-  attach: (version: string) => void;
-  detach: () => void;
-  isAttached: () => boolean;
-  sendCommand: (method: string) => Promise<RendererHeapUsage>;
-  on: (event: "detach", listener: (event: unknown, reason: string) => void) => void;
-  off?: (event: "detach", listener: (event: unknown, reason: string) => void) => void;
-};
-
-type RendererHeapTarget = {
-  debugger: RendererHeapDebugger;
-  takeHeapSnapshot: (filePath: string) => Promise<void>;
-};
-
 type Logger = Pick<Console, "info" | "warn" | "error">;
+
+type MainProcessHeapReading = {
+  heapUsed: number;
+  heapTotal: number;
+  rss: number;
+  external: number;
+  arrayBuffers: number;
+  heapSizeLimit: number;
+  totalPhysicalSize: number;
+  totalAvailableSize: number;
+  mallocedMemory: number;
+  peakMallocedMemory: number;
+};
 
 function serializeError(error: unknown): string {
   if (error instanceof Error) {
@@ -38,30 +30,34 @@ function serializeError(error: unknown): string {
 }
 
 function createSnapshotFilename(index: number): string {
-  return `heap-${String(index).padStart(4, "0")}.heapsnapshot`;
+  return `main-heap-${String(index).padStart(4, "0")}.heapsnapshot`;
 }
 
-export class RendererHeapMonitor {
-  private readonly detachListener = (_event: unknown, reason: string) => {
-    this.debuggerAttached = false;
-    this.pauseSampling();
-    void this.appendEvent({
-      source: "renderer",
-      capturedAt: this.now().toISOString(),
-      type: "debugger-detached",
-      detail: { reason },
-    });
-    this.logger.warn("[pwragnt:heap] debugger detached", {
-      reason,
-      sessionDirectory: this.session.directoryPath,
-    });
-  };
+function readMainProcessHeap(): MainProcessHeapReading {
+  const memoryUsage = process.memoryUsage();
+  const heapStatistics = getHeapStatistics();
 
+  return {
+    heapUsed: memoryUsage.heapUsed,
+    heapTotal: memoryUsage.heapTotal,
+    rss: memoryUsage.rss,
+    external: memoryUsage.external,
+    arrayBuffers: memoryUsage.arrayBuffers,
+    heapSizeLimit: heapStatistics.heap_size_limit,
+    totalPhysicalSize: heapStatistics.total_physical_size,
+    totalAvailableSize: heapStatistics.total_available_size,
+    mallocedMemory: heapStatistics.malloced_memory,
+    peakMallocedMemory: heapStatistics.peak_malloced_memory,
+  };
+}
+
+export class MainProcessHeapMonitor {
   private readonly config: Extract<HeapMonitorConfig, { enabled: true }>;
   private readonly logger: Logger;
   private readonly session: HeapSession;
-  private readonly target: RendererHeapTarget;
   private readonly now: () => Date;
+  private readonly readHeap: () => MainProcessHeapReading;
+  private readonly writeSnapshot: (filePath: string) => string;
 
   private previousSample: HeapSessionSample | null = null;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -69,23 +65,24 @@ export class RendererHeapMonitor {
   private started = false;
   private stopped = false;
   private paused = false;
-  private debuggerAttached = false;
   private snapshotInFlight = false;
   private snapshotCount = 0;
   private lastSnapshotAtMs: number | null = null;
 
   constructor(options: {
-    target: RendererHeapTarget;
     session: HeapSession;
     config: Extract<HeapMonitorConfig, { enabled: true }>;
     logger?: Logger;
     now?: () => Date;
+    readHeap?: () => MainProcessHeapReading;
+    writeSnapshot?: (filePath: string) => string;
   }) {
     this.config = options.config;
     this.logger = options.logger ?? defaultHeapLogger;
     this.session = options.session;
-    this.target = options.target;
     this.now = options.now ?? (() => new Date());
+    this.readHeap = options.readHeap ?? readMainProcessHeap;
+    this.writeSnapshot = options.writeSnapshot ?? writeHeapSnapshot;
   }
 
   async start(): Promise<void> {
@@ -96,22 +93,18 @@ export class RendererHeapMonitor {
     this.started = true;
 
     try {
-      if (!this.target.debugger.isAttached()) {
-        this.target.debugger.attach(CHROME_DEBUGGER_PROTOCOL_VERSION);
-      }
-      this.debuggerAttached = true;
-      this.target.debugger.on("detach", this.detachListener);
       await this.appendEvent({
-        source: "renderer",
+        source: "main",
         capturedAt: this.now().toISOString(),
         type: "monitor-started",
         detail: {
           sessionDirectory: this.session.directoryPath,
           intervalMs: this.config.intervalMs,
+          settleDelayMs: this.config.settleDelayMs,
           deltaThresholdBytes: this.config.deltaThresholdBytes,
         },
       });
-      this.logger.info("[pwragnt:heap] monitoring started", {
+      this.logger.info("main monitoring started", {
         sessionDirectory: this.session.directoryPath,
         intervalMs: this.config.intervalMs,
         settleDelayMs: this.config.settleDelayMs,
@@ -128,12 +121,12 @@ export class RendererHeapMonitor {
       }, this.config.settleDelayMs);
     } catch (error) {
       await this.appendEvent({
-        source: "renderer",
+        source: "main",
         capturedAt: this.now().toISOString(),
         type: "monitor-start-failed",
         detail: { error: serializeError(error) },
       });
-      this.logger.error("[pwragnt:heap] monitoring failed to start", error);
+      this.logger.error("main monitoring failed to start", error);
       this.pauseSampling();
     }
   }
@@ -145,21 +138,14 @@ export class RendererHeapMonitor {
 
     this.stopped = true;
     this.pauseSampling();
-    if (this.target.debugger.off) {
-      this.target.debugger.off("detach", this.detachListener);
-    }
-    if (this.debuggerAttached && this.target.debugger.isAttached()) {
-      this.target.debugger.detach();
-    }
-    this.debuggerAttached = false;
 
     await this.appendEvent({
-      source: "renderer",
+      source: "main",
       capturedAt: this.now().toISOString(),
       type: "monitor-stopped",
       detail: { reason },
     });
-    this.logger.info("[pwragnt:heap] monitoring stopped", {
+    this.logger.info("main monitoring stopped", {
       reason,
       sessionDirectory: this.session.directoryPath,
     });
@@ -200,18 +186,23 @@ export class RendererHeapMonitor {
     const capturedAt = this.now().toISOString();
 
     try {
-      const heapUsage = await this.target.debugger.sendCommand("Runtime.getHeapUsage");
+      const reading = this.readHeap();
       const previousUsedSize = this.previousSample?.usedSize ?? null;
-      const deltaBytes =
-        previousUsedSize === null ? null : heapUsage.usedSize - previousUsedSize;
+      const deltaBytes = previousUsedSize === null ? null : reading.heapUsed - previousUsedSize;
       const isBaseline = forceBaseline || this.previousSample === null;
       const sample: HeapSessionSample = {
-        source: "renderer",
+        source: "main",
         capturedAt,
-        usedSize: heapUsage.usedSize,
-        totalSize: heapUsage.totalSize,
-        embedderHeapUsedSize: heapUsage.embedderHeapUsedSize,
-        backingStorageSize: heapUsage.backingStorageSize,
+        usedSize: reading.heapUsed,
+        totalSize: reading.heapTotal,
+        rss: reading.rss,
+        external: reading.external,
+        arrayBuffers: reading.arrayBuffers,
+        heapSizeLimit: reading.heapSizeLimit,
+        totalPhysicalSize: reading.totalPhysicalSize,
+        totalAvailableSize: reading.totalAvailableSize,
+        mallocedMemory: reading.mallocedMemory,
+        peakMallocedMemory: reading.peakMallocedMemory,
         isBaseline,
         deltaBytes,
       };
@@ -228,12 +219,12 @@ export class RendererHeapMonitor {
       }
     } catch (error) {
       await this.appendEvent({
-        source: "renderer",
+        source: "main",
         capturedAt,
         type: "sample-failed",
         detail: { error: serializeError(error) },
       });
-      this.logger.error("[pwragnt:heap] heap sample failed", error);
+      this.logger.error("main heap sample failed", error);
     }
   }
 
@@ -279,7 +270,7 @@ export class RendererHeapMonitor {
     filePath: string;
   }): Promise<void> {
     await this.appendEvent({
-      source: "renderer",
+      source: "main",
       capturedAt: options.capturedAt,
       type: "snapshot-triggered",
       detail: {
@@ -287,28 +278,29 @@ export class RendererHeapMonitor {
         deltaBytes: options.deltaBytes,
       },
     });
-    this.logger.warn("[pwragnt:heap] capturing heap snapshot", {
+    this.logger.warn("capturing main heap snapshot", {
       filename: options.filename,
       deltaBytes: options.deltaBytes,
       sessionDirectory: this.session.directoryPath,
     });
 
     try {
-      await this.target.takeHeapSnapshot(options.filePath);
+      const writtenPath = await Promise.resolve(this.writeSnapshot(options.filePath));
+      const writtenFilename = path.basename(writtenPath);
       this.snapshotCount += 1;
       this.lastSnapshotAtMs = Date.parse(options.capturedAt);
-      await this.session.registerSnapshotFile(options.filename);
+      await this.session.registerSnapshotFile(writtenFilename);
       await this.appendEvent({
-        source: "renderer",
+        source: "main",
         capturedAt: this.now().toISOString(),
         type: "snapshot-completed",
         detail: {
-          filename: options.filename,
+          filename: writtenFilename,
         },
       });
     } catch (error) {
       await this.appendEvent({
-        source: "renderer",
+        source: "main",
         capturedAt: this.now().toISOString(),
         type: "snapshot-failed",
         detail: {
@@ -316,7 +308,7 @@ export class RendererHeapMonitor {
           error: serializeError(error),
         },
       });
-      this.logger.error("[pwragnt:heap] heap snapshot failed", error);
+      this.logger.error("main heap snapshot failed", error);
     } finally {
       this.snapshotInFlight = false;
     }
@@ -328,7 +320,7 @@ export class RendererHeapMonitor {
     capturedAt: string,
   ): Promise<void> {
     await this.appendEvent({
-      source: "renderer",
+      source: "main",
       capturedAt,
       type: "snapshot-skipped",
       detail: {

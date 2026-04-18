@@ -170,6 +170,7 @@ describe("RendererHeapMonitor", () => {
     await advance(1);
     expect(session.samples).toEqual([
       expect.objectContaining({
+        source: "renderer",
         usedSize: 100,
         isBaseline: true,
         deltaBytes: null,
@@ -180,9 +181,9 @@ describe("RendererHeapMonitor", () => {
     await advance(5);
 
     expect(session.samples).toEqual([
-      expect.objectContaining({ usedSize: 100, isBaseline: true, deltaBytes: null }),
-      expect.objectContaining({ usedSize: 120, isBaseline: false, deltaBytes: 20 }),
-      expect.objectContaining({ usedSize: 125, isBaseline: false, deltaBytes: 5 }),
+      expect.objectContaining({ source: "renderer", usedSize: 100, isBaseline: true, deltaBytes: null }),
+      expect.objectContaining({ source: "renderer", usedSize: 120, isBaseline: false, deltaBytes: 20 }),
+      expect.objectContaining({ source: "renderer", usedSize: 125, isBaseline: false, deltaBytes: 5 }),
     ]);
 
     await monitor.stop();
@@ -209,6 +210,7 @@ describe("RendererHeapMonitor", () => {
 
     expect(session.samples).toEqual([
       expect.objectContaining({
+        source: "renderer",
         usedSize: 100,
         isBaseline: true,
         deltaBytes: null,
@@ -247,6 +249,7 @@ describe("RendererHeapMonitor", () => {
     expect(session.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          source: "renderer",
           type: "snapshot-triggered",
           detail: expect.objectContaining({
             filename: "heap-0001.heapsnapshot",
@@ -254,6 +257,7 @@ describe("RendererHeapMonitor", () => {
           }),
         }),
         expect.objectContaining({
+          source: "renderer",
           type: "snapshot-completed",
           detail: expect.objectContaining({
             filename: "heap-0001.heapsnapshot",
@@ -331,6 +335,7 @@ describe("RendererHeapMonitor", () => {
     expect(session.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          source: "renderer",
           type: "snapshot-skipped",
           detail: expect.objectContaining({
             reason: "in-flight",
@@ -374,6 +379,7 @@ describe("RendererHeapMonitor", () => {
     expect(session.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          source: "renderer",
           type: "snapshot-skipped",
           detail: expect.objectContaining({
             reason: "cooldown",
@@ -416,6 +422,7 @@ describe("RendererHeapMonitor", () => {
     expect(session.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          source: "renderer",
           type: "snapshot-skipped",
           detail: expect.objectContaining({
             reason: "max-snapshots",
@@ -456,6 +463,7 @@ describe("RendererHeapMonitor", () => {
     expect(session.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          source: "renderer",
           type: "sample-failed",
           detail: expect.objectContaining({
             error: "heap exploded",
@@ -464,8 +472,8 @@ describe("RendererHeapMonitor", () => {
       ]),
     );
     expect(session.samples).toEqual([
-      expect.objectContaining({ usedSize: 100 }),
-      expect.objectContaining({ usedSize: 130 }),
+      expect.objectContaining({ source: "renderer", usedSize: 100 }),
+      expect.objectContaining({ source: "renderer", usedSize: 130 }),
     ]);
 
     await monitor.stop();
@@ -500,6 +508,7 @@ describe("RendererHeapMonitor", () => {
     expect(session.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          source: "renderer",
           type: "debugger-detached",
           detail: expect.objectContaining({
             reason: "devtools opened",
@@ -591,12 +600,14 @@ describe("RendererHeapMonitor", () => {
     expect(eventLines).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          source: "renderer",
           type: "snapshot-triggered",
           detail: expect.objectContaining({
             filename: "heap-0001.heapsnapshot",
           }),
         }),
         expect.objectContaining({
+          source: "renderer",
           type: "snapshot-completed",
           detail: expect.objectContaining({
             filename: "heap-0001.heapsnapshot",

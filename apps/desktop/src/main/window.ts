@@ -2,6 +2,7 @@ import { app, BrowserWindow, shell } from "electron";
 import { join, resolve } from "node:path";
 import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
 import { createHeapSession } from "./diagnostics/heap-session";
+import { MainProcessHeapMonitor } from "./diagnostics/main-process-heap-monitor";
 import { RendererHeapMonitor } from "./diagnostics/renderer-heap-monitor";
 import { getMainLogger } from "./log";
 import { attachWindowFocusSync } from "./window-focus-sync";
@@ -98,15 +99,35 @@ export function createMainWindow(): BrowserWindow {
       sessionDirectory: created.session.directoryPath,
     });
 
-    return new RendererHeapMonitor({
+    const mainMonitor = new MainProcessHeapMonitor({
+      session: created.session,
+      config: heapConfig,
+    });
+    await mainMonitor.start();
+
+    const rendererMonitor = new RendererHeapMonitor({
       target: webContents,
       session: created.session,
       config: heapConfig,
     });
+
+    return {
+      mainMonitor,
+      rendererMonitor,
+    };
   })();
 
   const stopHeapMonitor = (reason: string) => {
-    void heapMonitorPromise.then((monitor) => monitor?.stop(reason));
+    void heapMonitorPromise.then(async (monitors) => {
+      if (!monitors) {
+        return;
+      }
+
+      await Promise.all([
+        monitors.rendererMonitor.stop(reason),
+        monitors.mainMonitor.stop(reason),
+      ]);
+    });
   };
 
   if (typeof webContents.on === "function") {
@@ -125,7 +146,7 @@ export function createMainWindow(): BrowserWindow {
 
     if (typeof webContents.once === "function") {
       webContents.once("did-finish-load", () => {
-        void heapMonitorPromise.then((monitor) => monitor?.start());
+        void heapMonitorPromise.then((monitors) => monitors?.rendererMonitor.start());
       });
     }
   }

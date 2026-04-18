@@ -52,7 +52,7 @@ Typical workflow:
 
 ## Heap Diagnostics
 
-Renderer heap diagnostics are opt-in and write artifacts under repo-local `.local/`.
+Desktop heap diagnostics are opt-in and write artifacts under repo-local `.local/`.
 
 Enable a capture run with:
 
@@ -77,6 +77,9 @@ Expected artifacts:
 - `samples.ndjson`
 - `events.ndjson`
 - `heap-0001.heapsnapshot`, `heap-0002.heapsnapshot`, ...
+- `main-heap-0001.heapsnapshot`, `main-heap-0002.heapsnapshot`, ...
+
+Each sample and event record is tagged with `source: "renderer"` or `source: "main"`.
 
 During a repro run the desktop main process logs the session directory path. Share that path for later diagnosis.
 

@@ -4,16 +4,26 @@ import path from "node:path";
 import type { HeapMonitorConfig } from "./heap-monitor-config";
 
 export type HeapSessionSample = {
+  source: "renderer" | "main";
   capturedAt: string;
   usedSize: number;
   totalSize: number;
   embedderHeapUsedSize?: number;
   backingStorageSize?: number;
+  rss?: number;
+  external?: number;
+  arrayBuffers?: number;
+  heapSizeLimit?: number;
+  totalPhysicalSize?: number;
+  totalAvailableSize?: number;
+  mallocedMemory?: number;
+  peakMallocedMemory?: number;
   isBaseline: boolean;
   deltaBytes: number | null;
 };
 
 export type HeapSessionEvent = {
+  source: "renderer" | "main";
   capturedAt: string;
   type: string;
   detail?: Record<string, unknown>;

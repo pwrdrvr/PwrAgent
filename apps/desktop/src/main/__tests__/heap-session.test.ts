@@ -116,6 +116,7 @@ describe("heap diagnostics session", () => {
     }
 
     await result.session.appendSample({
+      source: "renderer",
       capturedAt: "2026-04-18T21:02:10.000Z",
       usedSize: 12,
       totalSize: 24,
@@ -125,6 +126,7 @@ describe("heap diagnostics session", () => {
       deltaBytes: null,
     });
     await result.session.appendSample({
+      source: "main",
       capturedAt: "2026-04-18T21:02:15.000Z",
       usedSize: 25,
       totalSize: 30,
@@ -135,6 +137,7 @@ describe("heap diagnostics session", () => {
     });
 
     await result.session.appendEvent({
+      source: "renderer",
       capturedAt: "2026-04-18T21:02:10.000Z",
       type: "monitor-started",
       detail: {
@@ -142,6 +145,7 @@ describe("heap diagnostics session", () => {
       },
     });
     await result.session.appendEvent({
+      source: "main",
       capturedAt: "2026-04-18T21:02:15.000Z",
       type: "snapshot-triggered",
       detail: {
@@ -164,6 +168,7 @@ describe("heap diagnostics session", () => {
 
     expect(sampleLines).toEqual([
       {
+        source: "renderer",
         capturedAt: "2026-04-18T21:02:10.000Z",
         usedSize: 12,
         totalSize: 24,
@@ -173,6 +178,7 @@ describe("heap diagnostics session", () => {
         deltaBytes: null,
       },
       {
+        source: "main",
         capturedAt: "2026-04-18T21:02:15.000Z",
         usedSize: 25,
         totalSize: 30,
@@ -184,6 +190,7 @@ describe("heap diagnostics session", () => {
     ]);
     expect(eventLines).toEqual([
       {
+        source: "renderer",
         capturedAt: "2026-04-18T21:02:10.000Z",
         type: "monitor-started",
         detail: {
@@ -191,6 +198,7 @@ describe("heap diagnostics session", () => {
         },
       },
       {
+        source: "main",
         capturedAt: "2026-04-18T21:02:15.000Z",
         type: "snapshot-triggered",
         detail: {
