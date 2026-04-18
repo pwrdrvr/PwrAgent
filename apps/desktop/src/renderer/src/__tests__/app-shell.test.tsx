@@ -634,6 +634,144 @@ describe("App", () => {
     });
   });
 
+  it("keeps assistant response text out of the thread header", async () => {
+    const response =
+      'I don\'t have a built-in "X Search" tool or direct real-time access to the X/Twitter API with the available workspace tools.';
+
+    Object.defineProperty(window, "pwragnt", {
+      configurable: true,
+      value: {
+        ping: () => "pong",
+        listSkills: async () => ({
+          backend: "codex",
+          fetchedAt: Date.now(),
+          data: []
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "grok",
+              label: "Grok app server",
+              available: true,
+              methods: ["thread/list", "thread/read", "turn/start"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: true,
+                steerTurn: true,
+                transcriptPagination: false,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: false
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+              ],
+            }
+          ]
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all",
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["grok:thread-1"],
+          threads: [
+            {
+              id: "thread-1",
+              title: "Use X Search to find stats on huntharo's latest tweets for me",
+              titleSource: "explicit",
+              summary: response,
+              source: "grok",
+              executionMode: "default",
+              linkedDirectories: [],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread"
+              },
+              updatedAt: Date.now()
+            }
+          ]
+        }),
+        markThreadSeen: async () => ({
+          backend: "grok",
+          threadId: "thread-1",
+          seenAt: Date.now()
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        readThread: async () => ({
+          backend: "grok",
+          fetchedAt: Date.now(),
+          threadId: "thread-1",
+          replay: {
+            entries: [
+              {
+                type: "message",
+                id: "message-1",
+                role: "user",
+                text: "Use X Search to find stats on huntharo's latest tweets for me"
+              },
+              {
+                type: "message",
+                id: "message-2",
+                role: "assistant",
+                text: response
+              }
+            ],
+            messages: [
+              {
+                id: "message-1",
+                role: "user",
+                text: "Use X Search to find stats on huntharo's latest tweets for me"
+              },
+              {
+                id: "message-2",
+                role: "assistant",
+                text: response
+              }
+            ],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false
+            }
+          }
+        }),
+        platform: "darwin",
+        startTurn: async () => ({
+          backend: "grok",
+          threadId: "thread-1",
+          runId: "turn-1"
+        }),
+        versions: {
+          electron: "41.2.1"
+        }
+      }
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 2,
+        name: "Use X Search to find stats on huntharo's latest tweets for me"
+      })
+    ).toBeInTheDocument();
+
+    const transcript = screen.getByRole("region", { name: "Transcript" });
+
+    expect(within(transcript).getByText(response)).toBeInTheDocument();
+    expect(screen.getAllByText(response)).toHaveLength(1);
+  });
+
   it("keeps a newly created Codex thread selected when thread/list lags behind creation", async () => {
     const startThread = vi.fn(async () => ({
       backend: "codex" as const,
