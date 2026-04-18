@@ -1,0 +1,119 @@
+import type { ReplayFixture, ReplayRequestStep, ReplayResponseMethod, ReplayResponseStep, ReplayStep, ReplayStepOverride } from "./replay-fixture";
+import { validateReplayFixture } from "./replay-fixture";
+
+export class ReplayController {
+  private readonly responseSteps: ReplayResponseStep[];
+  private readonly liveSteps: Array<Exclude<ReplayStep, ReplayResponseStep>>;
+  private responseIndex = 0;
+  private liveIndex = 0;
+  private pendingRequest?: ReplayRequestStep;
+
+  constructor(private readonly fixture: ReplayFixture) {
+    validateReplayFixture(fixture);
+    this.responseSteps = fixture.steps.filter(
+      (step): step is ReplayResponseStep => step.kind === "response"
+    );
+    this.liveSteps = fixture.steps.filter(
+      (step): step is Exclude<ReplayStep, ReplayResponseStep> => step.kind !== "response"
+    );
+  }
+
+  consumeResponse(method: ReplayResponseMethod): ReplayResponseStep {
+    const nextStep = this.responseSteps[this.responseIndex];
+    if (!nextStep) {
+      throw new Error(`Replay fixture exhausted before ${method}`);
+    }
+    if (nextStep.method !== method) {
+      throw new Error(
+        `Replay fixture expected ${nextStep.method} before ${method}`
+      );
+    }
+
+    this.responseIndex += 1;
+    return nextStep;
+  }
+
+  advance(params: {
+    stepId?: string;
+    override?: ReplayStepOverride;
+  } = {}): Exclude<ReplayStep, ReplayResponseStep> {
+    if (this.pendingRequest) {
+      throw new Error(
+        `Replay is waiting for request ${this.pendingRequest.request.params.requestId}`
+      );
+    }
+
+    const nextStep = this.liveSteps[this.liveIndex];
+    if (!nextStep) {
+      throw new Error("Replay has no remaining live steps");
+    }
+    if (params.stepId && nextStep.id !== params.stepId) {
+      throw new Error(`Replay expected step ${nextStep.id} before ${params.stepId}`);
+    }
+
+    const merged = applyOverride(nextStep, params.override);
+    this.liveIndex += 1;
+
+    if (merged.kind === "request") {
+      this.pendingRequest = merged;
+    }
+
+    return merged;
+  }
+
+  getPendingRequest(): ReplayRequestStep | undefined {
+    return this.pendingRequest;
+  }
+
+  resolvePendingRequest(requestId: string): ReplayRequestStep {
+    if (!this.pendingRequest || this.pendingRequest.request.params.requestId !== requestId) {
+      throw new Error(`Replay has no pending request ${requestId}`);
+    }
+
+    const current = this.pendingRequest;
+    this.pendingRequest = undefined;
+    return current;
+  }
+}
+
+function applyOverride<T extends Exclude<ReplayStep, ReplayResponseStep>>(
+  step: T,
+  override?: ReplayStepOverride
+): T {
+  if (!override) {
+    return step;
+  }
+
+  if ("request" in override && step.kind === "request") {
+    return {
+      ...step,
+      request: {
+        ...step.request,
+        ...override.request,
+        params: {
+          ...step.request.params,
+          ...(override.request?.params ?? {})
+        }
+      }
+    } as T;
+  }
+
+  if ("notification" in override && step.kind === "notification") {
+    return {
+      ...step,
+      notification: {
+        ...step.notification,
+        ...override.notification,
+        params: {
+          ...step.notification.params,
+          ...(override.notification?.params ?? {})
+        }
+      }
+    } as T;
+  }
+
+  return {
+    ...step,
+    ...override
+  } as T;
+}

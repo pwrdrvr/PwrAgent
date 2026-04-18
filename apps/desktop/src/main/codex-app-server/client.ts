@@ -23,7 +23,7 @@ import type {
   AppServerTurnInputItem,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
-import { JsonRpcConnection } from "./json-rpc";
+import { JsonRpcConnection, type JsonRpcObserver } from "./json-rpc";
 import { StdioJsonRpcTransport } from "./stdio-transport";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
@@ -37,6 +37,7 @@ type CodexClientOptions = {
   directoryResolver?: (
     projectKey?: string
   ) => Promise<LinkedDirectorySummary[]>;
+  connectionObserver?: JsonRpcObserver;
   requestTimeoutMs?: number;
 };
 
@@ -1408,7 +1409,8 @@ export class CodexAppServerClient {
         args: options.args ?? [],
         env: options.env
       }),
-      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options.connectionObserver
     );
     this.directoryResolver = options.directoryResolver ?? resolveLinkedDirectories;
     this.connection.setNotificationHandler(async (method, params) => {

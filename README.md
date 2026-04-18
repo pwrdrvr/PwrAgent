@@ -17,6 +17,21 @@ Thread-centric coding agent desktop app.
 
 - `pnpm test`
 - `pnpm typecheck`
+- `pnpm test:desktop-e2e`
+
+Desktop replay-backed Electron coverage lives under `apps/desktop/e2e`.
+
+To record real Codex App Server traffic from the desktop client boundary, launch
+the desktop app with `PWRAGNT_PROTOCOL_CAPTURE=true`. Captures are written under
+the Electron user-data directory at `test-artifacts/protocol-captures` by
+default. Override that root with `PWRAGNT_PROTOCOL_CAPTURE_ROOT=/absolute/path`
+when you want a stable local export location.
+
+Replay fixtures live in `apps/desktop/e2e/fixtures/*/replay.fixture.json`. The
+current harness runs the built Electron app in replay mode by pointing
+`PWRAGNT_REPLAY_FIXTURE_PATH` at one of those fixture files. The checked-in
+suite uses curated replay fixtures for deterministic UI regressions, while raw
+captures stay local evidence until they are promoted into a sanitized fixture.
 
 `packages/agent-core` now includes the Grok-backed Codex app-server contract,
 consumer-sequence compatibility tests, and provider coverage for the OpenClaw-used

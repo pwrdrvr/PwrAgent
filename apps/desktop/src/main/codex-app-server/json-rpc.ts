@@ -37,6 +37,16 @@ export interface JsonRpcTransport {
   setCloseHandler(handler: (error?: Error) => void): void;
 }
 
+export type JsonRpcObserverEvent = {
+  direction: "inbound" | "outbound";
+  raw: string;
+  envelope: JsonRpcEnvelope;
+};
+
+export interface JsonRpcObserver {
+  onMessage(event: JsonRpcObserverEvent): void | Promise<void>;
+}
+
 function parseJsonRpcEnvelope(raw: string): JsonRpcEnvelope | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -58,7 +68,8 @@ export class JsonRpcConnection {
 
   constructor(
     private readonly transport: JsonRpcTransport,
-    private readonly requestTimeoutMs: number
+    private readonly requestTimeoutMs: number,
+    private readonly observer?: JsonRpcObserver
   ) {
     this.transport.setMessageHandler((message) => {
       void this.handleMessage(message);
@@ -92,13 +103,11 @@ export class JsonRpcConnection {
   }
 
   async notify(method: string, params?: unknown): Promise<void> {
-    this.transport.send(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method,
-        params: params ?? {}
-      })
-    );
+    await this.sendEnvelope({
+      jsonrpc: "2.0",
+      method,
+      params: params ?? {}
+    });
   }
 
   async request(
@@ -115,14 +124,12 @@ export class JsonRpcConnection {
       this.pending.set(id, { resolve, reject, timer });
     });
 
-    this.transport.send(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id,
-        method,
-        params: params ?? {}
-      })
-    );
+    await this.sendEnvelope({
+      jsonrpc: "2.0",
+      id,
+      method,
+      params: params ?? {}
+    });
 
     return await requestPromise;
   }
@@ -132,6 +139,12 @@ export class JsonRpcConnection {
     if (!envelope) {
       return;
     }
+
+    await this.observer?.onMessage({
+      direction: "inbound",
+      raw: rawMessage,
+      envelope
+    });
 
     if (
       envelope.id != null &&
@@ -172,25 +185,31 @@ export class JsonRpcConnection {
 
     try {
       const result = await this.requestHandler(method, envelope.params);
-      this.transport.send(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: envelope.id,
-          result: result ?? {}
-        })
-      );
+      await this.sendEnvelope({
+        jsonrpc: "2.0",
+        id: envelope.id,
+        result: result ?? {}
+      });
     } catch (error) {
-      this.transport.send(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: envelope.id,
-          error: {
-            code: -32603,
-            message: error instanceof Error ? error.message : String(error)
-          }
-        })
-      );
+      await this.sendEnvelope({
+        jsonrpc: "2.0",
+        id: envelope.id,
+        error: {
+          code: -32603,
+          message: error instanceof Error ? error.message : String(error)
+        }
+      });
     }
+  }
+
+  private async sendEnvelope(envelope: JsonRpcEnvelope): Promise<void> {
+    const raw = JSON.stringify(envelope);
+    await this.observer?.onMessage({
+      direction: "outbound",
+      raw,
+      envelope
+    });
+    this.transport.send(raw);
   }
 
   private flushPending(error: Error): void {

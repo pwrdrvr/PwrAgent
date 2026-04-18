@@ -9,6 +9,7 @@
     "build": "electron-vite build",
     "dev": "electron-vite dev",
     "preview": "electron-vite preview",
+    "test:e2e": "playwright test -c playwright.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
@@ -20,6 +21,7 @@
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
+    "@playwright/test": "^1.55.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
