@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import type {
   AppServerSkillSummary,
   AppServerThreadImagePart,
@@ -14,7 +14,7 @@ type TranscriptMessageProps = {
   onOpenImage?: (image: AppServerThreadImagePart) => void;
 };
 
-export function TranscriptMessage(props: TranscriptMessageProps) {
+export const TranscriptMessage = memo(function TranscriptMessage(props: TranscriptMessageProps) {
   const contentParts =
     props.message.parts && props.message.parts.length > 0
       ? props.message.parts
@@ -52,7 +52,9 @@ export function TranscriptMessage(props: TranscriptMessageProps) {
       ) : null}
     </article>
   );
-}
+});
+
+TranscriptMessage.displayName = "TranscriptMessage";
 
 type MessagePartSegment =
   | { type: "text"; part: Exclude<AppServerThreadMessagePart, AppServerThreadImagePart> }

@@ -48,4 +48,12 @@ describe("ThreadMarkdown", () => {
     expect(container.querySelector("script")).toBeNull();
     expect(container.querySelector("img")).not.toHaveAttribute("onerror");
   });
+
+  it("skips raw html parsing for oversized html-like messages", () => {
+    const oversizedHtml = "<em>safe</em>".repeat(2_000);
+    const { container } = render(<ThreadMarkdown text={oversizedHtml} />);
+
+    expect(container.querySelector("em")).toBeNull();
+    expect(container.textContent).toContain("<em>safe</em>");
+  });
 });
