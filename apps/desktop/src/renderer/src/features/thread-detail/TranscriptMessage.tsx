@@ -50,9 +50,9 @@ export function TranscriptMessage(props: TranscriptMessageProps) {
       </header>
       {contentParts.length > 0 ? (
         <div className="transcript-message__text">
-          {contentParts.map((part, index) =>
-            renderMessagePart({
-              part,
+          {groupMessageParts(contentParts).map((segment, index) =>
+            renderMessageSegment({
+              segment,
               index,
               onOpenImage: props.onOpenImage,
               skillsByPath
@@ -64,37 +64,75 @@ export function TranscriptMessage(props: TranscriptMessageProps) {
   );
 }
 
-function renderMessagePart(params: {
-  part: AppServerThreadMessagePart;
+type MessagePartSegment =
+  | { type: "text"; part: Exclude<AppServerThreadMessagePart, AppServerThreadImagePart> }
+  | { type: "images"; parts: AppServerThreadImagePart[]; startIndex: number };
+
+function groupMessageParts(parts: AppServerThreadMessagePart[]): MessagePartSegment[] {
+  const segments: MessagePartSegment[] = [];
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (part.type === "image") {
+      const existingSegment = segments[segments.length - 1];
+      if (existingSegment?.type === "images") {
+        existingSegment.parts.push(part);
+        continue;
+      }
+
+      segments.push({
+        type: "images",
+        parts: [part],
+        startIndex: index
+      });
+      continue;
+    }
+
+    segments.push({
+      type: "text",
+      part
+    });
+  }
+
+  return segments;
+}
+
+function renderMessageSegment(params: {
+  segment: MessagePartSegment;
   index: number;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   skillsByPath: Map<string, AppServerSkillSummary & { path: string }>;
 }): ReactNode {
-  if (params.part.type === "image") {
-    const imagePart = params.part;
+  if (params.segment.type === "images") {
+    const imageSegment = params.segment;
+
     return (
-      <button
-        key={`image:${params.index}`}
-        type="button"
-        className="transcript-message__image-button"
-        aria-label={`Expand transcript image ${params.index + 1}`}
-        onClick={() => {
-          params.onOpenImage?.(imagePart);
-        }}
-      >
-        <TranscriptImage
-          className="transcript-message__image-preview"
-          src={imagePart.url}
-          alt={imagePart.alt ?? "Transcript image"}
-          loading="lazy"
-        />
-      </button>
+      <div key={`images:${params.index}`} className="transcript-message__image-grid">
+        {imageSegment.parts.map((imagePart, imageIndex) => (
+          <button
+            key={`image:${imageSegment.startIndex + imageIndex}`}
+            type="button"
+            className="transcript-message__image-button"
+            aria-label={`Expand transcript image ${imageSegment.startIndex + imageIndex + 1}`}
+            onClick={() => {
+              params.onOpenImage?.(imagePart);
+            }}
+          >
+            <TranscriptImage
+              className="transcript-message__image-preview"
+              src={imagePart.url}
+              alt={imagePart.alt ?? "Transcript image"}
+              loading="lazy"
+            />
+          </button>
+        ))}
+      </div>
     );
   }
 
   return (
     <Fragment key={`text:${params.index}`}>
-      {renderTextPart(params.part.text, `part-${params.index}`, params.skillsByPath)}
+      {renderTextPart(params.segment.part.text, `part-${params.index}`, params.skillsByPath)}
     </Fragment>
   );
 }

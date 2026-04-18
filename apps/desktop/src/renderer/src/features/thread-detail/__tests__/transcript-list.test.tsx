@@ -197,6 +197,7 @@ describe("TranscriptList", () => {
   it("renders inline image previews and opens them on demand", () => {
     const onOpenImage = vi.fn();
     const dataUrl = "data:image/png;base64,aGVsbG8=";
+    const secondDataUrl = "data:image/png;base64,d29ybGQ=";
 
     render(
       <TranscriptList
@@ -215,6 +216,11 @@ describe("TranscriptList", () => {
                 type: "image",
                 url: dataUrl,
                 alt: "Transcript screenshot"
+              },
+              {
+                type: "image",
+                url: secondDataUrl,
+                alt: "Second transcript screenshot"
               }
             ]
           },
@@ -245,8 +251,17 @@ describe("TranscriptList", () => {
       "src",
       "blob:transcript-image"
     );
+    expect(screen.getByAltText("Second transcript screenshot")).toHaveAttribute(
+      "src",
+      "blob:transcript-image"
+    );
     expect(screen.getByAltText("Assistant image")).toBeInTheDocument();
-    expect(createObjectURLMock).toHaveBeenCalledTimes(1);
+    expect(createObjectURLMock).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByAltText("Transcript screenshot").closest(".transcript-message__image-grid")
+    ).toBe(
+      screen.getByAltText("Second transcript screenshot").closest(".transcript-message__image-grid")
+    );
 
     fireEvent.click(screen.getByAltText("Transcript screenshot").closest("button")!);
 
