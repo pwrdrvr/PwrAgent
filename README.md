@@ -36,6 +36,9 @@ Computer Use-driven seeding recipes live next to the fixtures under
 `apps/desktop/e2e/fixtures/*/capture-recipe.md`, with shared workflow guidance
 in `apps/desktop/e2e/fixtures/README.md`.
 
+The current seeded desktop replay scenarios cover shell load, edited-change
+ordering, pending approval UI, and turn lifecycle cleanup.
+
 Typical workflow:
 
 1. Record a session:

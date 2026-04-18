@@ -219,7 +219,7 @@ flowchart TB
 **Verification:**
 - A maintainer can open a fixture directory and follow a documented Computer Use recipe to reproduce the live capture path that generated that scenario.
 
-- [ ] **Unit 4: Seed the first batch of live-captured replay scenarios**
+- [x] **Unit 4: Seed the first batch of live-captured replay scenarios**
 
 **Goal:** Promote the next set of replay-backed Electron regressions from live desktop sessions captured with Computer Use.
 
