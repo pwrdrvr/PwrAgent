@@ -1,7 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
-import electronBinary from "electron";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,7 +20,6 @@ export async function launchElectronApp(params: {
   fixturePath: string;
 }): Promise<LaunchResult> {
   const electronApp = await electron.launch({
-    executablePath: electronBinary,
     args: [path.resolve(fixtureDir, "../../out/main/index.js")],
     cwd: path.resolve(fixtureDir, "../.."),
     env: {

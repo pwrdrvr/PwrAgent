@@ -2,6 +2,7 @@
   "metadata": {
     "backend": "codex",
     "scenario": "edited-changes-order",
+    "sourceCaptureId": "2026-04-18T15-00-00-000Z-codex",
     "threadId": "thread-edited-changes"
   },
   "steps": [
@@ -14,7 +15,11 @@
           "name": "Replay Codex",
           "version": "1.0.0"
         },
-        "methods": ["thread/list", "thread/read", "skills/list"]
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
       }
     },
     {
@@ -26,7 +31,11 @@
           "name": "Replay Codex",
           "version": "1.0.0"
         },
-        "methods": ["thread/list", "thread/read", "skills/list"]
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
       }
     },
     {

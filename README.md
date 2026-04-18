@@ -33,6 +33,17 @@ current harness runs the built Electron app in replay mode by pointing
 suite uses curated replay fixtures for deterministic UI regressions, while raw
 captures stay local evidence until they are promoted into a sanitized fixture.
 
+Typical workflow:
+
+1. Record a session:
+   `PWRAGNT_PROTOCOL_CAPTURE=true PWRAGNT_PROTOCOL_CAPTURE_ROOT=/absolute/path pnpm dev`
+2. Export the recorded raw capture for a backend-qualified thread id:
+   `pnpm --filter @pwragnt/desktop export:session-capture -- --capture-root /absolute/path --session codex:thread-123 --output /tmp/thread-123.raw.capture.jsonl`
+3. Derive a curated fixture directory from a scenario window:
+   `pnpm --filter @pwragnt/desktop derive:replay-fixture -- --input /tmp/thread-123.raw.capture.jsonl --output-dir apps/desktop/e2e/fixtures/example-scenario --scenario example-scenario --start 20 --end 80`
+4. Run the desktop Electron regressions:
+   `pnpm test:desktop-e2e`
+
 `packages/agent-core` now includes the Grok-backed Codex app-server contract,
 consumer-sequence compatibility tests, and provider coverage for the OpenClaw-used
 subset.

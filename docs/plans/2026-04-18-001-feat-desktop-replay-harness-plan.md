@@ -1,7 +1,7 @@
 ---
 title: feat: Desktop replay harness for integration testing
 type: feat
-status: active
+status: completed
 date: 2026-04-18
 origin: docs/brainstorms/2026-04-18-desktop-integration-test-replay-harness-requirements.md
 deepened: 2026-04-18
@@ -275,7 +275,7 @@ flowchart TB
 **Verification:**
 - `test:e2e` can launch the built desktop app under Playwright, drive the first window, and coordinate replay advancement from the test without starting a separate renderer dev server.
 
-- [ ] **Unit 4: Add fixture derivation tooling and best-effort session-id export**
+- [x] **Unit 4: Add fixture derivation tooling and best-effort session-id export**
 
 **Goal:** Turn local raw captures into curated repo fixtures and support later lookup by session id when a recorded capture exists.
 
@@ -313,7 +313,7 @@ flowchart TB
 **Verification:**
 - A developer can take a locally recorded Codex session, derive a smaller replay fixture from it, and promote that fixture into the repo without hand-editing protocol payloads.
 
-- [ ] **Unit 5: Land the first edited-changes regression and document the workflow**
+- [x] **Unit 5: Land the first edited-changes regression and document the workflow**
 
 **Goal:** Prove the framework on the real bug target and document how future regressions should be captured and promoted.
 

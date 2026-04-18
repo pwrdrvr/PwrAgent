@@ -30,6 +30,15 @@ export class ReplayController {
     }
 
     this.responseIndex += 1;
+
+    if (nextStep.error) {
+      throw new Error(
+        `Replay response error (${nextStep.error.code ?? "unknown"}): ${
+          nextStep.error.message ?? "unknown error"
+        }`
+      );
+    }
+
     return nextStep;
   }
 

@@ -6,20 +6,18 @@ import type {
   AppServerThreadSummary,
 } from "@pwragnt/shared";
 
-export type ReplayResponseMethod =
-  | "initialize"
-  | "thread/list"
-  | "skills/list"
-  | "thread/read"
-  | "thread/start"
-  | "turn/start"
-  | "turn/interrupt";
+export type ReplayResponseMethod = string;
 
 export type ReplayResponseStep = {
   id: string;
   kind: "response";
   method: ReplayResponseMethod;
-  result: unknown;
+  result?: unknown;
+  error?: {
+    code?: number;
+    message?: string;
+    data?: unknown;
+  };
 };
 
 export type ReplayNotificationStep = {
@@ -74,6 +72,14 @@ export function validateReplayFixture(fixture: ReplayFixture): void {
     if (step.kind === "response") {
       if (!step.method?.trim()) {
         throw new Error(`Replay response step ${step.id} requires method`);
+      }
+      if (
+        !Object.hasOwn(step, "result")
+        && !Object.hasOwn(step, "error")
+      ) {
+        throw new Error(
+          `Replay response step ${step.id} requires result or error`
+        );
       }
       continue;
     }
