@@ -1,4 +1,4 @@
-import electronLog from "electron-log/main";
+import electronLog from "electron-log/main.js";
 
 let initialized = false;
 
