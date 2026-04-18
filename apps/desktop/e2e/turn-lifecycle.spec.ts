@@ -5,7 +5,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const turnLifecycleSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
-test("clears transient turn UI after a replayed turn completes", async () => {
+test("clears transient turn UI after a replayed turn returns idle", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       turnLifecycleSpecDir,
@@ -49,7 +49,6 @@ test("clears transient turn UI after a replayed turn completes", async () => {
     ).toBeVisible();
 
     await app.advance({ stepId: "status-idle-1" });
-    await app.advance({ stepId: "turn-completed-1" });
 
     await expect(
       app.window.getByRole("button", { name: "Stop" })
