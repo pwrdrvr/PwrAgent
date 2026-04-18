@@ -12,6 +12,14 @@ const mainLog = getMainLogger("pwragnt:main");
 const heapLog = getMainLogger("pwragnt:heap");
 const rendererConsoleLog = getMainLogger("pwragnt:renderer:console");
 
+function serializeError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
 export function getPreloadPath(): string {
   return join(__dirname, "../preload/index.cjs");
 }
@@ -118,16 +126,23 @@ export function createMainWindow(): BrowserWindow {
   })();
 
   const stopHeapMonitor = (reason: string) => {
-    void heapMonitorPromise.then(async (monitors) => {
-      if (!monitors) {
-        return;
-      }
+    void heapMonitorPromise
+      .then(async (monitors) => {
+        if (!monitors) {
+          return;
+        }
 
-      await Promise.all([
-        monitors.rendererMonitor.stop(reason),
-        monitors.mainMonitor.stop(reason),
-      ]);
-    });
+        await Promise.all([
+          monitors.rendererMonitor.stop(reason),
+          monitors.mainMonitor.stop(reason),
+        ]);
+      })
+      .catch((error: unknown) => {
+        heapLog.warn("failed to stop heap diagnostics", {
+          reason,
+          error: serializeError(error),
+        });
+      });
   };
 
   if (typeof webContents.on === "function") {

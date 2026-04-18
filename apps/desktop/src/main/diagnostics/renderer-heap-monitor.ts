@@ -25,6 +25,7 @@ type RendererHeapDebugger = {
 type RendererHeapTarget = {
   debugger: RendererHeapDebugger;
   takeHeapSnapshot: (filePath: string) => Promise<void>;
+  isDestroyed?: () => boolean;
 };
 
 type Logger = Pick<Console, "info" | "warn" | "error">;
@@ -145,11 +146,25 @@ export class RendererHeapMonitor {
 
     this.stopped = true;
     this.pauseSampling();
-    if (this.target.debugger.off) {
-      this.target.debugger.off("detach", this.detachListener);
-    }
-    if (this.debuggerAttached && this.target.debugger.isAttached()) {
-      this.target.debugger.detach();
+    const targetDestroyed = this.isTargetDestroyed();
+    if (!targetDestroyed) {
+      try {
+        if (this.target.debugger.off) {
+          this.target.debugger.off("detach", this.detachListener);
+        }
+        if (this.debuggerAttached && this.target.debugger.isAttached()) {
+          this.target.debugger.detach();
+        }
+      } catch (error) {
+        if (!this.isDestroyedError(error)) {
+          throw error;
+        }
+
+        this.logger.warn("[pwragnt:heap] renderer target destroyed during stop", {
+          reason,
+          sessionDirectory: this.session.directoryPath,
+        });
+      }
     }
     this.debuggerAttached = false;
 
@@ -348,6 +363,14 @@ export class RendererHeapMonitor {
       clearTimeout(this.intervalTimer);
       this.intervalTimer = null;
     }
+  }
+
+  private isTargetDestroyed(): boolean {
+    return typeof this.target.isDestroyed === "function" && this.target.isDestroyed();
+  }
+
+  private isDestroyedError(error: unknown): boolean {
+    return serializeError(error).includes("Object has been destroyed");
   }
 
   private async appendEvent(event: HeapSessionEvent): Promise<void> {

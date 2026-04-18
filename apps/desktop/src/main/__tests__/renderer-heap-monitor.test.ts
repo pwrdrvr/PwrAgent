@@ -520,6 +520,45 @@ describe("RendererHeapMonitor", () => {
     await monitor.stop();
   });
 
+  it("stops cleanly when the renderer target has already been destroyed", async () => {
+    const session = createSessionStub();
+    const { target, debuggerApi } = createTarget([{ usedSize: 100, totalSize: 200 }]);
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    const monitor = new RendererHeapMonitor({
+      target: {
+        ...target,
+        isDestroyed: () => true,
+      },
+      session: session.session,
+      config: createMonitorConfig(),
+      logger,
+    });
+
+    await monitor.start();
+    await advance(1);
+    await monitor.stop("window-closed");
+
+    expect(debuggerApi.off).not.toHaveBeenCalled();
+    expect(debuggerApi.detach).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(session.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "renderer",
+          type: "monitor-stopped",
+          detail: expect.objectContaining({
+            reason: "window-closed",
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("writes a heap snapshot file and matching events into a real session directory", async () => {
     vi.useRealTimers();
     const workspace = await createTemporaryTestDirectory();
