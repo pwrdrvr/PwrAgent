@@ -3,9 +3,13 @@ import { join, resolve } from "node:path";
 import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
 import { createHeapSession } from "./diagnostics/heap-session";
 import { RendererHeapMonitor } from "./diagnostics/renderer-heap-monitor";
+import { getMainLogger } from "./log";
 import { attachWindowFocusSync } from "./window-focus-sync";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
+const mainLog = getMainLogger("pwragnt:main");
+const heapLog = getMainLogger("pwragnt:heap");
+const rendererConsoleLog = getMainLogger("pwragnt:renderer:console");
 
 export function getPreloadPath(): string {
   return join(__dirname, "../preload/index.cjs");
@@ -45,7 +49,7 @@ export function createMainWindow(): BrowserWindow {
   });
 
   if (isDevelopment) {
-    console.info("[pwragnt:main] creating window", {
+    mainLog.info("creating window", {
       preloadPath,
       rendererUrl: process.env.ELECTRON_RENDERER_URL ?? null
     });
@@ -84,13 +88,13 @@ export function createMainWindow(): BrowserWindow {
     });
 
     if (!created.ok) {
-      console.error("[pwragnt:heap] failed to initialize heap diagnostics", {
+      heapLog.error("failed to initialize heap diagnostics", {
         message: created.message,
       });
       return null;
     }
 
-    console.info("[pwragnt:heap] session directory", {
+    heapLog.info("session directory", {
       sessionDirectory: created.session.directoryPath,
     });
 
@@ -107,7 +111,7 @@ export function createMainWindow(): BrowserWindow {
 
   if (typeof webContents.on === "function") {
     webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl) => {
-      console.error("[pwragnt:main] renderer load failed", {
+      mainLog.error("renderer load failed", {
         errorCode,
         errorDescription,
         validatedUrl
@@ -116,7 +120,7 @@ export function createMainWindow(): BrowserWindow {
 
     webContents.on("render-process-gone", (_event, details) => {
       stopHeapMonitor("render-process-gone");
-      console.error("[pwragnt:main] renderer process gone", details);
+      mainLog.error("renderer process gone", details);
     });
 
     if (typeof webContents.once === "function") {
@@ -128,7 +132,7 @@ export function createMainWindow(): BrowserWindow {
 
   if (isDevelopment && typeof webContents.on === "function") {
     webContents.on("console-message", (_event, level, message, line, sourceId) => {
-      console.info("[pwragnt:renderer:console]", {
+      rendererConsoleLog.info("message", {
         level,
         message,
         line,
@@ -147,10 +151,10 @@ export function createMainWindow(): BrowserWindow {
           true
         )
         .then((result) => {
-          console.info("[pwragnt:main] renderer globals", result);
+          mainLog.info("renderer globals", result);
         })
         .catch((error: unknown) => {
-          console.error("[pwragnt:main] failed to inspect renderer globals", error);
+          mainLog.error("failed to inspect renderer globals", error);
         });
     });
   }

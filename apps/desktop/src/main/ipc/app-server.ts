@@ -38,15 +38,17 @@ import {
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
 } from "../../shared/ipc";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
+import { getMainLogger } from "../log";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
+const appServerLog = getMainLogger("pwragnt:app-server");
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
   if (!isDevelopment) {
     return;
   }
 
-  console.info(`[pwragnt:app-server] ${event}`, payload);
+  appServerLog.info(event, payload);
 }
 
 class DesktopAppServerService {

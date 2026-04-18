@@ -1,8 +1,10 @@
 import path from "node:path";
 import type { HeapMonitorConfig } from "./heap-monitor-config";
 import type { HeapSession, HeapSessionEvent, HeapSessionSample } from "./heap-session";
+import { getMainLogger } from "../log";
 
 const CHROME_DEBUGGER_PROTOCOL_VERSION = "1.3";
+const defaultHeapLogger = getMainLogger("pwragnt:heap");
 
 type RendererHeapUsage = {
   usedSize: number;
@@ -79,7 +81,7 @@ export class RendererHeapMonitor {
     now?: () => Date;
   }) {
     this.config = options.config;
-    this.logger = options.logger ?? console;
+    this.logger = options.logger ?? defaultHeapLogger;
     this.session = options.session;
     this.target = options.target;
     this.now = options.now ?? (() => new Date());
