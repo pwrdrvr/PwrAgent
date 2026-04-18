@@ -1,5 +1,8 @@
-import { BrowserWindow, shell } from "electron";
-import { join } from "node:path";
+import { app, BrowserWindow, shell } from "electron";
+import { join, resolve } from "node:path";
+import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
+import { createHeapSession } from "./diagnostics/heap-session";
+import { RendererHeapMonitor } from "./diagnostics/renderer-heap-monitor";
 import { attachWindowFocusSync } from "./window-focus-sync";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -17,6 +20,10 @@ export function getRendererEntry(): { kind: "url" | "file"; value: string } {
     kind: "file",
     value: join(__dirname, "../renderer/index.html")
   };
+}
+
+function resolveRepoRoot(): string {
+  return resolve(app.getAppPath(), "../..");
 }
 
 export function createMainWindow(): BrowserWindow {
@@ -57,6 +64,46 @@ export function createMainWindow(): BrowserWindow {
 
   const { webContents } = window;
   attachWindowFocusSync(window);
+  const heapMonitorPromise = (async () => {
+    const heapConfig = resolveHeapMonitorConfig({
+      repoRoot: resolveRepoRoot(),
+    });
+
+    if (!heapConfig.enabled) {
+      return null;
+    }
+
+    const created = await createHeapSession({
+      config: heapConfig,
+      versions: {
+        appVersion: app.getVersion(),
+        electronVersion: process.versions.electron ?? "unknown",
+        chromeVersion: process.versions.chrome ?? "unknown",
+        nodeVersion: process.versions.node,
+      },
+    });
+
+    if (!created.ok) {
+      console.error("[pwragnt:heap] failed to initialize heap diagnostics", {
+        message: created.message,
+      });
+      return null;
+    }
+
+    console.info("[pwragnt:heap] session directory", {
+      sessionDirectory: created.session.directoryPath,
+    });
+
+    return new RendererHeapMonitor({
+      target: webContents,
+      session: created.session,
+      config: heapConfig,
+    });
+  })();
+
+  const stopHeapMonitor = (reason: string) => {
+    void heapMonitorPromise.then((monitor) => monitor?.stop(reason));
+  };
 
   if (typeof webContents.on === "function") {
     webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl) => {
@@ -68,8 +115,15 @@ export function createMainWindow(): BrowserWindow {
     });
 
     webContents.on("render-process-gone", (_event, details) => {
+      stopHeapMonitor("render-process-gone");
       console.error("[pwragnt:main] renderer process gone", details);
     });
+
+    if (typeof webContents.once === "function") {
+      webContents.once("did-finish-load", () => {
+        void heapMonitorPromise.then((monitor) => monitor?.start());
+      });
+    }
   }
 
   if (isDevelopment && typeof webContents.on === "function") {
@@ -104,6 +158,10 @@ export function createMainWindow(): BrowserWindow {
   webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
     return { action: "deny" };
+  });
+
+  window.on("closed", () => {
+    stopHeapMonitor("window-closed");
   });
 
   return window;

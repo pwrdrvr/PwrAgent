@@ -1,4 +1,5 @@
 node_modules/
+.local/
 .DS_Store
 coverage/
 dist/
