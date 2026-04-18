@@ -184,4 +184,38 @@ describe("OverlayStore", () => {
       fastMode: true,
     });
   });
+
+  it("persists correctly when separate store instances write the same file concurrently", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-overlay-store-shared-"));
+    tempDirs.push(tempDir);
+    const sharedPath = path.join(tempDir, "overlay-state.json");
+    const firstStore = new OverlayStore(sharedPath);
+    const secondStore = new OverlayStore(sharedPath);
+
+    await Promise.all([
+      firstStore.markThreadSeen({
+        backend: "codex",
+        threadId: "thread-1",
+        seenAt: 2000,
+        seenUpdatedAt: 1000,
+      }),
+      secondStore.markThreadSeen({
+        backend: "grok",
+        threadId: "thread-2",
+        seenAt: 3000,
+        seenUpdatedAt: 2500,
+      }),
+    ]);
+
+    const raw = JSON.parse(await readFile(sharedPath, "utf8")) as {
+      threads: Record<string, { backend?: string; lastSeenAt?: number }>;
+    };
+
+    expect(Object.values(raw.threads)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ backend: "codex", lastSeenAt: 2000 }),
+        expect.objectContaining({ backend: "grok", lastSeenAt: 3000 }),
+      ]),
+    );
+  });
 });

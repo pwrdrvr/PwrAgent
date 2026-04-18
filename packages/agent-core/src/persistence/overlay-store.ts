@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -24,7 +25,7 @@ import {
 } from "./migrations";
 
 export class OverlayStore {
-  private queue: Promise<unknown> = Promise.resolve();
+  private static readonly queues = new Map<string, Promise<unknown>>();
 
   constructor(private readonly filePath: string) {}
 
@@ -250,16 +251,20 @@ export class OverlayStore {
   private async withData<T>(
     operation: (data: OverlayStoreData) => Promise<T> | T,
   ): Promise<T> {
-    const next = this.queue.then(async () => {
+    const currentQueue = OverlayStore.queues.get(this.filePath) ?? Promise.resolve();
+    const next = currentQueue.then(async () => {
       const data = await this.readData();
       const result = await operation(data);
       await this.writeData(data);
       return result;
     });
 
-    this.queue = next.then(
-      () => undefined,
-      () => undefined,
+    OverlayStore.queues.set(
+      this.filePath,
+      next.then(
+        () => undefined,
+        () => undefined,
+      ),
     );
 
     return (await next) as T;
@@ -289,7 +294,7 @@ export class OverlayStore {
 
   private async writeData(data: OverlayStoreData): Promise<void> {
     await mkdir(path.dirname(this.filePath), { recursive: true });
-    const tempPath = `${this.filePath}.tmp`;
+    const tempPath = `${this.filePath}.${randomUUID()}.tmp`;
     await writeFile(tempPath, JSON.stringify(data, null, 2), "utf8");
     await rename(tempPath, this.filePath);
   }
