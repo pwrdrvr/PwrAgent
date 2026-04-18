@@ -607,55 +607,17 @@ textarea {
 .directory-row__details {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px 0 14px 0;
-}
-
-.directory-row__details-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding-left: 12px;
-}
-
-.directory-row__detail-chip {
-  display: inline-flex;
-  min-width: 0;
-  max-width: 100%;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.directory-row__detail-chip--draft {
-  border-color: var(--accent-border);
-  background: rgba(184, 255, 77, 0.08);
-  color: var(--text-primary);
-}
-
-.directory-row__detail-chip--path {
-  max-width: min(100%, 420px);
-  background: transparent;
-  text-align: left;
+  gap: 8px;
+  padding: 8px 0 14px 0;
 }
 
 .directory-row__threads {
-  padding-left: 12px;
+  padding-left: 8px;
 }
 
 .directory-row__empty {
   margin-top: 0;
-  padding-left: 12px;
+  padding-left: 8px;
 }
 
 .directory-group {
@@ -1829,36 +1791,40 @@ textarea {
 .composer__setup {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  align-items: flex-end;
+  gap: 10px 18px;
 }
 
 .composer__control-group {
   display: flex;
-  min-width: min(100%, 220px);
-  flex: 1 1 220px;
+  min-width: 0;
+  flex: 0 0 auto;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .composer__control-label {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
+  text-transform: uppercase;
 }
 
 .composer__segmented {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
 }
 
 .composer__segmented-button {
-  min-height: 30px;
-  padding: 0 10px;
+  min-height: 34px;
+  padding: 0 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .composer__segmented-button:hover {
@@ -1872,7 +1838,7 @@ textarea {
 }
 
 .composer__select {
-  width: 100%;
+  min-width: 168px;
   min-height: 34px;
   padding: 0 10px;
   border: 1px solid var(--border-subtle);

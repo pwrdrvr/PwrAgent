@@ -5,7 +5,6 @@ import type {
   NavigationThreadSummary,
 } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
-import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 
 type DirectoriesListProps = {
@@ -138,40 +137,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
             {expanded ? (
               <div className="directory-row__details">
-                <div className="directory-row__details-meta">
-                  {directory.path ? (
-                    <button
-                      aria-label={`Copy path for ${directory.label}`}
-                      className="directory-row__detail-chip directory-row__detail-chip--path path-copy-target tooltip-target"
-                      data-tooltip={formatCopyTooltip(directory.path)}
-                      type="button"
-                      onClick={() => {
-                        if (directory.path) {
-                          void copyText(directory.path);
-                        }
-                      }}
-                    >
-                      {directory.path}
-                    </button>
-                  ) : null}
-                  {directory.gitStatus?.currentBranch ? (
-                    <span className="directory-row__detail-chip thread-row__chip--mono">
-                      🌿 {directory.gitStatus.currentBranch}
-                    </span>
-                  ) : null}
-                  {formatSyncLabel(directory) ? (
-                    <span className="directory-row__detail-chip">{formatSyncLabel(directory)}</span>
-                  ) : null}
-                  <span className="directory-row__detail-chip">
-                    {visibleThreads.length} thread{visibleThreads.length === 1 ? "" : "s"}
-                  </span>
-                  {directory.launchpad ? (
-                    <span className="directory-row__detail-chip directory-row__detail-chip--draft">
-                      Draft
-                    </span>
-                  ) : null}
-                </div>
-
                 {visibleThreads.length > 0 ? (
                   <div className="sidebar-list sidebar-list--compact directory-row__threads">
                     {visibleThreads.map((thread) => {
@@ -239,32 +204,4 @@ function formatRelativeTime(timestamp?: number): string {
     month: "short",
     day: "numeric"
   }).format(timestamp);
-}
-
-function formatSyncLabel(directory: NavigationDirectorySummary): string | undefined {
-  const status = directory.gitStatus;
-  if (!status) {
-    return undefined;
-  }
-
-  if (status.syncState === "in-sync") {
-    return "Up to date";
-  }
-  if (status.syncState === "ahead") {
-    return `${status.ahead ?? 0} ahead`;
-  }
-  if (status.syncState === "behind") {
-    return `${status.behind ?? 0} behind`;
-  }
-  if (status.syncState === "diverged") {
-    return `${status.ahead ?? 0} ahead · ${status.behind ?? 0} behind`;
-  }
-  if (status.syncState === "untracked") {
-    return "No upstream";
-  }
-  if (status.syncState === "status-unavailable") {
-    return "Status unavailable";
-  }
-
-  return undefined;
 }

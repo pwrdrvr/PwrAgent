@@ -145,8 +145,6 @@ describe("Sidebar", () => {
       "true"
     );
     expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
-    expect(screen.getByText("Up to date")).toBeInTheDocument();
-    expect(screen.getByText("1 thread")).toBeInTheDocument();
     expect(screen.getAllByText("Cross-project cleanup").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Codex").length).toBeGreaterThan(0);
   });
