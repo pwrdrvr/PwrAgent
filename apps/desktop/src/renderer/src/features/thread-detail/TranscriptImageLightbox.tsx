@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { AppServerThreadImagePart } from "@pwragnt/shared";
+import { TranscriptImage } from "./TranscriptImage";
 
 type TranscriptImageLightboxProps = {
   image: AppServerThreadImagePart;
@@ -41,7 +42,7 @@ export function TranscriptImageLightbox(props: TranscriptImageLightboxProps) {
         >
           Close
         </button>
-        <img
+        <TranscriptImage
           className="transcript-image-lightbox__image"
           src={props.image.url}
           alt={props.image.alt ?? "Expanded transcript image"}

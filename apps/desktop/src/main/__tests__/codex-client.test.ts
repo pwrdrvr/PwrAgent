@@ -234,7 +234,7 @@ class MockTransport implements JsonRpcTransport {
                           },
                           {
                             type: "input_image",
-                            image_url: "file:///tmp/screenshot.png"
+                            image_url: "data:image/png;base64,aGVsbG8="
                           }
                         ]
                       },
@@ -940,7 +940,7 @@ describe("CodexAppServerClient", () => {
           },
           {
             type: "image",
-            url: "file:///tmp/screenshot.png"
+            url: "data:image/png;base64,aGVsbG8="
           }
         ]
       },
@@ -972,7 +972,7 @@ describe("CodexAppServerClient", () => {
           },
           {
             type: "image",
-            url: "file:///tmp/screenshot.png"
+            url: "data:image/png;base64,aGVsbG8="
           }
         ]
       },

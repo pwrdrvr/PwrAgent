@@ -377,7 +377,8 @@ function normalizeRenderableImageUrl(value: string | undefined): string | undefi
   if (
     trimmed.startsWith("http://") ||
     trimmed.startsWith("https://") ||
-    trimmed.startsWith("file://")
+    trimmed.startsWith("file://") ||
+    trimmed.startsWith("data:image/")
   ) {
     return trimmed;
   }

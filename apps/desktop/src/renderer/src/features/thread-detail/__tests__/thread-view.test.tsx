@@ -1,10 +1,21 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThreadView } from "../ThreadView";
 
 afterEach(() => {
   cleanup();
+});
+
+beforeEach(() => {
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: vi.fn(() => "blob:expanded-transcript-image")
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: vi.fn()
+  });
 });
 
 describe("ThreadView", () => {
@@ -257,6 +268,8 @@ describe("ThreadView", () => {
   });
 
   it("opens transcript image previews in a lightbox and dismisses them with Escape", () => {
+    const dataUrl = "data:image/png;base64,aGVsbG8=";
+
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
@@ -321,7 +334,7 @@ describe("ThreadView", () => {
             parts: [
               {
                 type: "image",
-                url: "file:///tmp/screenshot.png",
+                url: dataUrl,
                 alt: "Transcript screenshot"
               }
             ]
@@ -337,7 +350,10 @@ describe("ThreadView", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Expanded transcript image" });
     expect(dialog).toBeInTheDocument();
-    expect(within(dialog).getByAltText("Transcript screenshot")).toBeInTheDocument();
+    expect(within(dialog).getByAltText("Transcript screenshot")).toHaveAttribute(
+      "src",
+      "blob:expanded-transcript-image"
+    );
 
     fireEvent.keyDown(window, { key: "Escape" });
 

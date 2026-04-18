@@ -7,6 +7,8 @@ describe("TranscriptList", () => {
   let scrollHeight = 480;
   let clientHeight = 240;
   let scrollToMock: ReturnType<typeof vi.fn>;
+  let createObjectURLMock: ReturnType<typeof vi.fn>;
+  let revokeObjectURLMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     scrollHeight = 480;
@@ -41,6 +43,17 @@ describe("TranscriptList", () => {
     Object.defineProperty(HTMLElement.prototype, "scrollTo", {
       configurable: true,
       value: scrollToMock
+    });
+
+    createObjectURLMock = vi.fn(() => "blob:transcript-image");
+    revokeObjectURLMock = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: createObjectURLMock
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: revokeObjectURLMock
     });
   });
 
@@ -183,6 +196,7 @@ describe("TranscriptList", () => {
 
   it("renders inline image previews and opens them on demand", () => {
     const onOpenImage = vi.fn();
+    const dataUrl = "data:image/png;base64,aGVsbG8=";
 
     render(
       <TranscriptList
@@ -199,7 +213,7 @@ describe("TranscriptList", () => {
               },
               {
                 type: "image",
-                url: "file:///tmp/screenshot.png",
+                url: dataUrl,
                 alt: "Transcript screenshot"
               }
             ]
@@ -227,14 +241,18 @@ describe("TranscriptList", () => {
     );
 
     expect(screen.getByText("Describe this image")).toBeInTheDocument();
-    expect(screen.getByAltText("Transcript screenshot")).toBeInTheDocument();
+    expect(screen.getByAltText("Transcript screenshot")).toHaveAttribute(
+      "src",
+      "blob:transcript-image"
+    );
     expect(screen.getByAltText("Assistant image")).toBeInTheDocument();
+    expect(createObjectURLMock).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByAltText("Transcript screenshot").closest("button")!);
 
     expect(onOpenImage).toHaveBeenCalledWith({
       type: "image",
-      url: "file:///tmp/screenshot.png",
+      url: dataUrl,
       alt: "Transcript screenshot"
     });
   });

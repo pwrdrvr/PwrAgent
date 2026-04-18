@@ -8,6 +8,7 @@ import type {
 import { SkillChip } from "../composer/SkillChip";
 import { parseSkillMentionParts } from "../../lib/skill-mentions";
 import { MarkdownText } from "./MarkdownText";
+import { TranscriptImage } from "./TranscriptImage";
 
 type TranscriptMessageProps = {
   message: AppServerThreadMessageEntry;
@@ -81,7 +82,7 @@ function renderMessagePart(params: {
           params.onOpenImage?.(imagePart);
         }}
       >
-        <img
+        <TranscriptImage
           className="transcript-message__image-preview"
           src={imagePart.url}
           alt={imagePart.alt ?? "Transcript image"}
