@@ -673,6 +673,33 @@ function parseStructuredValue(value: unknown): unknown {
   }
 }
 
+function extractNestedPlanEntryFromItem(
+  item: Record<string, unknown>,
+  createdAt?: number
+): AppServerThreadPlanEntry | undefined {
+  for (const key of ["payload", "item", "responseItem", "response_item"]) {
+    const nestedItem = asRecord(item[key]);
+    if (!nestedItem) {
+      continue;
+    }
+
+    const nestedPlanEntry = extractPlanEntryFromItem(
+      {
+        ...nestedItem,
+        id:
+          pickString(item, ["id", "itemId", "item_id"]) ??
+          pickString(nestedItem, ["id", "itemId", "item_id", "call_id"])
+      },
+      createdAt
+    );
+    if (nestedPlanEntry) {
+      return nestedPlanEntry;
+    }
+  }
+
+  return undefined;
+}
+
 function extractPlanEntryFromItem(
   item: Record<string, unknown>,
   createdAt?: number
@@ -681,10 +708,14 @@ function extractPlanEntryFromItem(
   const normalizedItemType = itemType?.trim().toLowerCase();
   const itemId =
     pickString(item, ["id", "itemId", "item_id", "call_id"]) ?? `plan-${createdAt ?? 0}`;
+  const nestedPlanEntry = extractNestedPlanEntryFromItem(item, createdAt);
+  if (nestedPlanEntry) {
+    return nestedPlanEntry;
+  }
 
   if (normalizedItemType === "plan") {
     const normalizedPayload = normalizePlanPayload(item);
-    const textSteps = collectPlanLines(collectMessageText(item));
+    const textSteps = collectPlanLines(collectLegacyMessageText(item));
     const steps = normalizedPayload?.steps.length
       ? normalizedPayload.steps
       : textSteps;

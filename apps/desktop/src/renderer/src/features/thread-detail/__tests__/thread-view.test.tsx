@@ -638,6 +638,7 @@ describe("ThreadView", () => {
     const selectedThread = {
       id: "thread-2",
       title: "Plan the app-server protocol",
+      titleSource: "explicit" as const,
       source: "codex" as const,
       updatedAt: Date.now(),
       linkedDirectories: [],
