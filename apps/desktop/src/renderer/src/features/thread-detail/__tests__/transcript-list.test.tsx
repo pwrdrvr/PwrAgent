@@ -72,7 +72,7 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)\n\n- Check Unit 4\n- Keep Unit 3 isolated"
+            text: "Open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)\n\n- **Check Unit 4**\n- Keep Unit 3 isolated"
           },
           {
             type: "activity",
@@ -115,15 +115,15 @@ describe("TranscriptList", () => {
       />
     );
 
-    expect(screen.getByRole("link", { name: "`ce:work`" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
       "href",
       "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md"
     );
-    expect(screen.getByText("Check Unit 4")).toBeInTheDocument();
+    expect(screen.getByText("Check Unit 4", { selector: "strong" })).toBeInTheDocument();
     expect(screen.getByText("Keep Unit 3 isolated")).toBeInTheDocument();
     expect(screen.getByText("pnpm test -- --project desktop-renderer")).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: "`ce:work`" }).closest("article")
+      screen.getByRole("link", { name: "ce:work" }).closest("article")
     ).toHaveClass("transcript-message--user");
     expect(
       screen.getByText("pnpm test -- --project desktop-renderer").closest("article")
@@ -149,7 +149,7 @@ describe("TranscriptList", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders skill mentions as chips when present", () => {
+  it("renders skill mentions as chips when present alongside markdown text", () => {
     const loadOlder = vi.fn(async () => undefined);
 
     render(
@@ -159,7 +159,7 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Load [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)"
+            text: "Load [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md) and **keep** the current styling."
           },
           {
             type: "message",
@@ -189,6 +189,7 @@ describe("TranscriptList", () => {
     );
 
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
+    expect(screen.getByText("keep", { selector: "strong" })).toBeInTheDocument();
     expect(
       screen.getByText("$frontend-design").closest("article")
     ).toHaveClass("transcript-message--user");

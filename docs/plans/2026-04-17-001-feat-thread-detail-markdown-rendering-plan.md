@@ -1,7 +1,7 @@
 ---
 title: feat: Standardize thread-detail markdown rendering
 type: feat
-status: active
+status: completed
 date: 2026-04-17
 origin: docs/brainstorms/2026-04-17-thread-detail-markdown-rendering-requirements.md
 ---
@@ -114,7 +114,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Introduce the shared thread-detail markdown renderer**
+- [x] **Unit 1: Introduce the shared thread-detail markdown renderer**
 
 **Goal:** Add the maintained markdown dependency stack and create one reusable renderer component that encapsulates GFM support, raw-HTML sanitization, link handling, and style-preserving element overrides.
 
@@ -152,7 +152,7 @@ flowchart TB
 **Verification:**
 - A dedicated renderer test file proves the markdown stack, sanitizer, and style-preserving overrides work before any thread-detail consumer is migrated.
 
-- [ ] **Unit 2: Migrate transcript messages to the shared renderer and preserve skill-chip behavior**
+- [x] **Unit 2: Migrate transcript messages to the shared renderer and preserve skill-chip behavior**
 
 **Goal:** Move transcript message rendering onto the shared markdown component, remove the custom parser path from transcript messages, and keep skill mentions working within the new markdown flow.
 
@@ -192,7 +192,7 @@ flowchart TB
 **Verification:**
 - Transcript-list coverage proves persisted messages, pending messages, and skill-link messages all render through the shared markdown path without regressing non-message transcript behavior.
 
-- [ ] **Unit 3: Migrate thread summaries and finalize thread-detail styling regressions**
+- [x] **Unit 3: Migrate thread summaries and finalize thread-detail styling regressions**
 
 **Goal:** Apply the shared markdown renderer to thread summaries, close any summary-specific spacing or typography gaps, and verify the full thread-detail surface still reads cleanly.
 

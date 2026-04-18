@@ -628,9 +628,11 @@ describe("App", () => {
       await screen.findByRole("heading", { level: 2, name: "Investigate Grok thread" })
     ).toBeInTheDocument();
     expect(screen.getAllByText("Grok").length).toBeGreaterThan(0);
-    expect(
-      await screen.findByText("The Grok thread is live and selected.")
-    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: "Transcript" })).toHaveTextContent(
+        "The Grok thread is live and selected."
+      );
+    });
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: {

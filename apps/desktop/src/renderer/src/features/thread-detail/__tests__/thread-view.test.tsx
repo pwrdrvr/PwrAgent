@@ -108,7 +108,8 @@ describe("ThreadView", () => {
           id: "thread-2",
           title: "Plan the app-server protocol",
           titleSource: "explicit",
-          summary: "Inspect Codex thread/read output and normalize it for desktop.",
+          summary:
+            "Inspect **thread/read** output and normalize it for [desktop docs](https://example.com).",
           source: "codex",
           executionMode: "default",
           updatedAt: Date.now(),
@@ -166,6 +167,14 @@ describe("ThreadView", () => {
     expect(
       screen.getByRole("heading", { level: 2, name: "Plan the app-server protocol" })
     ).toBeInTheDocument();
+    const summary = document.querySelector(".thread-header__summary");
+    expect(summary).not.toBeNull();
+    expect(
+      within(summary as HTMLElement).getByText("thread/read", { selector: "strong" })
+    ).toBeInTheDocument();
+    expect(
+      within(summary as HTMLElement).getByRole("link", { name: "desktop docs" })
+    ).toHaveAttribute("href", "https://example.com");
     expect(screen.getByText("Codex")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open context rail" }));
 
