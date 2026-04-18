@@ -1,7 +1,7 @@
 import path from "node:path";
 
 const DEFAULT_INTERVAL_MS = 5_000;
-const DEFAULT_SETTLE_DELAY_MS = 10_000;
+const DEFAULT_SETTLE_DELAY_MS = 1_000;
 const DEFAULT_DELTA_THRESHOLD_BYTES = 100 * 1024 * 1024;
 const DEFAULT_SNAPSHOT_COOLDOWN_MS = 60_000;
 const DEFAULT_MAX_SNAPSHOTS = 5;
@@ -43,6 +43,22 @@ function parsePositiveInteger(
   return parsed;
 }
 
+function parseNonNegativeInteger(
+  value: string | undefined,
+  fallback: number,
+): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
 export function resolveHeapMonitorConfig(options?: {
   env?: NodeJS.ProcessEnv;
   repoRoot?: string;
@@ -64,7 +80,7 @@ export function resolveHeapMonitorConfig(options?: {
       env.PWRAGNT_HEAP_DIAGNOSTICS_INTERVAL_MS,
       DEFAULT_INTERVAL_MS,
     ),
-    settleDelayMs: parsePositiveInteger(
+    settleDelayMs: parseNonNegativeInteger(
       env.PWRAGNT_HEAP_DIAGNOSTICS_SETTLE_MS,
       DEFAULT_SETTLE_DELAY_MS,
     ),
@@ -72,7 +88,7 @@ export function resolveHeapMonitorConfig(options?: {
       env.PWRAGNT_HEAP_DIAGNOSTICS_DELTA_BYTES,
       DEFAULT_DELTA_THRESHOLD_BYTES,
     ),
-    snapshotCooldownMs: parsePositiveInteger(
+    snapshotCooldownMs: parseNonNegativeInteger(
       env.PWRAGNT_HEAP_DIAGNOSTICS_COOLDOWN_MS,
       DEFAULT_SNAPSHOT_COOLDOWN_MS,
     ),

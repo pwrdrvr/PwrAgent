@@ -78,7 +78,7 @@ describe("heap diagnostics session", () => {
       snapshotFiles: [],
       config: {
         intervalMs: 5000,
-        settleDelayMs: 10000,
+        settleDelayMs: 1000,
         deltaThresholdBytes: 100 * 1024 * 1024,
         snapshotCooldownMs: 60000,
         maxSnapshots: 5,
@@ -212,6 +212,24 @@ describe("heap diagnostics session", () => {
     expect(config).toEqual({ enabled: false });
     await expect(fs.stat(path.join(workspace.path, ".local"))).rejects.toMatchObject({
       code: "ENOENT",
+    });
+  });
+
+  it("allows a zero settle delay for immediate baseline capture", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = resolveHeapMonitorConfig({
+      env: {
+        PWRAGNT_HEAP_DIAGNOSTICS: "1",
+        PWRAGNT_HEAP_DIAGNOSTICS_SETTLE_MS: "0",
+      },
+      repoRoot: workspace.path,
+    });
+
+    expect(config).toMatchObject({
+      enabled: true,
+      settleDelayMs: 0,
     });
   });
 

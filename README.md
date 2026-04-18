@@ -61,7 +61,7 @@ Enable a capture run with:
 Optional tuning:
 
 - `PWRAGNT_HEAP_DIAGNOSTICS_ROOT` - override the repo root used for `.local/`
-- `PWRAGNT_HEAP_DIAGNOSTICS_SETTLE_MS` - delay before the baseline sample
+- `PWRAGNT_HEAP_DIAGNOSTICS_SETTLE_MS` - delay before the baseline sample (`0` captures immediately after `did-finish-load`)
 - `PWRAGNT_HEAP_DIAGNOSTICS_INTERVAL_MS` - recurring sample interval
 - `PWRAGNT_HEAP_DIAGNOSTICS_DELTA_BYTES` - adjacent-sample growth threshold for snapshots
 - `PWRAGNT_HEAP_DIAGNOSTICS_COOLDOWN_MS` - minimum time between snapshots

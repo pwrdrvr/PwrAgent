@@ -113,6 +113,12 @@ export class RendererHeapMonitor {
         settleDelayMs: this.config.settleDelayMs,
         deltaThresholdBytes: this.config.deltaThresholdBytes,
       });
+
+      if (this.config.settleDelayMs === 0) {
+        await this.beginMonitoring();
+        return;
+      }
+
       this.settleTimer = setTimeout(() => {
         void this.beginMonitoring();
       }, this.config.settleDelayMs);

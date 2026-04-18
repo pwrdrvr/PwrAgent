@@ -188,6 +188,36 @@ describe("RendererHeapMonitor", () => {
     await monitor.stop();
   });
 
+  it("captures the baseline immediately when settle delay is zero", async () => {
+    const session = createSessionStub();
+    const { target } = createTarget([{ usedSize: 100, totalSize: 200 }]);
+
+    const monitor = new RendererHeapMonitor({
+      target,
+      session: session.session,
+      config: createMonitorConfig({
+        settleDelayMs: 0,
+      }),
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await monitor.start();
+
+    expect(session.samples).toEqual([
+      expect.objectContaining({
+        usedSize: 100,
+        isBaseline: true,
+        deltaBytes: null,
+      }),
+    ]);
+
+    await monitor.stop();
+  });
+
   it("captures a heap snapshot when adjacent samples cross the threshold", async () => {
     const session = createSessionStub();
     const { target, takeHeapSnapshot } = createTarget([
