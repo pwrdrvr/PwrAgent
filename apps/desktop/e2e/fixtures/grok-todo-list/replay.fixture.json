@@ -14,44 +14,15 @@
           "name": "Replay Grok",
           "version": "1.0.0"
         },
-        "methods": ["thread/list", "thread/read", "skills/list"]
-      }
-    },
-    {
-      "id": "initialize-2",
-      "kind": "response",
-      "method": "initialize",
-      "result": {
-        "serverInfo": {
-          "name": "Replay Grok",
-          "version": "1.0.0"
-        },
-        "methods": ["thread/list", "thread/read", "skills/list"]
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
       }
     },
     {
       "id": "thread-list-1",
-      "kind": "response",
-      "method": "thread/list",
-      "result": [
-        {
-          "id": "thread-3mefc6i7",
-          "title": "Grok to-do list replay",
-          "titleSource": "explicit",
-          "summary": "Contract fixture for Grok-backed task plan rendering",
-          "source": "grok",
-          "executionMode": "default",
-          "linkedDirectories": [],
-          "inbox": {
-            "inInbox": true,
-            "reason": "new-thread"
-          },
-          "updatedAt": 1776563200000
-        }
-      ]
-    },
-    {
-      "id": "thread-list-2",
       "kind": "response",
       "method": "thread/list",
       "result": [

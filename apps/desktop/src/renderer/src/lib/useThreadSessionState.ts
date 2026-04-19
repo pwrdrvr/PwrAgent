@@ -474,6 +474,7 @@ export function useThreadSessionState(params: {
               ...current,
               activeRunId: undefined,
               lastTouchedAt: nextLastTouchedAt,
+              pendingAssistantMessage: undefined,
               pendingStatusText: undefined,
             };
           }

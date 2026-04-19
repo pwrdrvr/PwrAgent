@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type {
   AgentEvent,
   AppServerListSkillsRequest,
@@ -90,4 +91,42 @@ export type DesktopApi = {
 
 export function getDesktopApi(): DesktopApi | undefined {
   return (window as Window & { pwragnt?: DesktopApi }).pwragnt;
+}
+
+export function useDesktopApi(): DesktopApi | undefined {
+  const [desktopApi, setDesktopApi] = useState<DesktopApi | undefined>(() =>
+    getDesktopApi()
+  );
+
+  useEffect(() => {
+    if (desktopApi) {
+      return;
+    }
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+
+    const refresh = (): void => {
+      const nextDesktopApi = getDesktopApi();
+      if (nextDesktopApi) {
+        setDesktopApi(nextDesktopApi);
+        return;
+      }
+
+      if (!cancelled) {
+        timeoutId = setTimeout(refresh, 16);
+      }
+    };
+
+    refresh();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [desktopApi]);
+
+  return desktopApi;
 }

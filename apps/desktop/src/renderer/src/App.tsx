@@ -1,13 +1,13 @@
 import { Sidebar } from "./features/navigation/Sidebar";
 import { ThreadView } from "./features/thread-detail/ThreadView";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
-import { getDesktopApi } from "./lib/desktop-api";
+import { useDesktopApi } from "./lib/desktop-api";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { useThreadSkills } from "./lib/useThreadSkills";
 
 export function App() {
-  const desktopApi = getDesktopApi();
+  const desktopApi = useDesktopApi();
   const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);
   const session = useThreadSessionState({

@@ -14,19 +14,11 @@
           "name": "Replay Codex",
           "version": "1.0.0"
         },
-        "methods": ["thread/list", "thread/read", "skills/list"]
-      }
-    },
-    {
-      "id": "initialize-2",
-      "kind": "response",
-      "method": "initialize",
-      "result": {
-        "serverInfo": {
-          "name": "Replay Codex",
-          "version": "1.0.0"
-        },
-        "methods": ["thread/list", "thread/read", "skills/list"]
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
       }
     },
     {
@@ -49,33 +41,6 @@
           "updatedAt": 1760000000000
         }
       ]
-    },
-    {
-      "id": "thread-list-2",
-      "kind": "response",
-      "method": "thread/list",
-      "result": [
-        {
-          "id": "thread-smoke",
-          "title": "Replay smoke thread",
-          "titleSource": "explicit",
-          "summary": "Desktop replay smoke test",
-          "source": "codex",
-          "executionMode": "default",
-          "linkedDirectories": [],
-          "inbox": {
-            "inInbox": true,
-            "reason": "new-thread"
-          },
-          "updatedAt": 1760000000000
-        }
-      ]
-    },
-    {
-      "id": "skills-list-1",
-      "kind": "response",
-      "method": "skills/list",
-      "result": []
     },
     {
       "id": "thread-read-1",
