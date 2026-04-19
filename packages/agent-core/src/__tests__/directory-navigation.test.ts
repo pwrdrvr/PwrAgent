@@ -141,4 +141,46 @@ describe("buildDirectorySummaries", () => {
       ]),
     );
   });
+
+  it("groups multiple worktrees under the same home repo when thread summaries share the canonical directory path", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+              worktreePath: "/Users/huntharo/.codex/worktrees/repo-one/PwrAgnt",
+              kind: "worktree",
+            },
+          ],
+        }),
+        buildThread({
+          id: "thread-2",
+          linkedDirectories: [
+            {
+              id: "dir-2",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+              worktreePath: "/Users/huntharo/.codex/worktrees/repo-two/PwrAgnt",
+              kind: "worktree",
+            },
+          ],
+          updatedAt: 2_000,
+        }),
+      ],
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+        label: "PwrAgnt",
+        path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        threadKeys: ["codex:thread-1", "codex:thread-2"],
+        latestUpdatedAt: 2_000,
+      }),
+    ]);
+  });
 });

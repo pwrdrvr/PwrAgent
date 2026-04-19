@@ -209,11 +209,47 @@ describe("Sidebar", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Copy path for PwrAgnt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy path for worktree PwrAgnt" }));
 
     expect(copyText).toHaveBeenCalledWith("/Users/huntharo/pwrdrvr/PwrAgnt");
+    expect(copyText).toHaveBeenNthCalledWith(2, "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt");
     expect(
       screen.queryByText("Line up the desktop shell with the app server")
     ).not.toBeInTheDocument();
+  });
+
+  it("shows when the local branch diverged from the codex thread branch", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        fetchedAt={Date.now()}
+        inboxThreads={[
+          {
+            ...sharedThread,
+            observedGitBranch: "main",
+          },
+        ]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[
+          {
+            ...sharedThread,
+            observedGitBranch: "main",
+          },
+        ]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    expect(screen.getByText("now main")).toBeInTheDocument();
   });
 
   it("opens a new-thread picker with enabled and disabled backend options", async () => {

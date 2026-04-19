@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ProtocolCaptureStore } from "../testing/capture-store";
+import { ProtocolCaptureStore, readProtocolCaptureFile } from "../testing/capture-store";
 import { createProtocolCaptureObserver, createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 
 async function createTempDir(): Promise<string> {
@@ -132,5 +132,60 @@ describe("ProtocolCaptureStore", () => {
     ) as Record<string, { backend: string }>;
     expect(Object.values(index)).toHaveLength(1);
     expect(Object.values(index)[0]?.backend).toBe("codex");
+  });
+
+  it("reads capture files with parsed envelopes and optional redactions", async () => {
+    const rootDir = await createTempDir();
+    cleanupPaths.push(rootDir);
+    const capturePath = path.join(rootDir, "capture.jsonl");
+
+    await fs.writeFile(
+      capturePath,
+      `${JSON.stringify({
+        backend: "codex",
+        captureId: "capture-2",
+        direction: "outbound",
+        kind: "request",
+        method: "thread/list",
+        id: "rpc-2",
+        sequence: 1,
+        timestamp: 1,
+        threadIds: [],
+        raw: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "rpc-2",
+          method: "thread/list",
+          params: {
+            archived: false,
+            limit: 100,
+            cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          },
+        }),
+      })}\n`,
+      "utf8",
+    );
+
+    const records = await readProtocolCaptureFile(capturePath, [
+      {
+        match: "/Users/huntharo",
+        replace: "/repo-user",
+      },
+    ]);
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        record: expect.objectContaining({
+          captureId: "capture-2",
+          method: "thread/list",
+          sequence: 1,
+        }),
+        envelope: expect.objectContaining({
+          method: "thread/list",
+          params: expect.objectContaining({
+            cwd: "/repo-user/pwrdrvr/PwrAgnt",
+          }),
+        }),
+      }),
+    ]);
   });
 });

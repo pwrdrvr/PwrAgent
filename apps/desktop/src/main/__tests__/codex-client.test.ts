@@ -785,6 +785,39 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("exposes the locally observed branch when directory enrichment finds drift", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      threadDirectoryEnricher: async (projectKey) => ({
+        linkedDirectories: projectKey
+          ? [
+              {
+                id: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                label: "PwrAgnt",
+                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                worktreePath: projectKey,
+                kind: "worktree",
+              },
+            ]
+          : [],
+        observedGitBranch: "main",
+      }),
+    });
+
+    const threads = await client.listThreads();
+    const thread = threads.find((entry) => entry.id === "thread-2");
+
+    expect(thread).toMatchObject({
+      id: "thread-2",
+      gitBranch: undefined,
+      observedGitBranch: "main",
+    });
+
+    await client.close();
+  });
+
   it("extracts transcript messages and pagination metadata from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
