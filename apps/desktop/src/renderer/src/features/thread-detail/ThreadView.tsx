@@ -457,10 +457,7 @@ export function ThreadView(props: ThreadViewProps) {
           backendError={props.backendError}
           backends={props.backends}
           platform={props.platform}
-          setExecutionModeError={props.setExecutionModeError}
           thread={selectedThread!}
-          updatingExecutionMode={props.updatingExecutionMode}
-          onSetExecutionMode={props.onSetExecutionMode}
         />
       </div>
 
@@ -475,16 +472,20 @@ export function ThreadView(props: ThreadViewProps) {
 
       <Composer
         addOptimisticUserMessage={props.addOptimisticUserMessage}
+        backends={props.backends}
         desktopApi={props.desktopApi}
         disabled={props.composerDisabled}
         pendingRequestActive={Boolean(pendingRequest)}
         onPendingStatusChange={setPendingStatusText}
         onRefresh={props.onRefresh}
+        onSetExecutionMode={props.onSetExecutionMode}
         removeOptimisticMessage={props.removeOptimisticMessage}
+        setExecutionModeError={props.setExecutionModeError}
         skillError={props.skillError}
         skillLoading={props.skillLoading}
         skills={props.skills}
         thread={selectedThread!}
+        updatingExecutionMode={props.updatingExecutionMode}
       />
     </section>
   );

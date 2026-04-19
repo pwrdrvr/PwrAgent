@@ -1791,8 +1791,8 @@ textarea {
 .composer__setup {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 10px 18px;
+  align-items: center;
+  gap: 8px;
 }
 
 .composer__control-group {
@@ -1810,33 +1810,6 @@ textarea {
   text-transform: uppercase;
 }
 
-.composer__segmented {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.composer__segmented-button {
-  min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.composer__segmented-button:hover {
-  background: var(--bg-panel-hover);
-}
-
-.composer__segmented-button.is-active {
-  border-color: var(--accent-border);
-  background: rgba(184, 255, 77, 0.08);
-  color: var(--text-primary);
-}
-
 .composer__select {
   min-width: 168px;
   min-height: 34px;
@@ -1845,6 +1818,18 @@ textarea {
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.03);
   color: var(--text-primary);
+}
+
+.composer__select:disabled {
+  opacity: 1;
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.composer__select--compact {
+  min-width: 0;
+  width: auto;
+  max-width: 220px;
 }
 
 .composer__checkbox {

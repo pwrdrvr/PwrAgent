@@ -5,6 +5,7 @@ import type {
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
+  ThreadExecutionMode,
 } from "@pwragnt/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
@@ -51,10 +52,13 @@ type ComposerProps = {
     >
   ) => Promise<void>;
   removeOptimisticMessage?: (id: string) => void;
+  setExecutionModeError?: string;
   skillError?: string;
   skillLoading?: boolean;
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
+  updatingExecutionMode?: ThreadExecutionMode;
+  onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
 };
 
 export function Composer(props: ComposerProps) {
@@ -383,9 +387,11 @@ export function Composer(props: ComposerProps) {
     currentModelOption?.supportsFast ??
     backend?.launchpadOptions?.supportsFastMode ??
     false;
-  const canChooseWorktree = Boolean(
-    props.directory?.gitStatus?.currentBranch || props.directory?.gitStatus?.branches?.length
-  );
+  const availableExecutionModes =
+    backend?.executionModes.filter((mode) => mode.available) ?? [];
+  const workspaceLabel = isLaunchpad
+    ? formatLaunchpadWorkspaceLabel(props.launchpad, props.directory)
+    : formatThreadWorkspaceLabel(props.thread);
 
   return (
     <form
@@ -487,100 +493,85 @@ export function Composer(props: ComposerProps) {
         ) : null}
       </div>
 
-      {props.launchpad ? (
-        <div className="composer__setup" aria-label="New thread settings">
-          <div className="composer__control-group">
-            <span className="composer__control-label">Access</span>
-            <div className="composer__segmented" role="group" aria-label="Access mode">
-              {(backend?.executionModes ?? []).filter((mode) => mode.available).map((mode) => (
-                <button
-                  key={mode.mode}
-                  aria-pressed={props.launchpad?.executionMode === mode.mode}
-                  className={`composer__segmented-button${
-                    props.launchpad?.executionMode === mode.mode ? " is-active" : ""
-                  }`}
-                  type="button"
-                  onClick={() => {
-                    if (props.launchpad?.executionMode !== mode.mode) {
-                      handleLaunchpadPatch({ executionMode: mode.mode });
-                    }
-                  }}
-                >
-                  {formatExecutionModeLabel(mode.mode)}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {canChooseWorktree ? (
-            <div className="composer__control-group">
-              <span className="composer__control-label">Workspace</span>
-              <div className="composer__segmented" role="group" aria-label="Workspace mode">
-                <button
-                  aria-pressed={props.launchpad.workMode === "local"}
-                  className={`composer__segmented-button${
-                    props.launchpad.workMode === "local" ? " is-active" : ""
-                  }`}
-                  type="button"
-                  onClick={() => {
-                    if (props.launchpad?.workMode !== "local") {
-                      handleLaunchpadPatch({ workMode: "local" });
-                    }
-                  }}
-                >
-                  Local {props.directory?.gitStatus?.currentBranch ? `(${props.directory.gitStatus.currentBranch})` : ""}
-                </button>
-                <button
-                  aria-pressed={props.launchpad.workMode === "worktree"}
-                  className={`composer__segmented-button${
-                    props.launchpad.workMode === "worktree" ? " is-active" : ""
-                  }`}
-                  type="button"
-                  onClick={() => {
-                    if (props.launchpad?.workMode !== "worktree") {
-                      handleLaunchpadPatch({
-                        workMode: "worktree",
-                        branchName:
-                          launchpad?.branchName ??
-                          props.directory?.gitStatus?.currentBranch,
-                      });
-                    }
-                  }}
-                >
-                  New worktree
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {props.launchpad.workMode === "worktree" &&
-          (props.directory?.gitStatus?.branches?.length ?? 0) > 0 ? (
-            <div className="composer__control-group">
-              <label className="composer__control-label" htmlFor="launchpad-branch">
-                Base branch
-              </label>
-              <select
-                id="launchpad-branch"
-                className="composer__select"
-                value={
-                  props.launchpad.branchName ??
-                  props.directory?.gitStatus?.currentBranch ??
-                  ""
+      {props.launchpad || props.thread ? (
+        <div
+          className="composer__setup"
+          aria-label={props.launchpad ? "New thread settings" : "Thread settings"}
+        >
+          {availableExecutionModes.length > 0 &&
+          (props.launchpad || (props.thread?.source === "codex" && props.onSetExecutionMode)) ? (
+            <select
+              aria-label="Access mode"
+              className="composer__select composer__select--compact"
+              disabled={Boolean(props.updatingExecutionMode)}
+              value={
+                props.launchpad?.executionMode ??
+                props.thread?.executionMode ??
+                "default"
+              }
+              onChange={(event) => {
+                const executionMode = event.target.value as ThreadExecutionMode;
+                if (props.launchpad) {
+                  if (props.launchpad.executionMode !== executionMode) {
+                    handleLaunchpadPatch({ executionMode });
+                  }
+                  return;
                 }
-                onChange={(event) => {
-                  handleLaunchpadPatch({ branchName: event.target.value || undefined });
-                }}
-              >
-                {(props.directory?.gitStatus?.branches ?? []).map((branch) => (
-                  <option key={branch} value={branch}>
-                    {branch}
-                  </option>
-                ))}
-              </select>
-            </div>
+
+                if (
+                  props.thread &&
+                  props.thread.executionMode !== executionMode &&
+                  !props.updatingExecutionMode
+                ) {
+                  void props.onSetExecutionMode?.(executionMode);
+                }
+              }}
+            >
+              {availableExecutionModes.map((mode) => (
+                <option key={mode.mode} value={mode.mode}>
+                  {formatExecutionModeLabel(mode.mode)}
+                </option>
+              ))}
+            </select>
           ) : null}
 
-          {backend?.launchpadOptions?.models?.length ? (
+          {workspaceLabel ? (
+            <select
+              aria-label="Workspace mode"
+              className="composer__select composer__select--compact"
+              disabled
+              value={workspaceLabel}
+              onChange={() => undefined}
+            >
+              <option value={workspaceLabel}>{workspaceLabel}</option>
+            </select>
+          ) : null}
+
+          {props.launchpad &&
+          props.launchpad.workMode === "worktree" &&
+          (props.directory?.gitStatus?.branches?.length ?? 0) > 0 ? (
+            <select
+              aria-label="Base branch"
+              id="launchpad-branch"
+              className="composer__select composer__select--compact"
+              value={
+                props.launchpad.branchName ??
+                props.directory?.gitStatus?.currentBranch ??
+                ""
+              }
+              onChange={(event) => {
+                handleLaunchpadPatch({ branchName: event.target.value || undefined });
+              }}
+            >
+              {(props.directory?.gitStatus?.branches ?? []).map((branch) => (
+                <option key={branch} value={branch}>
+                  {branch}
+                </option>
+              ))}
+            </select>
+          ) : null}
+
+          {props.launchpad && backend?.launchpadOptions?.models?.length ? (
             <div className="composer__control-group">
               <label className="composer__control-label" htmlFor="launchpad-model">
                 Model
@@ -603,7 +594,9 @@ export function Composer(props: ComposerProps) {
             </div>
           ) : null}
 
-          {supportsReasoning && backend?.launchpadOptions?.reasoningEfforts?.length ? (
+          {props.launchpad &&
+          supportsReasoning &&
+          backend?.launchpadOptions?.reasoningEfforts?.length ? (
             <div className="composer__control-group">
               <label className="composer__control-label" htmlFor="launchpad-reasoning">
                 Reasoning
@@ -628,7 +621,7 @@ export function Composer(props: ComposerProps) {
             </div>
           ) : null}
 
-          {backend?.launchpadOptions?.serviceTiers?.length ? (
+          {props.launchpad && backend?.launchpadOptions?.serviceTiers?.length ? (
             <div className="composer__control-group">
               <label className="composer__control-label" htmlFor="launchpad-service-tier">
                 Service tier
@@ -653,7 +646,7 @@ export function Composer(props: ComposerProps) {
             </div>
           ) : null}
 
-          {supportsFast ? (
+          {props.launchpad && supportsFast ? (
             <label className="composer__checkbox">
               <input
                 checked={Boolean(props.launchpad.fastMode)}
@@ -673,8 +666,18 @@ export function Composer(props: ComposerProps) {
         <p className="composer__meta composer__meta--error">{props.launchpadError}</p>
       ) : null}
       {sendError ? <p className="composer__meta composer__meta--error">{sendError}</p> : null}
+      {props.setExecutionModeError ? (
+        <p className="composer__meta composer__meta--error">
+          {props.setExecutionModeError}
+        </p>
+      ) : null}
       {!props.skillError && props.skillLoading ? (
         <p className="composer__meta">Loading skills…</p>
+      ) : null}
+      {props.updatingExecutionMode ? (
+        <p className="composer__meta">
+          Switching to {formatExecutionModeLabel(props.updatingExecutionMode)}…
+        </p>
       ) : null}
       {props.disabled ? (
         <p className="composer__meta">
@@ -721,4 +724,40 @@ export function Composer(props: ComposerProps) {
       </div>
     </form>
   );
+}
+
+function formatLaunchpadWorkspaceLabel(
+  launchpad?: NavigationLaunchpadDraft,
+  directory?: NavigationDirectorySummary,
+): string | undefined {
+  if (!launchpad) {
+    return undefined;
+  }
+
+  if (launchpad.workMode === "worktree") {
+    return "New worktree";
+  }
+
+  return directory?.gitStatus?.currentBranch
+    ? `Local (${directory.gitStatus.currentBranch})`
+    : "Local";
+}
+
+function formatThreadWorkspaceLabel(thread?: NavigationThreadSummary): string | undefined {
+  if (!thread) {
+    return undefined;
+  }
+
+  if (thread.linkedDirectories.some((directory) => directory.kind === "worktree")) {
+    return "Worktree";
+  }
+
+  if (
+    thread.linkedDirectories.some((directory) => directory.kind === "local") ||
+    thread.projectKey
+  ) {
+    return thread.gitBranch ? `Local (${thread.gitBranch})` : "Local";
+  }
+
+  return undefined;
 }
