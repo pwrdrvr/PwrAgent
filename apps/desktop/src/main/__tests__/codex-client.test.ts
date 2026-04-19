@@ -664,37 +664,18 @@ describe("CodexAppServerClient", () => {
     }
   });
 
-  it("recovers the stable repo directory from rollout metadata when codex cwd is a removed worktree", async () => {
+  it("does not read rollout metadata when codex cwd points at a removed worktree", async () => {
     vi.resetModules();
+    const readFileMock = vi.fn(async () => {
+      throw new Error("desktop codex client should not read rollout files");
+    });
     vi.doMock("node:fs/promises", () => ({
       access: vi.fn(async (targetPath: string) => {
         if (targetPath === "/Users/huntharo/.codex/worktrees/be87/search-product") {
           throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
         }
       }),
-      readFile: vi.fn(async (targetPath: string) => {
-        if (targetPath !== "/tmp/forked-worktree-rollout.jsonl") {
-          throw new Error(`Unexpected read: ${targetPath}`);
-        }
-
-        return [
-          JSON.stringify({
-            type: "session_meta",
-            payload: {
-              id: "thread-forked-worktree",
-              forked_from_id: "thread-parent",
-              cwd: "/Users/huntharo/.codex/worktrees/be87/search-product"
-            }
-          }),
-          JSON.stringify({
-            type: "session_meta",
-            payload: {
-              id: "thread-parent",
-              cwd: "/Users/huntharo/GIPHY/search-product"
-            }
-          })
-        ].join("\n");
-      })
+      readFile: readFileMock,
     }));
     vi.doMock("node:child_process", () => ({
       execFile: vi.fn(
@@ -737,17 +718,11 @@ describe("CodexAppServerClient", () => {
       expect(threads).toEqual([
         expect.objectContaining({
           id: "thread-forked-worktree",
-          projectKey: "/Users/huntharo/GIPHY/search-product",
-          linkedDirectories: [
-            {
-              id: "/Users/huntharo/GIPHY/search-product",
-              label: "search-product",
-              path: "/Users/huntharo/GIPHY/search-product",
-              kind: "local"
-            }
-          ]
+          projectKey: "/Users/huntharo/.codex/worktrees/be87/search-product",
+          linkedDirectories: []
         })
       ]);
+      expect(readFileMock).not.toHaveBeenCalled();
 
       await client.close();
     } finally {

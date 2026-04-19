@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { access, readFile } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
@@ -62,7 +62,6 @@ type RawCodexThreadSummary = Omit<
   "source" | "linkedDirectories"
 > & {
   projectKey?: string;
-  rolloutPath?: string;
 };
 
 type SkillCatalogEntry = {
@@ -288,10 +287,6 @@ function normalizeThreadSummary(value: string | undefined): string | undefined {
   return trimmed;
 }
 
-function isLikelyCodexWorktreePath(value: string): boolean {
-  return /[\\/]\.codex[\\/]worktrees[\\/]/.test(value);
-}
-
 function getThreadTitleInfo(record: Record<string, unknown>): {
   title: string;
   titleSource: AppServerThreadTitleSource;
@@ -330,64 +325,11 @@ function getThreadTitleInfo(record: Record<string, unknown>): {
   };
 }
 
-async function extractProjectKeyFromRollout(
-  rolloutPath: string | undefined
-): Promise<string | undefined> {
-  if (!rolloutPath || !(await pathExists(rolloutPath))) {
-    return undefined;
-  }
-
-  let fallbackPath: string | undefined;
-
-  try {
-    const contents = await readFile(rolloutPath, "utf8");
-
-    for (const line of contents.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-
-      const record = asRecord(JSON.parse(trimmed));
-      if (record?.type !== "session_meta") {
-        continue;
-      }
-
-      const payload = asRecord(record.payload);
-      const cwd = pickString(payload ?? {}, ["cwd"]);
-      if (!cwd) {
-        continue;
-      }
-
-      if (await pathExists(cwd)) {
-        return cwd;
-      }
-
-      if (!fallbackPath && !isLikelyCodexWorktreePath(cwd)) {
-        fallbackPath = cwd;
-      }
-    }
-  } catch {
-    return undefined;
-  }
-
-  return fallbackPath;
-}
-
 async function resolveThreadProjectKey(
   thread: RawCodexThreadSummary
 ): Promise<string | undefined> {
   const projectKey = thread.projectKey?.trim();
-  if (projectKey && await pathExists(projectKey)) {
-    return projectKey;
-  }
-
-  const rolloutProjectKey = await extractProjectKeyFromRollout(thread.rolloutPath);
-  if (rolloutProjectKey) {
-    return rolloutProjectKey;
-  }
-
-  return projectKey;
+  return projectKey || undefined;
 }
 
 function normalizeConversationRole(
@@ -1486,9 +1428,6 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
           ? undefined
           : summary,
       projectKey,
-      rolloutPath:
-        pickString(record, ["path", "rolloutPath", "rollout_path"]) ??
-        pickString(sessionRecord ?? {}, ["path", "rolloutPath", "rollout_path"]),
       createdAt: normalizeEpochTimestamp(
         pickNumber(record, ["createdAt", "created_at"]) ??
           pickNumber(sessionRecord ?? {}, ["createdAt", "created_at"])
