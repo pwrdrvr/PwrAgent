@@ -55,13 +55,13 @@ describe("ThreadMarkdown", () => {
   it("preserves single newlines as visible line breaks", () => {
     const { container } = render(
       <ThreadMarkdown
-        text={"Still Grok 4.\nWon't change no matter how many times you test."}
+        text={"Still Grok 4.\nWon't change no matter how many times you test.\nBuilt by xAI."}
       />
     );
 
-    expect(container.querySelector("br")).not.toBeNull();
+    expect(container.querySelectorAll("br")).toHaveLength(2);
     expect(container).toHaveTextContent("Still Grok 4.");
-    expect(container).toHaveTextContent("Won't change no matter how many times you test.");
+    expect(container).toHaveTextContent("Built by xAI.");
   });
 
   it("renders html-looking transcript text literally", () => {
@@ -122,6 +122,8 @@ describe("ThreadMarkdown", () => {
     const { container } = render(<ThreadMarkdown text={oversizedHtml} />);
 
     expect(container.querySelector("em")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
     expect(container.textContent).toContain("<em>safe</em>");
+    expect(container.textContent).toContain('<img src="https://example.com/x.png" onerror="alert(1)" />');
   });
 });

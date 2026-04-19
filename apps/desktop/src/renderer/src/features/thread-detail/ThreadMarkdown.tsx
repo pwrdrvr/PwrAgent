@@ -135,7 +135,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     >
       <ReactMarkdown
         components={components}
-        remarkPlugins={[remarkGfm, remarkBreaks]}
+        remarkPlugins={[remarkBreaks, remarkGfm]}
         urlTransform={normalizeMarkdownUrl}
       >
         {props.text}
@@ -183,7 +183,6 @@ function denormalizeMarkdownUrl(url: string): string {
 
   return url;
 }
-
 function extractTextContent(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") {
     return String(node);
