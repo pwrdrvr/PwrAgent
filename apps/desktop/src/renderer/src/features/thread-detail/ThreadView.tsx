@@ -77,6 +77,10 @@ type ThreadViewProps = {
   ) => Promise<void>;
   onPendingStatusChange?: (status?: string) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onTranscriptViewportChange?: (viewport?: {
+    distanceFromBottom: number;
+    scrollTop: number;
+  }) => void;
   onUpdateLaunchpad?: (
     directoryKey: string,
     patch: Partial<
@@ -97,6 +101,10 @@ type ThreadViewProps = {
     >
   ) => Promise<void>;
   removeOptimisticMessage: (id: string) => void;
+  transcriptViewport?: {
+    distanceFromBottom: number;
+    scrollTop: number;
+  };
 };
 
 export function ThreadView(props: ThreadViewProps) {
@@ -351,10 +359,12 @@ export function ThreadView(props: ThreadViewProps) {
             pendingRequest={props.pendingRequest}
             pendingRequestBusy={pendingRequestBusy}
             pendingStatusText={props.pendingStatusText}
+            restoredViewport={props.transcriptViewport}
             skills={props.skills}
-            threadId={selectedThread!.id}
+            threadId={`${selectedThread!.source}:${selectedThread!.id}`}
             onLoadOlder={props.onLoadOlder}
             onOpenImage={setExpandedImage}
+            onViewportChange={props.onTranscriptViewportChange}
             onRespondToPendingRequest={respondToPendingRequest}
           />
           {pendingRequestError ? (

@@ -616,4 +616,96 @@ describe("TranscriptList", () => {
 
     expect(screen.getByRole("button", { name: "Jump to latest message" })).toBeInTheDocument();
   });
+
+  it("restores the previous viewport when switching back to a cached thread", () => {
+    const { rerender } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-1-message-1",
+            role: "user",
+            text: "Thread one first message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-2",
+            role: "assistant",
+            text: "Thread one second message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-3",
+            role: "assistant",
+            text: "Thread one third message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 72;
+    fireEvent.scroll(list);
+
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-2-message-1",
+            role: "user",
+            text: "Thread two first message"
+          },
+          {
+            type: "message",
+            id: "thread-2-message-2",
+            role: "assistant",
+            text: "Thread two second message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-2"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    list.scrollTop = 18;
+    fireEvent.scroll(list);
+
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-1-message-1",
+            role: "user",
+            text: "Thread one first message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-2",
+            role: "assistant",
+            text: "Thread one second message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-3",
+            role: "assistant",
+            text: "Thread one third message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(72);
+  });
 });

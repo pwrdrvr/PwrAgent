@@ -403,10 +403,21 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   });
 
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
+  const refreshInFlightRef = useRef(false);
+  const queuedRefreshRef = useRef<
+    | {
+        preferredOptimisticThread?: NavigationThreadSummary;
+        preferredSelectionKey?: string;
+      }
+    | undefined
+  >(undefined);
+  const scheduledRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  );
 
   optimisticThreadRef.current = optimisticThread;
 
-  const refresh = useCallback(
+  const performRefresh = useCallback(
     async (
       preferredSelectionKey?: string,
       preferredOptimisticThread?: NavigationThreadSummary
@@ -482,6 +493,79 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     [desktopApi]
   );
 
+  const refresh = useCallback(
+    async (
+      preferredSelectionKey?: string,
+      preferredOptimisticThread?: NavigationThreadSummary
+    ): Promise<void> => {
+      const initialRequest = {
+        preferredOptimisticThread,
+        preferredSelectionKey,
+      };
+
+      if (refreshInFlightRef.current) {
+        queuedRefreshRef.current = initialRequest;
+        return;
+      }
+
+      refreshInFlightRef.current = true;
+      let nextRequest: typeof initialRequest | undefined = initialRequest;
+
+      try {
+        while (nextRequest) {
+          queuedRefreshRef.current = undefined;
+          await performRefresh(
+            nextRequest.preferredSelectionKey,
+            nextRequest.preferredOptimisticThread
+          );
+          nextRequest = queuedRefreshRef.current;
+        }
+      } finally {
+        refreshInFlightRef.current = false;
+      }
+    },
+    [performRefresh]
+  );
+
+  const scheduleRefresh = useCallback(
+    (
+      preferredSelectionKey?: string,
+      preferredOptimisticThread?: NavigationThreadSummary
+    ): void => {
+      queuedRefreshRef.current = {
+        preferredOptimisticThread,
+        preferredSelectionKey,
+      };
+
+      if (scheduledRefreshTimerRef.current !== undefined) {
+        return;
+      }
+
+      scheduledRefreshTimerRef.current = setTimeout(() => {
+        scheduledRefreshTimerRef.current = undefined;
+        const nextRequest = queuedRefreshRef.current;
+        queuedRefreshRef.current = undefined;
+        if (!nextRequest) {
+          return;
+        }
+
+        void refresh(
+          nextRequest.preferredSelectionKey,
+          nextRequest.preferredOptimisticThread
+        );
+      }, 0);
+    },
+    [refresh]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (scheduledRefreshTimerRef.current !== undefined) {
+        clearTimeout(scheduledRefreshTimerRef.current);
+      }
+    };
+  }, []);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -530,10 +614,10 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         method === "turn/failed" ||
         method === "turn/cancelled"
       ) {
-        void refresh();
+        scheduleRefresh();
       }
     });
-  }, [desktopApi, refresh]);
+  }, [desktopApi, scheduleRefresh]);
 
   const threads = useMemo(() => {
     const currentThreads = state.response?.threads ?? [];
