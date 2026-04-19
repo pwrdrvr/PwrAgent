@@ -34,16 +34,30 @@ export async function launchElectronApp(params: {
   };
 }): Promise<LaunchResult> {
   const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-desktop-e2e-"));
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) {
+      env[key] = value;
+    }
+  }
+  Object.assign(env, {
+    NODE_ENV: "production",
+    PWRAGNT_REPLAY_FIXTURE_PATH: params.fixturePath,
+    PWRAGNT_STATE_ROOT: stateRoot,
+  });
+  delete env.ELECTRON_RENDERER_URL;
+  for (const [key, value] of Object.entries(params.env ?? {})) {
+    if (value === undefined) {
+      delete env[key];
+    } else {
+      env[key] = value;
+    }
+  }
+
   const electronApp = await electron.launch({
     args: [path.resolve(fixtureDir, "../../out/main/index.js")],
     cwd: path.resolve(fixtureDir, "../.."),
-    env: {
-      ...process.env,
-      NODE_ENV: "production",
-      PWRAGNT_REPLAY_FIXTURE_PATH: params.fixturePath,
-      PWRAGNT_STATE_ROOT: stateRoot,
-      ...params.env
-    },
+    env,
   });
   const window = await electronApp.firstWindow();
 

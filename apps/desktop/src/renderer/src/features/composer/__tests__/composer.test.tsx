@@ -91,6 +91,87 @@ describe("Composer", () => {
     });
   });
 
+  it("lets a directory launchpad switch from local checkout to a new worktree", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/start"],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          },
+        ]}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "main",
+            branches: ["main", "release"],
+            syncState: "untracked",
+          },
+        }}
+        launchpad={{
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgnt",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    const workspaceMode = screen.getByLabelText("Workspace mode");
+    expect(workspaceMode).toBeEnabled();
+    expect(workspaceMode).toHaveValue("local");
+    expect(screen.getByRole("option", { name: "Local (main)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "New worktree" })).toBeInTheDocument();
+
+    fireEvent.change(workspaceMode, { target: { value: "worktree" } });
+
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+        { workMode: "worktree" }
+      );
+    });
+  });
+
   it("inserts skill markdown from autocomplete and sends it through startTurn", async () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,

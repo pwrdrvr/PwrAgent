@@ -92,6 +92,15 @@ function pruneOptimisticEntries(
   );
 }
 
+function hasHydratedTranscriptContent(session: ThreadSessionEntry): boolean {
+  return Boolean(
+    session.response?.replay.entries.length ||
+      session.optimisticEntries.length ||
+      session.pendingAssistantMessage ||
+      session.pendingRequest
+  );
+}
+
 function appendAssistantMessage(
   response: AppServerReadThreadResponse | undefined,
   params: {
@@ -319,6 +328,11 @@ export function useThreadSessionState(params: {
     }
 
     if (session.expectOwnUpdate) {
+      if (!hasHydratedTranscriptContent(session)) {
+        void loadLatest(thread);
+        return;
+      }
+
       updateSession(threadKey, (current) => ({
         ...current,
         expectOwnUpdate: false,
@@ -329,6 +343,11 @@ export function useThreadSessionState(params: {
     }
 
     if (session.interacted) {
+      if (!hasHydratedTranscriptContent(session)) {
+        void loadLatest(thread);
+        return;
+      }
+
       updateSession(threadKey, (current) => ({
         ...current,
         hydratedUpdatedAt: thread.updatedAt,
@@ -438,32 +457,44 @@ export function useThreadSessionState(params: {
           const completedText =
             readCompletedTurnText(event.notification.params) ??
             current.pendingAssistantMessage?.text;
+          const nextResponse =
+            completedText
+              ? appendAssistantMessage(current.response, {
+                  backend: event.backend,
+                  threadId: notificationThreadId,
+                }, {
+                  type: "message",
+                  id:
+                    current.pendingAssistantMessage?.id ??
+                    `${event.notification.params.runId}:assistant`,
+                  role: "assistant",
+                  text: completedText,
+                  createdAt: Date.now(),
+                })
+              : current.response;
+          const shouldInvalidateHydration =
+            !completedText &&
+            !hasHydratedTranscriptContent({
+              ...current,
+              pendingAssistantMessage: undefined,
+              pendingRequest: undefined,
+              response: nextResponse,
+            });
 
           return {
             ...current,
             activeRunId: undefined,
             error: undefined,
             expectOwnUpdate: true,
+            hydratedUpdatedAt: shouldInvalidateHydration
+              ? undefined
+              : current.hydratedUpdatedAt,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
             pendingAssistantMessage: undefined,
             pendingRequest: undefined,
             pendingStatusText: undefined,
-            response:
-              completedText
-                ? appendAssistantMessage(current.response, {
-                    backend: event.backend,
-                    threadId: notificationThreadId,
-                  }, {
-                    type: "message",
-                    id:
-                      current.pendingAssistantMessage?.id ??
-                      `${event.notification.params.runId}:assistant`,
-                    role: "assistant",
-                    text: completedText,
-                    createdAt: Date.now(),
-                  })
-                : current.response,
+            response: nextResponse,
           };
         }
 
