@@ -72,20 +72,24 @@ Known shape-first endpoints:
 - `account/rateLimits/read` returns an empty collection until rate-limit reporting is wired
 - `account/read` returns local development account metadata rather than a full auth-backed profile
 
-When you are ready to run live xAI-backed smoke coverage, put credentials in
-`packages/agent-core/.env.local`. The tracked template lives at
-`packages/agent-core/.env.local.example`.
+When you are ready to run live xAI-backed smoke coverage, set credentials in
+either your shell environment or the Grok app-server user config at
+`~/.config/grok-app-server/config.toml`.
 
-The desktop Grok app server client also falls back to the user config
-directory. It will load `XAI_API_KEY`, `GROK_MODEL`, and `XAI_BASE_URL` from
-the first existing file under `~/.config/grok-app-server` in this order:
+The runtime config keys are:
+
+- `xai_api_key`
+- `grok_model`
+- `xai_base_url`
+- `state_root`
+
+Project-local env and already-exported shell env still win over the user
+config. The runtime loader also preserves legacy fallback support under
+`~/.config/grok-app-server` for:
 
 - `config.env`
 - `.env.local`
 - `.env`
-
-Project-local env and already-exported shell env still win over that global
-fallback.
 
 CI uses the existing `live-agent-core` workflow job with the `XAI_API_KEY`
 repository secret. No separate tool-test secret is required.
