@@ -71,9 +71,7 @@ export type SubmitServerRequestRequest = {
   threadId: ThreadIdentifier;
   runId?: string;
   requestId: string;
-  response: {
-    decision: "approve" | "decline" | "cancel";
-  };
+  response: Record<string, unknown>;
 };
 
 export type SubmitServerRequestResponse = {

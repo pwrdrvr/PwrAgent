@@ -209,6 +209,10 @@ export function ThreadView(props: ThreadViewProps) {
         typeof event.notification.params.itemId === "string" &&
         typeof event.notification.params.delta === "string"
       ) {
+        setPendingRequest(undefined);
+        setPendingRequestBusy(false);
+        setPendingRequestError(undefined);
+        setPendingStatusText("Thinking");
         const { itemId, delta } = event.notification.params;
         setPendingAssistantMessage((current) => ({
           type: "message",
@@ -240,6 +244,12 @@ export function ThreadView(props: ThreadViewProps) {
         (method === "thread/status/changed" && statusRecord?.type === "idle")
       ) {
         setPendingAssistantMessage(undefined);
+        setPendingRequest(undefined);
+        setPendingRequestBusy(false);
+        setPendingRequestError(undefined);
+        if (method !== "turn/completed") {
+          setPendingStatusText(undefined);
+        }
       }
 
       if (method.includes("/request")) {
@@ -275,12 +285,10 @@ export function ThreadView(props: ThreadViewProps) {
             ? pendingRequest.params.runId
             : undefined,
         requestId: pendingRequest.params.requestId,
-        response: { decision },
+        response: buildPendingRequestResponse(pendingRequest, decision),
       });
+      setPendingRequest(undefined);
       setPendingStatusText(decision === "approve" ? "Thinking" : undefined);
-      if (decision !== "approve") {
-        setPendingRequest(undefined);
-      }
     } catch (error) {
       setPendingRequestError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -489,6 +497,87 @@ export function ThreadView(props: ThreadViewProps) {
       />
     </section>
   );
+}
+
+function buildPendingRequestResponse(
+  request: AppServerPendingRequestNotification,
+  decision: "approve" | "decline" | "cancel",
+): { decision: string } {
+  const availableDecision = selectAvailableDecision(request.params, decision);
+  if (availableDecision) {
+    return { decision: availableDecision };
+  }
+
+  if (request.method.includes("commandExecution/requestApproval")) {
+    return {
+      decision:
+        decision === "approve"
+          ? "accept"
+          : decision === "decline"
+            ? "decline"
+            : "cancel",
+    };
+  }
+
+  if (request.method.includes("fileChange/requestApproval")) {
+    return {
+      decision:
+        decision === "approve"
+          ? "accept"
+          : decision === "decline"
+            ? "decline"
+            : "cancel",
+    };
+  }
+
+  return { decision };
+}
+
+function selectAvailableDecision(
+  params: AppServerPendingRequestNotification["params"],
+  decision: "approve" | "decline" | "cancel",
+): string | undefined {
+  const rawDecisions =
+    readDecisionStrings(params.availableDecisions) ?? readDecisionStrings(params.decisions);
+  if (!rawDecisions?.length) {
+    return undefined;
+  }
+
+  const acceptedAliases =
+    decision === "approve"
+      ? ["accept", "approve", "allow"]
+      : decision === "decline"
+        ? ["decline", "deny", "reject"]
+        : ["cancel", "abort", "stop"];
+
+  return rawDecisions.find((value) =>
+    acceptedAliases.some((alias) => value.toLowerCase().includes(alias)),
+  );
+}
+
+function readDecisionStrings(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value
+    .map((entry) => {
+      if (typeof entry === "string") {
+        return entry.trim();
+      }
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return undefined;
+      }
+      const record = entry as Record<string, unknown>;
+      for (const key of ["decision", "value", "name", "id"]) {
+        const raw = record[key];
+        if (typeof raw === "string" && raw.trim()) {
+          return raw.trim();
+        }
+      }
+      return undefined;
+    })
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 function formatDirectorySync(directory: NavigationDirectorySummary): string | undefined {
