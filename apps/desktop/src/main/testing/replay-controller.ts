@@ -1,10 +1,21 @@
 import type { ReplayFixture, ReplayRequestStep, ReplayResponseMethod, ReplayResponseStep, ReplayStep, ReplayStepOverride } from "./replay-fixture";
 import { validateReplayFixture } from "./replay-fixture";
 
+const REUSABLE_RESPONSE_METHODS = new Set<ReplayResponseMethod>([
+  "initialize",
+  "thread/list",
+  "thread/read",
+  "skills/list",
+]);
+
 export class ReplayController {
   private readonly steps: ReplayStep[];
   private index = 0;
   private pendingRequest?: ReplayRequestStep;
+  private readonly reusableResponses = new Map<
+    ReplayResponseMethod,
+    ReplayResponseStep
+  >();
 
   constructor(private readonly fixture: ReplayFixture) {
     validateReplayFixture(fixture);
@@ -13,31 +24,46 @@ export class ReplayController {
 
   consumeResponse(method: ReplayResponseMethod): ReplayResponseStep {
     const nextStep = this.steps[this.index];
+    const matchIndex = this.findResponseIndex(method);
+    if (matchIndex !== -1) {
+      const [matchedStep] = this.steps.splice(matchIndex, 1);
+      if (!matchedStep || matchedStep.kind !== "response") {
+        throw new Error(`Replay fixture could not resolve response ${method}`);
+      }
+
+      if (REUSABLE_RESPONSE_METHODS.has(method)) {
+        this.reusableResponses.set(method, matchedStep);
+      }
+
+      if (matchedStep.error) {
+        throw new Error(
+          `Replay response error (${matchedStep.error.code ?? "unknown"}): ${
+            matchedStep.error.message ?? "unknown error"
+          }`
+        );
+      }
+
+      return matchedStep;
+    }
+
+    const cachedResponse = this.reusableResponses.get(method);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+
     if (!nextStep) {
       throw new Error(`Replay fixture exhausted before ${method}`);
     }
+
     if (nextStep.kind !== "response") {
       throw new Error(
         `Replay fixture expected live step ${nextStep.id} before response ${method}`
       );
     }
-    if (nextStep.method !== method) {
-      throw new Error(
-        `Replay fixture expected ${nextStep.method} before ${method}`
-      );
-    }
 
-    this.index += 1;
-
-    if (nextStep.error) {
-      throw new Error(
-        `Replay response error (${nextStep.error.code ?? "unknown"}): ${
-          nextStep.error.message ?? "unknown error"
-        }`
-      );
-    }
-
-    return nextStep;
+    throw new Error(
+      `Replay fixture expected ${nextStep.method} before ${method}`
+    );
   }
 
   advance(params: {
@@ -85,6 +111,20 @@ export class ReplayController {
     const current = this.pendingRequest;
     this.pendingRequest = undefined;
     return current;
+  }
+
+  private findResponseIndex(method: ReplayResponseMethod): number {
+    for (let candidateIndex = this.index; candidateIndex < this.steps.length; candidateIndex += 1) {
+      const step = this.steps[candidateIndex];
+      if (step.kind !== "response") {
+        break;
+      }
+      if (step.method === method) {
+        return candidateIndex;
+      }
+    }
+
+    return -1;
   }
 }
 
