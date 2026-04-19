@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -8,7 +9,10 @@ import {
   defaultGrokAppServerConfigPath,
   defaultGrokAppServerConfigPaths,
 } from "@pwragnt/agent-core";
+import type { AppServerNotification } from "@pwragnt/shared";
 import { GrokAppServerClient } from "../grok-app-server/client";
+import { ProtocolCaptureStore } from "../testing/capture-store";
+import { createProtocolCaptureObserver } from "../testing/protocol-capture";
 
 describe("GrokAppServerClient", () => {
   it("lists threads, reads replay, and forwards turn notifications", async () => {
@@ -362,6 +366,154 @@ describe("GrokAppServerClient", () => {
       await secondClient.close();
     } finally {
       await temp.cleanup();
+    }
+  });
+
+  it("records Grok boundary traffic for requests, notifications, and inbound requests", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-grok-recording-"));
+
+    try {
+      const notificationListeners = new Set<
+        (notification: AppServerNotification) => void | Promise<void>
+      >();
+      let requestHandler:
+        | ((
+            method: string,
+            params?: Record<string, unknown>
+          ) => Promise<unknown> | unknown)
+        | undefined;
+
+      const server = {
+        request: async (method: string, params?: unknown): Promise<unknown> => {
+          if (method === "initialize") {
+            return {
+              serverInfo: {
+                name: "@pwragnt/grok-app-server",
+                version: "1.0.0"
+              },
+              methods: ["thread/list"]
+            };
+          }
+
+          if (method === "thread/list") {
+            return { threads: [] };
+          }
+
+          throw new Error(`unexpected request ${method} ${JSON.stringify(params)}`);
+        },
+        notify: async () => undefined,
+        onNotification: (
+          handler: (notification: AppServerNotification) => void | Promise<void>
+        ) => {
+          notificationListeners.add(handler);
+          return () => {
+            notificationListeners.delete(handler);
+          };
+        },
+        onRequest: (
+          handler: (
+            method: string,
+            params?: Record<string, unknown>
+          ) => Promise<unknown> | unknown
+        ) => {
+          requestHandler = handler;
+          return () => {
+            requestHandler = undefined;
+          };
+        }
+      };
+
+      const store = new ProtocolCaptureStore({
+        backend: "grok",
+        captureId: "grok-capture-1",
+        rootDir
+      });
+      const client = new GrokAppServerClient({
+        server,
+        connectionObserver: createProtocolCaptureObserver({
+          backend: "grok",
+          store
+        })
+      });
+
+      client.onRequest(async () => ({ decision: "approve" }));
+
+      await client.getInitializeResult();
+      await client.listThreads();
+
+      for (const listener of notificationListeners) {
+        await listener({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            runId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Done." }]
+            }
+          }
+        });
+      }
+
+      await requestHandler?.("turn/requestApproval", {
+        threadId: "thread-1",
+        runId: "turn-1",
+        requestId: "approval-1"
+      });
+
+      await store.close();
+      await client.close();
+
+      const lines = (await fs.readFile(path.join(rootDir, "grok-capture-1.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+      expect(
+        lines.some(
+          (line) =>
+            line.backend === "grok" &&
+            line.direction === "outbound" &&
+            line.kind === "request" &&
+            line.method === "initialize"
+        )
+      ).toBe(true);
+      expect(
+        lines.some(
+          (line) =>
+            line.direction === "inbound" &&
+            line.kind === "response" &&
+            line.id === "rpc-1"
+        )
+      ).toBe(true);
+      expect(
+        lines.some(
+          (line) =>
+            line.direction === "inbound" &&
+            line.kind === "notification" &&
+            line.method === "turn/completed"
+        )
+      ).toBe(true);
+      expect(
+        lines.some(
+          (line) =>
+            line.direction === "inbound" &&
+            line.kind === "request" &&
+            line.method === "turn/requestApproval" &&
+            line.id === "approval-1"
+        )
+      ).toBe(true);
+      expect(
+        lines.some(
+          (line) =>
+            line.direction === "outbound" &&
+            line.kind === "response" &&
+            line.id === "approval-1"
+        )
+      ).toBe(true);
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
     }
   });
 });

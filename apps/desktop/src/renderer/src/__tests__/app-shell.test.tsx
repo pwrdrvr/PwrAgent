@@ -768,7 +768,7 @@ describe("App", () => {
 
     const transcript = screen.getByRole("region", { name: "Transcript" });
 
-    expect(within(transcript).getByText(response)).toBeInTheDocument();
+    expect(await within(transcript).findByText(response)).toBeInTheDocument();
     expect(screen.getAllByText(response)).toHaveLength(1);
   });
 

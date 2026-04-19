@@ -21,6 +21,7 @@ import type {
   AppServerTurnInputItem,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
+import type { JsonRpcObserver } from "../codex-app-server/json-rpc";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
 
@@ -49,6 +50,7 @@ type GrokServerLike = {
 type GrokClientOptions = {
   apiKey?: string;
   baseUrl?: string;
+  connectionObserver?: JsonRpcObserver;
   model?: string;
   stateRoot?: string;
   directoryResolver?: (
@@ -377,6 +379,7 @@ export class GrokAppServerClient {
   private readonly directoryResolver: (
     projectKey?: string
   ) => Promise<LinkedDirectorySummary[]>;
+  private requestCounter = 0;
   private server: GrokServerLike | null;
   private initialized = false;
   private initializeResult: InitializeResult | null = null;
@@ -436,7 +439,7 @@ export class GrokAppServerClient {
   async listThreads(_params?: { filter?: string }): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
-    const result = await this.getServer().request("thread/list", {});
+    const result = await this.request("thread/list", {});
     return await Promise.all(
       extractThreadSummaryList(result).map(async (thread) => {
         const normalized = normalizeThreadSummary(thread);
@@ -461,7 +464,7 @@ export class GrokAppServerClient {
     await this.ensureInitialized();
 
     const cwds = [...new Set([...(params?.cwds ?? []), params?.cwd].filter(Boolean))];
-    const result = await this.getServer().request("skills/list", { cwds });
+    const result = await this.request("skills/list", { cwds });
     return extractSkillsList(result);
   }
 
@@ -472,7 +475,7 @@ export class GrokAppServerClient {
   }): Promise<AppServerThreadReplay> {
     await this.ensureInitialized();
 
-    const result = await this.getServer().request("thread/read", {
+    const result = await this.request("thread/read", {
       threadId: params.threadId,
       includeTurns: true,
       before: params.before,
@@ -492,7 +495,7 @@ export class GrokAppServerClient {
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
-    const result = await this.getServer().request("thread/start", params);
+    const result = await this.request("thread/start", params);
     const threadId = extractThreadId(result);
     if (!threadId) {
       throw new Error("grok app server thread/start did not return threadId");
@@ -508,7 +511,7 @@ export class GrokAppServerClient {
   }): Promise<{ threadId: string; runId: string }> {
     await this.ensureInitialized();
 
-    const result = await this.getServer().request("turn/start", params);
+    const result = await this.request("turn/start", params);
     const threadId = extractThreadId(result);
     const runId = extractRunId(result);
     if (!threadId || !runId) {
@@ -524,7 +527,7 @@ export class GrokAppServerClient {
   }): Promise<{ threadId: string; runId: string }> {
     await this.ensureInitialized();
 
-    const result = await this.getServer().request("turn/interrupt", {
+    const result = await this.request("turn/interrupt", {
       threadId: params.threadId,
       turnId: params.runId,
     });
@@ -548,7 +551,7 @@ export class GrokAppServerClient {
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
-    const result = await this.getServer().request("thread/resume", params);
+    const result = await this.request("thread/resume", params);
     return {
       threadId: extractThreadId(result) ?? params.threadId,
     };
@@ -559,15 +562,14 @@ export class GrokAppServerClient {
       return;
     }
 
-    const server = this.getServer();
-    const result = await server.request("initialize", {
+    const result = await this.request("initialize", {
       protocolVersion: DEFAULT_PROTOCOL_VERSION,
       clientInfo: { name: "pwragnt-desktop", version: "0.1.0" },
       capabilities: { experimentalApi: true },
     });
 
     this.initializeResult = (result ?? {}) as InitializeResult;
-    await server.notify?.("initialized", {});
+    await this.notify("initialized", {});
     this.initialized = true;
   }
 
@@ -607,12 +609,33 @@ export class GrokAppServerClient {
   private subscribeToServerNotifications(server: GrokServerLike): void {
     this.unsubscribeNotification?.();
     this.unsubscribeNotification = server.onNotification(async (notification) => {
+      await this.observe({
+        direction: "inbound",
+        envelope: {
+          jsonrpc: "2.0",
+          method: notification.method,
+          params: notification.params ?? {},
+        },
+      });
       for (const listener of this.notificationListeners) {
         await listener(notification);
       }
     });
     this.unsubscribeRequest?.();
     this.unsubscribeRequest = server.onRequest?.(async (method, params) => {
+      const requestId =
+        typeof params?.requestId === "string" && params.requestId.trim()
+          ? params.requestId.trim()
+          : `grok-request-${++this.requestCounter}`;
+      await this.observe({
+        direction: "inbound",
+        envelope: {
+          jsonrpc: "2.0",
+          id: requestId,
+          method,
+          params: params ?? {},
+        },
+      });
       const request = {
         method,
         params: (params ?? {}) as AppServerPendingRequestNotification["params"],
@@ -624,10 +647,118 @@ export class GrokAppServerClient {
       }
 
       for (const listener of listeners) {
-        return await listener(request);
+        try {
+          const response = await listener(request);
+          await this.observe({
+            direction: "outbound",
+            envelope: {
+              jsonrpc: "2.0",
+              id: requestId,
+              result: response ?? {},
+            },
+          });
+          return response;
+        } catch (error) {
+          await this.observe({
+            direction: "outbound",
+            envelope: {
+              jsonrpc: "2.0",
+              id: requestId,
+              error: {
+                code: -32603,
+                message: error instanceof Error ? error.message : String(error),
+              },
+            },
+          });
+          throw error;
+        }
       }
 
       throw new Error(`No desktop request handler registered for ${method}`);
     });
+  }
+
+  private async request(method: string, params?: unknown): Promise<unknown> {
+    const id = `rpc-${++this.requestCounter}`;
+    await this.observe({
+      direction: "outbound",
+      envelope: {
+        jsonrpc: "2.0",
+        id,
+        method,
+        params: params ?? {},
+      },
+    });
+
+    try {
+      const result = await this.getServer().request(method, params);
+      await this.observe({
+        direction: "inbound",
+        envelope: {
+          jsonrpc: "2.0",
+          id,
+          result: result ?? {},
+        },
+      });
+      return result;
+    } catch (error) {
+      await this.observe({
+        direction: "inbound",
+        envelope: {
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32603,
+            message: error instanceof Error ? error.message : String(error),
+          },
+        },
+      });
+      throw error;
+    }
+  }
+
+  private async notify(method: string, params?: unknown): Promise<void> {
+    await this.observe({
+      direction: "outbound",
+      envelope: {
+        jsonrpc: "2.0",
+        method,
+        params: params ?? {},
+      },
+    });
+    await this.getServer().notify?.(method, params);
+  }
+
+  private async observe(params: {
+    direction: "inbound" | "outbound";
+    envelope: {
+      jsonrpc: "2.0";
+      id?: string;
+      method?: string;
+      params?: unknown;
+      result?: unknown;
+      error?: {
+        code?: number;
+        message?: string;
+      };
+    };
+  }): Promise<void> {
+    if (!this.options.connectionObserver) {
+      return;
+    }
+
+    try {
+      await this.options.connectionObserver.onMessage({
+        direction: params.direction,
+        raw: JSON.stringify(params.envelope),
+        envelope: params.envelope,
+      });
+    } catch (error) {
+      console.error(
+        `[pwragnt:grok-client] observer failed for ${params.direction} ${
+          params.envelope.method ?? params.envelope.id ?? "message"
+        }: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 }

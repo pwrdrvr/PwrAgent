@@ -73,6 +73,34 @@ jobs:
       - name: Test
         run: pnpm run test
 
+  desktop-e2e:
+    name: Desktop E2E
+    runs-on: ubuntu-latest
+    needs: install-deps
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@v1
+
+      - name: Install Playwright Linux dependencies
+        run: pnpm --filter @pwragnt/desktop exec playwright install --with-deps
+
+      - name: Run desktop replay-backed Electron tests
+        run: xvfb-run --auto-servernum pnpm run test:desktop-e2e
+
+      - name: Upload desktop Playwright artifacts
+        uses: actions/upload-artifact@v5
+        if: ${{ !cancelled() }}
+        with:
+          name: desktop-e2e-artifacts
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+          retention-days: 30
+
   live-agent-core:
     name: Live Agent Core
     runs-on: ubuntu-latest

@@ -1,0 +1,400 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "turn-lifecycle",
+    "sourceCaptureId": "unit4-turn-lifecycle-capture",
+    "threadId": "thread-turn-lifecycle"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list",
+          "turn/start"
+        ]
+      }
+    },
+    {
+      "id": "initialize-2",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list",
+          "turn/start"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-turn-lifecycle",
+          "title": "Turn lifecycle replay",
+          "titleSource": "explicit",
+          "summary": "Replay seeded turn lifecycle",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000000000
+        }
+      ]
+    },
+    {
+      "id": "thread-list-2",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-turn-lifecycle",
+          "title": "Turn lifecycle replay",
+          "titleSource": "explicit",
+          "summary": "Replay seeded turn lifecycle",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000000000
+        }
+      ]
+    },
+    {
+      "id": "skills-list-1",
+      "kind": "response",
+      "method": "skills/list",
+      "result": []
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Reply exactly with: lifecycle baseline ready"
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "lifecycle baseline ready"
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Reply exactly with: lifecycle baseline ready"
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "lifecycle baseline ready"
+          }
+        ],
+        "lastUserMessage": "Reply exactly with: lifecycle baseline ready",
+        "lastAssistantMessage": "lifecycle baseline ready",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "turn-start-1",
+      "kind": "response",
+      "method": "turn/start",
+      "result": {
+        "threadId": "thread-turn-lifecycle",
+        "runId": "turn-turn-lifecycle-2"
+      }
+    },
+    {
+      "id": "thread-read-2",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Reply exactly with: lifecycle baseline ready"
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "lifecycle baseline ready"
+          },
+          {
+            "type": "message",
+            "id": "message-3",
+            "role": "user",
+            "text": "Create /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Reply exactly with: lifecycle baseline ready"
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "lifecycle baseline ready"
+          },
+          {
+            "id": "message-3",
+            "role": "user",
+            "text": "Create /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+          }
+        ],
+        "lastUserMessage": "Create /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn.",
+        "lastAssistantMessage": "lifecycle baseline ready",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "status-active-1",
+      "kind": "notification",
+      "notification": {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "thread-turn-lifecycle",
+          "status": {
+            "type": "active",
+            "activeFlags": []
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-turn-lifecycle",
+          "turn": {
+            "id": "turn-turn-lifecycle-2",
+            "status": "inProgress"
+          }
+        }
+      }
+    },
+    {
+      "id": "assistant-delta-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "thread-turn-lifecycle",
+          "turnId": "turn-turn-lifecycle-2",
+          "itemId": "pending-msg-1",
+          "delta": "I'll create the file now. "
+        }
+      }
+    },
+    {
+      "id": "assistant-delta-2",
+      "kind": "notification",
+      "notification": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "thread-turn-lifecycle",
+          "turnId": "turn-turn-lifecycle-2",
+          "itemId": "pending-msg-1",
+          "delta": "Verifying the exact bytes next."
+        }
+      }
+    },
+    {
+      "id": "status-idle-1",
+      "kind": "notification",
+      "notification": {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "thread-turn-lifecycle",
+          "status": {
+            "type": "idle"
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-turn-lifecycle",
+          "runId": "turn-turn-lifecycle-2",
+          "turn": {
+            "id": "turn-turn-lifecycle-2",
+            "status": "completed",
+            "output": [
+              {
+                "type": "text",
+                "text": "Created /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "thread-read-3",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Reply exactly with: lifecycle baseline ready"
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "lifecycle baseline ready"
+          },
+          {
+            "type": "message",
+            "id": "message-3",
+            "role": "user",
+            "text": "Create /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+          },
+          {
+            "type": "message",
+            "id": "message-4",
+            "role": "assistant",
+            "text": "Created /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Reply exactly with: lifecycle baseline ready"
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "lifecycle baseline ready"
+          },
+          {
+            "id": "message-3",
+            "role": "user",
+            "text": "Create /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+          },
+          {
+            "id": "message-4",
+            "role": "assistant",
+            "text": "Created /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+          }
+        ],
+        "lastUserMessage": "Create /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn.",
+        "lastAssistantMessage": "Created /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "thread-read-4",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Reply exactly with: lifecycle baseline ready"
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "lifecycle baseline ready"
+          },
+          {
+            "type": "message",
+            "id": "message-3",
+            "role": "user",
+            "text": "Create /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+          },
+          {
+            "type": "message",
+            "id": "message-4",
+            "role": "assistant",
+            "text": "Created /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Reply exactly with: lifecycle baseline ready"
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "lifecycle baseline ready"
+          },
+          {
+            "id": "message-3",
+            "role": "user",
+            "text": "Create /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+          },
+          {
+            "id": "message-4",
+            "role": "assistant",
+            "text": "Created /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+          }
+        ],
+        "lastUserMessage": "Create /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn.",
+        "lastAssistantMessage": "Created /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

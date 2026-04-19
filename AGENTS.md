@@ -11,6 +11,7 @@
 - Treat plan documents as decision artifacts, not implementation scripts.
 - Keep changes aligned with the current active plan unless the user explicitly changes scope.
 - Do not delete or "clean up" files in `docs/brainstorms/`, `docs/plans/`, or future `docs/solutions/` directories.
+- Use the project-local [desktop E2E fixture seeding skill](.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when seeding or refreshing desktop replay fixtures from live captured sessions.
 
 ## Frontend and Desktop UI
 

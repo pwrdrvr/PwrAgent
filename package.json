@@ -7,6 +7,7 @@
     "build": "pnpm --filter @pwragnt/desktop build",
     "dev": "pnpm --filter @pwragnt/desktop dev",
     "lint": "pnpm typecheck",
+    "test:desktop-e2e": "pnpm --filter @pwragnt/desktop build && pnpm --filter @pwragnt/desktop test:e2e",
     "test": "vitest run --config vitest.workspace.ts",
     "test:watch": "vitest --config vitest.workspace.ts",
     "typecheck": "pnpm -r --if-present typecheck"

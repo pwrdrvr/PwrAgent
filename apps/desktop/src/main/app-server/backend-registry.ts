@@ -1,3 +1,4 @@
+import { app } from "electron";
 import { OverlayStore } from "@pwragnt/agent-core";
 import type {
   AgentEvent,
@@ -24,6 +25,9 @@ import { CodexAppServerClient } from "../codex-app-server/client";
 import { GrokAppServerClient } from "../grok-app-server/client";
 import { createScratchProjectDirectory } from "./scratch-projects";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
+import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
+import type { ProtocolCaptureStore } from "../testing/capture-store";
+import { createReplayClientsFromEnv } from "../testing/replay-runtime";
 
 type InitializeResult = {
   serverInfo?: {
@@ -168,6 +172,7 @@ export class DesktopBackendRegistry {
   private readonly grokClient: BackendClient;
   private readonly overlayStore: OverlayStore;
   private readonly createScratchProjectDirectory: () => Promise<string>;
+  private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
   >();
@@ -181,13 +186,47 @@ export class DesktopBackendRegistry {
     overlayStore?: OverlayStore;
     createScratchProjectDirectory?: () => Promise<string>;
   }) {
-    this.codexDefaultClient = options?.codexClient ?? new CodexAppServerClient();
+    const replayClients = createReplayClientsFromEnv();
+    const codexCapture = options?.codexClient
+      || replayClients
+      ? undefined
+      : createProtocolCaptureFromEnv({
+          backend: "codex",
+          userDataPath: app.getPath("userData"),
+        });
+    if (codexCapture) {
+      this.captureStores.push(codexCapture.store);
+    }
+    const grokCapture = options?.grokClient
+      || replayClients
+      ? undefined
+      : createProtocolCaptureFromEnv({
+          backend: "grok",
+          userDataPath: app.getPath("userData"),
+        });
+    if (grokCapture) {
+      this.captureStores.push(grokCapture.store);
+    }
+
+    this.codexDefaultClient =
+      options?.codexClient ??
+      replayClients?.codexDefaultClient ??
+      new CodexAppServerClient({
+        connectionObserver: codexCapture?.observer,
+      });
     this.codexFullAccessClient =
       options?.codexFullAccessClient ??
+      replayClients?.codexFullAccessClient ??
       new CodexAppServerClient({
         args: buildCodexClientArgs("full-access"),
+        connectionObserver: codexCapture?.observer,
       });
-    this.grokClient = options?.grokClient ?? new GrokAppServerClient();
+    this.grokClient =
+      options?.grokClient ??
+      replayClients?.grokClient ??
+      new GrokAppServerClient({
+        connectionObserver: grokCapture?.observer,
+      });
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
     this.createScratchProjectDirectory =
       options?.createScratchProjectDirectory ?? createScratchProjectDirectory;
@@ -426,6 +465,7 @@ export class DesktopBackendRegistry {
     await this.codexDefaultClient.close();
     await this.codexFullAccessClient.close();
     await this.grokClient.close();
+    await Promise.all(this.captureStores.splice(0).map(async (store) => await store.close()));
   }
 
   private subscribeClient(backend: AppServerBackendKind, client: BackendClient): void {

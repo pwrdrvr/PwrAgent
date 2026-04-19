@@ -8,7 +8,10 @@
   "scripts": {
     "build": "electron-vite build",
     "dev": "electron-vite dev",
+    "derive:replay-fixture": "tsx ./scripts/derive-replay-fixture.ts",
+    "export:session-capture": "tsx ./scripts/export-session-capture.ts",
     "preview": "electron-vite preview",
+    "test:e2e": "playwright test -c playwright.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
@@ -20,11 +23,13 @@
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
+    "@playwright/test": "^1.55.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^41.2.1",
     "electron-vite": "^5.0.0",
+    "tsx": "^4.20.6",
     "vite": "^7.3.2"
   }
 }
