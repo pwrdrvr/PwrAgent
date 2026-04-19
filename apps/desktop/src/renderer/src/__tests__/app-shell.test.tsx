@@ -290,12 +290,13 @@ describe("App", () => {
     expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
     expect(screen.getAllByText("codex/build-codex-client").length).toBeGreaterThan(0);
     expect(screen.getByRole("heading", { level: 3, name: "Transcript" })).toBeInTheDocument();
-    expect(
-      await screen.findByText("Open the desktop plan and build the Codex client.")
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("The Codex client is wired and the thread browser is live.")
-    ).toBeInTheDocument();
+    const transcript = screen.getByRole("region", { name: "Transcript" });
+    await waitFor(() => {
+      expect(transcript).toHaveTextContent("Open the desktop plan and build the Codex client.");
+    });
+    expect(transcript).toHaveTextContent(
+      "The Codex client is wired and the thread browser is live."
+    );
     expect(screen.getByText("0 out of 3 tasks completed")).toBeInTheDocument();
     expect(screen.getByText("Render plan card")).toBeInTheDocument();
     expect(screen.getByText("Explored 2 files, ran 1 command")).toBeInTheDocument();

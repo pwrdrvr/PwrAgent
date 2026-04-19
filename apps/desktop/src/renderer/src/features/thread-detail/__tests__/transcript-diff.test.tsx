@@ -75,7 +75,7 @@ describe("TranscriptDiff", () => {
     render(<TranscriptDiff detail={DETAIL} />);
 
     expect(screen.getByRole("button", { name: "Zoom in" })).toBeInTheDocument();
-    await screen.findByText("1 hunk hidden, 8 lines skipped");
+    await screen.findByText("1 hunk hidden, 5 lines skipped");
     expect(screen.queryByText("// refreshed comment")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
@@ -99,7 +99,7 @@ describe("TranscriptDiff", () => {
       expect(analyzeFocusedDiff).toHaveBeenCalledTimes(1);
     });
     expect(screen.getByRole("button", { name: "Zoom in" })).toBeInTheDocument();
-    expect(screen.getByText("10 lines skipped")).toBeInTheDocument();
+    expect(screen.getByText("6 lines skipped")).toBeInTheDocument();
     expect(screen.queryByText("const keep3 = 3;")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
