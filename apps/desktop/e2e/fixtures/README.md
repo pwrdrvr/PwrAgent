@@ -87,6 +87,28 @@ fixture for CI.
 - If a capture includes secrets or machine-specific paths, use the replay
   derivation redaction flags when promoting the fixture.
 
+## Protocol Parity Fixture Inventory
+
+The current fixture set is still valid after rollout-file removal, but most
+desktop replay scenarios do not exercise Codex sidebar directory identity.
+
+- `codex-todo-list/raw.capture.jsonl` now serves as the primary parity evidence
+  fixture. Its real `thread/list` response includes `cwd`, `path`, and often
+  `gitInfo.branch`, which is enough to characterize the supported Codex thread
+  identity contract.
+- `codex-todo-list/replay.fixture.json` remains valid for transcript and plan
+  rendering, but it does **not** cover startup/sidebar grouping parity. Like the
+  other replay fixtures, it replays already-normalized thread summaries with
+  `linkedDirectories: []`.
+- The current replay-backed Electron specs continue to cover transcript,
+  approval, turn lifecycle, diff, and markdown behavior. None of the checked-in
+  replay fixtures currently assert home-repo/worktree grouping or branch-drift
+  display in the sidebar.
+- Follow-up fixture refresh is only needed when we add a replay or Electron spec
+  that must prove startup/sidebar grouping parity for Codex threads. Until then,
+  the runtime contract is protected by main-process normalization tests plus the
+  raw-capture protocol analyzer.
+
 ## Scenario Index
 
 - `approval-pending/`: pending approval card and waiting composer state

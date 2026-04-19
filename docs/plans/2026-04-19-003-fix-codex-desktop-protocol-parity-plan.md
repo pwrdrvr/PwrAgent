@@ -1,7 +1,7 @@
 ---
 title: fix: Restore Codex Desktop protocol parity for thread directory identity
 type: fix
-status: active
+status: completed
 date: 2026-04-19
 origin: docs/brainstorms/2026-04-19-codex-desktop-protocol-parity-requirements.md
 ---
@@ -255,7 +255,7 @@ flowchart TB
 **Verification:**
 - Sidebar grouping and directory metadata match Codex Desktop's home-repo/worktree presentation from startup data alone.
 
-- [ ] **Unit 5: Repair tests and inventory replay/E2E fallout**
+- [x] **Unit 5: Repair tests and inventory replay/E2E fallout**
 
 **Goal:** Update the runtime test suite to the new parity contract and explicitly identify which replay fixtures and E2E scenarios no longer match after rollout removal.
 
