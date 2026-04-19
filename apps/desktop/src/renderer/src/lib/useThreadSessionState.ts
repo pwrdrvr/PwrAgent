@@ -22,6 +22,7 @@ type ThreadSessionEntry = {
   completionHydrationRetries: number;
   error?: string;
   expectOwnUpdate: boolean;
+  failedHydrationVersion?: number | "unknown";
   hydratedUpdatedAt?: number;
   interacted: boolean;
   lastTouchedAt: number;
@@ -78,6 +79,12 @@ function buildEmptyResponse(params: {
       },
     },
   };
+}
+
+function getThreadHydrationVersion(
+  thread: Pick<NavigationThreadSummary, "updatedAt">
+): number | "unknown" {
+  return typeof thread.updatedAt === "number" ? thread.updatedAt : "unknown";
 }
 
 function pruneOptimisticEntries(
@@ -256,11 +263,13 @@ export function useThreadSessionState(params: {
     async (targetThread: NavigationThreadSummary): Promise<void> => {
       const readThread = desktopApi?.readThread;
       const targetThreadKey = buildThreadIdentityKey(targetThread.source, targetThread.id);
+      const hydrationVersion = getThreadHydrationVersion(targetThread);
 
       if (!readThread) {
         updateSession(targetThreadKey, (current) => ({
           ...current,
           error: "Desktop bridge is missing readThread().",
+          failedHydrationVersion: hydrationVersion,
           lastTouchedAt: Date.now(),
           loading: false,
           loadingMore: false,
@@ -274,6 +283,7 @@ export function useThreadSessionState(params: {
       updateSession(targetThreadKey, (current) => ({
         ...current,
         error: undefined,
+        failedHydrationVersion: undefined,
         lastTouchedAt: Date.now(),
         loading: true,
       }));
@@ -300,6 +310,7 @@ export function useThreadSessionState(params: {
             ...current,
             error: undefined,
             expectOwnUpdate: false,
+            failedHydrationVersion: undefined,
             hydratedUpdatedAt:
               needsHydrationAfterCompletion && completionHydrationRetries < 2
                 ? undefined
@@ -320,6 +331,7 @@ export function useThreadSessionState(params: {
         updateSession(targetThreadKey, (current) => ({
           ...current,
           error: error instanceof Error ? error.message : String(error),
+          failedHydrationVersion: hydrationVersion,
           lastTouchedAt: Date.now(),
           loading: false,
         }));
@@ -345,8 +357,12 @@ export function useThreadSessionState(params: {
     }
 
     const session = sessions[threadKey];
+    const hydrationVersion = getThreadHydrationVersion(thread);
     if (!session?.response) {
-      if (!session?.loading) {
+      if (
+        !session?.loading &&
+        session?.failedHydrationVersion !== hydrationVersion
+      ) {
         void loadLatest(thread);
       }
       return;
@@ -578,6 +594,7 @@ export function useThreadSessionState(params: {
         if (event.notification.method === "thread/compacted") {
           return {
             ...current,
+            failedHydrationVersion: undefined,
             hydratedUpdatedAt: undefined,
             lastTouchedAt: nextLastTouchedAt,
             response: undefined,

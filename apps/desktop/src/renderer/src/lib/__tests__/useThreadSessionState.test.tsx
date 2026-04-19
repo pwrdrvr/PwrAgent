@@ -356,6 +356,55 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("surfaces a failed transcript read once per thread version", async () => {
+    const readThread = vi.fn(async () => {
+      throw new Error(
+        "json-rpc error (-32603): failed to locate rollout for thread thread-1"
+      );
+    });
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+
+    const thread = buildThread({ id: "thread-1", updatedAt: 1_000 });
+    const updatedThread = buildThread({ id: "thread-1", updatedAt: 2_000 });
+
+    const { result, rerender } = renderHook(
+      ({ currentThread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: currentThread,
+        }),
+      {
+        initialProps: {
+          currentThread: thread,
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(result.current.error).toBe(
+        "json-rpc error (-32603): failed to locate rollout for thread thread-1"
+      );
+    });
+    expect(readThread).toHaveBeenCalledTimes(1);
+
+    rerender({ currentThread: thread });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(readThread).toHaveBeenCalledTimes(1);
+
+    rerender({ currentThread: updatedThread });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("rereads a partially hydrated transcript after turn completion when only the user message is present", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
@@ -465,7 +514,9 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(readThread).toHaveBeenCalledTimes(1);
     });
-    expect(result.current.entries).toHaveLength(1);
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
 
     act(() => {
       for (const listener of agentEventListeners) {
