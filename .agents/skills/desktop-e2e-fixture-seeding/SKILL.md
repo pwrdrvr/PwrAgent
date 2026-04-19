@@ -10,11 +10,10 @@ coverage.
 
 ## Read First
 
-Before changing anything, read these files in order:
+Repo and desktop `AGENTS.md` instructions already apply. For this workflow,
+read these files first:
 
-1. [../../../AGENTS.md](../../../AGENTS.md)
-2. [../../../apps/desktop/AGENTS.md](../../../apps/desktop/AGENTS.md)
-3. [../../../apps/desktop/e2e/fixtures/README.md](../../../apps/desktop/e2e/fixtures/README.md)
+1. [../../../apps/desktop/e2e/fixtures/README.md](../../../apps/desktop/e2e/fixtures/README.md)
 
 Then read the scenario recipe you are seeding or refreshing:
 
