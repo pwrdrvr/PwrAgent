@@ -61,4 +61,17 @@ describe("ThreadMarkdown", () => {
     expect(container.textContent).toContain("<em>safe</em>");
     expect(container.textContent).toContain("<table><tr><td>x</td></tr></table>");
   });
+
+  it("renders markdown image syntax as literal text instead of an image", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={"Keep ![Transcript preview](https://example.com/preview.png) inert for now."}
+      />
+    );
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toContain(
+      "![Transcript preview](https://example.com/preview.png)"
+    );
+  });
 });

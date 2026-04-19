@@ -764,6 +764,10 @@ textarea {
   margin-top: 8px;
 }
 
+.thread-markdown__image-literal {
+  word-break: break-word;
+}
+
 .transcript-message__text > * {
   margin: 0;
 }

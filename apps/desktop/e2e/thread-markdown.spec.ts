@@ -49,6 +49,12 @@ test("renders markdown content in thread summaries and transcript messages", asy
       transcript.getByRole("link", { name: "external links" })
     ).toHaveAttribute("href", "https://example.com/transcript");
     await expect(transcript.getByText("Preserves file links")).toBeVisible();
+    await expect(
+      transcript.getByText("![Transcript preview](https://example.com/preview.png)")
+    ).toBeVisible();
+    await expect(
+      transcript.locator('img[alt="Transcript preview"]')
+    ).toHaveCount(0);
   } finally {
     await app.close();
   }

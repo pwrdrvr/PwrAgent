@@ -92,6 +92,17 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       h6(headingProps) {
         return <h6 className="transcript-message__heading">{headingProps.children}</h6>;
       },
+      img(imageProps) {
+        const altText = typeof imageProps.alt === "string" ? imageProps.alt : "";
+        const src = typeof imageProps.src === "string" ? denormalizeMarkdownUrl(imageProps.src) : "";
+        const title = typeof imageProps.title === "string" ? ` "${imageProps.title}"` : "";
+
+        return (
+          <span className="thread-markdown__image-literal">
+            {`![${altText}](${src}${title})`}
+          </span>
+        );
+      },
       ol(listProps) {
         return <ol className="transcript-message__list">{listProps.children}</ol>;
       },
@@ -163,6 +174,14 @@ function normalizeSkillPath(href: string): string | undefined {
   }
 
   return undefined;
+}
+
+function denormalizeMarkdownUrl(url: string): string {
+  if (url.startsWith("file://")) {
+    return decodeURIComponent(url.replace(/^file:\/\//, ""));
+  }
+
+  return url;
 }
 
 function extractTextContent(node: ReactNode): string {
