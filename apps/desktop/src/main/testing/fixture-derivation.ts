@@ -87,7 +87,11 @@ export async function deriveReplayFixtureFromCapture(
     options.capturePath,
     options.redactions ?? []
   );
-  const selectedRecords = selectCaptureWindow(allRecords, options);
+  const threadScopedRecords = filterCaptureRecordsByThread(
+    allRecords,
+    options.threadId
+  );
+  const selectedRecords = selectCaptureWindow(threadScopedRecords, options);
   if (selectedRecords.length === 0) {
     throw new Error(
       `No capture records selected from ${options.capturePath}`
@@ -95,7 +99,7 @@ export async function deriveReplayFixtureFromCapture(
   }
 
   const requestsById = new Map<string, CapturedEnvelopeRecord>();
-  for (const entry of allRecords) {
+  for (const entry of threadScopedRecords) {
     if (
       entry.record.direction === "outbound"
       && entry.record.kind === "request"
@@ -430,6 +434,24 @@ function selectCaptureWindow(
       return false;
     }
     return true;
+  });
+}
+
+function filterCaptureRecordsByThread(
+  records: CapturedEnvelopeRecord[],
+  threadId?: string
+): CapturedEnvelopeRecord[] {
+  const normalizedThreadId = threadId?.trim();
+  if (!normalizedThreadId) {
+    return records;
+  }
+
+  return records.filter((entry) => {
+    if (entry.record.threadIds.length === 0) {
+      return true;
+    }
+
+    return entry.record.threadIds.includes(normalizedThreadId);
   });
 }
 

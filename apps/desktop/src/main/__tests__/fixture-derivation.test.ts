@@ -179,6 +179,121 @@ describe("fixture derivation", () => {
     ]);
   });
 
+  it("filters selected capture records to the requested thread while keeping global traffic", async () => {
+    const rootDir = await createTempDir();
+    cleanupPaths.push(rootDir);
+    const capturePath = path.join(rootDir, "capture.jsonl");
+
+    await writeJsonl(capturePath, [
+      {
+        backend: "codex",
+        captureId: "capture-threads",
+        direction: "outbound",
+        kind: "request",
+        method: "initialize",
+        id: "rpc-1",
+        sequence: 1,
+        timestamp: 1,
+        threadIds: [],
+        raw: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "rpc-1",
+          method: "initialize",
+          params: {}
+        })
+      },
+      {
+        backend: "codex",
+        captureId: "capture-threads",
+        direction: "inbound",
+        kind: "response",
+        id: "rpc-1",
+        sequence: 2,
+        timestamp: 2,
+        threadIds: [],
+        raw: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "rpc-1",
+          result: {
+            serverInfo: {
+              name: "Replay Codex",
+              version: "1.0.0"
+            }
+          }
+        })
+      },
+      {
+        backend: "codex",
+        captureId: "capture-threads",
+        direction: "inbound",
+        kind: "notification",
+        method: "thread/status/changed",
+        sequence: 3,
+        timestamp: 3,
+        threadIds: ["thread-1"],
+        raw: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "thread/status/changed",
+          params: {
+            threadId: "thread-1",
+            status: { type: "active" }
+          }
+        })
+      },
+      {
+        backend: "codex",
+        captureId: "capture-threads",
+        direction: "inbound",
+        kind: "notification",
+        method: "thread/status/changed",
+        sequence: 4,
+        timestamp: 4,
+        threadIds: ["thread-2"],
+        raw: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "thread/status/changed",
+          params: {
+            threadId: "thread-2",
+            status: { type: "idle" }
+          }
+        })
+      }
+    ]);
+
+    const derived = await deriveReplayFixtureFromCapture({
+      capturePath,
+      scenario: "thread-filter",
+      threadId: "thread-1"
+    });
+
+    expect(derived.rawCaptureRecords.map((record) => record.sequence)).toEqual([1, 2, 3]);
+    expect(derived.fixture.metadata.threadId).toBe("thread-1");
+    expect(derived.fixture.steps).toEqual([
+      {
+        id: "initialize-1",
+        kind: "response",
+        method: "initialize",
+        result: {
+          serverInfo: {
+            name: "Replay Codex",
+            version: "1.0.0"
+          }
+        }
+      },
+      {
+        id: "thread-status-changed-1",
+        kind: "notification",
+        notification: {
+          method: "thread/status/changed",
+          params: {
+            threadId: "thread-1",
+            status: { type: "active" }
+          }
+        }
+      }
+    ]);
+  });
+
   it("exports the latest recorded capture for a backend-qualified thread id", async () => {
     const rootDir = await createTempDir();
     cleanupPaths.push(rootDir);

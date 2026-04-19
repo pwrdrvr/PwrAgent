@@ -140,7 +140,7 @@ export class JsonRpcConnection {
       return;
     }
 
-    await this.observer?.onMessage({
+    await this.notifyObserver({
       direction: "inbound",
       raw: rawMessage,
       envelope
@@ -204,12 +204,28 @@ export class JsonRpcConnection {
 
   private async sendEnvelope(envelope: JsonRpcEnvelope): Promise<void> {
     const raw = JSON.stringify(envelope);
-    await this.observer?.onMessage({
+    await this.notifyObserver({
       direction: "outbound",
       raw,
       envelope
     });
     this.transport.send(raw);
+  }
+
+  private async notifyObserver(event: JsonRpcObserverEvent): Promise<void> {
+    if (!this.observer) {
+      return;
+    }
+
+    try {
+      await this.observer.onMessage(event);
+    } catch (error) {
+      console.error(
+        `[pwragnt:json-rpc] observer failed for ${event.direction} ${
+          event.envelope.method ?? event.envelope.id ?? "message"
+        }: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   private flushPending(error: Error): void {

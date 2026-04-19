@@ -32,6 +32,11 @@ test("shows pending approval UI without duplicating the turn elsewhere", async (
     await app.window.getByRole("button", { name: "Send" }).click();
 
     await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(
+      app.window
+        .getByRole("region", { name: "Transcript" })
+        .getByText("Read /etc/hosts and tell me the first three lines.")
+    ).toBeVisible();
 
     await app.advance({ stepId: "status-active-1" });
     await app.advance({ stepId: "turn-started-1" });

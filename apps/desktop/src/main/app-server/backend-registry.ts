@@ -186,10 +186,7 @@ export class DesktopBackendRegistry {
     overlayStore?: OverlayStore;
     createScratchProjectDirectory?: () => Promise<string>;
   }) {
-    const replayClients =
-      options?.codexClient || options?.codexFullAccessClient
-        ? undefined
-        : createReplayClientsFromEnv();
+    const replayClients = createReplayClientsFromEnv();
     const codexCapture = options?.codexClient
       || replayClients
       ? undefined
@@ -203,18 +200,21 @@ export class DesktopBackendRegistry {
 
     this.codexDefaultClient =
       options?.codexClient ??
-      replayClients?.defaultClient ??
+      replayClients?.codexDefaultClient ??
       new CodexAppServerClient({
         connectionObserver: codexCapture?.observer,
       });
     this.codexFullAccessClient =
       options?.codexFullAccessClient ??
-      replayClients?.fullAccessClient ??
+      replayClients?.codexFullAccessClient ??
       new CodexAppServerClient({
         args: buildCodexClientArgs("full-access"),
         connectionObserver: codexCapture?.observer,
       });
-    this.grokClient = options?.grokClient ?? new GrokAppServerClient();
+    this.grokClient =
+      options?.grokClient ??
+      replayClients?.grokClient ??
+      new GrokAppServerClient();
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
     this.createScratchProjectDirectory =
       options?.createScratchProjectDirectory ?? createScratchProjectDirectory;

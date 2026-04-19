@@ -63,8 +63,8 @@ describe("replay-runtime", () => {
     const clients = createReplayClientsFromEnv();
     expect(clients).toBeDefined();
 
-    await clients!.fullAccessClient.getInitializeResult();
-    await clients!.fullAccessClient.listThreads();
+    await clients!.codexFullAccessClient.getInitializeResult();
+    await clients!.codexFullAccessClient.listThreads();
 
     await globalThis.__PWRAGNT_REPLAY_DRIVER__?.advance({
       executionMode: "full-access",
@@ -94,6 +94,58 @@ describe("replay-runtime", () => {
         executionMode: "full-access"
       })
     ).toBeUndefined();
+  });
+
+  it("routes driver interactions to the replay fixture backend by default", async () => {
+    const fixturePath = writeFixture({
+      metadata: {
+        backend: "grok",
+        scenario: "replay-runtime-grok-routing"
+      },
+      steps: [
+        {
+          id: "initialize-1",
+          kind: "response",
+          method: "initialize",
+          result: {
+            serverInfo: {
+              name: "Replay Grok",
+              version: "1.0.0"
+            },
+            methods: ["thread/list"]
+          }
+        },
+        {
+          id: "notif-1",
+          kind: "notification",
+          notification: {
+            method: "thread/status/changed",
+            params: {
+              threadId: "thread-grok",
+              status: { type: "active" }
+            }
+          }
+        }
+      ]
+    });
+
+    process.env[REPLAY_FIXTURE_PATH_ENV] = fixturePath;
+
+    const clients = createReplayClientsFromEnv();
+    expect(clients).toBeDefined();
+
+    const notifications: string[] = [];
+    clients!.grokClient.onNotification((notification) => {
+      notifications.push(notification.method);
+    });
+
+    await clients!.grokClient.getInitializeResult();
+    await globalThis.__PWRAGNT_REPLAY_DRIVER__?.advance({ stepId: "notif-1" });
+
+    expect(notifications).toEqual(["thread/status/changed"]);
+    await expect(clients!.codexDefaultClient.getInitializeResult()).rejects.toThrow(
+      "Replay fixture backend is grok; codex is unavailable in replay mode."
+    );
   });
 });
 
