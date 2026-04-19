@@ -430,26 +430,27 @@ export class DesktopBackendRegistry {
     }
 
     const modeSettings = EXECUTION_MODE_SUMMARIES[params.executionMode];
-    const client = this.getClient("codex", params.executionMode);
-    if (!client.setThreadPermissions) {
-      throw new Error("Selected backend does not support execution mode updates");
-    }
+    const result = await this.withCodexThreadClient(params.threadId, async (client) => {
+      if (!client.setThreadPermissions) {
+        throw new Error("Selected backend does not support execution mode updates");
+      }
 
-    await client.setThreadPermissions({
-      threadId: params.threadId,
-      approvalPolicy: modeSettings.approvalPolicy,
-      sandbox: modeSettings.sandbox,
+      return await client.setThreadPermissions({
+        threadId: params.threadId,
+        approvalPolicy: modeSettings.approvalPolicy,
+        sandbox: modeSettings.sandbox,
+      });
     });
 
     await this.overlayStore.setThreadExecutionMode({
       backend: "codex",
-      threadId: params.threadId,
+      threadId: result.threadId,
       executionMode: params.executionMode,
     });
 
     return {
       backend: params.backend,
-      threadId: params.threadId,
+      threadId: result.threadId,
       executionMode: params.executionMode,
     };
   }

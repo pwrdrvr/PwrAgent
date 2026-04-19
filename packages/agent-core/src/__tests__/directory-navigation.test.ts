@@ -93,4 +93,52 @@ describe("buildDirectorySummaries", () => {
       }),
     ]);
   });
+
+  it("keeps same-named Codex worktrees as separate directory rows", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/.codex/worktrees/repo-one/PwrAgnt",
+              kind: "worktree",
+            },
+          ],
+        }),
+        buildThread({
+          id: "thread-2",
+          linkedDirectories: [
+            {
+              id: "dir-2",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/.codex/worktrees/repo-two/PwrAgnt",
+              kind: "worktree",
+            },
+          ],
+          updatedAt: 2_000,
+        }),
+      ],
+    });
+
+    expect(directories).toHaveLength(2);
+    expect(directories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "directory:/Users/huntharo/.codex/worktrees/repo-one/PwrAgnt",
+          label: "PwrAgnt",
+          path: "/Users/huntharo/.codex/worktrees/repo-one/PwrAgnt",
+          threadKeys: ["codex:thread-1"],
+        }),
+        expect.objectContaining({
+          key: "directory:/Users/huntharo/.codex/worktrees/repo-two/PwrAgnt",
+          label: "PwrAgnt",
+          path: "/Users/huntharo/.codex/worktrees/repo-two/PwrAgnt",
+          threadKeys: ["codex:thread-2"],
+        }),
+      ]),
+    );
+  });
 });

@@ -52,10 +52,12 @@ function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescript
     /^[\\/].*[\\/]\.codex[\\/]worktrees[\\/][^\\/]+[\\/]([^\\/]+)(?:[\\/].*)?$/,
   );
   if (codexWorktreeMatch) {
+    const canonicalPath = directory.path.replace(/[\\/]+$/, "");
     return {
-      key: `directory:${codexWorktreeMatch[1]}`,
+      key: `directory:${canonicalPath}`,
       kind: "directory",
       label: codexWorktreeMatch[1],
+      path: canonicalPath,
     };
   }
 
