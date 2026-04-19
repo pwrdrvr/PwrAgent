@@ -573,13 +573,18 @@ textarea {
 }
 
 .directory-row__chevron {
-  color: var(--text-muted);
-  font-size: 12px;
+  display: inline-flex;
+  width: 9px;
+  height: 9px;
+  border-right: 1.75px solid var(--text-muted);
+  border-bottom: 1.75px solid var(--text-muted);
+  opacity: 0.82;
   transition: transform 120ms ease;
+  transform: rotate(45deg) translateY(-1px);
 }
 
 .directory-row__chevron.is-open {
-  transform: rotate(180deg);
+  transform: rotate(225deg) translateY(1px);
 }
 
 .directory-row__launchpad-button {

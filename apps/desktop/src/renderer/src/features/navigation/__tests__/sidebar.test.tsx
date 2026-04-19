@@ -179,6 +179,30 @@ describe("Sidebar", () => {
     expect(onOpenLaunchpad).toHaveBeenCalledWith(directories[0], undefined);
   });
 
+  it("renders directory rows without the raw chevron glyph affordance", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={directories}
+        fetchedAt={Date.now()}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    expect(screen.queryByText("▾")).not.toBeInTheDocument();
+  });
+
   it("copies a linked directory path from the recents chip", () => {
     const copyText = vi.fn(async () => undefined);
     Object.defineProperty(window, "pwragnt", {
