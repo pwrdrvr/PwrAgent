@@ -8,6 +8,7 @@ import {
   waitFor,
   within
 } from "@testing-library/react";
+import type { StartTurnRequest, StartTurnResponse } from "@pwragnt/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 
@@ -35,7 +36,9 @@ describe("App", () => {
         }
       ]
     }));
-    const startTurn = vi.fn(async () => ({
+    const startTurn = vi.fn<
+      (request: StartTurnRequest) => Promise<StartTurnResponse>
+    >(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
       runId: "turn-1"
@@ -322,7 +325,7 @@ describe("App", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 
-    const reply = screen.getByLabelText("Reply");
+    const reply = screen.getByLabelText("Reply") as HTMLTextAreaElement;
     fireEvent.change(reply, {
       target: { value: "$frontend-design what can this skill do" }
     });
