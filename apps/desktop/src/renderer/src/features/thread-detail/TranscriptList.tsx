@@ -52,6 +52,7 @@ type ScrollSnapshot = {
 };
 
 const BOTTOM_THRESHOLD_PX = 24;
+type ScrollBottomMode = "instant" | "smooth";
 
 export function TranscriptList(props: TranscriptListProps) {
   const skills = props.skills ?? [];
@@ -117,16 +118,16 @@ export function TranscriptList(props: TranscriptListProps) {
     }
   }, [captureSnapshot]);
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+  const scrollToBottom = useCallback((mode: ScrollBottomMode = "smooth") => {
     const container = scrollContainerRef.current;
     if (!container) {
       return;
     }
 
-    if (typeof container.scrollTo === "function") {
+    if (mode === "smooth" && typeof container.scrollTo === "function") {
       container.scrollTo({
         top: container.scrollHeight,
-        behavior
+        behavior: "smooth"
       });
     } else {
       container.scrollTop = container.scrollHeight;
@@ -179,7 +180,7 @@ export function TranscriptList(props: TranscriptListProps) {
         previousSnapshot.firstMessageId === firstMessageId &&
         (previousSnapshot.lastMessageId !== lastMessageId ||
           previousSnapshot.pendingStatusText !== props.pendingStatusText ||
-          previousSnapshot.itemCount <
+      previousSnapshot.itemCount <
             props.entries.length +
               (props.pendingAssistantMessage ? 1 : 0) +
               (props.pendingPlanEntry ? 1 : 0) +
@@ -193,7 +194,7 @@ export function TranscriptList(props: TranscriptListProps) {
     } else if (previousSnapshot?.threadId !== props.threadId) {
       if (restoredViewport) {
         if (restoredViewport.distanceFromBottom <= BOTTOM_THRESHOLD_PX) {
-          scrollToBottom("auto");
+          scrollToBottom("instant");
         } else {
           container.scrollTop = Math.min(
             Math.max(0, restoredViewport.scrollTop),
@@ -205,21 +206,21 @@ export function TranscriptList(props: TranscriptListProps) {
         return;
       }
 
-      scrollToBottom("auto");
+      scrollToBottom("instant");
       shouldScrollToBottomRef.current = false;
       return;
     } else if (
       shouldScrollToBottomRef.current ||
       !previousSnapshot
     ) {
-      scrollToBottom("auto");
+      scrollToBottom("instant");
       shouldScrollToBottomRef.current = false;
       return;
     } else if (
       hasAppendedMessages &&
       previousSnapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX
     ) {
-      scrollToBottom("auto");
+      scrollToBottom("instant");
       return;
     }
 

@@ -328,6 +328,15 @@ export function useThreadSessionState(params: {
       return;
     }
 
+    if (session.interacted) {
+      updateSession(threadKey, (current) => ({
+        ...current,
+        hydratedUpdatedAt: thread.updatedAt,
+        lastTouchedAt: Date.now(),
+      }));
+      return;
+    }
+
     void loadLatest(thread);
   }, [loadLatest, sessions, thread, threadKey, updateSession]);
 

@@ -72,8 +72,8 @@ export async function launchElectronApp(params: {
     await expect
       .poll(async () =>
         await window.evaluate(() => ({
-          innerHeight: window.innerHeight,
-          innerWidth: window.innerWidth,
+          innerHeight: globalThis.innerHeight,
+          innerWidth: globalThis.innerWidth,
         }))
       )
       .toMatchObject({
