@@ -1,0 +1,411 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "live-plan-updates",
+    "threadId": "thread-live-plan-updates"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": ["thread/list", "thread/read", "skills/list", "turn/start"]
+      }
+    },
+    {
+      "id": "initialize-2",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": ["thread/list", "thread/read", "skills/list", "turn/start"]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-live-plan-updates",
+          "title": "Live plan updates replay",
+          "titleSource": "explicit",
+          "summary": "Replay seeded live plan update lifecycle",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1776563600000
+        }
+      ]
+    },
+    {
+      "id": "thread-list-2",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-live-plan-updates",
+          "title": "Live plan updates replay",
+          "titleSource": "explicit",
+          "summary": "Replay seeded live plan update lifecycle",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1776563600000
+        }
+      ]
+    },
+    {
+      "id": "skills-list-1",
+      "kind": "response",
+      "method": "skills/list",
+      "result": []
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Ready for the next renderer check."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Ready for the next renderer check."
+          }
+        ],
+        "lastAssistantMessage": "Ready for the next renderer check.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "turn-start-1",
+      "kind": "response",
+      "method": "turn/start",
+      "result": {
+        "threadId": "thread-live-plan-updates",
+        "runId": "turn-live-plan-1"
+      }
+    },
+    {
+      "id": "thread-read-2",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Ready for the next renderer check."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "user",
+            "text": "Create a three-step task list before you inspect the renderer."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Ready for the next renderer check."
+          },
+          {
+            "id": "message-2",
+            "role": "user",
+            "text": "Create a three-step task list before you inspect the renderer."
+          }
+        ],
+        "lastUserMessage": "Create a three-step task list before you inspect the renderer.",
+        "lastAssistantMessage": "Ready for the next renderer check.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "status-active-1",
+      "kind": "notification",
+      "notification": {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "thread-live-plan-updates",
+          "status": {
+            "type": "active",
+            "activeFlags": []
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-live-plan-updates",
+          "turn": {
+            "id": "turn-live-plan-1",
+            "status": "inProgress"
+          }
+        }
+      }
+    },
+    {
+      "id": "plan-updated-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/plan/updated",
+        "params": {
+          "threadId": "thread-live-plan-updates",
+          "runId": "turn-live-plan-1",
+          "plan": {
+            "explanation": "Check the shared contract and transcript renderer before summarizing the dependency.",
+            "steps": [
+              {
+                "step": "Inspect AppServerThreadPlanEntry",
+                "status": "completed"
+              },
+              {
+                "step": "Inspect TranscriptPlan rendering",
+                "status": "in_progress"
+              },
+              {
+                "step": "Summarize renderer dependency",
+                "status": "pending"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-live-plan-updates",
+          "turnId": "turn-live-plan-1"
+        }
+      }
+    },
+    {
+      "id": "thread-list-3",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-live-plan-updates",
+          "title": "Live plan updates replay",
+          "titleSource": "explicit",
+          "summary": "Replay seeded live plan update lifecycle",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1776563600000
+        }
+      ]
+    },
+    {
+      "id": "thread-list-4",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-live-plan-updates",
+          "title": "Live plan updates replay",
+          "titleSource": "explicit",
+          "summary": "Replay seeded live plan update lifecycle",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1776563600000
+        }
+      ]
+    },
+    {
+      "id": "skills-list-2",
+      "kind": "response",
+      "method": "skills/list",
+      "result": []
+    },
+    {
+      "id": "thread-read-3",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Ready for the next renderer check."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "user",
+            "text": "Create a three-step task list before you inspect the renderer."
+          },
+          {
+            "type": "plan",
+            "id": "persisted-plan-1",
+            "createdAt": 1776563601000,
+            "explanation": "Check the shared contract and transcript renderer before summarizing the dependency.",
+            "steps": [
+              {
+                "step": "Inspect AppServerThreadPlanEntry",
+                "status": "completed"
+              },
+              {
+                "step": "Inspect TranscriptPlan rendering",
+                "status": "in_progress"
+              },
+              {
+                "step": "Summarize renderer dependency",
+                "status": "pending"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "id": "message-3",
+            "role": "assistant",
+            "text": "The renderer is using the same normalized plan contract the backend emits, so the UI depends on that shared shape rather than backend-specific formatting."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Ready for the next renderer check."
+          },
+          {
+            "id": "message-2",
+            "role": "user",
+            "text": "Create a three-step task list before you inspect the renderer."
+          },
+          {
+            "id": "message-3",
+            "role": "assistant",
+            "text": "The renderer is using the same normalized plan contract the backend emits, so the UI depends on that shared shape rather than backend-specific formatting."
+          }
+        ],
+        "lastUserMessage": "Create a three-step task list before you inspect the renderer.",
+        "lastAssistantMessage": "The renderer is using the same normalized plan contract the backend emits, so the UI depends on that shared shape rather than backend-specific formatting.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "thread-read-4",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Ready for the next renderer check."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "user",
+            "text": "Create a three-step task list before you inspect the renderer."
+          },
+          {
+            "type": "plan",
+            "id": "persisted-plan-1",
+            "createdAt": 1776563601000,
+            "explanation": "Check the shared contract and transcript renderer before summarizing the dependency.",
+            "steps": [
+              {
+                "step": "Inspect AppServerThreadPlanEntry",
+                "status": "completed"
+              },
+              {
+                "step": "Inspect TranscriptPlan rendering",
+                "status": "in_progress"
+              },
+              {
+                "step": "Summarize renderer dependency",
+                "status": "pending"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "id": "message-3",
+            "role": "assistant",
+            "text": "The renderer is using the same normalized plan contract the backend emits, so the UI depends on that shared shape rather than backend-specific formatting."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Ready for the next renderer check."
+          },
+          {
+            "id": "message-2",
+            "role": "user",
+            "text": "Create a three-step task list before you inspect the renderer."
+          },
+          {
+            "id": "message-3",
+            "role": "assistant",
+            "text": "The renderer is using the same normalized plan contract the backend emits, so the UI depends on that shared shape rather than backend-specific formatting."
+          }
+        ],
+        "lastUserMessage": "Create a three-step task list before you inspect the renderer.",
+        "lastAssistantMessage": "The renderer is using the same normalized plan contract the backend emits, so the UI depends on that shared shape rather than backend-specific formatting.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

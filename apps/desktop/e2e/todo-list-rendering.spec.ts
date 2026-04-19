@@ -80,3 +80,41 @@ test("renders the Grok task plan contract with mixed step states", async () => {
     await app.close();
   }
 });
+
+test("renders live plan updates from turn/plan/updated notifications", async () => {
+  const app = await openThreadByTitle(
+    path.resolve(
+      todoListSpecDir,
+      "fixtures/live-plan-updates/replay.fixture.json"
+    ),
+    "Live plan updates replay"
+  );
+
+  try {
+    await app.window
+      .getByLabel("Reply")
+      .fill("Create a three-step task list before you inspect the renderer.");
+    await app.window.getByRole("button", { name: "Send" }).click();
+    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByRole("status")).toContainText("Thinking");
+
+    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    const planGroups = transcript.getByRole("group", { name: "Task plan" });
+
+    await app.advance({ stepId: "status-active-1" });
+    await app.advance({ stepId: "turn-started-1" });
+    await app.advance({ stepId: "plan-updated-1" });
+
+    await expect(planGroups).toHaveCount(1);
+    await expect(planGroups.first()).toContainText("1 out of 3 tasks completed");
+    await expect(planGroups.first()).toContainText(
+      "Check the shared contract and transcript renderer before summarizing the dependency."
+    );
+    await expect(planGroups.first()).toContainText("Inspect AppServerThreadPlanEntry");
+    await expect(planGroups.first()).toContainText("Inspect TranscriptPlan rendering");
+    await expect(planGroups.first()).toContainText("Summarize renderer dependency");
+
+  } finally {
+    await app.close();
+  }
+});

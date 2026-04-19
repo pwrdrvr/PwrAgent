@@ -97,3 +97,5 @@ fixture for CI.
   plan
 - `grok-todo-list/`: Grok-backed task plan rendering contract for the shared
   transcript plan UI
+- `live-plan-updates/`: live `turn/plan/updated` rendering for in-flight task
+  plan UI
