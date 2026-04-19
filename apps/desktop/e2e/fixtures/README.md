@@ -99,3 +99,5 @@ fixture for CI.
   transcript plan UI
 - `live-plan-updates/`: live `turn/plan/updated` rendering for in-flight task
   plan UI
+- `focused-diff-zoom/`: eligible transcript diffs that condense locally and can
+  hide low-signal hunks via the focused diff path

@@ -13,6 +13,8 @@ import type {
   SetThreadExecutionModeResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
+  FocusedDiffAnalysisRequest,
+  FocusedDiffAnalysisResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
   AppServerReadThreadRequest,
@@ -45,6 +47,7 @@ import {
   APP_SERVER_READ_THREAD_CHANNEL,
   BACKEND_LIST_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  FOCUSED_DIFF_ANALYZE_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
@@ -79,6 +82,10 @@ const desktopApi = Object.freeze({
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_READ_THREAD_CHANNEL, request),
+  analyzeFocusedDiff: async (
+    request: FocusedDiffAnalysisRequest
+  ): Promise<FocusedDiffAnalysisResponse> =>
+    await ipcRenderer.invoke(FOCUSED_DIFF_ANALYZE_CHANNEL, request),
   startThread: async (
     request: StartThreadRequest
   ): Promise<StartThreadResponse> =>

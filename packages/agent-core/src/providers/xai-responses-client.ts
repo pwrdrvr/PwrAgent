@@ -12,6 +12,16 @@ export type XaiResponseCreateRequest = {
   model?: string;
   input: Array<Record<string, unknown>>;
   previousResponseId?: string;
+  promptCacheKey?: string;
+  headers?: Record<string, string>;
+  text?: {
+    format: {
+      type: "json_schema";
+      name: string;
+      schema: Record<string, unknown>;
+      strict?: boolean;
+    };
+  };
   tools?: XaiFunctionTool[];
   parallelToolCalls?: boolean;
   signal?: AbortSignal;
@@ -47,6 +57,8 @@ export class XaiResponsesClient {
       ...(params.previousResponseId
         ? { previous_response_id: params.previousResponseId }
         : {}),
+      ...(params.promptCacheKey ? { prompt_cache_key: params.promptCacheKey } : {}),
+      ...(params.text ? { text: params.text } : {}),
       ...(params.tools?.length ? { tools: params.tools } : {}),
       ...(typeof params.parallelToolCalls === "boolean"
         ? { parallel_tool_calls: params.parallelToolCalls }
@@ -61,6 +73,7 @@ export class XaiResponsesClient {
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         "Content-Type": "application/json",
+        ...params.headers,
       },
       body: JSON.stringify(this.buildCreatePayload(params)),
       signal: params.signal,

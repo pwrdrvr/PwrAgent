@@ -2,20 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CodexAppServer } from "../app-server/codex-app-server.js";
+import { resolveGrokAppServerRuntimeConfig } from "../config/grok-app-server-config.js";
 import type { AppServerNotification } from "../app-server/protocol.js";
 import { GrokProvider } from "../providers/grok-provider.js";
 import { createTemporaryTestDirectory } from "../testing/test-harness.js";
-import { loadLocalEnv } from "../testing/load-local-env.js";
 
-const envResult = loadLocalEnv({ override: true });
-const xaiApiKey = process.env.XAI_API_KEY?.trim();
-const xaiBaseUrl = process.env.XAI_BASE_URL?.trim() || "https://api.x.ai/v1";
-const grokModel = process.env.GROK_MODEL?.trim() || "grok-4.20-reasoning";
+const runtimeConfig = resolveGrokAppServerRuntimeConfig();
+const xaiApiKey = runtimeConfig.apiKey?.trim();
+const xaiBaseUrl = runtimeConfig.baseUrl?.trim() || "https://api.x.ai/v1";
+const grokModel = runtimeConfig.model?.trim() || "grok-4.20-reasoning";
 const liveSkipReason = xaiApiKey
   ? undefined
-  : envResult.loaded
-    ? "XAI_API_KEY is missing from the local env file or environment"
-    : `missing local env file at ${envResult.path} and XAI_API_KEY is not set`;
+  : `XAI_API_KEY is not set in the environment or runtime config at ${runtimeConfig.configPath}`;
 
 const itLive = liveSkipReason ? it.skip : it;
 const liveNotificationTimeoutMs = 60_000;
@@ -89,7 +87,7 @@ describe("Grok live smoke", () => {
     async () => {
       const { notifications, server } = createLiveServer();
 
-      const marker = `smoke-${Date.now().toString(36)}`;
+      const marker = "sunny meadow checkpoint";
       const created = await server.request("thread/start", {
         cwd: "/tmp/live-smoke",
         model: grokModel,
@@ -104,7 +102,7 @@ describe("Grok live smoke", () => {
         input: [
           {
             type: "text",
-            text: `Reply with this token exactly. Do not use any tools or inspect the workspace. No explanation: ${marker}`,
+            text: `Reply with only these words: ${marker}`,
           },
         ],
       })) as { threadId: string; runId: string };
@@ -138,7 +136,7 @@ describe("Grok live smoke", () => {
         input: [
           {
             type: "text",
-            text: "What token did you just return? Reply with the token only. Do not use any tools.",
+            text: "Repeat the same words from your previous reply.",
           },
         ],
       })) as { threadId: string; runId: string };
@@ -156,8 +154,7 @@ describe("Grok live smoke", () => {
       const replay = await server.request("thread/read", { threadId: "thread-live" });
       expect(replay).toMatchObject({
         threadId: "thread-live",
-        lastUserMessage:
-          "What token did you just return? Reply with the token only. Do not use any tools.",
+        lastUserMessage: "Repeat the same words from your previous reply.",
       });
       expect((replay as { lastAssistantMessage?: string }).lastAssistantMessage).toContain(marker);
     },

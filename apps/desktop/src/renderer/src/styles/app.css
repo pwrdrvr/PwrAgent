@@ -1357,6 +1357,14 @@ textarea {
   padding: 0 12px 12px;
 }
 
+.transcript-diff__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
 .transcript-diff__stats {
   display: inline-flex;
   align-items: center;
@@ -1386,6 +1394,12 @@ textarea {
   min-height: 28px;
   padding: 0 10px;
   font-size: 12px;
+}
+
+.transcript-diff__summary {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .transcript-diff__rows {

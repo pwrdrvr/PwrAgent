@@ -467,7 +467,7 @@ describe("TranscriptList", () => {
     expect(screen.queryByText("Read TranscriptActivity.tsx")).not.toBeInTheDocument();
   });
 
-  it("renders write diffs zoomed out by default and expands them on demand", () => {
+  it("renders simple write diffs fully without zoom controls", () => {
     render(
       <TranscriptList
         entries={[
@@ -512,14 +512,10 @@ describe("TranscriptList", () => {
     fireEvent.click(screen.getByRole("button", { name: /Edited 1 file/i }));
 
     expect(screen.getByText("Update TranscriptList.tsx")).toBeInTheDocument();
-    expect(screen.getByText("2 unmodified lines skipped")).toBeInTheDocument();
-    expect(screen.queryByText("const b = 2;")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Zoom in" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-
     expect(screen.getByText("const b = 2;")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Zoom out" })).toBeInTheDocument();
+    expect(screen.getByText("const c = 3;")).toBeInTheDocument();
+    expect(screen.queryByText("2 unmodified lines skipped")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
   });
 
   it("preserves the reader position when older messages are prepended", () => {

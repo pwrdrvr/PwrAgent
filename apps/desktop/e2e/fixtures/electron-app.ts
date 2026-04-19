@@ -27,6 +27,7 @@ type LaunchResult = {
 
 export async function launchElectronApp(params: {
   fixturePath: string;
+  env?: Record<string, string | undefined>;
 }): Promise<LaunchResult> {
   const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-desktop-e2e-"));
   const electronApp = await electron.launch({
@@ -37,6 +38,7 @@ export async function launchElectronApp(params: {
       NODE_ENV: "production",
       PWRAGNT_REPLAY_FIXTURE_PATH: params.fixturePath,
       PWRAGNT_STATE_ROOT: stateRoot,
+      ...params.env
     },
   });
   const window = await electronApp.firstWindow();
