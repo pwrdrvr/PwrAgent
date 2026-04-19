@@ -1,7 +1,6 @@
 import type { NavigationThreadSummary } from "@pwragnt/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
-import { ThreadMarkdown } from "./ThreadMarkdown";
 
 type ThreadHeaderProps = {
   fetchedAt?: number;
@@ -23,13 +22,6 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           </span>
         </div>
         <h2 className="thread-header__title">{props.thread.title}</h2>
-        {props.thread.summary ? (
-          <ThreadMarkdown
-            className="thread-header__summary"
-            text={props.thread.summary}
-            variant="summary"
-          />
-        ) : null}
       </div>
 
       <div className="thread-header__stats">

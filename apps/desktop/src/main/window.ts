@@ -1,8 +1,24 @@
-import { BrowserWindow, shell } from "electron";
-import { join } from "node:path";
+import { app, BrowserWindow, shell } from "electron";
+import { join, resolve } from "node:path";
+import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
+import { createHeapSession } from "./diagnostics/heap-session";
+import { MainProcessHeapMonitor } from "./diagnostics/main-process-heap-monitor";
+import { RendererHeapMonitor } from "./diagnostics/renderer-heap-monitor";
+import { getMainLogger } from "./log";
 import { attachWindowFocusSync } from "./window-focus-sync";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
+const mainLog = getMainLogger("pwragnt:main");
+const heapLog = getMainLogger("pwragnt:heap");
+const rendererConsoleLog = getMainLogger("pwragnt:renderer:console");
+
+function serializeError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
 
 export function getPreloadPath(): string {
   return join(__dirname, "../preload/index.cjs");
@@ -17,6 +33,10 @@ export function getRendererEntry(): { kind: "url" | "file"; value: string } {
     kind: "file",
     value: join(__dirname, "../renderer/index.html")
   };
+}
+
+function resolveRepoRoot(): string {
+  return resolve(app.getAppPath(), "../..");
 }
 
 export function createMainWindow(): BrowserWindow {
@@ -38,7 +58,7 @@ export function createMainWindow(): BrowserWindow {
   });
 
   if (isDevelopment) {
-    console.info("[pwragnt:main] creating window", {
+    mainLog.info("creating window", {
       preloadPath,
       rendererUrl: process.env.ELECTRON_RENDERER_URL ?? null
     });
@@ -57,10 +77,77 @@ export function createMainWindow(): BrowserWindow {
 
   const { webContents } = window;
   attachWindowFocusSync(window);
+  const heapMonitorPromise = (async () => {
+    const heapConfig = resolveHeapMonitorConfig({
+      repoRoot: resolveRepoRoot(),
+    });
+
+    if (!heapConfig.enabled) {
+      return null;
+    }
+
+    const created = await createHeapSession({
+      config: heapConfig,
+      versions: {
+        appVersion: app.getVersion(),
+        electronVersion: process.versions.electron ?? "unknown",
+        chromeVersion: process.versions.chrome ?? "unknown",
+        nodeVersion: process.versions.node,
+      },
+    });
+
+    if (!created.ok) {
+      heapLog.error("failed to initialize heap diagnostics", {
+        message: created.message,
+      });
+      return null;
+    }
+
+    heapLog.info("session directory", {
+      sessionDirectory: created.session.directoryPath,
+    });
+
+    const mainMonitor = new MainProcessHeapMonitor({
+      session: created.session,
+      config: heapConfig,
+    });
+    await mainMonitor.start();
+
+    const rendererMonitor = new RendererHeapMonitor({
+      target: webContents,
+      session: created.session,
+      config: heapConfig,
+    });
+
+    return {
+      mainMonitor,
+      rendererMonitor,
+    };
+  })();
+
+  const stopHeapMonitor = (reason: string) => {
+    void heapMonitorPromise
+      .then(async (monitors) => {
+        if (!monitors) {
+          return;
+        }
+
+        await Promise.all([
+          monitors.rendererMonitor.stop(reason),
+          monitors.mainMonitor.stop(reason),
+        ]);
+      })
+      .catch((error: unknown) => {
+        heapLog.warn("failed to stop heap diagnostics", {
+          reason,
+          error: serializeError(error),
+        });
+      });
+  };
 
   if (typeof webContents.on === "function") {
     webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl) => {
-      console.error("[pwragnt:main] renderer load failed", {
+      mainLog.error("renderer load failed", {
         errorCode,
         errorDescription,
         validatedUrl
@@ -68,13 +155,20 @@ export function createMainWindow(): BrowserWindow {
     });
 
     webContents.on("render-process-gone", (_event, details) => {
-      console.error("[pwragnt:main] renderer process gone", details);
+      stopHeapMonitor("render-process-gone");
+      mainLog.error("renderer process gone", details);
     });
+
+    if (typeof webContents.once === "function") {
+      webContents.once("did-finish-load", () => {
+        void heapMonitorPromise.then((monitors) => monitors?.rendererMonitor.start());
+      });
+    }
   }
 
   if (isDevelopment && typeof webContents.on === "function") {
     webContents.on("console-message", (_event, level, message, line, sourceId) => {
-      console.info("[pwragnt:renderer:console]", {
+      rendererConsoleLog.info("message", {
         level,
         message,
         line,
@@ -93,10 +187,10 @@ export function createMainWindow(): BrowserWindow {
           true
         )
         .then((result) => {
-          console.info("[pwragnt:main] renderer globals", result);
+          mainLog.info("renderer globals", result);
         })
         .catch((error: unknown) => {
-          console.error("[pwragnt:main] failed to inspect renderer globals", error);
+          mainLog.error("failed to inspect renderer globals", error);
         });
     });
   }
@@ -104,6 +198,10 @@ export function createMainWindow(): BrowserWindow {
   webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
     return { action: "deny" };
+  });
+
+  window.on("closed", () => {
+    stopHeapMonitor("window-closed");
   });
 
   return window;

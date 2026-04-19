@@ -26,11 +26,7 @@ test("renders markdown edge cases without breaking transcript boundaries", async
       })
     ).toBeVisible();
 
-    const summary = app.window.locator(".thread-header__summary");
-    await expect(summary.locator("em", { hasText: "calm" })).toBeVisible();
-    await expect(summary.locator("del", { hasText: "legacy" })).toBeVisible();
-    await expect(summary.locator("strong", { hasText: "current" })).toBeVisible();
-    await expect(summary.getByText("😎", { exact: false })).toBeVisible();
+    await expect(app.window.locator(".thread-header__summary")).toHaveCount(0);
 
     const transcript = app.window.getByRole("region", { name: "Transcript" });
     await expect(transcript.getByText("Emoji check 😎")).toBeVisible();

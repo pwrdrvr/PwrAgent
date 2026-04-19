@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu, shell } from "electron";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import { disposeAppServerIpcHandlers, registerAppServerIpcHandlers } from "./ipc/app-server";
+import { initializeMainLogger } from "./log";
 import { createMainWindow } from "./window";
 
 const APP_NAME = "PwrAgnt";
@@ -31,6 +32,7 @@ function installApplicationMenu(): void {
 
 export function bootstrapApp(): void {
   app.setName(APP_NAME);
+  initializeMainLogger();
 
   app.whenReady().then(() => {
     installApplicationMenu();

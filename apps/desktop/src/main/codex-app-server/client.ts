@@ -26,6 +26,7 @@ import type {
   AppServerTurnInputItem,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
+import { getMainLogger } from "../log";
 import {
   JsonRpcConnection,
   type JsonRpcId,
@@ -86,6 +87,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "review/requestApproval",
   "mcpServer/startupStatus/updated",
 ]);
+const codexClientLog = getMainLogger("pwragnt:codex-client");
 
 function isApprovalLikeMethod(method: string): boolean {
   return method.endsWith("/requestApproval");
@@ -100,10 +102,8 @@ function logUnhandledCodexMessage(params: {
   method: string;
   payload: unknown;
 }): void {
-  const prefix = "[pwragnt:codex-client]";
-
   if (params.kind === "request") {
-    console.error(`${prefix} unhandled inbound codex request`, {
+    codexClientLog.error("unhandled inbound codex request", {
       method: params.method,
       payload: params.payload,
     });
@@ -111,14 +111,14 @@ function logUnhandledCodexMessage(params: {
   }
 
   if (isApprovalLikeMethod(params.method) || isRequestLikeMethod(params.method)) {
-    console.error(`${prefix} unhandled inbound codex notification`, {
+    codexClientLog.error("unhandled inbound codex notification", {
       method: params.method,
       payload: params.payload,
     });
     return;
   }
 
-  console.warn(`${prefix} unknown codex notification`, {
+  codexClientLog.warn("unknown codex notification", {
     method: params.method,
     payload: params.payload,
   });
@@ -1969,8 +1969,8 @@ export class CodexAppServerClient {
         throw error;
       }
 
-      console.warn(
-        "[pwragnt:codex-client] turn/interrupt timed out; waiting for later status updates",
+      codexClientLog.warn(
+        "turn/interrupt timed out; waiting for later status updates",
         {
           threadId: params.threadId,
           runId: params.runId,

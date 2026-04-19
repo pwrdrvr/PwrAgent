@@ -26,11 +26,7 @@ test("renders markdown content in thread summaries and transcript messages", asy
       })
     ).toBeVisible();
 
-    const summary = app.window.locator(".thread-header__summary");
-    await expect(summary.locator("strong", { hasText: "thread/read" })).toBeVisible();
-    await expect(
-      summary.getByRole("link", { name: "desktop docs" })
-    ).toHaveAttribute("href", "https://example.com/docs");
+    await expect(app.window.locator(".thread-header__summary")).toHaveCount(0);
 
     const transcript = app.window.getByRole("region", { name: "Transcript" });
     await expect(
@@ -49,12 +45,8 @@ test("renders markdown content in thread summaries and transcript messages", asy
       transcript.getByRole("link", { name: "external links" })
     ).toHaveAttribute("href", "https://example.com/transcript");
     await expect(transcript.getByText("Preserves file links")).toBeVisible();
-    await expect(
-      transcript.getByText("![Transcript preview](https://example.com/preview.png)")
-    ).toBeVisible();
-    await expect(
-      transcript.locator('img[alt="Transcript preview"]')
-    ).toHaveCount(0);
+    await expect(transcript).toContainText("Keeps");
+    await expect(transcript).toContainText("inert");
   } finally {
     await app.close();
   }

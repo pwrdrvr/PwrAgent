@@ -50,6 +50,39 @@ Typical workflow:
 4. Run the desktop Electron regressions:
    `pnpm test:desktop-e2e`
 
+## Heap Diagnostics
+
+Desktop heap diagnostics are opt-in and write artifacts under repo-local `.local/`.
+
+Enable a capture run with:
+
+- `PWRAGNT_HEAP_DIAGNOSTICS=1 pnpm dev`
+
+Optional tuning:
+
+- `PWRAGNT_HEAP_DIAGNOSTICS_ROOT` - override the repo root used for `.local/`
+- `PWRAGNT_HEAP_DIAGNOSTICS_SETTLE_MS` - delay before the baseline sample (`0` captures immediately after `did-finish-load`)
+- `PWRAGNT_HEAP_DIAGNOSTICS_INTERVAL_MS` - recurring sample interval
+- `PWRAGNT_HEAP_DIAGNOSTICS_DELTA_BYTES` - adjacent-sample growth threshold for snapshots
+- `PWRAGNT_HEAP_DIAGNOSTICS_COOLDOWN_MS` - minimum time between snapshots
+- `PWRAGNT_HEAP_DIAGNOSTICS_MAX_SNAPSHOTS` - per-session snapshot cap
+
+Each enabled run creates one directory shaped like:
+
+- `.local/heap-YYYY-MM-DD-HHmm-abc123/`
+
+Expected artifacts:
+
+- `session.json`
+- `samples.ndjson`
+- `events.ndjson`
+- `heap-0001.heapsnapshot`, `heap-0002.heapsnapshot`, ...
+- `main-heap-0001.heapsnapshot`, `main-heap-0002.heapsnapshot`, ...
+
+Each sample and event record is tagged with `source: "renderer"` or `source: "main"`.
+
+During a repro run the desktop main process logs the session directory path. Share that path for later diagnosis.
+
 `packages/agent-core` now includes the Grok-backed Codex app-server contract,
 consumer-sequence compatibility tests, and provider coverage for the OpenClaw-used
 subset.
