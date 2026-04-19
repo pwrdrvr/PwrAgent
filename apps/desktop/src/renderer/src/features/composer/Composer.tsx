@@ -448,6 +448,10 @@ export function Composer(props: ComposerProps) {
           }}
           onKeyDown={(event) => {
             if (!hasAutocomplete) {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void submitTurn();
+              }
               return;
             }
 
