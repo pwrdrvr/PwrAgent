@@ -1,3 +1,5 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ThreadExecutionMode } from "@pwragnt/shared";
@@ -26,6 +28,7 @@ type LaunchResult = {
 export async function launchElectronApp(params: {
   fixturePath: string;
 }): Promise<LaunchResult> {
+  const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-desktop-e2e-"));
   const electronApp = await electron.launch({
     args: [path.resolve(fixtureDir, "../../out/main/index.js")],
     cwd: path.resolve(fixtureDir, "../.."),
@@ -33,6 +36,7 @@ export async function launchElectronApp(params: {
       ...process.env,
       NODE_ENV: "production",
       PWRAGNT_REPLAY_FIXTURE_PATH: params.fixturePath,
+      PWRAGNT_STATE_ROOT: stateRoot,
     },
   });
   const window = await electronApp.firstWindow();
@@ -66,6 +70,7 @@ export async function launchElectronApp(params: {
     },
     close: async () => {
       await electronApp.close();
+      await rm(stateRoot, { recursive: true, force: true });
     },
   };
 }

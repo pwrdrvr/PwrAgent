@@ -1,14 +1,11 @@
-import { app } from "electron";
-import path from "node:path";
 import { OverlayStore } from "@pwragnt/agent-core";
+import { resolveDesktopOverlayStorePath } from "./desktop-state-root";
 
 let overlayStore: OverlayStore | null = null;
 
 export function getDesktopOverlayStore(): OverlayStore {
   if (!overlayStore) {
-    overlayStore = new OverlayStore(
-      path.join(app.getPath("userData"), "overlay-state.json"),
-    );
+    overlayStore = new OverlayStore(resolveDesktopOverlayStorePath());
   }
 
   return overlayStore;
