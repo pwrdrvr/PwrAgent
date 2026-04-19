@@ -628,9 +628,11 @@ describe("App", () => {
       await screen.findByRole("heading", { level: 2, name: "Investigate Grok thread" })
     ).toBeInTheDocument();
     expect(screen.getAllByText("Grok").length).toBeGreaterThan(0);
-    expect(
-      await screen.findByText("The Grok thread is live and selected.")
-    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: "Transcript" })).toHaveTextContent(
+        "The Grok thread is live and selected."
+      );
+    });
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: {
@@ -649,6 +651,7 @@ describe("App", () => {
   it("keeps assistant response text out of the thread header", async () => {
     const response =
       'I don\'t have a built-in "X Search" tool or direct real-time access to the X/Twitter API with the available workspace tools.';
+    const summary = "Grok thread summary";
 
     Object.defineProperty(window, "pwragnt", {
       configurable: true,
@@ -701,7 +704,7 @@ describe("App", () => {
               id: "thread-1",
               title: "Use X Search to find stats on huntharo's latest tweets for me",
               titleSource: "explicit",
-              summary: response,
+              summary,
               source: "grok",
               executionMode: "default",
               linkedDirectories: [],
@@ -779,9 +782,12 @@ describe("App", () => {
     ).toBeInTheDocument();
 
     const transcript = screen.getByRole("region", { name: "Transcript" });
+    const header = document.querySelector(".thread-header");
 
     expect(await within(transcript).findByText(response)).toBeInTheDocument();
-    expect(screen.getAllByText(response)).toHaveLength(1);
+    expect(header).not.toBeNull();
+    expect(within(header as HTMLElement).queryByText(response)).not.toBeInTheDocument();
+    expect(within(header as HTMLElement).getByText(summary)).toBeInTheDocument();
   });
 
   it("keeps a newly created Codex thread selected when thread/list lags behind creation", async () => {

@@ -901,6 +901,22 @@ textarea {
   line-height: 1.55;
 }
 
+.thread-markdown > * {
+  margin: 0;
+}
+
+.thread-markdown > * + * {
+  margin-top: 10px;
+}
+
+.thread-header__summary > * + * {
+  margin-top: 8px;
+}
+
+.thread-markdown__image-literal {
+  word-break: break-word;
+}
+
 .transcript-message__text > * {
   margin: 0;
 }
@@ -923,14 +939,15 @@ textarea {
   white-space: normal;
 }
 
-.transcript-message__text-part {
-  white-space: pre-wrap;
-}
-
 .transcript-message__heading {
   font-size: 15px;
   font-weight: 700;
   line-height: 1.4;
+}
+
+.thread-header__summary .transcript-message__heading {
+  font-size: 14px;
+  line-height: 1.45;
 }
 
 .transcript-message__list {
@@ -1011,6 +1028,12 @@ textarea {
   width: 100%;
   aspect-ratio: 4 / 3;
   object-fit: cover;
+}
+
+.thread-header__summary .transcript-message__paragraph,
+.thread-header__summary .transcript-message__list,
+.thread-header__summary .transcript-message__blockquote {
+  color: inherit;
 }
 
 .transcript-activity {
