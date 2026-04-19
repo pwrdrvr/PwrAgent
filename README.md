@@ -83,6 +83,39 @@ Each sample and event record is tagged with `source: "renderer"` or `source: "ma
 
 During a repro run the desktop main process logs the session directory path. Share that path for later diagnosis.
 
+## Startup CPU Profiling
+
+Desktop startup CPU profiling is opt-in and writes artifacts under repo-local `.local/`.
+
+Enable one startup capture run with:
+
+- `PWRAGNT_STARTUP_CPU_PROFILING=1 pnpm dev`
+
+Optional tuning:
+
+- `PWRAGNT_STARTUP_CPU_PROFILE_ROOT` - override the repo root used for `.local/`
+- `PWRAGNT_STARTUP_CPU_PROFILE_POST_LOAD_MS` - extra renderer capture time after `did-finish-load`
+- `PWRAGNT_STARTUP_CPU_PROFILE_HARD_TIMEOUT_MS` - hard stop for the entire startup capture window
+
+Each enabled run creates one directory shaped like:
+
+- `.local/startup-cpu-YYYY-MM-DD-HHmm-abc123/`
+
+Expected artifacts:
+
+- `session.json`
+- `events.ndjson`
+- `main.cpuprofile`
+- `renderer.cpuprofile`
+- `analysis.json`
+- `summary.md`
+
+The desktop main process logs the created session directory path during startup. Re-run the analyzer for an existing session with:
+
+- `pnpm --filter @pwragnt/desktop analyze:startup-cpu-profile -- --session-dir .local/startup-cpu-2026-04-19-0930-abc123`
+
+`summary.md` gives the quick ranked view of the hottest startup functions and source buckets. Open the raw `.cpuprofile` files in DevTools when the generated summary shows Electron or Chromium-heavy frames that need deeper inspection.
+
 `packages/agent-core` now includes the Grok-backed Codex app-server contract,
 consumer-sequence compatibility tests, and provider coverage for the OpenClaw-used
 subset.

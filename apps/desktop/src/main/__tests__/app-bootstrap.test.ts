@@ -206,6 +206,24 @@ describe("createMainWindow", () => {
     );
   });
 
+  it("attaches startup CPU profiling before the first renderer navigation", async () => {
+    process.env.ELECTRON_RENDERER_URL = "http://127.0.0.1:5173";
+    const startupCpuProfiler = {
+      attachWindow: vi.fn(() => {
+        expect(browserWindowState.loadURL).not.toHaveBeenCalled();
+        expect(browserWindowState.loadFile).not.toHaveBeenCalled();
+      }),
+    };
+
+    const { createMainWindow } = await import("../window");
+    createMainWindow({
+      startupCpuProfiler,
+    });
+
+    expect(startupCpuProfiler.attachWindow).toHaveBeenCalledTimes(1);
+    expect(browserWindowState.loadURL).toHaveBeenCalledWith("http://127.0.0.1:5173");
+  });
+
   it("starts and stops heap diagnostics when enabled", async () => {
     resolveHeapMonitorConfigMock.mockReturnValue({
       enabled: true,
