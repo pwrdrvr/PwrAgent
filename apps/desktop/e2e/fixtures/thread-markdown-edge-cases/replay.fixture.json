@@ -1,0 +1,115 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "thread-markdown-edge-cases",
+    "threadId": "thread-markdown-edge-cases"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": ["thread/list", "thread/read", "skills/list"]
+      }
+    },
+    {
+      "id": "initialize-2",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": ["thread/list", "thread/read", "skills/list"]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-markdown-edge-cases",
+          "title": "Markdown edge cases",
+          "titleSource": "explicit",
+          "summary": "Summary stays *calm* while ~~legacy~~ becomes **current** 😎",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000001000
+        }
+      ]
+    },
+    {
+      "id": "thread-list-2",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-markdown-edge-cases",
+          "title": "Markdown edge cases",
+          "titleSource": "explicit",
+          "summary": "Summary stays *calm* while ~~legacy~~ becomes **current** 😎",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000001000
+        }
+      ]
+    },
+    {
+      "id": "skills-list-1",
+      "kind": "response",
+      "method": "skills/list",
+      "result": [
+        {
+          "name": "frontend-design",
+          "description": "Design and verify renderer UI work.",
+          "path": "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Emoji check 😎\nSingle newline survives.\n\n*Italic text* and ~~struck text~~ with `inline code`.\n\n````md\n```ts\nconst marker = \"**not bold**\";\n```\n[$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)\n![Preview](https://example.com/inside-code.png)\n````\n\nBack outside the block."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "assistant",
+            "text": "Emoji check 😎\nSingle newline survives.\n\n*Italic text* and ~~struck text~~ with `inline code`.\n\n````md\n```ts\nconst marker = \"**not bold**\";\n```\n[$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)\n![Preview](https://example.com/inside-code.png)\n````\n\nBack outside the block."
+          }
+        ],
+        "lastAssistantMessage": "Emoji check 😎",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

@@ -37,6 +37,21 @@ describe("ThreadMarkdown", () => {
     expect(screen.queryByRole("link", { name: "$frontend-design" })).not.toBeInTheDocument();
   });
 
+  it("renders emoji, italic, strikethrough, and inline code", () => {
+    render(
+      <ThreadMarkdown
+        text={"Calmer 😎 with *italic*, ~~struck~~, and `inline code`."}
+      />
+    );
+
+    expect(screen.getByText("😎", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("italic", { selector: "em" })).toBeInTheDocument();
+    expect(screen.getByText("struck", { selector: "del" })).toBeInTheDocument();
+    expect(
+      screen.getByText("inline code", { selector: "code.transcript-message__code" })
+    ).toBeInTheDocument();
+  });
+
   it("preserves single newlines as visible line breaks", () => {
     const { container } = render(
       <ThreadMarkdown
@@ -60,6 +75,33 @@ describe("ThreadMarkdown", () => {
     expect(container.querySelector("table")).toBeNull();
     expect(container.textContent).toContain("<em>safe</em>");
     expect(container.textContent).toContain("<table><tr><td>x</td></tr></table>");
+  });
+
+  it("keeps markdown-looking syntax literal inside fenced code blocks", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        skills={[
+          {
+            name: "frontend-design",
+            description: "Design and verify renderer UI work.",
+            path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+            enabled: true,
+          },
+        ]}
+        text={
+          "````md\n```ts\nconst marker = \"**not bold**\";\n```\n[$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)\n![Preview](https://example.com/inside-code.png)\n````"
+        }
+      />
+    );
+
+    const codeBlock = container.querySelector("pre code");
+    expect(codeBlock).not.toBeNull();
+    expect(codeBlock?.textContent).toContain("**not bold**");
+    expect(codeBlock?.textContent).toContain("[$frontend-design]");
+    expect(codeBlock?.textContent).toContain("![Preview](https://example.com/inside-code.png)");
+    expect(container.querySelector("pre strong")).toBeNull();
+    expect(container.querySelector("pre .skill-chip")).toBeNull();
+    expect(container.querySelector("pre img")).toBeNull();
   });
 
   it("renders markdown image syntax as literal text instead of an image", () => {
