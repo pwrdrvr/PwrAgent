@@ -28,11 +28,10 @@ test("expanded edited changes stay in transcript order", async () => {
 
     const activityToggle = app.window.getByRole("button", { name: /Edited 1 file/i });
     await activityToggle.click();
-    await expect(app.window.getByText("2 unmodified lines skipped")).toBeVisible();
-    await expect(app.window.getByText("const b = 2;")).toHaveCount(0);
-
-    await app.window.getByRole("button", { name: "Zoom in" }).click();
     await expect(app.window.getByText("const b = 2;")).toBeVisible();
+    await expect(app.window.getByText("const c = 3;")).toBeVisible();
+    await expect(app.window.getByText("2 unmodified lines skipped")).toHaveCount(0);
+    await expect(app.window.getByRole("button", { name: "Zoom in" })).toHaveCount(0);
 
     const transcriptText = await app.window
       .getByRole("region", { name: "Transcript" })

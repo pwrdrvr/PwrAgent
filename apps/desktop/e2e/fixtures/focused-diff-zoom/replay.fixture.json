@@ -1,0 +1,148 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "focused-diff-zoom",
+    "sourceCaptureId": "synthetic-focused-diff-zoom",
+    "threadId": "thread-focused-diff-zoom"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "initialize-2",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-focused-diff-zoom",
+          "title": "Focused diff zoom",
+          "titleSource": "explicit",
+          "summary": "Verify focused transcript diffs can condense and hide hunks",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000000001
+        }
+      ]
+    },
+    {
+      "id": "thread-list-2",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-focused-diff-zoom",
+          "title": "Focused diff zoom",
+          "titleSource": "explicit",
+          "summary": "Verify focused transcript diffs can condense and hide hunks",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000000001
+        }
+      ]
+    },
+    {
+      "id": "skills-list-1",
+      "kind": "response",
+      "method": "skills/list",
+      "result": []
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Please collapse the low-signal changes."
+          },
+          {
+            "type": "activity",
+            "id": "activity-1",
+            "summary": "Edited 1 file",
+            "details": [
+              {
+                "id": "detail-1",
+                "kind": "write",
+                "label": "Update example.ts",
+                "path": "/repo/src/example.ts",
+                "fileDiff": {
+                  "kind": "update",
+                  "additions": 4,
+                  "removals": 4,
+                  "diff": "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1,7 +1,7 @@\n import { alpha } from './alpha';\n-import { beta } from './beta';\n+import { beta } from './beta/index';\n const keep = 1;\n const keep2 = 2;\n const keep3 = 3;\n const keep4 = 4;\n@@ -18,7 +18,7 @@\n function one() {\n   return keep;\n-  // old comment\n+  // refreshed comment\n }\n \n export function two() {\n@@ -34,7 +34,7 @@\n export function three() {\n   return 'three';\n-  const label = 'before';\n+  const label = 'after';\n   return label;\n }\n \n export function four() {\n@@ -50,7 +50,7 @@\n export function five() {\n   return 'five';\n-  // lint\n+  // linted\n }\n \n export const six = 6;\n"
+                }
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "Done reviewing the collapsed diff."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Please collapse the low-signal changes."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "Done reviewing the collapsed diff."
+          }
+        ],
+        "lastUserMessage": "Please collapse the low-signal changes.",
+        "lastAssistantMessage": "Done reviewing the collapsed diff.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

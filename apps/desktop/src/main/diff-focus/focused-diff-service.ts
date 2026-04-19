@@ -22,6 +22,7 @@ const FOCUSED_DIFF_PROMPT_VERSION = "focused-diff-v1";
 const FOCUSED_DIFF_MODEL = "grok-4.20-fast";
 const FOCUSED_DIFF_TIMEOUT_MS = 5_000;
 const MIN_HIDE_CONFIDENCE = 0.8;
+const FOCUSED_DIFF_TEST_RESPONSE_ENV = "PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE";
 
 const FOCUSED_DIFF_REASON_CODES = [
   "comment_only",
@@ -136,6 +137,12 @@ export class FocusedDiffService {
         ...cached,
         source: "cache"
       };
+    }
+
+    const testOverride = readFocusedDiffTestOverride(parsed.hunks.length);
+    if (testOverride) {
+      this.cache.set(cacheKey, testOverride);
+      return testOverride;
     }
 
     const client = this.getClient();
@@ -350,6 +357,68 @@ function createDefaultDecisions(hunkCount: number): FocusedDiffHunkDecision[] {
     reason: "Keep visible",
     confidence: 1
   }));
+}
+
+function readFocusedDiffTestOverride(
+  hunkCount: number
+): FocusedDiffAnalysisResponse | null {
+  const rawValue = process.env[FOCUSED_DIFF_TEST_RESPONSE_ENV]?.trim();
+  if (!rawValue) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawValue);
+  } catch (error) {
+    throw new Error(
+      `${FOCUSED_DIFF_TEST_RESPONSE_ENV} must be valid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${FOCUSED_DIFF_TEST_RESPONSE_ENV} must decode to an object`);
+  }
+
+  const record = parsed as {
+    hiddenHunkIndices?: unknown;
+    reason?: unknown;
+  };
+  const hiddenHunkIndices = Array.isArray(record.hiddenHunkIndices)
+    ? record.hiddenHunkIndices.filter(
+        (value): value is number =>
+          typeof value === "number" &&
+          Number.isInteger(value) &&
+          value >= 0 &&
+          value < hunkCount
+      )
+    : [];
+  const hiddenHunkIndexSet = new Set(hiddenHunkIndices);
+  const decisions: FocusedDiffHunkDecision[] = createDefaultDecisions(hunkCount).map(
+    (decision): FocusedDiffHunkDecision =>
+      hiddenHunkIndexSet.has(decision.index)
+        ? {
+            ...decision,
+            disposition: "hide",
+            reasonCode: "comment_only",
+            reason: "Hidden by focused diff test override",
+            confidence: 1
+          }
+        : decision
+  );
+
+  return {
+    mode: hiddenHunkIndices.length > 0 ? "focused" : "fallback",
+    source: "heuristic",
+    hiddenHunkIndices,
+    hiddenHunkCount: hiddenHunkIndices.length,
+    decisions,
+    ...(typeof record.reason === "string" && record.reason.trim()
+      ? { reason: record.reason.trim() }
+      : {})
+  };
 }
 
 function buildFocusedDiffCacheKey(

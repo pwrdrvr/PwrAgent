@@ -51,6 +51,38 @@ function makeRequest(diff = ELIGIBLE_DIFF) {
 }
 
 describe("FocusedDiffService", () => {
+  it("uses a test override response when configured", async () => {
+    const originalOverride = process.env.PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE;
+    process.env.PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE = JSON.stringify({
+      hiddenHunkIndices: [1],
+      reason: "test override"
+    });
+
+    try {
+      const client = {
+        createResponse: vi.fn(async () => makeXaiResponse())
+      };
+      const service = new FocusedDiffService({ client });
+
+      const response = await service.analyze(makeRequest());
+
+      expect(response).toMatchObject({
+        mode: "focused",
+        source: "heuristic",
+        hiddenHunkIndices: [1],
+        hiddenHunkCount: 1,
+        reason: "test override"
+      });
+      expect(client.createResponse).not.toHaveBeenCalled();
+    } finally {
+      if (originalOverride === undefined) {
+        delete process.env.PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE;
+      } else {
+        process.env.PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE = originalOverride;
+      }
+    }
+  });
+
   it("returns focused hide decisions for eligible diffs", async () => {
     const client = {
       createResponse: vi.fn(async () => ({
