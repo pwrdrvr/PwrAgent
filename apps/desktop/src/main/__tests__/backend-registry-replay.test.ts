@@ -52,6 +52,18 @@ describe("DesktopBackendRegistry replay integration", () => {
       },
       steps: [
         {
+          id: "initialize-1",
+          kind: "response",
+          method: "initialize",
+          result: {
+            serverInfo: {
+              name: "Replay Codex",
+              version: "1.0.0"
+            },
+            methods: ["thread/read"]
+          }
+        },
+        {
           id: "read-1",
           kind: "response",
           method: "thread/read",

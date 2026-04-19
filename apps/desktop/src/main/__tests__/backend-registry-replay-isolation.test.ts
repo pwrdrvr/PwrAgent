@@ -166,6 +166,18 @@ describe("DesktopBackendRegistry replay isolation", () => {
       },
       steps: [
         {
+          id: "initialize-1",
+          kind: "response",
+          method: "initialize",
+          result: {
+            serverInfo: {
+              name: "Replay Codex",
+              version: "1.0.0"
+            },
+            methods: ["thread/list"]
+          }
+        },
+        {
           id: "list-1",
           kind: "response",
           method: "thread/list",
@@ -192,6 +204,18 @@ describe("DesktopBackendRegistry replay isolation", () => {
         scenario: "registry-replay-grok"
       },
       steps: [
+        {
+          id: "initialize-1",
+          kind: "response",
+          method: "initialize",
+          result: {
+            serverInfo: {
+              name: "Replay Grok",
+              version: "1.0.0"
+            },
+            methods: ["thread/list"]
+          }
+        },
         {
           id: "list-1",
           kind: "response",
