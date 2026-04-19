@@ -1,0 +1,331 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "thread-scroll-restore",
+    "threadId": "thread-scroll-a"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": ["thread/list", "thread/read", "skills/list"]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-scroll-a",
+          "title": "First scroll replay thread",
+          "titleSource": "explicit",
+          "summary": "Preserve the saved transcript viewport.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000002000
+        },
+        {
+          "id": "thread-scroll-b",
+          "title": "Second scroll replay thread",
+          "titleSource": "explicit",
+          "summary": "Switch away and confirm cached state survives.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1760000001000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-1",
+            "role": "user",
+            "text": "First thread message 1: inspect the saved viewport before switching threads. This line is intentionally verbose so the transcript grows tall enough to scroll in the replay window."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-2",
+            "role": "assistant",
+            "text": "First thread message 2: the desktop client should reopen this thread without replaying a smooth descent from the top. Keep the transcript height large and stable."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-3",
+            "role": "user",
+            "text": "First thread message 3: every message in this fixture is long on purpose. That keeps the scroll container comfortably larger than the viewport in Electron."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-4",
+            "role": "assistant",
+            "text": "First thread message 4: when the renderer keeps thread state in memory, switching back should restore the exact viewport instead of treating the transcript like a cold load."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-5",
+            "role": "user",
+            "text": "First thread message 5: we also want this fixture to explode if the app issues a third thread/read, because the replay controller would hand back the wrong transcript."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-6",
+            "role": "assistant",
+            "text": "First thread message 6: cached transcript reuse matters here just as much as viewport restore. The thread heading can stay the same while the body becomes wrong if we reread."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-7",
+            "role": "user",
+            "text": "First thread message 7: another long message keeps the transcript flowing and gives the test plenty of room to set a nonzero scrollTop before switching away."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-8",
+            "role": "assistant",
+            "text": "First thread message 8: the saved viewport should be neither the top nor the bottom after restoration. It should be the same middle position the user left behind."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-9",
+            "role": "user",
+            "text": "First thread message 9: this transcript intentionally reads like test evidence. The exact content is less important than its height and stable identity."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-10",
+            "role": "assistant",
+            "text": "First thread message 10: if loading flips back to true during a cached refresh, the renderer must not rearm auto-scroll and yank the viewport to the bottom again."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-11",
+            "role": "user",
+            "text": "First thread message 11: we keep stacking messages so the replay remains scrollable even if typography or transcript spacing shifts a little over time."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-12",
+            "role": "assistant",
+            "text": "First thread message 12: the user should be able to inspect older context, click another thread, and come back without the app pretending it forgot everything."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-13",
+            "role": "user",
+            "text": "First thread message 13: the scroll container state is part of the thread session state. Treating it as disposable creates the repeated glide shown in the bug report."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-14",
+            "role": "assistant",
+            "text": "First thread message 14: once the saved viewport is captured, switching away should not overwrite it with a synthetic bottom-aligned state during a background refresh."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-15",
+            "role": "user",
+            "text": "First thread message 15: this line keeps the replay deterministic while still being tall enough for the renderer to compute a meaningful distance from bottom."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-16",
+            "role": "assistant",
+            "text": "First thread message 16: restore the viewport, preserve the cached transcript, and do not show a second thread body under the first thread title."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-17",
+            "role": "user",
+            "text": "First thread message 17: the long fixture text also makes this scenario resilient to small changes in renderer chrome or window size across CI environments."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-18",
+            "role": "assistant",
+            "text": "First thread message 18: nothing about reselecting a recently viewed thread should feel like a reload. It should feel immediate because the data is already local."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-19",
+            "role": "user",
+            "text": "First thread message 19: after the user scrolls up, that position becomes the expected reopen target until the user scrolls somewhere else."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-a-message-20",
+            "role": "assistant",
+            "text": "First thread message 20: cached transcript remains stable."
+          }
+        ],
+        "messages": [
+          {
+            "id": "thread-scroll-a-message-1",
+            "role": "user",
+            "text": "First thread message 1: inspect the saved viewport before switching threads. This line is intentionally verbose so the transcript grows tall enough to scroll in the replay window."
+          },
+          {
+            "id": "thread-scroll-a-message-2",
+            "role": "assistant",
+            "text": "First thread message 2: the desktop client should reopen this thread without replaying a smooth descent from the top. Keep the transcript height large and stable."
+          },
+          {
+            "id": "thread-scroll-a-message-3",
+            "role": "user",
+            "text": "First thread message 3: every message in this fixture is long on purpose. That keeps the scroll container comfortably larger than the viewport in Electron."
+          },
+          {
+            "id": "thread-scroll-a-message-4",
+            "role": "assistant",
+            "text": "First thread message 4: when the renderer keeps thread state in memory, switching back should restore the exact viewport instead of treating the transcript like a cold load."
+          },
+          {
+            "id": "thread-scroll-a-message-5",
+            "role": "user",
+            "text": "First thread message 5: we also want this fixture to explode if the app issues a third thread/read, because the replay controller would hand back the wrong transcript."
+          },
+          {
+            "id": "thread-scroll-a-message-6",
+            "role": "assistant",
+            "text": "First thread message 6: cached transcript reuse matters here just as much as viewport restore. The thread heading can stay the same while the body becomes wrong if we reread."
+          },
+          {
+            "id": "thread-scroll-a-message-7",
+            "role": "user",
+            "text": "First thread message 7: another long message keeps the transcript flowing and gives the test plenty of room to set a nonzero scrollTop before switching away."
+          },
+          {
+            "id": "thread-scroll-a-message-8",
+            "role": "assistant",
+            "text": "First thread message 8: the saved viewport should be neither the top nor the bottom after restoration. It should be the same middle position the user left behind."
+          },
+          {
+            "id": "thread-scroll-a-message-9",
+            "role": "user",
+            "text": "First thread message 9: this transcript intentionally reads like test evidence. The exact content is less important than its height and stable identity."
+          },
+          {
+            "id": "thread-scroll-a-message-10",
+            "role": "assistant",
+            "text": "First thread message 10: if loading flips back to true during a cached refresh, the renderer must not rearm auto-scroll and yank the viewport to the bottom again."
+          },
+          {
+            "id": "thread-scroll-a-message-11",
+            "role": "user",
+            "text": "First thread message 11: we keep stacking messages so the replay remains scrollable even if typography or transcript spacing shifts a little over time."
+          },
+          {
+            "id": "thread-scroll-a-message-12",
+            "role": "assistant",
+            "text": "First thread message 12: the user should be able to inspect older context, click another thread, and come back without the app pretending it forgot everything."
+          },
+          {
+            "id": "thread-scroll-a-message-13",
+            "role": "user",
+            "text": "First thread message 13: the scroll container state is part of the thread session state. Treating it as disposable creates the repeated glide shown in the bug report."
+          },
+          {
+            "id": "thread-scroll-a-message-14",
+            "role": "assistant",
+            "text": "First thread message 14: once the saved viewport is captured, switching away should not overwrite it with a synthetic bottom-aligned state during a background refresh."
+          },
+          {
+            "id": "thread-scroll-a-message-15",
+            "role": "user",
+            "text": "First thread message 15: this line keeps the replay deterministic while still being tall enough for the renderer to compute a meaningful distance from bottom."
+          },
+          {
+            "id": "thread-scroll-a-message-16",
+            "role": "assistant",
+            "text": "First thread message 16: restore the viewport, preserve the cached transcript, and do not show a second thread body under the first thread title."
+          },
+          {
+            "id": "thread-scroll-a-message-17",
+            "role": "user",
+            "text": "First thread message 17: the long fixture text also makes this scenario resilient to small changes in renderer chrome or window size across CI environments."
+          },
+          {
+            "id": "thread-scroll-a-message-18",
+            "role": "assistant",
+            "text": "First thread message 18: nothing about reselecting a recently viewed thread should feel like a reload. It should feel immediate because the data is already local."
+          },
+          {
+            "id": "thread-scroll-a-message-19",
+            "role": "user",
+            "text": "First thread message 19: after the user scrolls up, that position becomes the expected reopen target until the user scrolls somewhere else."
+          },
+          {
+            "id": "thread-scroll-a-message-20",
+            "role": "assistant",
+            "text": "First thread message 20: cached transcript remains stable."
+          }
+        ],
+        "lastUserMessage": "First thread message 19: after the user scrolls up, that position becomes the expected reopen target until the user scrolls somewhere else.",
+        "lastAssistantMessage": "First thread message 20: cached transcript remains stable.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "thread-read-2",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "thread-scroll-b-message-1",
+            "role": "user",
+            "text": "Second thread message 1: this alternate transcript exists so the replay can expose an accidental reread when we switch back to the first thread."
+          },
+          {
+            "type": "message",
+            "id": "thread-scroll-b-message-2",
+            "role": "assistant",
+            "text": "Second thread message 2: switching away should not wipe cache."
+          }
+        ],
+        "messages": [
+          {
+            "id": "thread-scroll-b-message-1",
+            "role": "user",
+            "text": "Second thread message 1: this alternate transcript exists so the replay can expose an accidental reread when we switch back to the first thread."
+          },
+          {
+            "id": "thread-scroll-b-message-2",
+            "role": "assistant",
+            "text": "Second thread message 2: switching away should not wipe cache."
+          }
+        ],
+        "lastUserMessage": "Second thread message 1: this alternate transcript exists so the replay can expose an accidental reread when we switch back to the first thread.",
+        "lastAssistantMessage": "Second thread message 2: switching away should not wipe cache.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

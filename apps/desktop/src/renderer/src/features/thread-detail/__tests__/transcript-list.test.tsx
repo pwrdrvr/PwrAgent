@@ -708,4 +708,109 @@ describe("TranscriptList", () => {
 
     expect(list.scrollTop).toBe(72);
   });
+
+  it("does not re-arm auto-scroll while a cached transcript is refreshing", () => {
+    const { rerender } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-1-message-1",
+            role: "user",
+            text: "Thread one first message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-2",
+            role: "assistant",
+            text: "Thread one second message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-3",
+            role: "assistant",
+            text: "Thread one third message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 72;
+    fireEvent.scroll(list);
+    scrollToMock.mockClear();
+
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-1-message-1",
+            role: "user",
+            text: "Thread one first message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-2",
+            role: "assistant",
+            text: "Thread one second message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-3",
+            role: "assistant",
+            text: "Thread one third message"
+          }
+        ]}
+        loading={true}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    scrollHeight = 640;
+
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-1-message-1",
+            role: "user",
+            text: "Thread one first message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-2",
+            role: "assistant",
+            text: "Thread one second message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-3",
+            role: "assistant",
+            text: "Thread one third message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-4",
+            role: "assistant",
+            text: "Thread one fourth message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(72);
+    expect(scrollToMock).not.toHaveBeenCalled();
+  });
 });

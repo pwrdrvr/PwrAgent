@@ -136,10 +136,10 @@ export function TranscriptList(props: TranscriptListProps) {
   }, [syncScrollState]);
 
   useEffect(() => {
-    if (props.loading) {
+    if (props.loading && props.entries.length === 0) {
       shouldScrollToBottomRef.current = true;
     }
-  }, [props.loading]);
+  }, [props.entries.length, props.loading]);
 
   useEffect(() => {
     return () => {
