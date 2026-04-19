@@ -167,6 +167,8 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
+    const thread = props.thread;
+
     return props.desktopApi.onAgentEvent((event) => {
       const notificationThreadId =
         "threadId" in event.notification.params &&
@@ -186,7 +188,7 @@ export function Composer(props: ComposerProps) {
           ? (event.notification.params.turn as { id?: unknown })
           : undefined;
 
-      if (event.backend !== props.thread.source || notificationThreadId !== props.thread.id) {
+      if (event.backend !== thread.source || notificationThreadId !== thread.id) {
         return;
       }
 

@@ -186,7 +186,7 @@ export function useThreadSessionState(params: {
   const threadKey = thread
     ? buildThreadIdentityKey(thread.source, thread.id)
     : undefined;
-  const selectedThreadKeyRef = useRef<string>();
+  const selectedThreadKeyRef = useRef<string | undefined>(undefined);
   const requestVersionsRef = useRef<Record<string, number>>({});
   const [sessions, setSessions] = useState<ThreadSessionState>({});
 
@@ -383,9 +383,14 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "turn/started") {
+          const startedTurnRecord =
+            typeof event.notification.params.turn === "object" &&
+            event.notification.params.turn !== null
+              ? (event.notification.params.turn as { id?: unknown })
+              : undefined;
           const runId =
-            typeof event.notification.params.turn?.id === "string"
-              ? event.notification.params.turn.id
+            typeof startedTurnRecord?.id === "string"
+              ? startedTurnRecord.id
               : event.notification.params.runId;
 
           return {

@@ -157,9 +157,9 @@ describe("ThreadView", () => {
             text: "The desktop client now reads the full transcript."
           }
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={async () => undefined}
         skillLoading={false}
       />
     );
@@ -265,9 +265,9 @@ describe("ThreadView", () => {
             text: "The thread still loads."
           }
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={vi.fn(async () => undefined)}
       />
     );
 
@@ -354,9 +354,9 @@ describe("ThreadView", () => {
             ]
           }
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={async () => undefined}
       />
     );
 
@@ -435,9 +435,9 @@ describe("ThreadView", () => {
           ]
         }
       ],
+      clearPendingRequest: () => undefined,
       onLoadOlder: async () => undefined,
       removeOptimisticMessage: (_id: string) => undefined,
-      onRefresh: async () => undefined,
     };
 
     const { rerender } = render(
@@ -580,9 +580,9 @@ describe("ThreadView", () => {
             text: "Run npm view dive"
           }
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={vi.fn(async () => undefined)}
       />
     );
 
@@ -729,9 +729,9 @@ describe("ThreadView", () => {
             text: "Render the task list."
           }
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={vi.fn(async () => undefined)}
       />
     );
 
@@ -830,9 +830,9 @@ describe("ThreadView", () => {
           },
           livePlan
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={vi.fn(async () => undefined)}
       />
     );
 
@@ -923,9 +923,9 @@ describe("ThreadView", () => {
             text: "Run npm view dive"
           }
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={vi.fn(async () => undefined)}
       />
     );
 
@@ -1043,9 +1043,9 @@ describe("ThreadView", () => {
             text: "Run npm view dive"
           }
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={vi.fn(async () => undefined)}
       />
     );
 

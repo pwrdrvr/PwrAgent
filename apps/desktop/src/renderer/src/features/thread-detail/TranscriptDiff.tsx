@@ -7,7 +7,7 @@ import {
   summarizeHunksForFocus,
   type DiffView
 } from "../../../../shared/diff-focus";
-import { getDesktopApi } from "../../lib/desktop-api";
+import { useDesktopApi } from "../../lib/desktop-api";
 
 type TranscriptDiffProps = {
   detail: AppServerThreadActivityDetail;
@@ -17,7 +17,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
   const [isZoomedIn, setIsZoomedIn] = useState(false);
   const [focusedView, setFocusedView] = useState<DiffView | null>(null);
   const diff = props.detail.fileDiff;
-  const desktopApi = getDesktopApi();
+  const desktopApi = useDesktopApi();
   const parsed = useMemo(() => parseUnifiedDiff(diff?.diff ?? ""), [diff?.diff]);
   const eligibility = useMemo(() => getFocusedDiffEligibility(parsed), [parsed]);
   const hunkSummaries = useMemo(() => summarizeHunksForFocus(parsed), [parsed]);

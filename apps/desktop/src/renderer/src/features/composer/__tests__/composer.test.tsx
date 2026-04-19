@@ -56,7 +56,6 @@ describe("Composer", () => {
           }),
         }}
         disabled={false}
-        onRefresh={async () => undefined}
         onSetExecutionMode={onSetExecutionMode}
         skills={[]}
         thread={{
@@ -98,8 +97,6 @@ describe("Composer", () => {
       threadId: "thread-1",
       runId: "turn-1",
     }));
-    const refresh = vi.fn(async () => undefined);
-
     render(
       <Composer
         desktopApi={{
@@ -107,7 +104,6 @@ describe("Composer", () => {
           startTurn,
         }}
         disabled={false}
-        onRefresh={refresh}
         skills={[
           {
             name: "frontend-design",
@@ -150,7 +146,6 @@ describe("Composer", () => {
         ],
       });
     });
-    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   it("applies the focused skill option when activated from the keyboard", async () => {
@@ -165,7 +160,6 @@ describe("Composer", () => {
           }),
         }}
         disabled={false}
-        onRefresh={async () => undefined}
         skills={[
           {
             name: "ce:plan",
@@ -233,7 +227,6 @@ describe("Composer", () => {
           }),
         }}
         disabled={false}
-        onRefresh={async () => undefined}
         skills={[]}
         thread={{
           id: "thread-1",
@@ -316,8 +309,6 @@ describe("Composer", () => {
       threadId: "thread-1",
       runId: "turn-99",
     }));
-    const refresh = vi.fn(async () => undefined);
-
     render(
       <Composer
         desktopApi={{
@@ -333,7 +324,6 @@ describe("Composer", () => {
           }),
         }}
         disabled={false}
-        onRefresh={refresh}
         skills={[]}
         thread={{
           id: "thread-1",
@@ -397,6 +387,5 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
     });
-    expect(refresh).toHaveBeenCalledTimes(2);
   });
 });

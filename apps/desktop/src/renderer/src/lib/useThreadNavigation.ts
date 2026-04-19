@@ -402,7 +402,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     refreshing: false,
   });
 
-  const optimisticThreadRef = useRef<NavigationThreadSummary>();
+  const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
 
   optimisticThreadRef.current = optimisticThread;
 
@@ -575,7 +575,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     return undefined;
   }, [selectedItemKey]);
 
-  const selectedThread = useMemo(
+  const selectedThread = useMemo<NavigationThreadSummary | undefined>(
     () =>
       selectedThreadKey
         ? threads.find(
@@ -610,12 +610,13 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       return;
     }
 
+    const markThreadSeenRequest = submitMarkThreadSeen;
     const threadToMarkSeen = selectedThread;
     let cancelled = false;
 
     async function markSeen(): Promise<void> {
       try {
-        await submitMarkThreadSeen({
+        await markThreadSeenRequest({
           backend: threadToMarkSeen.source,
           threadId: threadToMarkSeen.id,
           seenUpdatedAt: threadToMarkSeen.updatedAt,
