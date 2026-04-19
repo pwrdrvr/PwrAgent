@@ -37,23 +37,28 @@ describe("ThreadMarkdown", () => {
     expect(screen.queryByRole("link", { name: "$frontend-design" })).not.toBeInTheDocument();
   });
 
-  it("sanitizes unsafe raw html while keeping safe inline markup", () => {
+  it("preserves single newlines as visible line breaks", () => {
     const { container } = render(
       <ThreadMarkdown
-        text={'Trusted? <em>safe</em> <img src="x" onerror="alert(1)" /><script>alert("x")</script>'}
+        text={"Still Grok 4.\nWon't change no matter how many times you test."}
       />
     );
 
-    expect(screen.getByText("safe", { selector: "em" })).toBeInTheDocument();
-    expect(container.querySelector("script")).toBeNull();
-    expect(container.querySelector("img")).not.toHaveAttribute("onerror");
+    expect(container.querySelector("br")).not.toBeNull();
+    expect(container).toHaveTextContent("Still Grok 4.");
+    expect(container).toHaveTextContent("Won't change no matter how many times you test.");
   });
 
-  it("skips raw html parsing for oversized html-like messages", () => {
-    const oversizedHtml = "<em>safe</em>".repeat(2_000);
-    const { container } = render(<ThreadMarkdown text={oversizedHtml} />);
+  it("renders html-looking transcript text literally", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={"Use <em>safe</em> markup and <table><tr><td>x</td></tr></table> literally."}
+      />
+    );
 
     expect(container.querySelector("em")).toBeNull();
+    expect(container.querySelector("table")).toBeNull();
     expect(container.textContent).toContain("<em>safe</em>");
+    expect(container.textContent).toContain("<table><tr><td>x</td></tr></table>");
   });
 });

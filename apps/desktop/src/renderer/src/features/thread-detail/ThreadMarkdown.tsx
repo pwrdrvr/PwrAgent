@@ -1,9 +1,8 @@
 import type { AppServerSkillSummary } from "@pwragnt/shared";
-import { memo, useMemo, type ComponentProps, type ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import ReactMarkdown, { type Components, type UrlTransform } from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { SkillChip } from "../composer/SkillChip";
 
 type ThreadMarkdownProps = {
@@ -12,16 +11,6 @@ type ThreadMarkdownProps = {
   text: string;
   variant?: "message" | "summary";
 };
-
-const SANITIZE_SCHEMA = {
-  ...defaultSchema,
-  protocols: {
-    ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href ?? []), "file"],
-  },
-};
-
-const MAX_RAW_HTML_LENGTH = 12_000;
 
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
   const skillsByPath = useMemo(
@@ -35,11 +24,6 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       ),
     [props.skills]
   );
-  const allowRawHtml =
-    props.text.length <= MAX_RAW_HTML_LENGTH && containsPotentialRawHtml(props.text);
-  const rehypePlugins: ComponentProps<typeof ReactMarkdown>["rehypePlugins"] = allowRawHtml
-    ? [rehypeRaw, [rehypeSanitize, SANITIZE_SCHEMA] as [typeof rehypeSanitize, typeof SANITIZE_SCHEMA]]
-    : undefined;
   const components = useMemo<Components>(
     () => ({
       a(anchorProps) {
@@ -140,8 +124,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     >
       <ReactMarkdown
         components={components}
-        rehypePlugins={rehypePlugins}
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkBreaks]}
         urlTransform={normalizeMarkdownUrl}
       >
         {props.text}
@@ -180,10 +163,6 @@ function normalizeSkillPath(href: string): string | undefined {
   }
 
   return undefined;
-}
-
-function containsPotentialRawHtml(text: string): boolean {
-  return /<\/?[a-z][^>\n]*>/i.test(text);
 }
 
 function extractTextContent(node: ReactNode): string {
