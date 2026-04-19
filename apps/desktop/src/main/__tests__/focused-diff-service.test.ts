@@ -1,7 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createTemporaryTestDirectory } from "@pwragnt/agent-core";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { parseUnifiedDiff, summarizeHunksForFocus } from "../../shared/diff-focus";
 import { makeXaiResponse } from "../../../../../packages/agent-core/src/testing/xai-fixtures.js";
+import { defaultGrokAppServerConfigPath } from "../../../../../packages/agent-core/src/config/grok-app-server-config.js";
+import { stringifyFlatToml } from "../../../../../packages/agent-core/src/config/simple-toml.js";
 
 const ELIGIBLE_DIFF = [
   "--- a/src/example.ts",
@@ -176,6 +181,45 @@ describe("FocusedDiffService", () => {
     expect(response.reason).toContain("invalid structured diff response");
   });
 
+  it("does not cache fallback responses from transient failures", async () => {
+    const client = {
+      createResponse: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("timeout"))
+        .mockResolvedValueOnce(
+          makeXaiResponse({
+            text: JSON.stringify({
+              decisions: [
+                {
+                  index: 1,
+                  disposition: "hide",
+                  reasonCode: "comment_only",
+                  reason: "Comment-only hunk.",
+                  confidence: 0.96
+                }
+              ]
+            })
+          })
+        )
+    };
+    const service = new FocusedDiffService({ client });
+
+    const first = await service.analyze(makeRequest());
+    const second = await service.analyze(makeRequest());
+
+    expect(first).toMatchObject({
+      mode: "fallback",
+      source: "heuristic",
+      hiddenHunkIndices: []
+    });
+    expect(second).toMatchObject({
+      mode: "focused",
+      source: "grok",
+      hiddenHunkIndices: [1]
+    });
+    expect(client.createResponse).toHaveBeenCalledTimes(2);
+  });
+
   it("returns a full ineligible response for small diffs", async () => {
     const client = {
       createResponse: vi.fn(async () => makeXaiResponse())
@@ -203,5 +247,99 @@ describe("FocusedDiffService", () => {
       reason: "too_few_hunks"
     });
     expect(client.createResponse).not.toHaveBeenCalled();
+  });
+
+  it("reads xAI credentials and model from runtime config.toml", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const originalHome = process.env.HOME;
+    const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+    const originalXaiApiKey = process.env.XAI_API_KEY;
+    const originalXaiBaseUrl = process.env.XAI_BASE_URL;
+    const originalGrokModel = process.env.GROK_MODEL;
+    const fetchSpy = vi.fn(async (_input, init) => ({
+      ok: true,
+      json: async () =>
+        makeXaiResponse({
+          text: JSON.stringify({
+            decisions: [
+              {
+                index: 1,
+                disposition: "hide",
+                reasonCode: "comment_only",
+                reason: "Comment-only hunk.",
+                confidence: 0.96
+              }
+            ]
+          })
+        })
+    }));
+    const originalFetch = globalThis.fetch;
+
+    try {
+      process.env.HOME = temp.path;
+      delete process.env.XDG_CONFIG_HOME;
+      delete process.env.XAI_API_KEY;
+      delete process.env.XAI_BASE_URL;
+      delete process.env.GROK_MODEL;
+
+      const configPath = defaultGrokAppServerConfigPath({ homeDir: temp.path });
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        stringifyFlatToml({
+          xai_api_key: "config-key",
+          xai_base_url: "https://api.example.test/v1",
+          grok_model: "grok-4.20-fast"
+        })
+      );
+
+      globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+      const service = new FocusedDiffService();
+      const response = await service.analyze(makeRequest());
+
+      expect(response).toMatchObject({
+        mode: "focused",
+        source: "grok",
+        hiddenHunkIndices: [1]
+      });
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://api.example.test/v1/responses",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer config-key"
+          }),
+          body: expect.stringContaining('"model":"grok-4.20-fast"')
+        })
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalXdgConfigHome === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+      }
+      if (originalXaiApiKey === undefined) {
+        delete process.env.XAI_API_KEY;
+      } else {
+        process.env.XAI_API_KEY = originalXaiApiKey;
+      }
+      if (originalXaiBaseUrl === undefined) {
+        delete process.env.XAI_BASE_URL;
+      } else {
+        process.env.XAI_BASE_URL = originalXaiBaseUrl;
+      }
+      if (originalGrokModel === undefined) {
+        delete process.env.GROK_MODEL;
+      } else {
+        process.env.GROK_MODEL = originalGrokModel;
+      }
+      await temp.cleanup();
+    }
   });
 });

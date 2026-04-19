@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import {
-  loadGrokAppServerConfig,
-  loadLocalEnv,
   normalizeXaiResponse,
+  resolveGrokAppServerRuntimeConfig,
   XaiResponsesClient
 } from "@pwragnt/agent-core";
 import type {
@@ -88,17 +87,19 @@ export class FocusedDiffService {
   private readonly configuredClient?: XaiClientLike;
   private readonly configuredApiKey?: string;
   private readonly configuredBaseUrl?: string;
-  private readonly model: string;
+  private readonly configuredModel?: string;
   private readonly promptVersion: string;
   private readonly timeoutMs: number;
-  private loadedEnv = false;
+  private runtimeConfig:
+    | ReturnType<typeof resolveGrokAppServerRuntimeConfig>
+    | undefined;
   private envClient: XaiClientLike | null | undefined;
 
   constructor(options: FocusedDiffServiceOptions = {}) {
     this.configuredClient = options.client;
     this.configuredApiKey = options.apiKey?.trim() || undefined;
     this.configuredBaseUrl = options.baseUrl?.trim() || undefined;
-    this.model = options.model?.trim() || process.env.GROK_MODEL?.trim() || FOCUSED_DIFF_MODEL;
+    this.configuredModel = options.model?.trim() || undefined;
     this.promptVersion = options.promptVersion?.trim() || FOCUSED_DIFF_PROMPT_VERSION;
     this.timeoutMs = options.timeoutMs ?? FOCUSED_DIFF_TIMEOUT_MS;
   }
@@ -147,9 +148,7 @@ export class FocusedDiffService {
 
     const client = this.getClient();
     if (!client) {
-      const fallback = this.buildFallbackResponse(decisions, "grok_unavailable");
-      this.cache.set(cacheKey, fallback);
-      return fallback;
+      return this.buildFallbackResponse(decisions, "grok_unavailable");
     }
 
     try {
@@ -167,12 +166,10 @@ export class FocusedDiffService {
       this.cache.set(cacheKey, analysis);
       return analysis;
     } catch (error) {
-      const fallback = this.buildFallbackResponse(
+      return this.buildFallbackResponse(
         decisions,
         error instanceof Error ? error.message : "grok_request_failed"
       );
-      this.cache.set(cacheKey, fallback);
-      return fallback;
     }
   }
 
@@ -199,13 +196,8 @@ export class FocusedDiffService {
       return this.envClient;
     }
 
-    if (!this.loadedEnv) {
-      loadLocalEnv({ override: false });
-      loadGrokAppServerConfig({ override: false });
-      this.loadedEnv = true;
-    }
-
-    const apiKey = this.configuredApiKey ?? process.env.XAI_API_KEY?.trim();
+    const runtimeConfig = this.getRuntimeConfig();
+    const apiKey = this.configuredApiKey ?? runtimeConfig.apiKey;
     if (!apiKey) {
       this.envClient = null;
       return this.envClient;
@@ -213,11 +205,24 @@ export class FocusedDiffService {
 
     this.envClient = new XaiResponsesClient({
       apiKey,
-      baseUrl: this.configuredBaseUrl ?? (process.env.XAI_BASE_URL?.trim() || undefined),
-      model: this.model
+      baseUrl: this.configuredBaseUrl ?? runtimeConfig.baseUrl,
+      model: this.getModel()
     });
 
     return this.envClient;
+  }
+
+  private getRuntimeConfig(): ReturnType<typeof resolveGrokAppServerRuntimeConfig> {
+    if (this.runtimeConfig) {
+      return this.runtimeConfig;
+    }
+
+    this.runtimeConfig = resolveGrokAppServerRuntimeConfig();
+    return this.runtimeConfig;
+  }
+
+  private getModel(): string {
+    return this.configuredModel ?? this.getRuntimeConfig().model ?? FOCUSED_DIFF_MODEL;
   }
 
   private async requestFocusedDiffDecision(
@@ -232,7 +237,7 @@ export class FocusedDiffService {
 
     try {
       return await client.createResponse({
-        model: this.model,
+        model: this.getModel(),
         promptCacheKey: this.promptVersion,
         headers: {
           "x-grok-conv-id": this.promptVersion
