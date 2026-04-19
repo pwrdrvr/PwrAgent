@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   AppServerBackendKind,
+  AppServerTurnInputItem,
+  NavigationDirectorySummary,
+  NavigationLaunchpadDraft,
   NavigationSnapshot,
   NavigationThreadSummary,
   ThreadExecutionMode,
@@ -16,6 +19,18 @@ type NavigationState = {
   error?: string;
   response?: NavigationSnapshot;
 };
+
+function buildLaunchpadSelectionKey(directoryKey: string): string {
+  return `launchpad:${directoryKey}`;
+}
+
+function getDirectoryKeyFromLaunchpadSelection(selectionKey?: string): string | undefined {
+  if (!selectionKey?.startsWith("launchpad:")) {
+    return undefined;
+  }
+
+  return selectionKey.slice("launchpad:".length);
+}
 
 function applyThreadNameUpdate(
   snapshot: NavigationSnapshot | undefined,
@@ -52,6 +67,145 @@ function applyThreadNameUpdate(
     : snapshot;
 }
 
+function applyLaunchpadUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  launchpad: NavigationLaunchpadDraft,
+  defaults: NavigationSnapshot["launchpadDefaults"]
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let foundDirectory = false;
+  const directories = snapshot.directories.map((directory) => {
+    if (directory.key !== launchpad.directoryKey) {
+      return directory;
+    }
+
+    foundDirectory = true;
+    return {
+      ...directory,
+      kind: launchpad.directoryKind,
+      label: launchpad.directoryLabel,
+      path: launchpad.directoryPath ?? directory.path,
+      launchpad,
+    };
+  });
+
+  return {
+    ...snapshot,
+    directories: foundDirectory
+      ? directories
+      : [
+          {
+            key: launchpad.directoryKey,
+            kind: launchpad.directoryKind,
+            label: launchpad.directoryLabel,
+            path: launchpad.directoryPath,
+            threadKeys: [],
+            needsAttentionCount: 0,
+            launchpad,
+          },
+          ...directories,
+        ],
+    launchpadDefaults: defaults,
+  };
+}
+
+function applyLaunchpadReset(
+  snapshot: NavigationSnapshot | undefined,
+  directoryKey: string,
+  defaults: NavigationSnapshot["launchpadDefaults"]
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    directories: snapshot.directories.map((directory) =>
+      directory.key === directoryKey ? { ...directory, launchpad: undefined } : directory
+    ),
+    launchpadDefaults: defaults,
+  };
+}
+
+function hasSelectionKey(
+  response: NavigationSnapshot,
+  selectionKey: string,
+  optimisticThreadKey?: string
+): boolean {
+  const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectionKey);
+  if (launchpadDirectoryKey) {
+    return response.directories.some(
+      (directory) =>
+        directory.key === launchpadDirectoryKey && Boolean(directory.launchpad),
+    );
+  }
+
+  return (
+    response.threads.some(
+      (thread) => buildThreadIdentityKey(thread.source, thread.id) === selectionKey,
+    ) || selectionKey === optimisticThreadKey
+  );
+}
+
+function getFallbackSelectionKey(
+  response: NavigationSnapshot,
+  optimisticThreadKey?: string
+): string | undefined {
+  if (optimisticThreadKey) {
+    return optimisticThreadKey;
+  }
+
+  if (response.threads[0]) {
+    return buildThreadIdentityKey(response.threads[0].source, response.threads[0].id);
+  }
+
+  const firstLaunchpadDirectory = response.directories.find((directory) => directory.launchpad);
+  return firstLaunchpadDirectory
+    ? buildLaunchpadSelectionKey(firstLaunchpadDirectory.key)
+    : undefined;
+}
+
+function buildOptimisticThreadFromLaunchpad(params: {
+  directory?: NavigationDirectorySummary;
+  launchpad: NavigationLaunchpadDraft;
+  backend: AppServerBackendKind;
+  threadId: string;
+  executionMode: ThreadExecutionMode;
+  workMode: NavigationLaunchpadDraft["workMode"];
+}): NavigationThreadSummary {
+  return {
+    id: params.threadId,
+    title: "Untitled thread",
+    titleSource: "fallback",
+    summary: params.launchpad.prompt.trim() || undefined,
+    projectKey: params.launchpad.directoryPath,
+    source: params.backend,
+    executionMode: params.executionMode,
+    linkedDirectories: params.launchpad.directoryPath
+      ? [
+          {
+            id: `launchpad:${params.launchpad.directoryKey}`,
+            label: params.launchpad.directoryLabel,
+            path: params.launchpad.directoryPath,
+            kind: params.workMode === "worktree" ? "worktree" : "local",
+          },
+        ]
+      : [],
+    gitBranch:
+      params.workMode === "worktree"
+        ? params.launchpad.branchName
+        : params.directory?.gitStatus?.currentBranch ?? params.launchpad.branchName,
+    updatedAt: Date.now(),
+    inbox: {
+      inInbox: true,
+      reason: "new-thread",
+    },
+  };
+}
+
 export function useThreadNavigation(desktopApi?: DesktopApi): {
   browseMode: BrowseMode;
   createThread: (
@@ -63,11 +217,25 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     backend: AppServerBackendKind;
     executionMode: ThreadExecutionMode;
   };
+  directories: NavigationDirectorySummary[];
   error?: string;
   inboxThreads: NavigationThreadSummary[];
+  launchpadError?: string;
   loading: boolean;
   refreshing: boolean;
   refresh: () => Promise<void>;
+  materializeDirectoryLaunchpad: (
+    directoryKey: string,
+    input?: AppServerTurnInputItem[]
+  ) => Promise<void>;
+  openDirectoryLaunchpad: (
+    directory: NavigationDirectorySummary,
+    preferredBackend?: AppServerBackendKind
+  ) => Promise<void>;
+  resetDirectoryLaunchpad: (directoryKey: string) => Promise<void>;
+  selectedDirectory?: NavigationDirectorySummary;
+  selectedItemKey?: string;
+  selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
   selectedThreadKey?: string;
   setThreadExecutionMode: (
@@ -76,6 +244,10 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   ) => Promise<void>;
   setThreadExecutionModeError?: string;
   updatingThreadExecutionMode?: ThreadExecutionMode;
+  updateDirectoryLaunchpad: (
+    directoryKey: string,
+    patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"]
+  ) => Promise<void>;
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
   snapshot?: NavigationSnapshot;
@@ -85,7 +257,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const startThread = desktopApi?.startThread;
   const setThreadExecutionMode = desktopApi?.setThreadExecutionMode;
   const [browseMode, setBrowseMode] = useState<BrowseMode>("recents");
-  const [selectedThreadKey, setSelectedThreadKey] = useState<string>();
+  const [selectedItemKey, setSelectedItemKey] = useState<string>();
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
   const [optimisticThread, setOptimisticThread] = useState<NavigationThreadSummary>();
   const [creatingThread, setCreatingThread] = useState<{
@@ -93,6 +265,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     executionMode: ThreadExecutionMode;
   }>();
   const [createThreadError, setCreateThreadError] = useState<string>();
+  const [launchpadError, setLaunchpadError] = useState<string>();
   const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
     useState<ThreadExecutionMode>();
   const [setThreadExecutionModeError, setSetThreadExecutionModeError] =
@@ -103,7 +276,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   });
 
   const refresh = useCallback(async (
-    preferredThreadKey?: string,
+    preferredSelectionKey?: string,
     preferredOptimisticThread?: NavigationThreadSummary
   ): Promise<void> => {
     if (!desktopApi?.getNavigationSnapshot) {
@@ -129,23 +302,10 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       const optimisticThreadKey = optimisticSelection
         ? buildThreadIdentityKey(optimisticSelection.source, optimisticSelection.id)
         : undefined;
-      const hasPreferredThread = Boolean(
-        preferredThreadKey &&
-          response.threads.some(
-            (thread) =>
-              buildThreadIdentityKey(thread.source, thread.id) === preferredThreadKey,
-          )
-      );
-      const hasOptimisticThread = Boolean(
-        optimisticThreadKey &&
-          response.threads.some(
-            (thread) =>
-              buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey,
-          )
-      );
+      const effectivePreferredSelectionKey = preferredSelectionKey ?? selectedItemKey;
 
       setState((current) => {
-        if (current.response && response.unchanged) {
+        if (current.response && response.unchanged && !preferredSelectionKey) {
           return {
             ...current,
             loading: false,
@@ -162,40 +322,23 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         };
       });
 
-      if (hasOptimisticThread) {
+      if (
+        optimisticThreadKey &&
+        response.threads.some(
+          (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey,
+        )
+      ) {
         setOptimisticThread(undefined);
       }
 
-      if (!response.unchanged || preferredThreadKey) {
-        setSelectedThreadKey((current) => {
-          if (
-            preferredThreadKey &&
-            (hasPreferredThread || preferredThreadKey === optimisticThreadKey)
-          ) {
-            return preferredThreadKey;
-          }
+      setSelectedItemKey((current) => {
+        const candidate = preferredSelectionKey ?? current ?? effectivePreferredSelectionKey;
+        if (candidate && hasSelectionKey(response, candidate, optimisticThreadKey)) {
+          return candidate;
+        }
 
-          if (
-            current &&
-            (
-              response.threads.some(
-                (thread) => buildThreadIdentityKey(thread.source, thread.id) === current,
-              ) ||
-              current === optimisticThreadKey
-            )
-          ) {
-            return current;
-          }
-
-          if (optimisticThreadKey) {
-            return optimisticThreadKey;
-          }
-
-          return response.threads[0]
-            ? buildThreadIdentityKey(response.threads[0].source, response.threads[0].id)
-            : undefined;
-        });
-      }
+        return getFallbackSelectionKey(response, optimisticThreadKey);
+      });
     } catch (error) {
       setState((current) => ({
         loading: false,
@@ -204,7 +347,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         error: error instanceof Error ? error.message : String(error)
       }));
     }
-  }, [desktopApi, optimisticThread]);
+  }, [desktopApi, optimisticThread, selectedItemKey]);
 
   useEffect(() => {
     void refresh();
@@ -291,6 +434,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     return [optimisticThread, ...currentThreads];
   }, [optimisticThread, state.response?.threads]);
 
+  const directories = state.response?.directories ?? [];
+
   const inboxThreads = useMemo(() => {
     const inboxThreadKeys = new Set(state.response?.inboxThreadKeys ?? []);
     return threads.filter((thread) =>
@@ -299,14 +444,35 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     );
   }, [state.response?.inboxThreadKeys, threads]);
 
+  const selectedThreadKey = useMemo(() => {
+    if (selectedItemKey && !getDirectoryKeyFromLaunchpadSelection(selectedItemKey)) {
+      return selectedItemKey;
+    }
+
+    return undefined;
+  }, [selectedItemKey]);
+
   const selectedThread = useMemo(
     () =>
-      threads.find(
-        (thread) =>
-          buildThreadIdentityKey(thread.source, thread.id) === selectedThreadKey,
-      ) ?? threads[0],
+      selectedThreadKey
+        ? threads.find(
+            (thread) =>
+              buildThreadIdentityKey(thread.source, thread.id) === selectedThreadKey,
+          )
+        : undefined,
     [selectedThreadKey, threads]
   );
+
+  const selectedDirectory = useMemo(() => {
+    const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
+    if (!launchpadDirectoryKey) {
+      return undefined;
+    }
+
+    return directories.find((directory) => directory.key === launchpadDirectoryKey);
+  }, [directories, selectedItemKey]);
+
+  const selectedLaunchpad = selectedDirectory?.launchpad;
 
   useEffect(() => {
     const submitMarkThreadSeen = markThreadSeen;
@@ -321,14 +487,16 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       return;
     }
 
+    const markThreadSeenRequest = submitMarkThreadSeen;
+    const threadToMarkSeen = selectedThread;
     let cancelled = false;
 
     async function markSeen(): Promise<void> {
       try {
-        await submitMarkThreadSeen!({
-          backend: selectedThread.source,
-          threadId: selectedThread.id,
-          seenUpdatedAt: selectedThread.updatedAt
+        await markThreadSeenRequest({
+          backend: threadToMarkSeen.source,
+          threadId: threadToMarkSeen.id,
+          seenUpdatedAt: threadToMarkSeen.updatedAt
         });
         if (!cancelled) {
           await refresh();
@@ -350,8 +518,9 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const selectThread = useCallback((thread: NavigationThreadSummary): void => {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
     setCreateThreadError(undefined);
+    setLaunchpadError(undefined);
     setSetThreadExecutionModeError(undefined);
-    setSelectedThreadKey(threadKey);
+    setSelectedItemKey(threadKey);
     setPendingSeenThreadKey(threadKey);
   }, []);
 
@@ -367,6 +536,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
 
       setCreatingThread({ backend, executionMode });
       setCreateThreadError(undefined);
+      setLaunchpadError(undefined);
 
       try {
         const response = await startThread({ backend, executionMode });
@@ -387,7 +557,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           }
         };
         setOptimisticThread(nextOptimisticThread);
-        setSelectedThreadKey(nextThreadKey);
+        setSelectedItemKey(nextThreadKey);
         setPendingSeenThreadKey(nextThreadKey);
         await refresh(nextThreadKey, nextOptimisticThread);
       } catch (error) {
@@ -397,6 +567,177 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       }
     },
     [refresh, startThread],
+  );
+
+  const openDirectoryLaunchpad = useCallback(
+    async (
+      directory: NavigationDirectorySummary,
+      preferredBackend?: AppServerBackendKind
+    ): Promise<void> => {
+      if (!desktopApi?.ensureDirectoryLaunchpad) {
+        setLaunchpadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
+        return;
+      }
+
+      setLaunchpadError(undefined);
+      setCreateThreadError(undefined);
+      setSetThreadExecutionModeError(undefined);
+
+      try {
+        const response = await desktopApi.ensureDirectoryLaunchpad({
+          directoryKey: directory.key,
+          directoryKind: directory.kind,
+          directoryLabel: directory.label,
+          directoryPath: directory.path,
+          currentBranch: directory.gitStatus?.currentBranch,
+          preferredBackend,
+        });
+        setState((current) => ({
+          ...current,
+          response: applyLaunchpadUpdate(
+            current.response,
+            response.launchpad,
+            response.defaults,
+          ),
+        }));
+        setSelectedItemKey(buildLaunchpadSelectionKey(directory.key));
+      } catch (error) {
+        setLaunchpadError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [desktopApi],
+  );
+
+  const updateDirectoryLaunchpad = useCallback(
+    async (
+      directoryKey: string,
+      patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"]
+    ): Promise<void> => {
+      if (!desktopApi?.updateDirectoryLaunchpad) {
+        setLaunchpadError("Desktop bridge is missing updateDirectoryLaunchpad().");
+        return;
+      }
+
+      setLaunchpadError(undefined);
+
+      try {
+        const response = await desktopApi.updateDirectoryLaunchpad({
+          directoryKey,
+          patch,
+        });
+        setState((current) => ({
+          ...current,
+          response: applyLaunchpadUpdate(
+            current.response,
+            response.launchpad,
+            response.defaults,
+          ),
+        }));
+      } catch (error) {
+        setLaunchpadError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [desktopApi],
+  );
+
+  const resetDirectoryLaunchpad = useCallback(
+    async (directoryKey: string): Promise<void> => {
+      if (!desktopApi?.resetDirectoryLaunchpad) {
+        setLaunchpadError("Desktop bridge is missing resetDirectoryLaunchpad().");
+        return;
+      }
+
+      setLaunchpadError(undefined);
+
+      try {
+        const response = await desktopApi.resetDirectoryLaunchpad({ directoryKey });
+        setState((current) => ({
+          ...current,
+          response: applyLaunchpadReset(
+            current.response,
+            response.directoryKey,
+            response.defaults,
+          ),
+        }));
+        setSelectedItemKey((current) =>
+          current === buildLaunchpadSelectionKey(directoryKey)
+            ? getFallbackSelectionKey(
+                state.response
+                  ? applyLaunchpadReset(state.response, response.directoryKey, response.defaults)!
+                  : {
+                      backend: "all",
+                      fetchedAt: Date.now(),
+                      unchanged: false,
+                      threads,
+                      inboxThreadKeys: [],
+                      directories,
+                      launchpadDefaults: response.defaults,
+                    },
+                optimisticThread
+                  ? buildThreadIdentityKey(optimisticThread.source, optimisticThread.id)
+                  : undefined,
+              )
+            : current
+        );
+      } catch (error) {
+        setLaunchpadError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [desktopApi, directories, optimisticThread, state.response, threads],
+  );
+
+  const materializeDirectoryLaunchpad = useCallback(
+    async (
+      directoryKey: string,
+      input?: AppServerTurnInputItem[]
+    ): Promise<void> => {
+      if (!desktopApi?.materializeDirectoryLaunchpad) {
+        setLaunchpadError("Desktop bridge is missing materializeDirectoryLaunchpad().");
+        return;
+      }
+
+      const directory = directories.find((candidate) => candidate.key === directoryKey);
+      const launchpad = directory?.launchpad;
+      if (!launchpad) {
+        setLaunchpadError(`No launchpad found for ${directoryKey}.`);
+        return;
+      }
+
+      setLaunchpadError(undefined);
+
+      try {
+        const response = await desktopApi.materializeDirectoryLaunchpad({
+          directoryKey,
+          input,
+        });
+        const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
+          directory,
+          launchpad,
+          backend: response.backend,
+          threadId: response.threadId,
+          executionMode: response.executionMode,
+          workMode: response.workMode,
+        });
+        const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
+        setOptimisticThread(optimisticMaterializedThread);
+        setSelectedItemKey(nextThreadKey);
+        setPendingSeenThreadKey(nextThreadKey);
+        setState((current) => ({
+          ...current,
+          response: current.response
+            ? applyLaunchpadReset(
+                current.response,
+                directoryKey,
+                current.response.launchpadDefaults,
+              )
+            : current.response,
+        }));
+        await refresh(nextThreadKey, optimisticMaterializedThread);
+      } catch (error) {
+        setLaunchpadError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [desktopApi, directories, refresh],
   );
 
   const updateThreadExecutionMode = useCallback(
@@ -456,16 +797,25 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     createThread,
     createThreadError,
     creatingThread,
+    directories,
     error: state.error,
     inboxThreads,
+    launchpadError,
     loading: state.loading,
     refreshing: state.refreshing,
-    refresh,
+    refresh: async () => await refresh(),
+    materializeDirectoryLaunchpad,
+    openDirectoryLaunchpad,
+    resetDirectoryLaunchpad,
+    selectedDirectory,
+    selectedItemKey,
+    selectedLaunchpad,
     selectedThread,
     selectedThreadKey,
     setThreadExecutionMode: updateThreadExecutionMode,
     setThreadExecutionModeError,
     updatingThreadExecutionMode,
+    updateDirectoryLaunchpad,
     setBrowseMode,
     selectThread,
     snapshot: state.response,

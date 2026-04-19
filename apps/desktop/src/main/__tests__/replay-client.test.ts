@@ -119,6 +119,57 @@ function buildInterleavedFixture() {
   };
 }
 
+function buildConcurrentResponseFixture() {
+  return {
+    metadata: {
+      backend: "codex" as const,
+      scenario: "replay-client-concurrent-response-test"
+    },
+    steps: [
+      {
+        id: "initialize-1",
+        kind: "response" as const,
+        method: "initialize" as const,
+        result: {
+          serverInfo: {
+            name: "Replay Codex",
+            version: "1.0.0"
+          },
+          methods: ["thread/read", "skills/list", "turn/start"]
+        }
+      },
+      {
+        id: "skills-list-1",
+        kind: "response" as const,
+        method: "skills/list" as const,
+        result: []
+      },
+      {
+        id: "thread-read-1",
+        kind: "response" as const,
+        method: "thread/read" as const,
+        result: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false
+          }
+        }
+      },
+      {
+        id: "turn-start-1",
+        kind: "response" as const,
+        method: "turn/start" as const,
+        result: {
+          threadId: "thread-1",
+          runId: "turn-1"
+        }
+      }
+    ]
+  };
+}
+
 describe("ReplayClient", () => {
   it("consumes response steps and advances live replay deterministically", async () => {
     const client = ReplayClient.fromFixture(buildFixture());
@@ -194,5 +245,53 @@ describe("ReplayClient", () => {
         id: "thread-1"
       })
     ]);
+  });
+
+  it("allows concurrent response steps to resolve in either order before the next live step", async () => {
+    const client = ReplayClient.fromFixture(buildConcurrentResponseFixture());
+
+    await expect(client.getInitializeResult()).resolves.toMatchObject({
+      methods: ["thread/read", "skills/list", "turn/start"]
+    });
+
+    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+      entries: [],
+      messages: []
+    });
+
+    await expect(client.listSkills()).resolves.toEqual([]);
+
+    await expect(
+      client.startTurn({
+        threadId: "thread-1",
+        input: [{ type: "text", text: "Need approval coverage." }]
+      })
+    ).resolves.toEqual({
+      threadId: "thread-1",
+      runId: "turn-1"
+    });
+  });
+
+  it("reuses stable read responses when the desktop shell asks again", async () => {
+    const client = ReplayClient.fromFixture(buildConcurrentResponseFixture());
+
+    await expect(client.getInitializeResult()).resolves.toMatchObject({
+      methods: ["thread/read", "skills/list", "turn/start"]
+    });
+    await expect(client.getInitializeResult()).resolves.toMatchObject({
+      methods: ["thread/read", "skills/list", "turn/start"]
+    });
+
+    await expect(client.listSkills()).resolves.toEqual([]);
+    await expect(client.listSkills()).resolves.toEqual([]);
+
+    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+      entries: [],
+      messages: []
+    });
+    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+      entries: [],
+      messages: []
+    });
   });
 });

@@ -14,12 +14,24 @@ import type {
   BackendSummary,
   ListBackendsRequest,
   ListBackendsResponse,
+  MaterializeDirectoryLaunchpadRequest,
+  MaterializeDirectoryLaunchpadResponse,
+  NavigationDirectoryGitStatus,
+  NavigationDirectorySummary,
+  NavigationLaunchpadDraft,
+  NavigationLaunchpadDefaults,
+  ResetDirectoryLaunchpadRequest,
+  ResetDirectoryLaunchpadResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   StartThreadResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   ThreadExecutionMode,
+  UpdateDirectoryLaunchpadRequest,
+  UpdateDirectoryLaunchpadResponse,
+  EnsureDirectoryLaunchpadRequest,
+  EnsureDirectoryLaunchpadResponse,
 } from "@pwragnt/shared";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { GrokAppServerClient } from "../grok-app-server/client";
@@ -28,6 +40,7 @@ import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createReplayClientsFromEnv } from "../testing/replay-runtime";
+import { GitDirectoryService } from "./git-directory-service";
 
 type InitializeResult = {
   serverInfo?: {
@@ -171,6 +184,7 @@ export class DesktopBackendRegistry {
   private readonly codexFullAccessClient: BackendClient;
   private readonly grokClient: BackendClient;
   private readonly overlayStore: OverlayStore;
+  private readonly gitDirectoryService: GitDirectoryService;
   private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
@@ -184,6 +198,7 @@ export class DesktopBackendRegistry {
     codexFullAccessClient?: BackendClient;
     grokClient?: BackendClient;
     overlayStore?: OverlayStore;
+    gitDirectoryService?: GitDirectoryService;
     createScratchProjectDirectory?: () => Promise<string>;
   }) {
     const replayClients = createReplayClientsFromEnv();
@@ -228,6 +243,7 @@ export class DesktopBackendRegistry {
         connectionObserver: grokCapture?.observer,
       });
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
+    this.gitDirectoryService = options?.gitDirectoryService ?? new GitDirectoryService();
     this.createScratchProjectDirectory =
       options?.createScratchProjectDirectory ?? createScratchProjectDirectory;
 
@@ -293,6 +309,12 @@ export class DesktopBackendRegistry {
     });
 
     return { data };
+  }
+
+  async readDirectoryStatuses(directories: NavigationDirectorySummary[]): Promise<
+    Record<string, NavigationDirectoryGitStatus | undefined>
+  > {
+    return await this.gitDirectoryService.readDirectoryStatuses(directories);
   }
 
   async readThread(
@@ -408,26 +430,27 @@ export class DesktopBackendRegistry {
     }
 
     const modeSettings = EXECUTION_MODE_SUMMARIES[params.executionMode];
-    const client = this.getClient("codex", params.executionMode);
-    if (!client.setThreadPermissions) {
-      throw new Error("Selected backend does not support execution mode updates");
-    }
+    const result = await this.withCodexThreadClient(params.threadId, async (client) => {
+      if (!client.setThreadPermissions) {
+        throw new Error("Selected backend does not support execution mode updates");
+      }
 
-    await client.setThreadPermissions({
-      threadId: params.threadId,
-      approvalPolicy: modeSettings.approvalPolicy,
-      sandbox: modeSettings.sandbox,
+      return await client.setThreadPermissions({
+        threadId: params.threadId,
+        approvalPolicy: modeSettings.approvalPolicy,
+        sandbox: modeSettings.sandbox,
+      });
     });
 
     await this.overlayStore.setThreadExecutionMode({
       backend: "codex",
-      threadId: params.threadId,
+      threadId: result.threadId,
       executionMode: params.executionMode,
     });
 
     return {
       backend: params.backend,
-      threadId: params.threadId,
+      threadId: result.threadId,
       executionMode: params.executionMode,
     };
   }
@@ -449,6 +472,157 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       runId: params.runId,
       requestId: params.requestId,
+    };
+  }
+
+  async ensureDirectoryLaunchpad(
+    request: EnsureDirectoryLaunchpadRequest,
+  ): Promise<EnsureDirectoryLaunchpadResponse> {
+    const existing = await this.overlayStore.getDirectoryLaunchpad({
+      directoryKey: request.directoryKey,
+    });
+    const defaults = await this.overlayStore.getLaunchpadDefaults();
+    if (existing) {
+      return {
+        launchpad: existing,
+        defaults,
+      };
+    }
+
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: request.directoryKey,
+      directoryKind: request.directoryKind,
+      directoryLabel: request.directoryLabel,
+      directoryPath: request.directoryPath,
+      backend: request.preferredBackend ?? defaults.backend,
+      executionMode: defaults.executionMode,
+      model: defaults.model,
+      reasoningEffort: defaults.reasoningEffort,
+      serviceTier: defaults.serviceTier,
+      fastMode: defaults.fastMode,
+      prompt: "",
+      workMode: "local",
+      branchName: request.currentBranch,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const persisted = await this.overlayStore.upsertDirectoryLaunchpad(launchpad);
+    return {
+      launchpad: persisted,
+      defaults,
+    };
+  }
+
+  async updateDirectoryLaunchpad(
+    request: UpdateDirectoryLaunchpadRequest,
+  ): Promise<UpdateDirectoryLaunchpadResponse> {
+    const current =
+      (await this.overlayStore.getDirectoryLaunchpad({
+        directoryKey: request.directoryKey,
+      })) ??
+      (await this.ensureDirectoryLaunchpad({
+        directoryKey: request.directoryKey,
+        directoryKind: "directory",
+        directoryLabel: request.directoryKey,
+      })).launchpad;
+
+    const nextLaunchpad: NavigationLaunchpadDraft = {
+      ...current,
+      ...request.patch,
+      directoryKey: request.directoryKey,
+      updatedAt: Date.now(),
+    };
+    const persisted = await this.overlayStore.upsertDirectoryLaunchpad(nextLaunchpad);
+
+    const stickyPatch: Partial<NavigationLaunchpadDefaults> = {};
+    if (request.patch.backend) {
+      stickyPatch.backend = request.patch.backend;
+    }
+    if (request.patch.executionMode) {
+      stickyPatch.executionMode = request.patch.executionMode;
+    }
+    if (request.patch.model !== undefined) {
+      stickyPatch.model = request.patch.model;
+    }
+    if (request.patch.reasoningEffort !== undefined) {
+      stickyPatch.reasoningEffort = request.patch.reasoningEffort;
+    }
+    if (request.patch.serviceTier !== undefined) {
+      stickyPatch.serviceTier = request.patch.serviceTier;
+    }
+    if (request.patch.fastMode !== undefined) {
+      stickyPatch.fastMode = request.patch.fastMode;
+    }
+
+    const defaults =
+      Object.keys(stickyPatch).length > 0
+        ? await this.overlayStore.setLaunchpadDefaults(stickyPatch)
+        : await this.overlayStore.getLaunchpadDefaults();
+
+    return {
+      launchpad: persisted,
+      defaults,
+    };
+  }
+
+  async resetDirectoryLaunchpad(
+    request: ResetDirectoryLaunchpadRequest,
+  ): Promise<ResetDirectoryLaunchpadResponse> {
+    await this.overlayStore.resetDirectoryLaunchpad({
+      directoryKey: request.directoryKey,
+    });
+    return {
+      directoryKey: request.directoryKey,
+      defaults: await this.overlayStore.getLaunchpadDefaults(),
+    };
+  }
+
+  async materializeDirectoryLaunchpad(
+    request: MaterializeDirectoryLaunchpadRequest,
+  ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    const launchpad = await this.overlayStore.getDirectoryLaunchpad({
+      directoryKey: request.directoryKey,
+    });
+    if (!launchpad) {
+      throw new Error(`No launchpad found for ${request.directoryKey}`);
+    }
+
+    const workspace = await this.gitDirectoryService.prepareLaunchpadWorkspace(launchpad);
+    const startThreadResponse = await this.startThread({
+      backend: launchpad.backend,
+      executionMode: launchpad.executionMode,
+      cwd: workspace.cwd,
+      model: launchpad.model,
+      reasoningEffort: launchpad.reasoningEffort,
+      serviceTier: launchpad.serviceTier,
+    });
+
+    const input =
+      request.input ??
+      (launchpad.prompt.trim()
+        ? [{ type: "text", text: launchpad.prompt } as const]
+        : []);
+    let runId: string | undefined;
+    if (input.length > 0) {
+      const turnResponse = await this.startTurn({
+        backend: launchpad.backend,
+        threadId: startThreadResponse.threadId,
+        input,
+        model: launchpad.model,
+      });
+      runId = turnResponse.runId;
+    }
+
+    await this.overlayStore.resetDirectoryLaunchpad({
+      directoryKey: request.directoryKey,
+    });
+
+    return {
+      backend: startThreadResponse.backend,
+      threadId: startThreadResponse.threadId,
+      runId,
+      executionMode: startThreadResponse.executionMode,
+      workMode: workspace.workMode,
     };
   }
 

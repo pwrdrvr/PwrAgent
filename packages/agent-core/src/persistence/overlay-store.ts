@@ -3,8 +3,11 @@ import path from "node:path";
 import type {
   AppServerBackendScope,
   AppServerThreadSummary,
+  DirectoryLaunchpadOverlayState,
   LinkedDirectorySummary,
   MarkThreadSeenResponse,
+  NavigationDirectoryGitStatus,
+  NavigationLaunchpadDefaults,
   NavigationSnapshot,
   ThreadExecutionMode,
   ThreadOverlayState,
@@ -28,6 +31,7 @@ export class OverlayStore {
   async reconcileNavigationSnapshot(params: {
     backend: AppServerBackendScope;
     fetchedAt: number;
+    gitStatusByDirectoryKey?: Record<string, NavigationDirectoryGitStatus | undefined>;
     threads: AppServerThreadSummary[];
   }): Promise<NavigationSnapshot> {
     return await this.withData(async (data) => {
@@ -61,6 +65,9 @@ export class OverlayStore {
         backend: params.backend,
         fetchedAt: params.fetchedAt,
         firstSnapshot,
+        gitStatusByDirectoryKey: params.gitStatusByDirectoryKey,
+        launchpadDefaults: data.launchpadDefaults,
+        launchpadsByKey: data.directoryLaunchpads,
         overlayByThreadKey,
         previousKnownThreadKeys: backendState?.knownThreadKeys ?? [],
         threads: params.threads,
@@ -69,6 +76,8 @@ export class OverlayStore {
 
       const nextHash = buildNavigationSnapshotHash({
         backend: params.backend,
+        directories: snapshot.directories,
+        launchpadDefaults: snapshot.launchpadDefaults,
         threads: snapshot.threads,
       });
       const unchanged = backendState?.lastSnapshotHash === nextHash;
@@ -189,6 +198,55 @@ export class OverlayStore {
     });
   }
 
+  async getLaunchpadDefaults(): Promise<NavigationLaunchpadDefaults> {
+    return await this.withData(async (data) => data.launchpadDefaults);
+  }
+
+  async setLaunchpadDefaults(
+    patch: Partial<NavigationLaunchpadDefaults>,
+  ): Promise<NavigationLaunchpadDefaults> {
+    return await this.withData(async (data) => {
+      data.launchpadDefaults = {
+        ...data.launchpadDefaults,
+        ...patch,
+      };
+      return data.launchpadDefaults;
+    });
+  }
+
+  async getDirectoryLaunchpad(params: {
+    directoryKey: string;
+  }): Promise<DirectoryLaunchpadOverlayState | undefined> {
+    return await this.withData(async (data) => data.directoryLaunchpads[params.directoryKey]);
+  }
+
+  async listDirectoryLaunchpads(): Promise<DirectoryLaunchpadOverlayState[]> {
+    return await this.withData(async (data) => Object.values(data.directoryLaunchpads));
+  }
+
+  async upsertDirectoryLaunchpad(
+    launchpad: DirectoryLaunchpadOverlayState,
+  ): Promise<DirectoryLaunchpadOverlayState> {
+    return await this.withData(async (data) => {
+      const current = data.directoryLaunchpads[launchpad.directoryKey];
+      const nextLaunchpad: DirectoryLaunchpadOverlayState = {
+        ...current,
+        ...launchpad,
+        createdAt: current?.createdAt ?? launchpad.createdAt,
+      };
+      data.directoryLaunchpads[launchpad.directoryKey] = nextLaunchpad;
+      return nextLaunchpad;
+    });
+  }
+
+  async resetDirectoryLaunchpad(params: {
+    directoryKey: string;
+  }): Promise<void> {
+    await this.withData(async (data) => {
+      delete data.directoryLaunchpads[params.directoryKey];
+    });
+  }
+
   private async withData<T>(
     operation: (data: OverlayStoreData) => Promise<T> | T,
   ): Promise<T> {
@@ -216,6 +274,11 @@ export class OverlayStore {
         return migrateOverlayStoreData({
           version: CURRENT_OVERLAY_STORE_VERSION,
           backends: {},
+          launchpadDefaults: {
+            backend: "codex",
+            executionMode: "default",
+          },
+          directoryLaunchpads: {},
           threads: {},
         });
       }

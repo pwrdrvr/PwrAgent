@@ -26,7 +26,11 @@ import type {
   AppServerTurnInputItem,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
-import { JsonRpcConnection, type JsonRpcObserver } from "./json-rpc";
+import {
+  JsonRpcConnection,
+  type JsonRpcId,
+  type JsonRpcObserver,
+} from "./json-rpc";
 import { StdioJsonRpcTransport } from "./stdio-transport";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
@@ -174,6 +178,51 @@ function pickBoolean(
     }
   }
   return undefined;
+}
+
+function extractRequestMetadata(value: unknown): {
+  threadId?: string;
+  runId?: string;
+  requestId?: string;
+} {
+  const record = asRecord(value);
+  if (!record) {
+    return {};
+  }
+
+  const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
+  const turnRecord = asRecord(record.turn) ?? asRecord(record.run);
+
+  return {
+    threadId:
+      pickString(record, ["threadId", "thread_id", "conversationId", "conversation_id"]) ??
+      pickString(threadRecord ?? {}, ["id", "threadId", "thread_id", "conversationId"]),
+    runId:
+      pickString(record, ["turnId", "turn_id", "runId", "run_id"]) ??
+      pickString(turnRecord ?? {}, ["id", "turnId", "turn_id", "runId", "run_id"]),
+    requestId:
+      pickString(record, ["requestId", "request_id", "serverRequestId"]) ??
+      pickString(asRecord(record.serverRequest) ?? {}, ["id", "requestId", "request_id"]),
+  };
+}
+
+function normalizePendingRequestNotification(
+  method: string,
+  params: unknown,
+  rpcId?: JsonRpcId,
+): AppServerPendingRequestNotification {
+  const record = asRecord(params) ?? {};
+  const metadata = extractRequestMetadata(params);
+
+  return {
+    method,
+    params: {
+      ...record,
+      ...(metadata.threadId ? { threadId: metadata.threadId } : {}),
+      ...(metadata.runId ? { runId: metadata.runId } : {}),
+      requestId: metadata.requestId ?? String(rpcId ?? `${method}-request`),
+    } as AppServerPendingRequestNotification["params"],
+  };
 }
 
 function normalizeEpochTimestamp(value: number | undefined): number | undefined {
@@ -1656,11 +1705,8 @@ export class CodexAppServerClient {
         } as AppServerNotification);
       }
     });
-    this.connection.setRequestHandler(async (method, params) => {
-      const request = {
-        method,
-        params: (params ?? {}) as AppServerPendingRequestNotification["params"],
-      } satisfies AppServerPendingRequestNotification;
+    this.connection.setRequestHandler(async (method, params, rpcId) => {
+      const request = normalizePendingRequestNotification(method, params, rpcId);
 
       const listeners = [...this.requestListeners];
       if (listeners.length === 0) {

@@ -1,12 +1,14 @@
 import type {
   AppServerBackendKind,
   AppServerBackendScope,
+  DirectoryLaunchpadOverlayState,
+  NavigationLaunchpadDefaults,
   ThreadExecutionMode,
   ThreadOverlayState,
 } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
 
-export const CURRENT_OVERLAY_STORE_VERSION = 3;
+export const CURRENT_OVERLAY_STORE_VERSION = 4;
 
 export type OverlayStoreData = {
   version: number;
@@ -28,6 +30,8 @@ export type OverlayStoreData = {
         >
       >
   >;
+  launchpadDefaults: NavigationLaunchpadDefaults;
+  directoryLaunchpads: Record<string, DirectoryLaunchpadOverlayState>;
   threads: Record<string, ThreadOverlayState>;
 };
 
@@ -60,6 +64,11 @@ function migrateBackendState(
 const EMPTY_OVERLAY_STORE_DATA: OverlayStoreData = {
   version: CURRENT_OVERLAY_STORE_VERSION,
   backends: {},
+  launchpadDefaults: {
+    backend: "codex",
+    executionMode: "default",
+  },
+  directoryLaunchpads: {},
   threads: {},
 };
 
@@ -84,6 +93,8 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
   const version =
     typeof record.version === "number" ? record.version : CURRENT_OVERLAY_STORE_VERSION;
   const backendsRecord = asRecord(record.backends) ?? {};
+  const launchpadDefaultsRecord = asRecord(record.launchpadDefaults) ?? {};
+  const directoryLaunchpadsRecord = asRecord(record.directoryLaunchpads) ?? {};
   const threadsRecord = asRecord(record.threads) ?? {};
 
   return {
@@ -93,6 +104,92 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
       grok: migrateBackendState("grok", backendsRecord.grok),
       all: migrateBackendState("all", backendsRecord.all),
     },
+    launchpadDefaults: {
+      backend:
+        launchpadDefaultsRecord.backend === "grok" ||
+        launchpadDefaultsRecord.backend === "codex"
+          ? (launchpadDefaultsRecord.backend as AppServerBackendKind)
+          : "codex",
+      executionMode: normalizeExecutionMode(launchpadDefaultsRecord.executionMode),
+      model:
+        typeof launchpadDefaultsRecord.model === "string"
+          ? launchpadDefaultsRecord.model
+          : undefined,
+      reasoningEffort:
+        typeof launchpadDefaultsRecord.reasoningEffort === "string"
+          ? launchpadDefaultsRecord.reasoningEffort
+          : undefined,
+      serviceTier:
+        typeof launchpadDefaultsRecord.serviceTier === "string"
+          ? launchpadDefaultsRecord.serviceTier
+          : undefined,
+      fastMode:
+        typeof launchpadDefaultsRecord.fastMode === "boolean"
+          ? launchpadDefaultsRecord.fastMode
+          : undefined,
+    },
+    directoryLaunchpads: Object.fromEntries(
+      Object.entries(directoryLaunchpadsRecord).map(([directoryKey, value]) => {
+        const launchpadRecord = asRecord(value) ?? {};
+        const now = Date.now();
+        return [
+          directoryKey,
+          {
+            directoryKey,
+            directoryKind:
+              launchpadRecord.directoryKind === "workspace" ||
+              launchpadRecord.directoryKind === "unlinked"
+                ? launchpadRecord.directoryKind
+                : "directory",
+            directoryLabel:
+              typeof launchpadRecord.directoryLabel === "string"
+                ? launchpadRecord.directoryLabel
+                : directoryKey,
+            directoryPath:
+              typeof launchpadRecord.directoryPath === "string"
+                ? launchpadRecord.directoryPath
+                : undefined,
+            backend:
+              launchpadRecord.backend === "grok" || launchpadRecord.backend === "codex"
+                ? (launchpadRecord.backend as AppServerBackendKind)
+                : "codex",
+            executionMode: normalizeExecutionMode(launchpadRecord.executionMode),
+            prompt:
+              typeof launchpadRecord.prompt === "string" ? launchpadRecord.prompt : "",
+            workMode:
+              launchpadRecord.workMode === "worktree" ? "worktree" : "local",
+            branchName:
+              typeof launchpadRecord.branchName === "string"
+                ? launchpadRecord.branchName
+                : undefined,
+            model:
+              typeof launchpadRecord.model === "string"
+                ? launchpadRecord.model
+                : undefined,
+            reasoningEffort:
+              typeof launchpadRecord.reasoningEffort === "string"
+                ? launchpadRecord.reasoningEffort
+                : undefined,
+            serviceTier:
+              typeof launchpadRecord.serviceTier === "string"
+                ? launchpadRecord.serviceTier
+                : undefined,
+            fastMode:
+              typeof launchpadRecord.fastMode === "boolean"
+                ? launchpadRecord.fastMode
+                : undefined,
+            createdAt:
+              typeof launchpadRecord.createdAt === "number"
+                ? launchpadRecord.createdAt
+                : now,
+            updatedAt:
+              typeof launchpadRecord.updatedAt === "number"
+                ? launchpadRecord.updatedAt
+                : now,
+          } satisfies DirectoryLaunchpadOverlayState,
+        ];
+      }),
+    ),
     threads: Object.fromEntries(
       Object.entries(threadsRecord).map(([rawKey, value]) => {
         const threadRecord = asRecord(value) ?? {};

@@ -8,6 +8,90 @@ afterEach(() => {
 });
 
 describe("Composer", () => {
+  it("shows thread access in the composer and updates it from the select", async () => {
+    const onSetExecutionMode = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: [],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+              {
+                mode: "full-access",
+                label: "Full Access",
+                available: true,
+              },
+            ],
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            runId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        onRefresh={async () => undefined}
+        onSetExecutionMode={onSetExecutionMode}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          gitBranch: "main",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+              kind: "local",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    expect(screen.getByLabelText("Access mode")).toHaveValue("default");
+    expect(screen.getByLabelText("Workspace mode")).toHaveValue("Local (main)");
+    expect(screen.getByLabelText("Workspace mode")).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Access mode"), {
+      target: { value: "full-access" },
+    });
+
+    await waitFor(() => {
+      expect(onSetExecutionMode).toHaveBeenCalledWith("full-access");
+    });
+  });
+
   it("inserts skill markdown from autocomplete and sends it through startTurn", async () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,

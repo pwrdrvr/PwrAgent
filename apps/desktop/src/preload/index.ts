@@ -1,10 +1,14 @@
 import { clipboard, contextBridge, ipcRenderer } from "electron";
 import type {
   AgentEvent,
+  EnsureDirectoryLaunchpadRequest,
+  EnsureDirectoryLaunchpadResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  MaterializeDirectoryLaunchpadRequest,
+  MaterializeDirectoryLaunchpadResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   AppServerListSkillsRequest,
@@ -17,16 +21,21 @@ import type {
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   NavigationSnapshot,
+  ResetDirectoryLaunchpadRequest,
+  ResetDirectoryLaunchpadResponse,
   StartThreadRequest,
   StartThreadResponse,
   StartTurnRequest,
   StartTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  UpdateDirectoryLaunchpadRequest,
+  UpdateDirectoryLaunchpadResponse,
 } from "@pwragnt/shared";
 import {
   AGENT_EVENT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
+  AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_TURN_CHANNEL,
@@ -35,8 +44,11 @@ import {
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   BACKEND_LIST_CHANNEL,
+  NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
+  NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
+  NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
 } from "../shared/ipc";
 
@@ -83,6 +95,10 @@ const desktopApi = Object.freeze({
     request: SetThreadExecutionModeRequest
   ): Promise<SetThreadExecutionModeResponse> =>
     await ipcRenderer.invoke(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL, request),
+  materializeDirectoryLaunchpad: async (
+    request: MaterializeDirectoryLaunchpadRequest
+  ): Promise<MaterializeDirectoryLaunchpadResponse> =>
+    await ipcRenderer.invoke(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL, request),
   submitServerRequest: async (
     request: SubmitServerRequestRequest
   ): Promise<SubmitServerRequestResponse> =>
@@ -95,6 +111,18 @@ const desktopApi = Object.freeze({
     request: MarkThreadSeenRequest,
   ): Promise<MarkThreadSeenResponse> =>
     await ipcRenderer.invoke(NAVIGATION_MARK_THREAD_SEEN_CHANNEL, request),
+  ensureDirectoryLaunchpad: async (
+    request: EnsureDirectoryLaunchpadRequest,
+  ): Promise<EnsureDirectoryLaunchpadResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+  updateDirectoryLaunchpad: async (
+    request: UpdateDirectoryLaunchpadRequest,
+  ): Promise<UpdateDirectoryLaunchpadResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+  resetDirectoryLaunchpad: async (
+    request: ResetDirectoryLaunchpadRequest,
+  ): Promise<ResetDirectoryLaunchpadResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL, request),
   onWindowFocus: (callback: () => void): (() => void) => {
     const listener = () => callback();
     ipcRenderer.on(WINDOW_FOCUS_SYNC_CHANNEL, listener);

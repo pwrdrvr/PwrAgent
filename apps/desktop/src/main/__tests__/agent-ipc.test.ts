@@ -3,6 +3,7 @@ import type {
   AgentEvent,
   InterruptTurnRequest,
   ListBackendsRequest,
+  MaterializeDirectoryLaunchpadRequest,
   StartThreadRequest,
   StartTurnRequest,
 } from "@pwragnt/shared";
@@ -36,6 +37,15 @@ const registry = {
     threadId: request.threadId,
     runId: request.runId,
   })),
+  materializeDirectoryLaunchpad: vi.fn(
+    async (request: MaterializeDirectoryLaunchpadRequest) => ({
+      backend: "codex" as const,
+      threadId: `materialized:${request.directoryKey}`,
+      executionMode: "default" as const,
+      workMode: "local" as const,
+      runId: "turn-2",
+    }),
+  ),
 };
 
 vi.mock("electron", () => ({
@@ -70,6 +80,7 @@ describe("agent ipc", () => {
     registry.startThread.mockClear();
     registry.startTurn.mockClear();
     registry.interruptTurn.mockClear();
+    registry.materializeDirectoryLaunchpad.mockClear();
     registryListener = undefined;
   });
 
@@ -81,6 +92,7 @@ describe("agent ipc", () => {
     const {
       AGENT_EVENT_CHANNEL,
       AGENT_INTERRUPT_TURN_CHANNEL,
+      AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
       AGENT_START_THREAD_CHANNEL,
       AGENT_START_TURN_CHANNEL,
       BACKEND_LIST_CHANNEL,
@@ -119,6 +131,17 @@ describe("agent ipc", () => {
       backend: "grok",
       threadId: "thread-1",
       runId: "turn-1",
+    });
+    expect(
+      await handlers.get(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL)?.({}, {
+        directoryKey: "directory:/repo/app",
+      }),
+    ).toEqual({
+      backend: "codex",
+      threadId: "materialized:directory:/repo/app",
+      executionMode: "default",
+      workMode: "local",
+      runId: "turn-2",
     });
 
     await registryListener?.({

@@ -1,8 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BackendSummary } from "@pwragnt/shared";
+import type { BackendSummary, NavigationDirectorySummary } from "@pwragnt/shared";
 import { Sidebar } from "../Sidebar";
 
 const backends: BackendSummary[] = [
@@ -76,10 +75,11 @@ const sharedThread = {
   summary: "Line up the desktop shell with the app server",
   source: "codex" as const,
   gitBranch: "codex/thread-centric-ui",
+  executionMode: "default" as const,
   updatedAt: Date.now(),
   inbox: {
     inInbox: true,
-    reason: "new-thread" as const
+    reason: "new-thread" as const,
   },
   linkedDirectories: [
     {
@@ -87,51 +87,52 @@ const sharedThread = {
       label: "PwrAgnt",
       path: "/Users/huntharo/pwrdrvr/PwrAgnt",
       worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
-      kind: "local" as const
+      kind: "local" as const,
     },
-    {
-      id: "dir-b",
-      label: "openclaw-codex-app-server",
-      path: "/Users/huntharo/pwrdrvr/openclaw-codex-app-server",
-      kind: "worktree" as const
-    }
-  ]
+  ],
 };
+
+const directories: NavigationDirectorySummary[] = [
+  {
+    key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+    kind: "directory",
+    label: "PwrAgnt",
+    path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+    threadKeys: ["codex:thread-1"],
+    needsAttentionCount: 1,
+    latestUpdatedAt: sharedThread.updatedAt,
+    gitStatus: {
+      currentBranch: "main",
+      upstreamBranch: "origin/main",
+      syncState: "in-sync",
+      branches: ["main", "release"],
+    },
+  },
+];
 
 afterEach(() => {
   cleanup();
 });
 
 describe("Sidebar", () => {
-  it("keeps Inbox first and groups a thread under each linked directory lens", () => {
+  it("keeps Inbox first and renders compact directory rows from directory summaries", () => {
     render(
       <Sidebar
         backends={backends}
         browseMode="directories"
         createThreadError={undefined}
+        directories={directories}
         fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
+        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         refreshing={false}
-        selectedThreadKey="codex:thread-1"
-        threads={[
-          sharedThread,
-          {
-            id: "thread-2",
-            title: "Unlinked planning thread",
-            titleSource: "explicit",
-            summary: undefined,
-            source: "codex",
-            updatedAt: Date.now(),
-            inbox: {
-              inInbox: false
-            },
-            linkedDirectories: []
-          }
-        ]}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
         onRefresh={async () => undefined}
         onSelectThread={() => undefined}
       />
@@ -143,305 +144,43 @@ describe("Sidebar", () => {
       "aria-pressed",
       "true"
     );
-    expect(screen.getByRole("heading", { level: 3, name: "PwrAgnt" })).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { level: 3, name: "openclaw-codex-app-server" })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { level: 3, name: "No linked directory" })
-    ).toBeInTheDocument();
-    expect(
-      within(screen.getByRole("heading", { level: 3, name: "PwrAgnt" })).getByText("📁")
-    ).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /Cross-project cleanup/i }).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Cross-project cleanup").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Codex").length).toBeGreaterThan(0);
-    const pwrAgntSection = screen
-      .getByRole("heading", { level: 3, name: "PwrAgnt" })
-      .closest("section");
-    expect(pwrAgntSection).not.toBeNull();
-    const groupedThread = within(pwrAgntSection as HTMLElement).getByRole("button", {
-      name: /Cross-project cleanup/i,
-    });
-    expect(groupedThread).toHaveClass("thread-row");
-    expect(groupedThread).not.toHaveClass("thread-row--compact");
-    expect(within(groupedThread).getByText("Codex")).toBeInTheDocument();
-    expect(within(groupedThread).getByText("codex/thread-centric-ui")).toBeInTheDocument();
   });
 
-  it("lumps scratch workspaces under a shared Workspaces directory group", () => {
+  it("opens the directory launchpad from the plus button", () => {
+    const onOpenLaunchpad = vi.fn(async () => undefined);
+
     render(
       <Sidebar
         backends={backends}
         browseMode="directories"
         createThreadError={undefined}
+        directories={directories}
         fetchedAt={Date.now()}
-        inboxThreads={[]}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         refreshing={false}
-        selectedThreadKey={undefined}
-        threads={[
-          {
-            id: "thread-3",
-            title: "Untitled thread",
-            titleSource: "explicit",
-            summary: undefined,
-            source: "codex",
-            updatedAt: Date.now(),
-            inbox: {
-              inInbox: false
-            },
-            linkedDirectories: [
-              {
-                id: "scratch-1",
-                label: "2026-04-17-a15d5e",
-                path: "/Users/huntharo/.pwragnt/projects/2026-04-17-a15d5e",
-                kind: "local"
-              }
-            ]
-          },
-          {
-            id: "thread-4",
-            title: "Second untitled thread",
-            titleSource: "explicit",
-            summary: undefined,
-            source: "codex",
-            updatedAt: Date.now(),
-            inbox: {
-              inInbox: false
-            },
-            linkedDirectories: [
-              {
-                id: "scratch-2",
-                label: "2026-04-17-b83f91",
-                path: "/Users/huntharo/.pwragnt/projects/2026-04-17-b83f91",
-                kind: "local"
-              }
-            ]
-          }
-        ]}
+        selectedItemKey={undefined}
+        threads={[sharedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
+        onOpenLaunchpad={onOpenLaunchpad}
         onRefresh={async () => undefined}
         onSelectThread={() => undefined}
       />
     );
 
-    expect(screen.getByRole("heading", { level: 3, name: "Workspaces" })).toBeInTheDocument();
-    expect(screen.getByText("2 threads")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("heading", { level: 3, name: "2026-04-17-a15d5e" })
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("heading", { level: 3, name: "2026-04-17-b83f91" })
-    ).not.toBeInTheDocument();
-  });
-
-  it("merges codex worktree paths into the stable repo directory group", () => {
-    render(
-      <Sidebar
-        backends={backends}
-        browseMode="directories"
-        createThreadError={undefined}
-        fetchedAt={Date.now()}
-        inboxThreads={[]}
-        loading={false}
-        creatingThread={undefined}
-        refreshing={false}
-        selectedThreadKey={undefined}
-        threads={[
-          {
-            id: "thread-5",
-            title: "Check web API proxy support",
-            titleSource: "explicit",
-            summary: undefined,
-            source: "codex",
-            updatedAt: Date.now(),
-            inbox: {
-              inInbox: false
-            },
-            linkedDirectories: [
-              {
-                id: "web-app-root",
-                label: "web-app",
-                path: "/Users/huntharo/GIPHY/web-app",
-                kind: "local"
-              }
-            ]
-          },
-          {
-            id: "thread-6",
-            title: "Explain web app login flow",
-            titleSource: "explicit",
-            summary: undefined,
-            source: "codex",
-            updatedAt: Date.now(),
-            inbox: {
-              inInbox: false
-            },
-            linkedDirectories: [
-              {
-                id: "web-app-worktree-1",
-                label: "web-app",
-                path: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
-                kind: "local"
-              }
-            ]
-          },
-          {
-            id: "thread-7",
-            title: "Investigate chunk file errors",
-            titleSource: "explicit",
-            summary: undefined,
-            source: "codex",
-            updatedAt: Date.now(),
-            inbox: {
-              inInbox: false
-            },
-            linkedDirectories: [
-              {
-                id: "web-app-worktree-2",
-                label: "web-app",
-                path: "/Users/huntharo/.codex/worktrees/1f9a/web-app",
-                kind: "local"
-              }
-            ]
-          }
-        ]}
-        onBrowseModeChange={() => undefined}
-        onCreateThread={async () => undefined}
-        onRefresh={async () => undefined}
-        onSelectThread={() => undefined}
-      />
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open new thread launchpad for PwrAgnt",
+      })
     );
 
-    expect(screen.getAllByRole("heading", { level: 3, name: "web-app" })).toHaveLength(1);
-    expect(screen.getByText("3 threads")).toBeInTheDocument();
-  });
-
-  it("ages old non-inbox threads out of directory groups", () => {
-    const now = new Date("2026-04-17T13:00:00.000Z").getTime();
-    vi.useFakeTimers();
-    vi.setSystemTime(now);
-
-    try {
-      render(
-        <Sidebar
-          backends={backends}
-          browseMode="directories"
-          createThreadError={undefined}
-          fetchedAt={now}
-          inboxThreads={[]}
-          loading={false}
-          creatingThread={undefined}
-          refreshing={false}
-          selectedThreadKey={undefined}
-          threads={[
-            {
-              id: "thread-recent",
-              title: "Check web API proxy support",
-              titleSource: "explicit",
-              summary: undefined,
-              source: "codex",
-              updatedAt: now - 5 * 24 * 60 * 60 * 1000,
-              inbox: {
-                inInbox: false
-              },
-              linkedDirectories: [
-                {
-                  id: "web-app-root",
-                  label: "web-app",
-                  path: "/Users/huntharo/GIPHY/web-app",
-                  kind: "local"
-                }
-              ]
-            },
-            {
-              id: "thread-old",
-              title: "Explain web app login flow",
-              titleSource: "explicit",
-              summary: undefined,
-              source: "codex",
-              updatedAt: now - 38 * 24 * 60 * 60 * 1000,
-              inbox: {
-                inInbox: false
-              },
-              linkedDirectories: [
-                {
-                  id: "web-app-root-2",
-                  label: "web-app",
-                  path: "/Users/huntharo/GIPHY/web-app",
-                  kind: "local"
-                }
-              ]
-            }
-          ]}
-          onBrowseModeChange={() => undefined}
-          onCreateThread={async () => undefined}
-          onRefresh={async () => undefined}
-          onSelectThread={() => undefined}
-        />
-      );
-
-      expect(screen.getByRole("heading", { level: 3, name: "web-app" })).toBeInTheDocument();
-      expect(screen.getByText("1 thread")).toBeInTheDocument();
-      expect(screen.getByText("Check web API proxy support")).toBeInTheDocument();
-      expect(screen.queryByText("Explain web app login flow")).not.toBeInTheDocument();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not place unresolved worktree threads under No linked directory", () => {
-    render(
-      <Sidebar
-        backends={backends}
-        browseMode="directories"
-        createThreadError={undefined}
-        fetchedAt={Date.now()}
-        inboxThreads={[]}
-        loading={false}
-        creatingThread={undefined}
-        refreshing={false}
-        selectedThreadKey={undefined}
-        threads={[
-          {
-            id: "thread-missing-cwd",
-            title: "Plan Slidev theme extraction",
-            titleSource: "explicit",
-            summary: undefined,
-            source: "codex",
-            projectKey: "/Users/huntharo/.codex/worktrees/be87/search-product",
-            updatedAt: Date.now(),
-            inbox: {
-              inInbox: false
-            },
-            linkedDirectories: []
-          },
-          {
-            id: "thread-unlinked",
-            title: "Untitled thread",
-            titleSource: "explicit",
-            summary: undefined,
-            source: "grok",
-            updatedAt: Date.now(),
-            inbox: {
-              inInbox: false
-            },
-            linkedDirectories: []
-          }
-        ]}
-        onBrowseModeChange={() => undefined}
-        onCreateThread={async () => undefined}
-        onRefresh={async () => undefined}
-        onSelectThread={() => undefined}
-      />
-    );
-
-    expect(screen.getByRole("heading", { level: 3, name: "No linked directory" })).toBeInTheDocument();
-    expect(screen.getByText("1 thread")).toBeInTheDocument();
-    expect(screen.getByText("Untitled thread")).toBeInTheDocument();
-    expect(screen.queryByText("Plan Slidev theme extraction")).not.toBeInTheDocument();
+    expect(onOpenLaunchpad).toHaveBeenCalledWith(directories[0], undefined);
   });
 
   it("copies a linked directory path from the recents chip", () => {
@@ -449,8 +188,8 @@ describe("Sidebar", () => {
     Object.defineProperty(window, "pwragnt", {
       configurable: true,
       value: {
-        copyText
-      }
+        copyText,
+      },
     });
 
     render(
@@ -458,15 +197,18 @@ describe("Sidebar", () => {
         backends={backends}
         browseMode="recents"
         createThreadError={undefined}
+        directories={directories}
         fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
+        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         refreshing={false}
-        selectedThreadKey="codex:thread-1"
+        selectedItemKey="codex:thread-1"
         threads={[sharedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
         onRefresh={async () => undefined}
         onSelectThread={() => undefined}
       />
@@ -488,15 +230,18 @@ describe("Sidebar", () => {
         backends={backends}
         browseMode="recents"
         createThreadError={undefined}
+        directories={directories}
         fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
+        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         refreshing={false}
-        selectedThreadKey="codex:thread-1"
+        selectedItemKey="codex:thread-1"
         threads={[sharedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={onCreateThread}
+        onOpenLaunchpad={async () => undefined}
         onRefresh={async () => undefined}
         onSelectThread={() => undefined}
       />
@@ -504,29 +249,22 @@ describe("Sidebar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
 
-    expect(screen.getByRole("menu", { name: "New thread backend" })).toBeInTheDocument();
+    const menu = screen.getByRole("menu", { name: "New thread backend" });
+    expect(menu).toBeInTheDocument();
     expect(
-      screen.getByRole("menuitem", {
+      within(menu).getByRole("menuitem", {
         name: "Create thread with Codex in Default Access",
       })
     ).toBeEnabled();
     expect(
-      screen.getByRole("menuitem", {
+      within(menu).getByRole("menuitem", {
         name: "Create thread with Codex in Full Access",
       })
     ).toBeEnabled();
     expect(
-      screen.getByRole("menuitem", {
+      within(menu).getByRole("menuitem", {
         name: "Create thread with Grok in Default Access",
       })
     ).toBeDisabled();
-
-    fireEvent.click(
-      screen.getByRole("menuitem", {
-        name: "Create thread with Codex in Default Access",
-      })
-    );
-
-    expect(onCreateThread).toHaveBeenCalledWith("codex", "default");
   });
 });

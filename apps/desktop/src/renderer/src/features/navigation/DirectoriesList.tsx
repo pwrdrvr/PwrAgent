@@ -1,270 +1,176 @@
-import type { LinkedDirectorySummary, NavigationThreadSummary } from "@pwragnt/shared";
+import { useEffect, useMemo, useState } from "react";
+import type {
+  AppServerBackendKind,
+  NavigationDirectorySummary,
+  NavigationThreadSummary,
+} from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
-import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 
 type DirectoriesListProps = {
-  selectedThreadKey?: string;
+  directories: NavigationDirectorySummary[];
+  selectedItemKey?: string;
   threads: NavigationThreadSummary[];
+  onOpenLaunchpad: (
+    directory: NavigationDirectorySummary,
+    preferredBackend?: AppServerBackendKind
+  ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
 };
 
-type DirectoryGroup = {
-  id: string;
-  icon: string;
-  label: string;
-  path?: string;
-  threads: NavigationThreadSummary[];
-};
-
-type DirectoryGroupDescriptor = Omit<DirectoryGroup, "threads">;
-type DirectoryIdentity =
-  | {
-      kind: "scratch-workspaces";
-      path: string;
-    }
-  | {
-      kind: "stable";
-      label: string;
-      path: string;
-    }
-  | {
-      kind: "codex-worktree";
-      label: string;
-    };
-
-const DIRECTORY_THREAD_AGE_OUT_MS = 30 * 24 * 60 * 60 * 1000;
+function buildLaunchpadSelectionKey(directoryKey: string): string {
+  return `launchpad:${directoryKey}`;
+}
 
 export function DirectoriesList(props: DirectoriesListProps) {
-  const groups = groupThreadsByDirectory(props.threads);
+  const [expandedByKey, setExpandedByKey] = useState<Record<string, boolean>>({});
+  const threadsByKey = useMemo(
+    () =>
+      new Map(
+        props.threads.map((thread) => [
+          buildThreadIdentityKey(thread.source, thread.id),
+          thread,
+        ]),
+      ),
+    [props.threads]
+  );
 
-  if (groups.length === 0) {
+  useEffect(() => {
+    const selectedItemKey = props.selectedItemKey;
+    if (!selectedItemKey) {
+      return;
+    }
+
+    setExpandedByKey((current) => {
+      for (const directory of props.directories) {
+        if (
+          selectedItemKey === buildLaunchpadSelectionKey(directory.key) ||
+          directory.threadKeys.includes(selectedItemKey)
+        ) {
+          if (current[directory.key]) {
+            return current;
+          }
+
+          return {
+            ...current,
+            [directory.key]: true,
+          };
+        }
+      }
+
+      return current;
+    });
+  }, [props.directories, props.selectedItemKey]);
+
+  if (props.directories.length === 0) {
     return <p className="sidebar-empty">No directory-linked threads.</p>;
   }
 
   return (
-    <div className="directory-groups">
-      {groups.map((group) => (
-        <section key={group.id} className="directory-group">
-          <header className="directory-group__header">
-            <h3 className="directory-group__title">
+    <div className="directory-list sidebar-list sidebar-list--dense">
+      {props.directories.map((directory) => {
+        const selectedLaunchpad =
+          props.selectedItemKey === buildLaunchpadSelectionKey(directory.key);
+        const selectedThreadInDirectory = directory.threadKeys.includes(
+          props.selectedItemKey ?? ""
+        );
+        const expanded =
+          expandedByKey[directory.key] ??
+          (selectedLaunchpad || selectedThreadInDirectory);
+        const visibleThreads = directory.threadKeys
+          .map((threadKey) => threadsByKey.get(threadKey))
+          .filter((thread): thread is NavigationThreadSummary => Boolean(thread));
+
+        return (
+          <section key={directory.key} className="directory-row">
+            <div className="directory-row__header">
               <button
-                aria-label={`Copy path for ${group.label}`}
-                className="directory-group__button path-copy-target tooltip-target"
-                data-tooltip={group.path ? formatCopyTooltip(group.path) : undefined}
+                aria-expanded={expanded}
+                className={`thread-row thread-row--compact directory-row__summary${
+                  selectedLaunchpad ? " is-selected" : ""
+                }`}
                 type="button"
                 onClick={() => {
-                  if (group.path) {
-                    void copyText(group.path);
-                  }
+                  setExpandedByKey((current) => ({
+                    ...current,
+                    [directory.key]: !expanded,
+                  }));
                 }}
               >
-                <span aria-hidden="true" className="directory-group__icon">
-                  {group.icon}
-                </span>
-                {group.label}
-              </button>
-            </h3>
-            <span className="directory-group__count">
-              {group.threads.length} thread{group.threads.length === 1 ? "" : "s"}
-            </span>
-          </header>
-
-          <div className="sidebar-list sidebar-list--compact" role="list">
-            {group.threads.map((thread) => {
-              const selected =
-                buildThreadIdentityKey(thread.source, thread.id) === props.selectedThreadKey;
-              return (
-                <button
-                  key={`${group.id}:${buildThreadIdentityKey(thread.source, thread.id)}`}
-                  aria-pressed={selected}
-                  className={`thread-row${selected ? " is-selected" : ""}`}
-                  type="button"
-                  onClick={() => props.onSelectThread(thread)}
-                >
-                  <span className="thread-row__header">
-                    <span className="thread-row__title">{thread.title}</span>
-                    <span className="thread-row__time">
-                      {formatRelativeTime(thread.updatedAt)}
-                    </span>
+                <span className="directory-row__summary-main">
+                  <span aria-hidden="true" className="directory-row__icon">
+                    {directory.kind === "workspace" ? "🗂" : directory.kind === "unlinked" ? "•" : "📁"}
                   </span>
-                  <ThreadMetaChips thread={thread} />
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      ))}
+                  <span className="directory-row__title-wrap">
+                    <span className="thread-row__title">{directory.label}</span>
+                  </span>
+                </span>
+
+                <span className="directory-row__summary-meta">
+                  {directory.needsAttentionCount > 0 ? (
+                    <span className="count-pill directory-row__attention">
+                      {directory.needsAttentionCount}
+                    </span>
+                  ) : null}
+                  <span
+                    aria-hidden="true"
+                    className={`directory-row__chevron${expanded ? " is-open" : ""}`}
+                  >
+                    ▾
+                  </span>
+                </span>
+              </button>
+
+              <button
+                aria-label={`Open new thread launchpad for ${directory.label}`}
+                className={`directory-row__launchpad-button${
+                  directory.launchpad ? " has-draft" : ""
+                }`}
+                type="button"
+                onClick={() => {
+                  void props.onOpenLaunchpad(directory, directory.launchpad?.backend);
+                }}
+              >
+                +
+              </button>
+            </div>
+
+            {expanded ? (
+              <div className="directory-row__details">
+                {visibleThreads.length > 0 ? (
+                  <div className="sidebar-list sidebar-list--compact directory-row__threads">
+                    {visibleThreads.map((thread) => {
+                      const selected =
+                        buildThreadIdentityKey(thread.source, thread.id) === props.selectedItemKey;
+                      return (
+                        <button
+                          key={`${directory.key}:${buildThreadIdentityKey(thread.source, thread.id)}`}
+                          aria-pressed={selected}
+                          className={`thread-row${selected ? " is-selected" : ""}`}
+                          type="button"
+                          onClick={() => props.onSelectThread(thread)}
+                        >
+                          <span className="thread-row__header">
+                            <span className="thread-row__title">{thread.title}</span>
+                            <span className="thread-row__time">
+                              {formatRelativeTime(thread.updatedAt)}
+                            </span>
+                          </span>
+                          <ThreadMetaChips thread={thread} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="sidebar-empty directory-row__empty">No threads in this directory yet.</p>
+                )}
+              </div>
+            ) : null}
+          </section>
+        );
+      })}
     </div>
   );
-}
-
-function groupThreadsByDirectory(threads: NavigationThreadSummary[]): DirectoryGroup[] {
-  const groups = new Map<string, DirectoryGroup>();
-  const visibleThreads = threads.filter((thread) => shouldShowThreadInDirectories(thread));
-  const stablePathByLabel = collectStablePathByLabel(visibleThreads);
-
-  for (const thread of visibleThreads) {
-    if (thread.linkedDirectories.length === 0) {
-      if (thread.projectKey?.trim()) {
-        continue;
-      }
-
-      const unlinked = groups.get("unlinked");
-      if (unlinked) {
-        unlinked.threads.push(thread);
-      } else {
-        groups.set("unlinked", {
-          id: "unlinked",
-          icon: "•",
-          label: "No linked directory",
-          threads: [thread]
-        });
-      }
-      continue;
-    }
-
-    for (const directory of thread.linkedDirectories) {
-      const descriptor = getDirectoryGroupDescriptor(directory, stablePathByLabel);
-      const existing = groups.get(descriptor.id);
-      if (existing) {
-        existing.threads.push(thread);
-        continue;
-      }
-
-      groups.set(descriptor.id, {
-        ...descriptor,
-        threads: [thread]
-      });
-    }
-  }
-
-  return [...groups.values()].sort((left, right) => left.label.localeCompare(right.label));
-}
-
-function shouldShowThreadInDirectories(thread: NavigationThreadSummary): boolean {
-  if (thread.inbox.inInbox) {
-    return true;
-  }
-
-  if (!thread.updatedAt) {
-    return true;
-  }
-
-  return Date.now() - thread.updatedAt < DIRECTORY_THREAD_AGE_OUT_MS;
-}
-
-function collectStablePathByLabel(
-  threads: NavigationThreadSummary[]
-): Map<string, string | undefined> {
-  const pathsByLabel = new Map<string, Set<string>>();
-
-  for (const thread of threads) {
-    for (const directory of thread.linkedDirectories) {
-      const identity = classifyDirectory(directory);
-      if (identity.kind !== "stable") {
-        continue;
-      }
-
-      const paths = pathsByLabel.get(identity.label) ?? new Set<string>();
-      paths.add(identity.path);
-      pathsByLabel.set(identity.label, paths);
-    }
-  }
-
-  return new Map(
-    [...pathsByLabel.entries()].map(([label, paths]) => [
-      label,
-      paths.size === 1 ? [...paths][0] : undefined
-    ])
-  );
-}
-
-function getDirectoryGroupDescriptor(
-  directory: LinkedDirectorySummary,
-  stablePathByLabel: Map<string, string | undefined>
-): DirectoryGroupDescriptor {
-  const identity = classifyDirectory(directory);
-
-  if (identity.kind === "scratch-workspaces") {
-    return {
-      id: `workspaces:${identity.path}`,
-      icon: "📁",
-      label: "Workspaces",
-      path: identity.path
-    };
-  }
-
-  if (identity.kind === "codex-worktree") {
-    const stablePath = stablePathByLabel.get(identity.label);
-    if (stablePath) {
-      return {
-        id: `directory:${stablePath}`,
-        icon: "📁",
-        label: identity.label,
-        path: stablePath
-      };
-    }
-
-    return {
-      id: `codex-worktree:${identity.label}`,
-      icon: "📁",
-      label: identity.label
-    };
-  }
-
-  return {
-    id: `directory:${identity.path}`,
-    icon: "📁",
-    label: identity.label,
-    path: identity.path
-  };
-}
-
-function classifyDirectory(directory: LinkedDirectorySummary): DirectoryIdentity {
-  const scratchWorkspaceMatch = directory.path.match(
-    /^(.*[\\/]\.pwragnt[\\/]projects)[\\/][^\\/]+$/
-  );
-  if (scratchWorkspaceMatch) {
-    return {
-      kind: "scratch-workspaces",
-      path: scratchWorkspaceMatch[1]
-    };
-  }
-
-  const repoWorktreeMatch = directory.path.match(
-    /^(.*)[\\/]\.worktrees[\\/][^\\/]+(?:[\\/].*)?$/
-  );
-  if (repoWorktreeMatch) {
-    const canonicalPath = repoWorktreeMatch[1];
-    return {
-      kind: "stable",
-      label: pathBaseName(canonicalPath),
-      path: canonicalPath
-    };
-  }
-
-  const codexWorktreeMatch = directory.path.match(
-    /^[\\/].*[\\/]\.codex[\\/]worktrees[\\/][^\\/]+[\\/]([^\\/]+)(?:[\\/].*)?$/
-  );
-  if (codexWorktreeMatch) {
-    return {
-      kind: "codex-worktree",
-      label: codexWorktreeMatch[1]
-    };
-  }
-
-  return {
-    kind: "stable",
-    label: directory.label,
-    path: directory.path
-  };
-}
-
-function pathBaseName(pathname: string): string {
-  const normalized = pathname.replace(/[\\/]+$/, "");
-  const segments = normalized.split(/[\\/]/).filter(Boolean);
-  return segments.at(-1) ?? pathname;
 }
 
 function formatRelativeTime(timestamp?: number): string {

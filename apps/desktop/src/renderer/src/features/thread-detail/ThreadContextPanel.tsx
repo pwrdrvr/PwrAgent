@@ -1,9 +1,5 @@
 import { useState, type KeyboardEvent, type MouseEvent } from "react";
-import type {
-  BackendSummary,
-  NavigationThreadSummary,
-  ThreadExecutionMode,
-} from "@pwragnt/shared";
+import type { BackendSummary, NavigationThreadSummary } from "@pwragnt/shared";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 
@@ -12,20 +8,12 @@ type ThreadContextPanelProps = {
   backends: BackendSummary[];
   platform?: string;
   thread: NavigationThreadSummary;
-  setExecutionModeError?: string;
-  updatingExecutionMode?: ThreadExecutionMode;
-  onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
 };
 
 export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const [pinned, setPinned] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const open = pinned || revealed;
-  const threadBackend = props.backends.find(
-    (backend) => backend.kind === props.thread.source
-  );
-  const executionModes =
-    threadBackend?.executionModes.filter((mode) => mode.available) ?? [];
 
   return (
     <aside
@@ -218,41 +206,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               </div>
             </dl>
 
-            {props.thread.source === "codex" && executionModes.length > 0 ? (
-              <div className="context-mode-switch">
-                {executionModes.map((mode) => {
-                  const active = (props.thread.executionMode ?? "default") === mode.mode;
-                  return (
-                    <button
-                      key={mode.mode}
-                      aria-pressed={active}
-                      className={`context-mode-switch__button${
-                        active ? " is-active" : ""
-                      }`}
-                      disabled={Boolean(props.updatingExecutionMode)}
-                      type="button"
-                      onClick={() => {
-                        if (!active) {
-                          void props.onSetExecutionMode?.(mode.mode);
-                        }
-                      }}
-                    >
-                      {formatExecutionModeLabel(mode.mode)}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
-
-            {props.setExecutionModeError ? (
-              <p className="context-empty context-empty--error">
-                {props.setExecutionModeError}
-              </p>
-            ) : props.updatingExecutionMode ? (
-              <p className="context-empty">
-                Switching to {formatExecutionModeLabel(props.updatingExecutionMode)}…
-              </p>
-            ) : null}
           </section>
 
           <section className="context-panel__section context-panel__section--status">

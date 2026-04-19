@@ -9,9 +9,17 @@ import type {
 } from "@pwragnt/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 
-function createOverlayStoreMock() {
+function createOverlayStoreMock(params?: { executionMode?: "default" | "full-access" }) {
   return {
-    getThreadOverlayState: async () => undefined,
+    getThreadOverlayState: async () =>
+      params?.executionMode
+        ? {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: params.executionMode,
+            extraLinkedDirectories: [],
+          }
+        : undefined,
     setThreadExecutionMode: async ({
       backend,
       threadId,
@@ -46,6 +54,15 @@ class MockBackendClient {
     serviceTier?: string;
     reasoningEffort?: string;
   };
+  lastSetThreadPermissionsParams?: {
+    threadId: string;
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+  };
 
   constructor(
     private readonly options: {
@@ -60,6 +77,7 @@ class MockBackendClient {
       threads?: AppServerThreadSummary[];
       replay?: AppServerThreadReplay;
       skills?: Array<{ cwd?: string; skills: AppServerSkillSummary[] }>;
+      setThreadPermissionsError?: Error;
     }
   ) {}
 
@@ -122,6 +140,23 @@ class MockBackendClient {
 
   async startTurn(): Promise<{ threadId: string; runId: string }> {
     return { threadId: "thread-1", runId: "turn-1" };
+  }
+
+  async setThreadPermissions(params: {
+    threadId: string;
+    cwd?: string;
+    model?: string;
+    approvalPolicy?: string;
+    sandbox?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+  }): Promise<{ threadId: string }> {
+    this.lastSetThreadPermissionsParams = params;
+    if (this.options.setThreadPermissionsError) {
+      throw this.options.setThreadPermissionsError;
+    }
+
+    return { threadId: params.threadId };
   }
 
   async interruptTurn(): Promise<{ threadId: string; runId: string }> {
@@ -375,6 +410,44 @@ describe("DesktopBackendRegistry", () => {
       before: "cursor-1",
       limit: 25,
     });
+
+    await registry.close();
+  });
+
+  it("updates execution mode through the current Codex thread owner", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read", "thread/resume"] },
+    });
+    const codexFullAccessClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read", "thread/resume"] },
+      setThreadPermissionsError: new Error("thread not found on full-access client"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+
+    const response = await registry.setThreadExecutionMode({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "full-access",
+    });
+
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "full-access",
+    });
+    expect(codexClient.lastSetThreadPermissionsParams).toEqual({
+      threadId: "thread-1",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    expect(codexFullAccessClient.lastSetThreadPermissionsParams).toBeUndefined();
 
     await registry.close();
   });

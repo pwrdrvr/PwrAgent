@@ -514,6 +514,112 @@ textarea {
   font-family: "IBM Plex Mono", "JetBrains Mono", "SF Mono", ui-monospace, monospace;
 }
 
+.directory-list {
+  gap: 0;
+  padding-top: 0;
+}
+
+.directory-row {
+  padding: 10px 0 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.directory-row:first-child {
+  border-top: 0;
+}
+
+.directory-row__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.directory-row__summary {
+  min-height: 44px;
+  padding: 10px 12px;
+}
+
+.directory-row__summary-main,
+.directory-row__summary-meta,
+.directory-row__title-wrap {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.directory-row__summary-main {
+  gap: 8px;
+}
+
+.directory-row__summary-meta {
+  gap: 10px;
+}
+
+.directory-row__icon {
+  flex: 0 0 auto;
+  line-height: 1;
+}
+
+.directory-row__title-wrap {
+  min-width: 0;
+}
+
+.directory-row__attention {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.directory-row__chevron {
+  color: var(--text-muted);
+  font-size: 12px;
+  transition: transform 120ms ease;
+}
+
+.directory-row__chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.directory-row__launchpad-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.directory-row__launchpad-button:hover {
+  background: var(--bg-panel-hover);
+}
+
+.directory-row__launchpad-button.has-draft {
+  border-color: var(--accent-border);
+  background: rgba(184, 255, 77, 0.08);
+  color: var(--accent);
+}
+
+.directory-row__details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0 14px 0;
+}
+
+.directory-row__threads {
+  padding-left: 8px;
+}
+
+.directory-row__empty {
+  margin-top: 0;
+  padding-left: 8px;
+}
+
 .directory-group {
   padding-top: 12px;
   border-top: 1px solid var(--border-subtle);
@@ -638,6 +744,49 @@ textarea {
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel);
+}
+
+.launchpad-panel {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.launchpad-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.launchpad-panel__header p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.launchpad-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px;
+}
+
+.launchpad-grid dt {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.launchpad-grid dd {
+  margin: 4px 0 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.45;
+  word-break: break-word;
 }
 
 .transcript-panel {
@@ -1639,6 +1788,58 @@ textarea {
   gap: 8px;
 }
 
+.composer__setup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer__control-group {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.composer__control-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.composer__select {
+  min-width: 168px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-primary);
+}
+
+.composer__select:disabled {
+  opacity: 1;
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.composer__select--compact {
+  min-width: 0;
+  width: auto;
+  max-width: 220px;
+}
+
+.composer__checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
 .composer__autocomplete {
   position: absolute;
   right: 0;
@@ -1730,6 +1931,10 @@ textarea {
   .transcript-list__scroll-bottom {
     left: 50%;
     bottom: 16px;
+  }
+
+  .launchpad-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .context-rail,

@@ -1,13 +1,17 @@
 import type {
+  DirectoryLaunchpadOverlayState,
+  NavigationDirectoryGitStatus,
   AppServerBackendScope,
   AppServerThreadSummary,
   LinkedDirectorySummary,
   NavigationSnapshot,
   NavigationThreadSummary,
+  NavigationLaunchpadDefaults,
   ThreadOverlayState,
 } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
 import { deriveInboxState, rankInboxThreadKeys } from "./inbox";
+import { buildDirectorySummaries } from "./directory-navigation";
 
 function dedupeLinkedDirectories(
   directories: LinkedDirectorySummary[],
@@ -60,6 +64,9 @@ export function buildNavigationSnapshot(params: {
   fetchedAt: number;
   firstSnapshot: boolean;
   now?: number;
+  gitStatusByDirectoryKey?: Record<string, NavigationDirectoryGitStatus | undefined>;
+  launchpadDefaults?: NavigationLaunchpadDefaults;
+  launchpadsByKey?: Record<string, DirectoryLaunchpadOverlayState | undefined>;
   overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
   previousKnownThreadKeys: string[];
   threads: AppServerThreadSummary[];
@@ -79,11 +86,22 @@ export function buildNavigationSnapshot(params: {
     unchanged: params.unchanged,
     threads,
     inboxThreadKeys: rankInboxThreadKeys(threads),
+    directories: buildDirectorySummaries({
+      threads,
+      launchpadsByKey: params.launchpadsByKey,
+      gitStatusByKey: params.gitStatusByDirectoryKey,
+    }),
+    launchpadDefaults: params.launchpadDefaults ?? {
+      backend: "codex",
+      executionMode: "default",
+    },
   };
 }
 
 export function buildNavigationSnapshotHash(params: {
   backend: AppServerBackendScope;
+  directories?: NavigationSnapshot["directories"];
+  launchpadDefaults?: NavigationLaunchpadDefaults;
   threads: NavigationThreadSummary[];
 }): string {
   return JSON.stringify({
@@ -109,5 +127,38 @@ export function buildNavigationSnapshotHash(params: {
         lastSeenUpdatedAt: thread.inbox.lastSeenUpdatedAt ?? null,
       },
     })),
+    directories: (params.directories ?? []).map((directory) => ({
+      key: directory.key,
+      kind: directory.kind,
+      label: directory.label,
+      path: directory.path ?? null,
+      threadKeys: directory.threadKeys,
+      needsAttentionCount: directory.needsAttentionCount,
+      latestUpdatedAt: directory.latestUpdatedAt ?? null,
+      launchpad: directory.launchpad
+        ? {
+            backend: directory.launchpad.backend,
+            executionMode: directory.launchpad.executionMode,
+            prompt: directory.launchpad.prompt,
+            workMode: directory.launchpad.workMode,
+            branchName: directory.launchpad.branchName ?? null,
+            updatedAt: directory.launchpad.updatedAt,
+          }
+        : null,
+      gitStatus: directory.gitStatus
+        ? {
+            currentBranch: directory.gitStatus.currentBranch ?? null,
+            upstreamBranch: directory.gitStatus.upstreamBranch ?? null,
+            ahead: directory.gitStatus.ahead ?? null,
+            behind: directory.gitStatus.behind ?? null,
+            branches: directory.gitStatus.branches ?? [],
+            syncState: directory.gitStatus.syncState ?? null,
+          }
+        : null,
+    })),
+    launchpadDefaults: params.launchpadDefaults ?? {
+      backend: "codex",
+      executionMode: "default",
+    },
   });
 }

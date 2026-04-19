@@ -5,6 +5,12 @@ import type {
   AppServerTurnInputItem,
   ThreadIdentifier,
 } from "./app-server";
+import type {
+  DirectorySummaryKind,
+  LaunchpadWorkMode,
+  NavigationLaunchpadDraft,
+  NavigationLaunchpadDefaults,
+} from "./navigation";
 
 export type StartThreadRequest = {
   backend: AppServerBackendKind;
@@ -65,9 +71,7 @@ export type SubmitServerRequestRequest = {
   threadId: ThreadIdentifier;
   runId?: string;
   requestId: string;
-  response: {
-    decision: "approve" | "decline" | "cancel";
-  };
+  response: Record<string, unknown>;
 };
 
 export type SubmitServerRequestResponse = {
@@ -75,6 +79,67 @@ export type SubmitServerRequestResponse = {
   threadId: ThreadIdentifier;
   runId?: string;
   requestId: string;
+};
+
+export type EnsureDirectoryLaunchpadRequest = {
+  directoryKey: string;
+  directoryKind: DirectorySummaryKind;
+  directoryLabel: string;
+  directoryPath?: string;
+  currentBranch?: string;
+  preferredBackend?: AppServerBackendKind;
+};
+
+export type EnsureDirectoryLaunchpadResponse = {
+  launchpad: NavigationLaunchpadDraft;
+  defaults: NavigationLaunchpadDefaults;
+};
+
+export type UpdateDirectoryLaunchpadRequest = {
+  directoryKey: string;
+  patch: Partial<
+    Pick<
+      NavigationLaunchpadDraft,
+      | "prompt"
+      | "backend"
+      | "executionMode"
+      | "model"
+      | "reasoningEffort"
+      | "serviceTier"
+      | "fastMode"
+      | "workMode"
+      | "branchName"
+      | "directoryLabel"
+      | "directoryPath"
+    >
+  >;
+};
+
+export type UpdateDirectoryLaunchpadResponse = {
+  launchpad: NavigationLaunchpadDraft;
+  defaults: NavigationLaunchpadDefaults;
+};
+
+export type ResetDirectoryLaunchpadRequest = {
+  directoryKey: string;
+};
+
+export type ResetDirectoryLaunchpadResponse = {
+  directoryKey: string;
+  defaults: NavigationLaunchpadDefaults;
+};
+
+export type MaterializeDirectoryLaunchpadRequest = {
+  directoryKey: string;
+  input?: AppServerTurnInputItem[];
+};
+
+export type MaterializeDirectoryLaunchpadResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  runId?: string;
+  executionMode: ThreadExecutionMode;
+  workMode: LaunchpadWorkMode;
 };
 
 export type AgentEvent = {
