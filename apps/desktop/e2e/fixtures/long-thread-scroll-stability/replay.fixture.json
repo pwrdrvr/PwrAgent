@@ -1,0 +1,2095 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "long-thread-scroll-stability",
+    "threadId": "thread-long-scroll"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-long-scroll",
+          "title": "Long scroll stability thread",
+          "titleSource": "explicit",
+          "summary": "Open a very long transcript without drifting downward.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000005000
+        },
+        {
+          "id": "thread-short-companion",
+          "title": "Short companion thread",
+          "titleSource": "explicit",
+          "summary": "Used to verify saved viewport restore after switching away.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1760000004000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "long-message-1",
+            "role": "user",
+            "text": "Long thread message 1: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-2",
+            "role": "assistant",
+            "text": "Long thread message 2: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-3",
+            "role": "user",
+            "text": "Long thread message 3: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-4",
+            "role": "assistant",
+            "text": "Long thread message 4: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-5",
+            "role": "user",
+            "text": "Long thread message 5: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-6",
+            "role": "assistant",
+            "text": "Long thread message 6: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-7",
+            "role": "user",
+            "text": "Long thread message 7: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-8",
+            "role": "assistant",
+            "text": "Long thread message 8: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-9",
+            "role": "user",
+            "text": "Long thread message 9: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-10",
+            "role": "assistant",
+            "text": "Long thread message 10: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-11",
+            "role": "user",
+            "text": "Long thread message 11: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-12",
+            "role": "assistant",
+            "text": "Long thread message 12: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-13",
+            "role": "user",
+            "text": "Long thread message 13: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-14",
+            "role": "assistant",
+            "text": "Long thread message 14: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-15",
+            "role": "user",
+            "text": "Long thread message 15: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-16",
+            "role": "assistant",
+            "text": "Long thread message 16: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-17",
+            "role": "user",
+            "text": "Long thread message 17: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-18",
+            "role": "assistant",
+            "text": "Long thread message 18: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-19",
+            "role": "user",
+            "text": "Long thread message 19: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-20",
+            "role": "assistant",
+            "text": "Long thread message 20: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-21",
+            "role": "user",
+            "text": "Long thread message 21: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-22",
+            "role": "assistant",
+            "text": "Long thread message 22: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-23",
+            "role": "user",
+            "text": "Long thread message 23: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-24",
+            "role": "assistant",
+            "text": "Long thread message 24: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-25",
+            "role": "user",
+            "text": "Long thread message 25: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-26",
+            "role": "assistant",
+            "text": "Long thread message 26: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-27",
+            "role": "user",
+            "text": "Long thread message 27: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-28",
+            "role": "assistant",
+            "text": "Long thread message 28: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-29",
+            "role": "user",
+            "text": "Long thread message 29: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-30",
+            "role": "assistant",
+            "text": "Long thread message 30: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-31",
+            "role": "user",
+            "text": "Long thread message 31: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-32",
+            "role": "assistant",
+            "text": "Long thread message 32: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-33",
+            "role": "user",
+            "text": "Long thread message 33: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-34",
+            "role": "assistant",
+            "text": "Long thread message 34: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-35",
+            "role": "user",
+            "text": "Long thread message 35: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-36",
+            "role": "assistant",
+            "text": "Long thread message 36: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-37",
+            "role": "user",
+            "text": "Long thread message 37: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-38",
+            "role": "assistant",
+            "text": "Long thread message 38: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-39",
+            "role": "user",
+            "text": "Long thread message 39: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-40",
+            "role": "assistant",
+            "text": "Long thread message 40: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-41",
+            "role": "user",
+            "text": "Long thread message 41: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-42",
+            "role": "assistant",
+            "text": "Long thread message 42: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-43",
+            "role": "user",
+            "text": "Long thread message 43: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-44",
+            "role": "assistant",
+            "text": "Long thread message 44: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-45",
+            "role": "user",
+            "text": "Long thread message 45: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-46",
+            "role": "assistant",
+            "text": "Long thread message 46: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-47",
+            "role": "user",
+            "text": "Long thread message 47: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-48",
+            "role": "assistant",
+            "text": "Long thread message 48: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-49",
+            "role": "user",
+            "text": "Long thread message 49: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-50",
+            "role": "assistant",
+            "text": "Long thread message 50: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-51",
+            "role": "user",
+            "text": "Long thread message 51: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-52",
+            "role": "assistant",
+            "text": "Long thread message 52: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-53",
+            "role": "user",
+            "text": "Long thread message 53: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-54",
+            "role": "assistant",
+            "text": "Long thread message 54: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-55",
+            "role": "user",
+            "text": "Long thread message 55: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-56",
+            "role": "assistant",
+            "text": "Long thread message 56: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-57",
+            "role": "user",
+            "text": "Long thread message 57: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-58",
+            "role": "assistant",
+            "text": "Long thread message 58: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-59",
+            "role": "user",
+            "text": "Long thread message 59: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-60",
+            "role": "assistant",
+            "text": "Long thread message 60: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-61",
+            "role": "user",
+            "text": "Long thread message 61: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-62",
+            "role": "assistant",
+            "text": "Long thread message 62: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-63",
+            "role": "user",
+            "text": "Long thread message 63: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-64",
+            "role": "assistant",
+            "text": "Long thread message 64: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-65",
+            "role": "user",
+            "text": "Long thread message 65: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-66",
+            "role": "assistant",
+            "text": "Long thread message 66: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-67",
+            "role": "user",
+            "text": "Long thread message 67: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-68",
+            "role": "assistant",
+            "text": "Long thread message 68: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-69",
+            "role": "user",
+            "text": "Long thread message 69: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-70",
+            "role": "assistant",
+            "text": "Long thread message 70: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-71",
+            "role": "user",
+            "text": "Long thread message 71: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-72",
+            "role": "assistant",
+            "text": "Long thread message 72: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-73",
+            "role": "user",
+            "text": "Long thread message 73: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-74",
+            "role": "assistant",
+            "text": "Long thread message 74: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-75",
+            "role": "user",
+            "text": "Long thread message 75: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-76",
+            "role": "assistant",
+            "text": "Long thread message 76: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-77",
+            "role": "user",
+            "text": "Long thread message 77: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-78",
+            "role": "assistant",
+            "text": "Long thread message 78: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-79",
+            "role": "user",
+            "text": "Long thread message 79: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-80",
+            "role": "assistant",
+            "text": "Long thread message 80: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-81",
+            "role": "user",
+            "text": "Long thread message 81: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-82",
+            "role": "assistant",
+            "text": "Long thread message 82: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-83",
+            "role": "user",
+            "text": "Long thread message 83: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-84",
+            "role": "assistant",
+            "text": "Long thread message 84: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-85",
+            "role": "user",
+            "text": "Long thread message 85: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-86",
+            "role": "assistant",
+            "text": "Long thread message 86: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-87",
+            "role": "user",
+            "text": "Long thread message 87: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-88",
+            "role": "assistant",
+            "text": "Long thread message 88: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-89",
+            "role": "user",
+            "text": "Long thread message 89: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-90",
+            "role": "assistant",
+            "text": "Long thread message 90: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-91",
+            "role": "user",
+            "text": "Long thread message 91: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-92",
+            "role": "assistant",
+            "text": "Long thread message 92: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-93",
+            "role": "user",
+            "text": "Long thread message 93: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-94",
+            "role": "assistant",
+            "text": "Long thread message 94: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-95",
+            "role": "user",
+            "text": "Long thread message 95: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-96",
+            "role": "assistant",
+            "text": "Long thread message 96: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-97",
+            "role": "user",
+            "text": "Long thread message 97: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-98",
+            "role": "assistant",
+            "text": "Long thread message 98: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-99",
+            "role": "user",
+            "text": "Long thread message 99: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-100",
+            "role": "assistant",
+            "text": "Long thread message 100: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-101",
+            "role": "user",
+            "text": "Long thread message 101: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-102",
+            "role": "assistant",
+            "text": "Long thread message 102: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-103",
+            "role": "user",
+            "text": "Long thread message 103: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-104",
+            "role": "assistant",
+            "text": "Long thread message 104: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-105",
+            "role": "user",
+            "text": "Long thread message 105: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-106",
+            "role": "assistant",
+            "text": "Long thread message 106: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-107",
+            "role": "user",
+            "text": "Long thread message 107: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-108",
+            "role": "assistant",
+            "text": "Long thread message 108: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-109",
+            "role": "user",
+            "text": "Long thread message 109: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-110",
+            "role": "assistant",
+            "text": "Long thread message 110: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-111",
+            "role": "user",
+            "text": "Long thread message 111: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-112",
+            "role": "assistant",
+            "text": "Long thread message 112: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-113",
+            "role": "user",
+            "text": "Long thread message 113: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-114",
+            "role": "assistant",
+            "text": "Long thread message 114: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-115",
+            "role": "user",
+            "text": "Long thread message 115: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-116",
+            "role": "assistant",
+            "text": "Long thread message 116: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-117",
+            "role": "user",
+            "text": "Long thread message 117: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-118",
+            "role": "assistant",
+            "text": "Long thread message 118: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-119",
+            "role": "user",
+            "text": "Long thread message 119: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-120",
+            "role": "assistant",
+            "text": "Long thread message 120: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-121",
+            "role": "user",
+            "text": "Long thread message 121: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-122",
+            "role": "assistant",
+            "text": "Long thread message 122: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-123",
+            "role": "user",
+            "text": "Long thread message 123: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-124",
+            "role": "assistant",
+            "text": "Long thread message 124: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-125",
+            "role": "user",
+            "text": "Long thread message 125: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-126",
+            "role": "assistant",
+            "text": "Long thread message 126: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-127",
+            "role": "user",
+            "text": "Long thread message 127: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-128",
+            "role": "assistant",
+            "text": "Long thread message 128: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-129",
+            "role": "user",
+            "text": "Long thread message 129: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-130",
+            "role": "assistant",
+            "text": "Long thread message 130: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-131",
+            "role": "user",
+            "text": "Long thread message 131: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-132",
+            "role": "assistant",
+            "text": "Long thread message 132: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-133",
+            "role": "user",
+            "text": "Long thread message 133: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-134",
+            "role": "assistant",
+            "text": "Long thread message 134: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-135",
+            "role": "user",
+            "text": "Long thread message 135: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-136",
+            "role": "assistant",
+            "text": "Long thread message 136: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-137",
+            "role": "user",
+            "text": "Long thread message 137: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-138",
+            "role": "assistant",
+            "text": "Long thread message 138: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-139",
+            "role": "user",
+            "text": "Long thread message 139: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-140",
+            "role": "assistant",
+            "text": "Long thread message 140: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-141",
+            "role": "user",
+            "text": "Long thread message 141: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-142",
+            "role": "assistant",
+            "text": "Long thread message 142: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-143",
+            "role": "user",
+            "text": "Long thread message 143: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-144",
+            "role": "assistant",
+            "text": "Long thread message 144: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-145",
+            "role": "user",
+            "text": "Long thread message 145: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-146",
+            "role": "assistant",
+            "text": "Long thread message 146: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-147",
+            "role": "user",
+            "text": "Long thread message 147: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-148",
+            "role": "assistant",
+            "text": "Long thread message 148: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-149",
+            "role": "user",
+            "text": "Long thread message 149: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-150",
+            "role": "assistant",
+            "text": "Long thread message 150: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-151",
+            "role": "user",
+            "text": "Long thread message 151: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-152",
+            "role": "assistant",
+            "text": "Long thread message 152: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-153",
+            "role": "user",
+            "text": "Long thread message 153: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-154",
+            "role": "assistant",
+            "text": "Long thread message 154: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-155",
+            "role": "user",
+            "text": "Long thread message 155: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-156",
+            "role": "assistant",
+            "text": "Long thread message 156: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-157",
+            "role": "user",
+            "text": "Long thread message 157: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-158",
+            "role": "assistant",
+            "text": "Long thread message 158: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-159",
+            "role": "user",
+            "text": "Long thread message 159: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-160",
+            "role": "assistant",
+            "text": "Long thread message 160: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-161",
+            "role": "user",
+            "text": "Long thread message 161: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-162",
+            "role": "assistant",
+            "text": "Long thread message 162: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-163",
+            "role": "user",
+            "text": "Long thread message 163: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-164",
+            "role": "assistant",
+            "text": "Long thread message 164: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-165",
+            "role": "user",
+            "text": "Long thread message 165: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-166",
+            "role": "assistant",
+            "text": "Long thread message 166: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-167",
+            "role": "user",
+            "text": "Long thread message 167: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-168",
+            "role": "assistant",
+            "text": "Long thread message 168: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-169",
+            "role": "user",
+            "text": "Long thread message 169: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-170",
+            "role": "assistant",
+            "text": "Long thread message 170: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-171",
+            "role": "user",
+            "text": "Long thread message 171: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-172",
+            "role": "assistant",
+            "text": "Long thread message 172: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-173",
+            "role": "user",
+            "text": "Long thread message 173: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-174",
+            "role": "assistant",
+            "text": "Long thread message 174: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-175",
+            "role": "user",
+            "text": "Long thread message 175: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-176",
+            "role": "assistant",
+            "text": "Long thread message 176: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-177",
+            "role": "user",
+            "text": "Long thread message 177: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-178",
+            "role": "assistant",
+            "text": "Long thread message 178: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-179",
+            "role": "user",
+            "text": "Long thread message 179: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "type": "message",
+            "id": "long-message-180",
+            "role": "assistant",
+            "text": "Long thread message 180: final transcript marker."
+          }
+        ],
+        "messages": [
+          {
+            "id": "long-message-1",
+            "role": "user",
+            "text": "Long thread message 1: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-2",
+            "role": "assistant",
+            "text": "Long thread message 2: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-3",
+            "role": "user",
+            "text": "Long thread message 3: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-4",
+            "role": "assistant",
+            "text": "Long thread message 4: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-5",
+            "role": "user",
+            "text": "Long thread message 5: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-6",
+            "role": "assistant",
+            "text": "Long thread message 6: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-7",
+            "role": "user",
+            "text": "Long thread message 7: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-8",
+            "role": "assistant",
+            "text": "Long thread message 8: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-9",
+            "role": "user",
+            "text": "Long thread message 9: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-10",
+            "role": "assistant",
+            "text": "Long thread message 10: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-11",
+            "role": "user",
+            "text": "Long thread message 11: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-12",
+            "role": "assistant",
+            "text": "Long thread message 12: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-13",
+            "role": "user",
+            "text": "Long thread message 13: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-14",
+            "role": "assistant",
+            "text": "Long thread message 14: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-15",
+            "role": "user",
+            "text": "Long thread message 15: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-16",
+            "role": "assistant",
+            "text": "Long thread message 16: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-17",
+            "role": "user",
+            "text": "Long thread message 17: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-18",
+            "role": "assistant",
+            "text": "Long thread message 18: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-19",
+            "role": "user",
+            "text": "Long thread message 19: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-20",
+            "role": "assistant",
+            "text": "Long thread message 20: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-21",
+            "role": "user",
+            "text": "Long thread message 21: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-22",
+            "role": "assistant",
+            "text": "Long thread message 22: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-23",
+            "role": "user",
+            "text": "Long thread message 23: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-24",
+            "role": "assistant",
+            "text": "Long thread message 24: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-25",
+            "role": "user",
+            "text": "Long thread message 25: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-26",
+            "role": "assistant",
+            "text": "Long thread message 26: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-27",
+            "role": "user",
+            "text": "Long thread message 27: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-28",
+            "role": "assistant",
+            "text": "Long thread message 28: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-29",
+            "role": "user",
+            "text": "Long thread message 29: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-30",
+            "role": "assistant",
+            "text": "Long thread message 30: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-31",
+            "role": "user",
+            "text": "Long thread message 31: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-32",
+            "role": "assistant",
+            "text": "Long thread message 32: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-33",
+            "role": "user",
+            "text": "Long thread message 33: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-34",
+            "role": "assistant",
+            "text": "Long thread message 34: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-35",
+            "role": "user",
+            "text": "Long thread message 35: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-36",
+            "role": "assistant",
+            "text": "Long thread message 36: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-37",
+            "role": "user",
+            "text": "Long thread message 37: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-38",
+            "role": "assistant",
+            "text": "Long thread message 38: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-39",
+            "role": "user",
+            "text": "Long thread message 39: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-40",
+            "role": "assistant",
+            "text": "Long thread message 40: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-41",
+            "role": "user",
+            "text": "Long thread message 41: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-42",
+            "role": "assistant",
+            "text": "Long thread message 42: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-43",
+            "role": "user",
+            "text": "Long thread message 43: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-44",
+            "role": "assistant",
+            "text": "Long thread message 44: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-45",
+            "role": "user",
+            "text": "Long thread message 45: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-46",
+            "role": "assistant",
+            "text": "Long thread message 46: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-47",
+            "role": "user",
+            "text": "Long thread message 47: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-48",
+            "role": "assistant",
+            "text": "Long thread message 48: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-49",
+            "role": "user",
+            "text": "Long thread message 49: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-50",
+            "role": "assistant",
+            "text": "Long thread message 50: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-51",
+            "role": "user",
+            "text": "Long thread message 51: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-52",
+            "role": "assistant",
+            "text": "Long thread message 52: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-53",
+            "role": "user",
+            "text": "Long thread message 53: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-54",
+            "role": "assistant",
+            "text": "Long thread message 54: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-55",
+            "role": "user",
+            "text": "Long thread message 55: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-56",
+            "role": "assistant",
+            "text": "Long thread message 56: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-57",
+            "role": "user",
+            "text": "Long thread message 57: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-58",
+            "role": "assistant",
+            "text": "Long thread message 58: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-59",
+            "role": "user",
+            "text": "Long thread message 59: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-60",
+            "role": "assistant",
+            "text": "Long thread message 60: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-61",
+            "role": "user",
+            "text": "Long thread message 61: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-62",
+            "role": "assistant",
+            "text": "Long thread message 62: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-63",
+            "role": "user",
+            "text": "Long thread message 63: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-64",
+            "role": "assistant",
+            "text": "Long thread message 64: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-65",
+            "role": "user",
+            "text": "Long thread message 65: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-66",
+            "role": "assistant",
+            "text": "Long thread message 66: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-67",
+            "role": "user",
+            "text": "Long thread message 67: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-68",
+            "role": "assistant",
+            "text": "Long thread message 68: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-69",
+            "role": "user",
+            "text": "Long thread message 69: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-70",
+            "role": "assistant",
+            "text": "Long thread message 70: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-71",
+            "role": "user",
+            "text": "Long thread message 71: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-72",
+            "role": "assistant",
+            "text": "Long thread message 72: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-73",
+            "role": "user",
+            "text": "Long thread message 73: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-74",
+            "role": "assistant",
+            "text": "Long thread message 74: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-75",
+            "role": "user",
+            "text": "Long thread message 75: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-76",
+            "role": "assistant",
+            "text": "Long thread message 76: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-77",
+            "role": "user",
+            "text": "Long thread message 77: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-78",
+            "role": "assistant",
+            "text": "Long thread message 78: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-79",
+            "role": "user",
+            "text": "Long thread message 79: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-80",
+            "role": "assistant",
+            "text": "Long thread message 80: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-81",
+            "role": "user",
+            "text": "Long thread message 81: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-82",
+            "role": "assistant",
+            "text": "Long thread message 82: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-83",
+            "role": "user",
+            "text": "Long thread message 83: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-84",
+            "role": "assistant",
+            "text": "Long thread message 84: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-85",
+            "role": "user",
+            "text": "Long thread message 85: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-86",
+            "role": "assistant",
+            "text": "Long thread message 86: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-87",
+            "role": "user",
+            "text": "Long thread message 87: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-88",
+            "role": "assistant",
+            "text": "Long thread message 88: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-89",
+            "role": "user",
+            "text": "Long thread message 89: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-90",
+            "role": "assistant",
+            "text": "Long thread message 90: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-91",
+            "role": "user",
+            "text": "Long thread message 91: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-92",
+            "role": "assistant",
+            "text": "Long thread message 92: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-93",
+            "role": "user",
+            "text": "Long thread message 93: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-94",
+            "role": "assistant",
+            "text": "Long thread message 94: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-95",
+            "role": "user",
+            "text": "Long thread message 95: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-96",
+            "role": "assistant",
+            "text": "Long thread message 96: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-97",
+            "role": "user",
+            "text": "Long thread message 97: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-98",
+            "role": "assistant",
+            "text": "Long thread message 98: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-99",
+            "role": "user",
+            "text": "Long thread message 99: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-100",
+            "role": "assistant",
+            "text": "Long thread message 100: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-101",
+            "role": "user",
+            "text": "Long thread message 101: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-102",
+            "role": "assistant",
+            "text": "Long thread message 102: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-103",
+            "role": "user",
+            "text": "Long thread message 103: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-104",
+            "role": "assistant",
+            "text": "Long thread message 104: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-105",
+            "role": "user",
+            "text": "Long thread message 105: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-106",
+            "role": "assistant",
+            "text": "Long thread message 106: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-107",
+            "role": "user",
+            "text": "Long thread message 107: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-108",
+            "role": "assistant",
+            "text": "Long thread message 108: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-109",
+            "role": "user",
+            "text": "Long thread message 109: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-110",
+            "role": "assistant",
+            "text": "Long thread message 110: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-111",
+            "role": "user",
+            "text": "Long thread message 111: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-112",
+            "role": "assistant",
+            "text": "Long thread message 112: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-113",
+            "role": "user",
+            "text": "Long thread message 113: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-114",
+            "role": "assistant",
+            "text": "Long thread message 114: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-115",
+            "role": "user",
+            "text": "Long thread message 115: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-116",
+            "role": "assistant",
+            "text": "Long thread message 116: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-117",
+            "role": "user",
+            "text": "Long thread message 117: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-118",
+            "role": "assistant",
+            "text": "Long thread message 118: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-119",
+            "role": "user",
+            "text": "Long thread message 119: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-120",
+            "role": "assistant",
+            "text": "Long thread message 120: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-121",
+            "role": "user",
+            "text": "Long thread message 121: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-122",
+            "role": "assistant",
+            "text": "Long thread message 122: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-123",
+            "role": "user",
+            "text": "Long thread message 123: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-124",
+            "role": "assistant",
+            "text": "Long thread message 124: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-125",
+            "role": "user",
+            "text": "Long thread message 125: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-126",
+            "role": "assistant",
+            "text": "Long thread message 126: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-127",
+            "role": "user",
+            "text": "Long thread message 127: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-128",
+            "role": "assistant",
+            "text": "Long thread message 128: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-129",
+            "role": "user",
+            "text": "Long thread message 129: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-130",
+            "role": "assistant",
+            "text": "Long thread message 130: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-131",
+            "role": "user",
+            "text": "Long thread message 131: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-132",
+            "role": "assistant",
+            "text": "Long thread message 132: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-133",
+            "role": "user",
+            "text": "Long thread message 133: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-134",
+            "role": "assistant",
+            "text": "Long thread message 134: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-135",
+            "role": "user",
+            "text": "Long thread message 135: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-136",
+            "role": "assistant",
+            "text": "Long thread message 136: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-137",
+            "role": "user",
+            "text": "Long thread message 137: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-138",
+            "role": "assistant",
+            "text": "Long thread message 138: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-139",
+            "role": "user",
+            "text": "Long thread message 139: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-140",
+            "role": "assistant",
+            "text": "Long thread message 140: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-141",
+            "role": "user",
+            "text": "Long thread message 141: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-142",
+            "role": "assistant",
+            "text": "Long thread message 142: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-143",
+            "role": "user",
+            "text": "Long thread message 143: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-144",
+            "role": "assistant",
+            "text": "Long thread message 144: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-145",
+            "role": "user",
+            "text": "Long thread message 145: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-146",
+            "role": "assistant",
+            "text": "Long thread message 146: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-147",
+            "role": "user",
+            "text": "Long thread message 147: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-148",
+            "role": "assistant",
+            "text": "Long thread message 148: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-149",
+            "role": "user",
+            "text": "Long thread message 149: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-150",
+            "role": "assistant",
+            "text": "Long thread message 150: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-151",
+            "role": "user",
+            "text": "Long thread message 151: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-152",
+            "role": "assistant",
+            "text": "Long thread message 152: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-153",
+            "role": "user",
+            "text": "Long thread message 153: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-154",
+            "role": "assistant",
+            "text": "Long thread message 154: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-155",
+            "role": "user",
+            "text": "Long thread message 155: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-156",
+            "role": "assistant",
+            "text": "Long thread message 156: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-157",
+            "role": "user",
+            "text": "Long thread message 157: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-158",
+            "role": "assistant",
+            "text": "Long thread message 158: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-159",
+            "role": "user",
+            "text": "Long thread message 159: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-160",
+            "role": "assistant",
+            "text": "Long thread message 160: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-161",
+            "role": "user",
+            "text": "Long thread message 161: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-162",
+            "role": "assistant",
+            "text": "Long thread message 162: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-163",
+            "role": "user",
+            "text": "Long thread message 163: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-164",
+            "role": "assistant",
+            "text": "Long thread message 164: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-165",
+            "role": "user",
+            "text": "Long thread message 165: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-166",
+            "role": "assistant",
+            "text": "Long thread message 166: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-167",
+            "role": "user",
+            "text": "Long thread message 167: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-168",
+            "role": "assistant",
+            "text": "Long thread message 168: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-169",
+            "role": "user",
+            "text": "Long thread message 169: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-170",
+            "role": "assistant",
+            "text": "Long thread message 170: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-171",
+            "role": "user",
+            "text": "Long thread message 171: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-172",
+            "role": "assistant",
+            "text": "Long thread message 172: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-173",
+            "role": "user",
+            "text": "Long thread message 173: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-174",
+            "role": "assistant",
+            "text": "Long thread message 174: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-175",
+            "role": "user",
+            "text": "Long thread message 175: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-176",
+            "role": "assistant",
+            "text": "Long thread message 176: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-177",
+            "role": "user",
+            "text": "Long thread message 177: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-178",
+            "role": "assistant",
+            "text": "Long thread message 178: renderer should keep the newest content pinned immediately; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-179",
+            "role": "user",
+            "text": "Long thread message 179: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance."
+          },
+          {
+            "id": "long-message-180",
+            "role": "assistant",
+            "text": "Long thread message 180: final transcript marker."
+          }
+        ],
+        "lastUserMessage": "Long thread message 179: opening this transcript must not animate downward after selection; this line is intentionally verbose so the replay stays extremely tall across Electron layouts and CI rendering variance.",
+        "lastAssistantMessage": "Long thread message 180: final transcript marker.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "thread-read-2",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "short-message-1",
+            "role": "user",
+            "text": "Short companion thread message 1."
+          },
+          {
+            "type": "message",
+            "id": "short-message-2",
+            "role": "assistant",
+            "text": "Short companion thread message 2."
+          }
+        ],
+        "messages": [
+          {
+            "id": "short-message-1",
+            "role": "user",
+            "text": "Short companion thread message 1."
+          },
+          {
+            "id": "short-message-2",
+            "role": "assistant",
+            "text": "Short companion thread message 2."
+          }
+        ],
+        "lastUserMessage": "Short companion thread message 1.",
+        "lastAssistantMessage": "Short companion thread message 2.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

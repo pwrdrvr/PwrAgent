@@ -1,9 +1,34 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+
+async function sampleScrollTop(locator: Locator) {
+  return await locator.evaluate((element) => Math.round(element.scrollTop));
+}
+
+async function expectScrollTopStable(
+  locator: Locator,
+  samples = 5,
+  intervalMs = 100
+) {
+  const values: number[] = [];
+
+  for (let index = 0; index < samples; index += 1) {
+    values.push(await sampleScrollTop(locator));
+    if (index < samples - 1) {
+      await locator.page().waitForTimeout(intervalMs);
+    }
+  }
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+
+  expect(max - min, `scrollTop drifted across samples: ${values.join(", ")}`).toBeLessThanOrEqual(4);
+  return values[values.length - 1] ?? 0;
+}
 
 test("restores the saved transcript viewport when reselecting a cached thread", async () => {
   const app = await launchElectronApp({
@@ -58,6 +83,7 @@ test("restores the saved transcript viewport when reselecting a cached thread", 
       ),
       scrollTop: Math.round(element.scrollTop),
     }));
+    await expectScrollTopStable(list);
 
     await app.window
       .getByRole("button", { name: /Second scroll replay thread/i })
@@ -89,9 +115,8 @@ test("restores the saved transcript viewport when reselecting a cached thread", 
       transcript.getByText("First thread message 20: cached transcript remains stable.")
     ).toBeVisible();
 
-    await expect
-      .poll(async () => await list.evaluate((element) => Math.round(element.scrollTop)))
-      .toBeGreaterThanOrEqual(savedViewport.scrollTop - 4);
+    const restoredScrollTop = await expectScrollTopStable(list);
+    expect(restoredScrollTop).toBeGreaterThanOrEqual(savedViewport.scrollTop - 4);
 
     const scrollMetrics = await list.evaluate((element) => ({
       distanceFromBottom: Math.round(
