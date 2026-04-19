@@ -167,14 +167,7 @@ describe("ThreadView", () => {
     expect(
       screen.getByRole("heading", { level: 2, name: "Plan the app-server protocol" })
     ).toBeInTheDocument();
-    const summary = document.querySelector(".thread-header__summary");
-    expect(summary).not.toBeNull();
-    expect(
-      within(summary as HTMLElement).getByText("thread/read", { selector: "strong" })
-    ).toBeInTheDocument();
-    expect(
-      within(summary as HTMLElement).getByRole("link", { name: "desktop docs" })
-    ).toHaveAttribute("href", "https://example.com");
+    expect(document.querySelector(".thread-header__summary")).toBeNull();
     expect(screen.getByText("Codex")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open context rail" }));
 
@@ -182,6 +175,8 @@ describe("ThreadView", () => {
     expect(
       screen.getByText("The desktop client now reads the full transcript.")
     ).toBeInTheDocument();
+    expect(screen.queryByText("thread/read")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "desktop docs" })).not.toBeInTheDocument();
     expect(screen.getByText("Explored 2 files")).toBeInTheDocument();
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 3, name: "Thread details" })).toBeInTheDocument();

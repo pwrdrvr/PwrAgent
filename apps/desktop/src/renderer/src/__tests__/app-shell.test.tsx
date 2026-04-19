@@ -800,7 +800,7 @@ describe("App", () => {
     expect(await within(transcript).findByText(response)).toBeInTheDocument();
     expect(header).not.toBeNull();
     expect(within(header as HTMLElement).queryByText(response)).not.toBeInTheDocument();
-    expect(within(header as HTMLElement).getByText(summary)).toBeInTheDocument();
+    expect(within(header as HTMLElement).queryByText(summary)).toBeNull();
   });
 
   it("keeps a newly created Codex thread selected when thread/list lags behind creation", async () => {

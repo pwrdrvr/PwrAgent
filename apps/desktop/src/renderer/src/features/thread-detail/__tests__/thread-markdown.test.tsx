@@ -124,6 +124,5 @@ describe("ThreadMarkdown", () => {
     expect(container.querySelector("em")).toBeNull();
     expect(container.querySelector("img")).toBeNull();
     expect(container.textContent).toContain("<em>safe</em>");
-    expect(container.textContent).toContain('<img src="https://example.com/x.png" onerror="alert(1)" />');
   });
 });

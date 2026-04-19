@@ -629,12 +629,29 @@ describe("RendererHeapMonitor", () => {
       fs.readFile(path.join(created.session.directoryPath, "heap-0001.heapsnapshot"), "utf8"),
     ).resolves.toContain('"snapshot":true');
 
-    const eventLines = (
-      await fs.readFile(path.join(created.session.directoryPath, "events.ndjson"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+    const eventsPath = path.join(created.session.directoryPath, "events.ndjson");
+    let eventLines: Array<Record<string, unknown>> = [];
+    const deadline = Date.now() + 1_000;
+
+    while (Date.now() < deadline) {
+      eventLines = (await fs.readFile(eventsPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+      const hasCompletedSnapshot = eventLines.some(
+        (line) =>
+          line.type === "snapshot-completed" &&
+          typeof line.detail === "object" &&
+          line.detail !== null &&
+          (line.detail as { filename?: string }).filename === "heap-0001.heapsnapshot"
+      );
+      if (hasCompletedSnapshot) {
+        break;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
 
     expect(eventLines).toEqual(
       expect.arrayContaining([

@@ -26,7 +26,6 @@ import type {
   AppServerTurnInputItem,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
-<<<<<<< HEAD
 import { getMainLogger } from "../log";
 import {
   JsonRpcConnection,
