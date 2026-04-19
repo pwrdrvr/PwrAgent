@@ -4,6 +4,7 @@ import type { JsonRpcTransport } from "../codex-app-server/json-rpc";
 class MockTransport implements JsonRpcTransport {
   static instances: MockTransport[] = [];
   static readThreadErrorByThreadId = new Map<string, { code: number; message: string }>();
+  static readThreadResultByThreadId = new Map<string, unknown>();
   static threadStartResult: unknown = {
     thread: {
       id: "thread-3",
@@ -201,12 +202,26 @@ class MockTransport implements JsonRpcTransport {
       const readThreadError = threadId
         ? MockTransport.readThreadErrorByThreadId.get(threadId)
         : undefined;
+      const readThreadResult = threadId
+        ? MockTransport.readThreadResultByThreadId.get(threadId)
+        : undefined;
       if (readThreadError) {
         this.messageHandler(
           JSON.stringify({
             jsonrpc: "2.0",
             id: payload.id,
             error: readThreadError
+          })
+        );
+        return;
+      }
+
+      if (readThreadResult) {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: readThreadResult
           })
         );
         return;
@@ -447,6 +462,7 @@ describe("CodexAppServerClient", () => {
   beforeEach(() => {
     MockTransport.instances.length = 0;
     MockTransport.readThreadErrorByThreadId.clear();
+    MockTransport.readThreadResultByThreadId.clear();
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-3",
@@ -991,6 +1007,220 @@ describe("CodexAppServerClient", () => {
       }
     ]);
     expect(replay.lastUserMessage).toBe("Describe this image");
+
+    await client.close();
+  });
+
+  it("extracts structured plan items from thread/read", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-plan-item", {
+      thread: {
+        turns: [
+          {
+            id: "turn-1",
+            startedAt: 1_763_500_200,
+            items: [
+              {
+                type: "userMessage",
+                id: "item-1",
+                content: [{ type: "text", text: "Plan the desktop transcript work." }]
+              },
+              {
+                type: "plan",
+                id: "plan-1",
+                explanation: "Keep the transcript contract stable.",
+                steps: [
+                  { step: "Normalize replay", status: "completed" },
+                  { step: "Render live plan progress", status: "in_progress" }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-plan-item"
+    });
+
+    expect(replay.entries).toEqual([
+      {
+        type: "message",
+        id: "item-1",
+        role: "user",
+        text: "Plan the desktop transcript work.",
+        createdAt: 1_763_500_200_000,
+        parts: [
+          {
+            type: "text",
+            text: "Plan the desktop transcript work."
+          }
+        ]
+      },
+      {
+        type: "plan",
+        id: "plan-1",
+        createdAt: 1_763_500_200_000,
+        explanation: "Keep the transcript contract stable.",
+        steps: [
+          { step: "Normalize replay", status: "completed" },
+          { step: "Render live plan progress", status: "in_progress" }
+        ]
+      }
+    ]);
+
+    await client.close();
+  });
+
+  it("extracts update_plan function calls from thread/read", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-plan-call", {
+      thread: {
+        turns: [
+          {
+            id: "turn-1",
+            startedAt: 1_763_500_300,
+            items: [
+              {
+                type: "userMessage",
+                id: "item-1",
+                content: [{ type: "text", text: "Build the task list rendering." }]
+              },
+              {
+                type: "function_call",
+                id: "item-2",
+                name: "update_plan",
+                arguments: JSON.stringify({
+                  explanation: "Track the desktop work in three steps.",
+                  plan: [
+                    { step: "Normalize replay", status: "pending" },
+                    { step: "Render plan cards", status: "pending" },
+                    { step: "Verify with tests", status: "pending" }
+                  ]
+                })
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-plan-call"
+    });
+
+    expect(replay.entries).toEqual([
+      {
+        type: "message",
+        id: "item-1",
+        role: "user",
+        text: "Build the task list rendering.",
+        createdAt: 1_763_500_300_000,
+        parts: [
+          {
+            type: "text",
+            text: "Build the task list rendering."
+          }
+        ]
+      },
+      {
+        type: "plan",
+        id: "item-2",
+        createdAt: 1_763_500_300_000,
+        explanation: "Track the desktop work in three steps.",
+        steps: [
+          { step: "Normalize replay", status: "pending" },
+          { step: "Render plan cards", status: "pending" },
+          { step: "Verify with tests", status: "pending" }
+        ]
+      }
+    ]);
+
+    await client.close();
+  });
+
+  it("extracts wrapped update_plan response items from thread/read", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-wrapped-plan-call", {
+      thread: {
+        turns: [
+          {
+            id: "turn-1",
+            startedAt: 1_763_500_350,
+            items: [
+              {
+                type: "userMessage",
+                id: "item-1",
+                content: [{ type: "text", text: "Trace the image preview bug." }]
+              },
+              {
+                type: "response_item",
+                id: "item-2",
+                payload: {
+                  type: "function_call",
+                  name: "update_plan",
+                  arguments: JSON.stringify({
+                    explanation: "Verify the renderer path before changing it.",
+                    plan: [
+                      { step: "Read the replay normalizer", status: "completed" },
+                      { step: "Inspect the renderer", status: "in_progress" },
+                      { step: "Summarize the findings", status: "pending" }
+                    ]
+                  })
+                }
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-wrapped-plan-call"
+    });
+
+    expect(replay.entries).toEqual([
+      {
+        type: "message",
+        id: "item-1",
+        role: "user",
+        text: "Trace the image preview bug.",
+        createdAt: 1_763_500_350_000,
+        parts: [
+          {
+            type: "text",
+            text: "Trace the image preview bug."
+          }
+        ]
+      },
+      {
+        type: "plan",
+        id: "item-2",
+        createdAt: 1_763_500_350_000,
+        explanation: "Verify the renderer path before changing it.",
+        steps: [
+          { step: "Read the replay normalizer", status: "completed" },
+          { step: "Inspect the renderer", status: "in_progress" },
+          { step: "Summarize the findings", status: "pending" }
+        ]
+      }
+    ]);
 
     await client.close();
   });

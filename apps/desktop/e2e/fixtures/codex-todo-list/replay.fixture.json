@@ -1,0 +1,140 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "codex-todo-list",
+    "sourceCaptureId": "2026-04-19T01-40-27-292Z-codex",
+    "threadId": "019ce224-97ac-7c01-a2ae-55da8b7a4006"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": ["thread/list", "thread/read", "skills/list"]
+      }
+    },
+    {
+      "id": "initialize-2",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": ["thread/list", "thread/read", "skills/list"]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "019ce224-97ac-7c01-a2ae-55da8b7a4006",
+          "title": "Add AGENTS docs for media VCL",
+          "titleSource": "explicit",
+          "summary": "Captured Codex thread with a persisted task plan",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1776562836000
+        }
+      ]
+    },
+    {
+      "id": "thread-list-2",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "019ce224-97ac-7c01-a2ae-55da8b7a4006",
+          "title": "Add AGENTS docs for media VCL",
+          "titleSource": "explicit",
+          "summary": "Captured Codex thread with a persisted task plan",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1776562836000
+        }
+      ]
+    },
+    {
+      "id": "skills-list-1",
+      "kind": "response",
+      "method": "skills/list",
+      "result": []
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Document the current VCL behavior and keep the work tracked."
+          },
+          {
+            "type": "plan",
+            "id": "019ce22a-076d-7293-ba32-19a799d3c3f7-plan",
+            "createdAt": 1776562834000,
+            "steps": [
+              {
+                "step": "Start the implementation by creating a local root plan file named `IMPLEMENTATION_PLAN.local.md` and add that exact filename to `.gitignore`.",
+                "status": "pending"
+              },
+              {
+                "step": "The local plan file should begin with a short facts/goals section, followed by a `To-Do` section using Markdown checkboxes that get updated as work is completed.",
+                "status": "pending"
+              },
+              {
+                "step": "Establish the repo pattern for scoped context, but implement it fully only for `gif-media` in this pass.",
+                "status": "pending"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "I’ll keep the implementation checklist in sync while I work through the documentation pass."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Document the current VCL behavior and keep the work tracked."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "I’ll keep the implementation checklist in sync while I work through the documentation pass."
+          }
+        ],
+        "lastUserMessage": "Document the current VCL behavior and keep the work tracked.",
+        "lastAssistantMessage": "I’ll keep the implementation checklist in sync while I work through the documentation pass.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

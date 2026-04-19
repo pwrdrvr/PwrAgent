@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AppServerNotification } from "@pwragnt/shared";
 import { ThreadView } from "../ThreadView";
 
 afterEach(() => {
@@ -19,6 +20,10 @@ beforeEach(() => {
 });
 
 describe("ThreadView", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   it("renders a directory-less thread with transcript history and context", () => {
     render(
       <ThreadView
@@ -627,5 +632,201 @@ describe("ThreadView", () => {
     });
 
     expect(screen.queryByText("I ran")).not.toBeInTheDocument();
+  });
+
+  it("renders live plan progress from turn/plan/updated and clears it once replay catches up", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Plan the app-server protocol",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    const livePlan = {
+      type: "plan" as const,
+      id: "persisted-plan-1",
+      explanation: "Track the desktop transcript work in three steps.",
+      steps: [
+        { step: "Normalize replay", status: "pending" as const },
+        { step: "Render plan card", status: "pending" as const },
+        { step: "Verify the thread view", status: "pending" as const }
+      ]
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    const { rerender } = render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            runId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Render the task list."
+          }
+        ]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        onRefresh={vi.fn(async () => undefined)}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/plan/updated",
+          params: {
+            threadId: "thread-2",
+            runId: "turn-1",
+            plan: {
+              explanation: livePlan.explanation,
+              steps: livePlan.steps
+            }
+          }
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/plan/updated",
+          params: {
+            threadId: "thread-other",
+            runId: "turn-2",
+            plan: {
+              explanation: "Ignore this other thread.",
+              steps: [{ step: "Ignore", status: "completed" }]
+            }
+          }
+        },
+      });
+    });
+
+    expect(screen.getByText("0 out of 3 tasks completed")).toBeInTheDocument();
+    expect(screen.getByText("Normalize replay")).toBeInTheDocument();
+    expect(screen.getByText("Render plan card")).toBeInTheDocument();
+    expect(screen.getByText("Verify the thread view")).toBeInTheDocument();
+    expect(screen.queryByText("Ignore this other thread.")).not.toBeInTheDocument();
+
+    rerender(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            runId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Render the task list."
+          },
+          livePlan
+        ]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        onRefresh={vi.fn(async () => undefined)}
+      />
+    );
+
+    expect(screen.getAllByText("0 out of 3 tasks completed")).toHaveLength(1);
   });
 });

@@ -120,9 +120,28 @@ export type AppServerThreadActivityEntry = {
   details: AppServerThreadActivityDetail[];
 };
 
+export type AppServerThreadPlanStepStatus =
+  | "pending"
+  | "in_progress"
+  | "completed";
+
+export type AppServerThreadPlanStep = {
+  step: string;
+  status: AppServerThreadPlanStepStatus;
+};
+
+export type AppServerThreadPlanEntry = {
+  type: "plan";
+  id: string;
+  createdAt?: number;
+  explanation?: string;
+  steps: AppServerThreadPlanStep[];
+};
+
 export type AppServerThreadEntry =
   | AppServerThreadMessageEntry
-  | AppServerThreadActivityEntry;
+  | AppServerThreadActivityEntry
+  | AppServerThreadPlanEntry;
 
 export type AppServerThreadReplayPagination = {
   supportsPagination: boolean;

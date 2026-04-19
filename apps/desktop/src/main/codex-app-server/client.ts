@@ -15,6 +15,9 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadMessageEntry,
+  AppServerThreadPlanEntry,
+  AppServerThreadPlanStep,
+  AppServerThreadPlanStepStatus,
   AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadReplayPagination,
@@ -553,6 +556,223 @@ function normalizeActivityStatus(
   return undefined;
 }
 
+function normalizePlanStepStatus(
+  value: string | undefined
+): AppServerThreadPlanStepStatus | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (
+    normalized === "pending" ||
+    normalized === "in_progress" ||
+    normalized === "completed"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function collectPlanLines(text: string): AppServerThreadPlanStep[] {
+  const steps = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line): AppServerThreadPlanStep[] => {
+      const completedMatch = line.match(/^[-*]\s+\[(x|X)\]\s+(.+)$/);
+      if (completedMatch) {
+        return [{ step: completedMatch[2].trim(), status: "completed" }];
+      }
+
+      const pendingMatch = line.match(/^[-*]\s+\[\s?\]\s+(.+)$/);
+      if (pendingMatch) {
+        return [{ step: pendingMatch[1].trim(), status: "pending" }];
+      }
+
+      const bulletMatch = line.match(/^([-*]|\d+\.)\s+(.+)$/);
+      if (bulletMatch) {
+        return [{ step: bulletMatch[2].trim(), status: "pending" }];
+      }
+
+      return [];
+    })
+    .filter((step) => step.step.length > 0);
+
+  const deduped = new Map<string, AppServerThreadPlanStep>();
+  for (const step of steps) {
+    deduped.set(`${step.status}:${step.step}`, step);
+  }
+  return [...deduped.values()];
+}
+
+function normalizePlanSteps(value: unknown): AppServerThreadPlanStep[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry): AppServerThreadPlanStep[] => {
+    const record = asRecord(entry);
+    if (!record) {
+      return [];
+    }
+
+    const step = pickString(record, ["step", "title", "text", "label"]);
+    const status = normalizePlanStepStatus(pickString(record, ["status", "state"]));
+    if (!step || !status) {
+      return [];
+    }
+
+    return [{ step, status }];
+  });
+}
+
+function normalizePlanPayload(value: unknown): {
+  explanation?: string;
+  steps: AppServerThreadPlanStep[];
+} | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const directSteps = normalizePlanSteps(record.steps);
+  const nestedPlanRecord = asRecord(record.plan);
+  const nestedPlanSteps = normalizePlanSteps(record.plan);
+  const nestedRecordSteps = normalizePlanSteps(nestedPlanRecord?.steps);
+  const steps =
+    directSteps.length > 0
+      ? directSteps
+      : nestedPlanSteps.length > 0
+        ? nestedPlanSteps
+        : nestedRecordSteps;
+  const explanation =
+    pickString(record, ["explanation", "summary"]) ??
+    pickString(nestedPlanRecord ?? {}, ["explanation", "summary"]);
+
+  if (steps.length === 0 && !explanation) {
+    return undefined;
+  }
+
+  return {
+    ...(explanation ? { explanation } : {}),
+    steps,
+  };
+}
+
+function parseStructuredValue(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
+function extractNestedPlanEntryFromItem(
+  item: Record<string, unknown>,
+  createdAt?: number
+): AppServerThreadPlanEntry | undefined {
+  for (const key of ["payload", "item", "responseItem", "response_item"]) {
+    const nestedItem = asRecord(item[key]);
+    if (!nestedItem) {
+      continue;
+    }
+
+    const nestedPlanEntry = extractPlanEntryFromItem(
+      {
+        ...nestedItem,
+        id:
+          pickString(item, ["id", "itemId", "item_id"]) ??
+          pickString(nestedItem, ["id", "itemId", "item_id", "call_id"])
+      },
+      createdAt
+    );
+    if (nestedPlanEntry) {
+      return nestedPlanEntry;
+    }
+  }
+
+  return undefined;
+}
+
+function extractPlanEntryFromItem(
+  item: Record<string, unknown>,
+  createdAt?: number
+): AppServerThreadPlanEntry | undefined {
+  const itemType = pickString(item, ["type"]);
+  const normalizedItemType = itemType?.trim().toLowerCase();
+  const itemId =
+    pickString(item, ["id", "itemId", "item_id", "call_id"]) ?? `plan-${createdAt ?? 0}`;
+  const nestedPlanEntry = extractNestedPlanEntryFromItem(item, createdAt);
+  if (nestedPlanEntry) {
+    return nestedPlanEntry;
+  }
+
+  if (normalizedItemType === "plan") {
+    const normalizedPayload = normalizePlanPayload(item);
+    const textSteps = collectPlanLines(collectLegacyMessageText(item));
+    const steps = normalizedPayload?.steps.length
+      ? normalizedPayload.steps
+      : textSteps;
+    const explanation = normalizedPayload?.explanation;
+
+    if (steps.length === 0 && !explanation) {
+      return undefined;
+    }
+
+    return {
+      type: "plan",
+      id: itemId,
+      createdAt,
+      ...(explanation ? { explanation } : {}),
+      steps,
+    };
+  }
+
+  const functionLikeTypes = new Set([
+    "functioncall",
+    "function_call",
+    "dynamictoolcall",
+    "dynamic_tool_call",
+  ]);
+  const normalizedCollapsedType = normalizedItemType?.replace(/[-_\s]/g, "");
+  if (!normalizedCollapsedType || !functionLikeTypes.has(normalizedCollapsedType)) {
+    return undefined;
+  }
+
+  const functionName = pickString(item, ["name", "toolName", "tool_name", "text"]);
+  if (functionName !== "update_plan") {
+    return undefined;
+  }
+
+  const payload =
+    parseStructuredValue(item.arguments) ??
+    parseStructuredValue(item.input) ??
+    parseStructuredValue(item.output) ??
+    asRecord(item.arguments) ??
+    asRecord(item.input) ??
+    asRecord(item.output);
+  const normalizedPayload = normalizePlanPayload(payload);
+  if (!normalizedPayload) {
+    return undefined;
+  }
+
+  return {
+    type: "plan",
+    id: itemId,
+    createdAt,
+    ...(normalizedPayload.explanation
+      ? { explanation: normalizedPayload.explanation }
+      : {}),
+    steps: normalizedPayload.steps,
+  };
+}
+
 function pushActivityDetail(
   details: AppServerThreadActivityDetail[],
   detail: AppServerThreadActivityDetail
@@ -861,6 +1081,13 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
             ? { phase: "commentary" as const }
             : {})
         });
+        continue;
+      }
+
+      const planEntry = extractPlanEntryFromItem(item, createdAt);
+      if (planEntry) {
+        flushActivityItems();
+        entries.push(planEntry);
         continue;
       }
 

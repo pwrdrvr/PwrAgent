@@ -93,3 +93,9 @@ fixture for CI.
 - `turn-lifecycle/`: turn start, visible Stop button, and clean completion
 - `edited-changes-order/`: edited-file activity that must remain in transcript
   order when expanded
+- `codex-todo-list/`: selected Codex thread renders a persisted transcript task
+  plan
+- `grok-todo-list/`: Grok-backed task plan rendering contract for the shared
+  transcript plan UI
+- `live-plan-updates/`: live `turn/plan/updated` rendering for in-flight task
+  plan UI
