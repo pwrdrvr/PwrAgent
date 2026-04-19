@@ -12,6 +12,11 @@ import type { DesktopApi } from "./desktop-api";
 
 const MAX_VIEW_ONLY_THREADS = 10;
 
+export type ThreadViewportState = {
+  distanceFromBottom: number;
+  scrollTop: number;
+};
+
 type ThreadSessionEntry = {
   activeRunId?: string;
   error?: string;
@@ -26,6 +31,7 @@ type ThreadSessionEntry = {
   pendingRequest?: AppServerPendingRequestNotification;
   pendingStatusText?: string;
   response?: AppServerReadThreadResponse;
+  viewport?: ThreadViewportState;
 };
 
 type ThreadSessionState = Record<string, ThreadSessionEntry>;
@@ -181,6 +187,8 @@ export function useThreadSessionState(params: {
   response?: AppServerReadThreadResponse;
   setActiveRunId: (runId?: string) => void;
   setPendingStatusText: (status?: string) => void;
+  setViewport: (viewport?: ThreadViewportState) => void;
+  viewport?: ThreadViewportState;
 } {
   const { desktopApi, thread } = params;
   const threadKey = thread
@@ -314,6 +322,15 @@ export function useThreadSessionState(params: {
       updateSession(threadKey, (current) => ({
         ...current,
         expectOwnUpdate: false,
+        hydratedUpdatedAt: thread.updatedAt,
+        lastTouchedAt: Date.now(),
+      }));
+      return;
+    }
+
+    if (session.interacted) {
+      updateSession(threadKey, (current) => ({
+        ...current,
         hydratedUpdatedAt: thread.updatedAt,
         lastTouchedAt: Date.now(),
       }));
@@ -661,6 +678,40 @@ export function useThreadSessionState(params: {
     [threadKey, updateSession]
   );
 
+  const setViewport = useCallback(
+    (viewport?: ThreadViewportState): void => {
+      if (!threadKey) {
+        return;
+      }
+
+      updateSession(threadKey, (current) => {
+        const nextViewport =
+          viewport &&
+          Number.isFinite(viewport.scrollTop) &&
+          Number.isFinite(viewport.distanceFromBottom)
+            ? {
+                distanceFromBottom: Math.max(0, viewport.distanceFromBottom),
+                scrollTop: Math.max(0, viewport.scrollTop),
+              }
+            : undefined;
+
+        if (
+          current.viewport?.scrollTop === nextViewport?.scrollTop &&
+          current.viewport?.distanceFromBottom === nextViewport?.distanceFromBottom
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          lastTouchedAt: Date.now(),
+          viewport: nextViewport,
+        };
+      });
+    },
+    [threadKey, updateSession]
+  );
+
   const visibleOptimisticEntries = useMemo(
     () =>
       pruneOptimisticEntries(
@@ -701,5 +752,7 @@ export function useThreadSessionState(params: {
     response: selectedSession?.response,
     setActiveRunId,
     setPendingStatusText,
+    setViewport,
+    viewport: selectedSession?.viewport,
   };
 }

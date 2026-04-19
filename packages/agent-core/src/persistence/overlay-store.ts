@@ -162,7 +162,7 @@ export class OverlayStore {
     backend: ThreadOverlayState["backend"];
     threadId: string;
   }): Promise<ThreadExecutionMode> {
-    return await this.withData(async (data) => {
+    return await this.withReadData(async (data) => {
       const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
       return data.threads[threadKey]?.executionMode ?? "default";
     });
@@ -172,10 +172,24 @@ export class OverlayStore {
     backend: ThreadOverlayState["backend"];
     threadId: string;
   }): Promise<ThreadOverlayState | undefined> {
-    return await this.withData(async (data) => {
+    return await this.withReadData(async (data) => {
       const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
       return data.threads[threadKey];
     });
+  }
+
+  async getThreadOverlayStates(params: {
+    backend: ThreadOverlayState["backend"];
+    threadIds: string[];
+  }): Promise<Record<string, ThreadOverlayState | undefined>> {
+    return await this.withReadData(async (data) =>
+      Object.fromEntries(
+        params.threadIds.map((threadId) => {
+          const threadKey = buildThreadIdentityKey(params.backend, threadId);
+          return [threadId, data.threads[threadKey]];
+        }),
+      ),
+    );
   }
 
   async setThreadExecutionMode(params: {
@@ -200,7 +214,7 @@ export class OverlayStore {
   }
 
   async getLaunchpadDefaults(): Promise<NavigationLaunchpadDefaults> {
-    return await this.withData(async (data) => data.launchpadDefaults);
+    return await this.withReadData(async (data) => data.launchpadDefaults);
   }
 
   async setLaunchpadDefaults(
@@ -218,11 +232,11 @@ export class OverlayStore {
   async getDirectoryLaunchpad(params: {
     directoryKey: string;
   }): Promise<DirectoryLaunchpadOverlayState | undefined> {
-    return await this.withData(async (data) => data.directoryLaunchpads[params.directoryKey]);
+    return await this.withReadData(async (data) => data.directoryLaunchpads[params.directoryKey]);
   }
 
   async listDirectoryLaunchpads(): Promise<DirectoryLaunchpadOverlayState[]> {
-    return await this.withData(async (data) => Object.values(data.directoryLaunchpads));
+    return await this.withReadData(async (data) => Object.values(data.directoryLaunchpads));
   }
 
   async upsertDirectoryLaunchpad(
@@ -268,6 +282,13 @@ export class OverlayStore {
     );
 
     return (await next) as T;
+  }
+
+  private async withReadData<T>(
+    operation: (data: OverlayStoreData) => Promise<T> | T,
+  ): Promise<T> {
+    await (OverlayStore.queues.get(this.filePath) ?? Promise.resolve());
+    return await operation(await this.readData());
   }
 
   private async readData(): Promise<OverlayStoreData> {

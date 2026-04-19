@@ -411,10 +411,10 @@ describe("TranscriptList", () => {
       />
     );
 
-    expect(scrollToMock).toHaveBeenCalledWith({
-      behavior: "auto",
-      top: 480
-    });
+    const list = screen.getByRole("list");
+
+    expect(list.scrollTop).toBe(480);
+    expect(scrollToMock).not.toHaveBeenCalled();
   });
 
   it("collapses activity details by default and toggles them inline", () => {
@@ -615,5 +615,239 @@ describe("TranscriptList", () => {
     fireEvent.scroll(list);
 
     expect(screen.getByRole("button", { name: "Jump to latest message" })).toBeInTheDocument();
+  });
+
+  it("uses smooth scrolling only for the explicit jump-to-latest action", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "First message"
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "Second message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 0;
+    fireEvent.scroll(list);
+    scrollToMock.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to latest message" }));
+
+    expect(scrollToMock).toHaveBeenCalledWith({
+      behavior: "smooth",
+      top: 480
+    });
+  });
+
+  it("restores the previous viewport when switching back to a cached thread", () => {
+    const { rerender } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-1-message-1",
+            role: "user",
+            text: "Thread one first message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-2",
+            role: "assistant",
+            text: "Thread one second message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-3",
+            role: "assistant",
+            text: "Thread one third message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 72;
+    fireEvent.scroll(list);
+
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-2-message-1",
+            role: "user",
+            text: "Thread two first message"
+          },
+          {
+            type: "message",
+            id: "thread-2-message-2",
+            role: "assistant",
+            text: "Thread two second message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-2"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    list.scrollTop = 18;
+    fireEvent.scroll(list);
+
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-1-message-1",
+            role: "user",
+            text: "Thread one first message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-2",
+            role: "assistant",
+            text: "Thread one second message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-3",
+            role: "assistant",
+            text: "Thread one third message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(72);
+  });
+
+  it("does not re-arm auto-scroll while a cached transcript is refreshing", () => {
+    const { rerender } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-1-message-1",
+            role: "user",
+            text: "Thread one first message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-2",
+            role: "assistant",
+            text: "Thread one second message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-3",
+            role: "assistant",
+            text: "Thread one third message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 72;
+    fireEvent.scroll(list);
+    scrollToMock.mockClear();
+
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-1-message-1",
+            role: "user",
+            text: "Thread one first message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-2",
+            role: "assistant",
+            text: "Thread one second message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-3",
+            role: "assistant",
+            text: "Thread one third message"
+          }
+        ]}
+        loading={true}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    scrollHeight = 640;
+
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-1-message-1",
+            role: "user",
+            text: "Thread one first message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-2",
+            role: "assistant",
+            text: "Thread one second message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-3",
+            role: "assistant",
+            text: "Thread one third message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-4",
+            role: "assistant",
+            text: "Thread one fourth message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(72);
+    expect(scrollToMock).not.toHaveBeenCalled();
   });
 });

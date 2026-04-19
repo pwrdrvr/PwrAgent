@@ -211,4 +211,112 @@ describe("app server ipc", () => {
       seenUpdatedAt: 3000,
     });
   });
+
+  it("preserves unchanged snapshots when directory statuses are unchanged", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    reconcileNavigationSnapshot
+      .mockResolvedValueOnce({
+        backend: "all",
+        fetchedAt: 1234,
+        unchanged: false,
+        threads: [
+          {
+            id: "thread-1",
+            title: "Thread one",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            updatedAt: 2000,
+          },
+        ],
+        inboxThreadKeys: ["codex:thread-1"],
+        directories: [
+          {
+            key: "directory:/repo/app",
+            kind: "directory" as const,
+            label: "app",
+            path: "/repo/app",
+            threadKeys: ["codex:thread-1"],
+            needsAttentionCount: 1,
+            latestUpdatedAt: 2000,
+          },
+        ],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      })
+      .mockResolvedValueOnce({
+        backend: "all",
+        fetchedAt: 5678,
+        unchanged: true,
+        threads: [
+          {
+            id: "thread-1",
+            title: "Thread one",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            updatedAt: 2000,
+          },
+        ],
+        inboxThreadKeys: ["codex:thread-1"],
+        directories: [
+          {
+            key: "directory:/repo/app",
+            kind: "directory" as const,
+            label: "app",
+            path: "/repo/app",
+            threadKeys: ["codex:thread-1"],
+            needsAttentionCount: 1,
+            latestUpdatedAt: 2000,
+          },
+        ],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      });
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+    expect(readDirectoryStatuses).toHaveBeenCalledTimes(2);
+    expect(response).toEqual({
+      backend: "all",
+      fetchedAt: 5678,
+      unchanged: true,
+      threads: [
+        expect.objectContaining({ source: "codex", id: "thread-1" }),
+      ],
+      inboxThreadKeys: ["codex:thread-1"],
+      directories: [
+        {
+          key: "directory:/repo/app",
+          kind: "directory",
+          label: "app",
+          path: "/repo/app",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 1,
+          latestUpdatedAt: 2000,
+          gitStatus: {
+            currentBranch: "main",
+            upstreamBranch: "origin/main",
+            ahead: 0,
+            behind: 0,
+            syncState: "in-sync",
+            branches: ["main"],
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+  });
 });

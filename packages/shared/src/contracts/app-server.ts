@@ -53,6 +53,7 @@ export type AppServerThreadSummary = {
   updatedAt?: number;
   linkedDirectories: LinkedDirectorySummary[];
   gitBranch?: string;
+  observedGitBranch?: string;
   source: AppServerBackendKind;
   executionMode?: ThreadExecutionMode;
 };

@@ -2,6 +2,7 @@ import { app, BrowserWindow, Menu, shell } from "electron";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import { disposeAppServerIpcHandlers, registerAppServerIpcHandlers } from "./ipc/app-server";
 import { initializeMainLogger } from "./log";
+import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
 import { createMainWindow } from "./window";
 
 const APP_NAME = "PwrAgnt";
@@ -34,15 +35,21 @@ export function bootstrapApp(): void {
   app.setName(APP_NAME);
   initializeMainLogger();
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    const startupCpuProfiler = new StartupCpuProfiler();
+    await startupCpuProfiler.start();
     installApplicationMenu();
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();
-    createMainWindow();
+    createMainWindow({
+      startupCpuProfiler,
+    });
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow();
+        createMainWindow({
+          startupCpuProfiler,
+        });
       }
     });
   });

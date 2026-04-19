@@ -24,9 +24,17 @@ type TranscriptListProps = {
   pendingRequestBusy?: boolean;
   pendingStatusText?: string;
   pagination?: AppServerThreadReplayPagination;
+  restoredViewport?: {
+    distanceFromBottom: number;
+    scrollTop: number;
+  };
   threadId?: string;
   skills?: AppServerSkillSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
+  onViewportChange?: (viewport?: {
+    distanceFromBottom: number;
+    scrollTop: number;
+  }) => void;
   onRespondToPendingRequest?: (decision: "approve" | "decline" | "cancel") => Promise<void>;
   onLoadOlder: () => Promise<void>;
 };
@@ -44,11 +52,15 @@ type ScrollSnapshot = {
 };
 
 const BOTTOM_THRESHOLD_PX = 24;
+type ScrollBottomMode = "instant" | "smooth";
 
 export function TranscriptList(props: TranscriptListProps) {
   const skills = props.skills ?? [];
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const snapshotRef = useRef<ScrollSnapshot | undefined>(undefined);
+  const savedViewportsRef = useRef(
+    new Map<string, { distanceFromBottom: number; scrollTop: number }>()
+  );
   const shouldScrollToBottomRef = useRef(true);
   const [hasContentBelow, setHasContentBelow] = useState(false);
   const canLoadOlder = Boolean(
@@ -98,18 +110,24 @@ export function TranscriptList(props: TranscriptListProps) {
     const snapshot = captureSnapshot();
     snapshotRef.current = snapshot;
     setHasContentBelow(Boolean(snapshot && snapshot.distanceFromBottom > BOTTOM_THRESHOLD_PX));
+    if (snapshot?.threadId) {
+      savedViewportsRef.current.set(snapshot.threadId, {
+        distanceFromBottom: snapshot.distanceFromBottom,
+        scrollTop: snapshot.scrollTop,
+      });
+    }
   }, [captureSnapshot]);
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+  const scrollToBottom = useCallback((mode: ScrollBottomMode = "smooth") => {
     const container = scrollContainerRef.current;
     if (!container) {
       return;
     }
 
-    if (typeof container.scrollTo === "function") {
+    if (mode === "smooth" && typeof container.scrollTo === "function") {
       container.scrollTo({
         top: container.scrollHeight,
-        behavior
+        behavior: "smooth"
       });
     } else {
       container.scrollTop = container.scrollHeight;
@@ -119,14 +137,22 @@ export function TranscriptList(props: TranscriptListProps) {
   }, [syncScrollState]);
 
   useEffect(() => {
-    shouldScrollToBottomRef.current = true;
-  }, [props.threadId]);
-
-  useEffect(() => {
-    if (props.loading) {
+    if (props.loading && props.entries.length === 0) {
       shouldScrollToBottomRef.current = true;
     }
-  }, [props.loading]);
+  }, [props.entries.length, props.loading]);
+
+  useEffect(() => {
+    return () => {
+      if (!props.threadId) {
+        props.onViewportChange?.(undefined);
+        return;
+      }
+
+      const viewport = savedViewportsRef.current.get(props.threadId);
+      props.onViewportChange?.(viewport);
+    };
+  }, [props.onViewportChange, props.threadId]);
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
@@ -137,6 +163,9 @@ export function TranscriptList(props: TranscriptListProps) {
     }
 
     const previousSnapshot = snapshotRef.current;
+    const restoredViewport =
+      props.restoredViewport ??
+      (props.threadId ? savedViewportsRef.current.get(props.threadId) : undefined);
     const firstMessageId = props.entries[0]?.id;
     const lastMessageId = props.entries[props.entries.length - 1]?.id;
     const hasPrependedMessages = Boolean(
@@ -151,7 +180,7 @@ export function TranscriptList(props: TranscriptListProps) {
         previousSnapshot.firstMessageId === firstMessageId &&
         (previousSnapshot.lastMessageId !== lastMessageId ||
           previousSnapshot.pendingStatusText !== props.pendingStatusText ||
-          previousSnapshot.itemCount <
+      previousSnapshot.itemCount <
             props.entries.length +
               (props.pendingAssistantMessage ? 1 : 0) +
               (props.pendingPlanEntry ? 1 : 0) +
@@ -162,19 +191,36 @@ export function TranscriptList(props: TranscriptListProps) {
     if (hasPrependedMessages && previousSnapshot) {
       const heightDelta = container.scrollHeight - previousSnapshot.scrollHeight;
       container.scrollTop = previousSnapshot.scrollTop + heightDelta;
+    } else if (previousSnapshot?.threadId !== props.threadId) {
+      if (restoredViewport) {
+        if (restoredViewport.distanceFromBottom <= BOTTOM_THRESHOLD_PX) {
+          scrollToBottom("instant");
+        } else {
+          container.scrollTop = Math.min(
+            Math.max(0, restoredViewport.scrollTop),
+            Math.max(container.scrollHeight - container.clientHeight, 0)
+          );
+          syncScrollState();
+        }
+        shouldScrollToBottomRef.current = false;
+        return;
+      }
+
+      scrollToBottom("instant");
+      shouldScrollToBottomRef.current = false;
+      return;
     } else if (
       shouldScrollToBottomRef.current ||
-      !previousSnapshot ||
-      previousSnapshot.threadId !== props.threadId
+      !previousSnapshot
     ) {
-      scrollToBottom("auto");
+      scrollToBottom("instant");
       shouldScrollToBottomRef.current = false;
       return;
     } else if (
       hasAppendedMessages &&
       previousSnapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX
     ) {
-      scrollToBottom("auto");
+      scrollToBottom("instant");
       return;
     }
 
@@ -185,6 +231,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingPlanEntry,
     props.pendingRequest,
     props.pendingStatusText,
+    props.restoredViewport,
     props.threadId,
     scrollToBottom,
     syncScrollState,

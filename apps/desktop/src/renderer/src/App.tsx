@@ -91,8 +91,10 @@ export function App() {
                   )
               : undefined
           }
+          onTranscriptViewportChange={session.setViewport}
           onUpdateLaunchpad={navigation.updateDirectoryLaunchpad}
           removeOptimisticMessage={session.removeOptimisticMessage}
+          transcriptViewport={session.viewport}
         />
       </main>
     </div>

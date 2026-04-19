@@ -42,7 +42,17 @@ function buildWorktreePath(repoRoot: string, branchName: string): string {
   return path.join(repoRoot, ".worktrees", branchName.replace(/[\\/]/g, "-"));
 }
 
+type CachedDirectoryStatus = {
+  expiresAt: number;
+  inFlight?: Promise<NavigationDirectoryGitStatus | undefined>;
+  status?: NavigationDirectoryGitStatus;
+};
+
 export class GitDirectoryService {
+  private readonly statusCache = new Map<string, CachedDirectoryStatus>();
+
+  constructor(private readonly cacheTtlMs = 3_000) {}
+
   async readDirectoryStatuses(
     directories: NavigationDirectorySummary[],
   ): Promise<Record<string, NavigationDirectoryGitStatus | undefined>> {
@@ -63,65 +73,109 @@ export class GitDirectoryService {
       return undefined;
     }
 
-    try {
-      const [currentBranch, branches] = await Promise.all([
-        runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ""),
-        runGit(cwd, ["for-each-ref", "refs/heads", "--format=%(refname:short)"]).catch(
-          () => "",
-        ),
-      ]);
-      const upstreamBranch = await runGit(cwd, [
-        "rev-parse",
-        "--abbrev-ref",
-        "--symbolic-full-name",
-        "@{upstream}",
-      ]).catch(() => "");
-      if (!currentBranch) {
-        return undefined;
-      }
+    const cached = this.statusCache.get(cwd);
+    const now = Date.now();
+    if (cached?.inFlight) {
+      return await cached.inFlight;
+    }
 
-      if (!upstreamBranch) {
-        return {
-          currentBranch,
-          branches: branches ? branches.split("\n").filter(Boolean) : [],
-          syncState: "untracked",
+    if (cached && cached.expiresAt > now) {
+      return cached.status;
+    }
+
+    const inFlight = this.loadDirectoryStatus(cwd)
+      .then((status) => {
+        this.statusCache.set(cwd, {
+          expiresAt: Date.now() + this.cacheTtlMs,
+          status,
+        });
+        return status;
+      })
+      .catch((error) => {
+        const status: NavigationDirectoryGitStatus = {
+          syncState: "status-unavailable",
+          statusUnavailableReason: error instanceof Error ? error.message : String(error),
         };
-      }
+        this.statusCache.set(cwd, {
+          expiresAt: Date.now() + this.cacheTtlMs,
+          status,
+        });
+        return status;
+      });
 
-      const counts = await runGit(cwd, [
-        "rev-list",
-        "--left-right",
-        "--count",
-        `HEAD...${upstreamBranch}`,
-      ]).catch(() => "");
-      const [aheadValue, behindValue] = counts
-        .split(/\s+/)
-        .map((value) => Number.parseInt(value, 10));
-      const ahead = Number.isFinite(aheadValue) ? aheadValue : 0;
-      const behind = Number.isFinite(behindValue) ? behindValue : 0;
-      const syncState =
-        ahead > 0 && behind > 0
-          ? "diverged"
-          : ahead > 0
-            ? "ahead"
-            : behind > 0
-              ? "behind"
-              : "in-sync";
+    this.statusCache.set(cwd, {
+      expiresAt: cached?.expiresAt ?? 0,
+      inFlight,
+      status: cached?.status,
+    });
 
+    return await inFlight;
+  }
+
+  invalidateDirectoryStatus(directoryPath?: string): void {
+    const normalizedPath = directoryPath?.trim();
+    if (!normalizedPath) {
+      return;
+    }
+
+    this.statusCache.delete(normalizedPath);
+  }
+
+  private async loadDirectoryStatus(
+    cwd: string,
+  ): Promise<NavigationDirectoryGitStatus | undefined> {
+    const [currentBranch, branches] = await Promise.all([
+      runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ""),
+      runGit(cwd, ["for-each-ref", "refs/heads", "--format=%(refname:short)"]).catch(
+        () => "",
+      ),
+    ]);
+    const upstreamBranch = await runGit(cwd, [
+      "rev-parse",
+      "--abbrev-ref",
+      "--symbolic-full-name",
+      "@{upstream}",
+    ]).catch(() => "");
+    if (!currentBranch) {
+      return undefined;
+    }
+
+    if (!upstreamBranch) {
       return {
         currentBranch,
-        upstreamBranch,
-        ahead,
-        behind,
         branches: branches ? branches.split("\n").filter(Boolean) : [],
-        syncState,
-      };
-    } catch (error) {
-      return {
-        syncState: "status-unavailable",
-        statusUnavailableReason: error instanceof Error ? error.message : String(error),
+        syncState: "untracked",
       };
     }
+
+    const counts = await runGit(cwd, [
+      "rev-list",
+      "--left-right",
+      "--count",
+      `HEAD...${upstreamBranch}`,
+    ]).catch(() => "");
+    const [aheadValue, behindValue] = counts
+      .split(/\s+/)
+      .map((value) => Number.parseInt(value, 10));
+    const ahead = Number.isFinite(aheadValue) ? aheadValue : 0;
+    const behind = Number.isFinite(behindValue) ? behindValue : 0;
+    const syncState =
+      ahead > 0 && behind > 0
+        ? "diverged"
+        : ahead > 0
+          ? "ahead"
+          : behind > 0
+            ? "behind"
+            : "in-sync";
+
+    return {
+      currentBranch,
+      upstreamBranch,
+      ahead,
+      behind,
+      branches: branches ? branches.split("\n").filter(Boolean) : [],
+      syncState,
+    };
   }
 
   async prepareLaunchpadWorkspace(

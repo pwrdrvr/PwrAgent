@@ -39,7 +39,11 @@ function resolveRepoRoot(): string {
   return resolve(app.getAppPath(), "../..");
 }
 
-export function createMainWindow(): BrowserWindow {
+export function createMainWindow(options?: {
+  startupCpuProfiler?: {
+    attachWindow: (window: BrowserWindow) => void;
+  };
+}): BrowserWindow {
   const preloadPath = getPreloadPath();
   const window = new BrowserWindow({
     width: 1440,
@@ -63,6 +67,8 @@ export function createMainWindow(): BrowserWindow {
       rendererUrl: process.env.ELECTRON_RENDERER_URL ?? null
     });
   }
+
+  options?.startupCpuProfiler?.attachWindow(window);
 
   const rendererEntry = getRendererEntry();
   if (rendererEntry.kind === "url") {

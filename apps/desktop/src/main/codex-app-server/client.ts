@@ -1,7 +1,4 @@
-import { execFile as execFileCallback } from "node:child_process";
-import { access, readFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import {
   shortenDerivedThreadTitle,
 } from "@pwragnt/shared";
@@ -32,11 +29,14 @@ import {
   type JsonRpcId,
   type JsonRpcObserver,
 } from "./json-rpc";
+import {
+  createThreadDirectoryEnricher,
+  type ThreadDirectoryEnrichment,
+} from "./thread-directory-enricher";
 import { StdioJsonRpcTransport } from "./stdio-transport";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
-const execFile = promisify(execFileCallback);
 
 type CodexClientOptions = {
   command?: string;
@@ -45,6 +45,9 @@ type CodexClientOptions = {
   directoryResolver?: (
     projectKey?: string
   ) => Promise<LinkedDirectorySummary[]>;
+  threadDirectoryEnricher?: (
+    projectKey?: string
+  ) => Promise<ThreadDirectoryEnrichment>;
   connectionObserver?: JsonRpcObserver;
   requestTimeoutMs?: number;
 };
@@ -62,7 +65,7 @@ type RawCodexThreadSummary = Omit<
   "source" | "linkedDirectories"
 > & {
   projectKey?: string;
-  rolloutPath?: string;
+  gitOriginUrl?: string;
 };
 
 type SkillCatalogEntry = {
@@ -288,10 +291,6 @@ function normalizeThreadSummary(value: string | undefined): string | undefined {
   return trimmed;
 }
 
-function isLikelyCodexWorktreePath(value: string): boolean {
-  return /[\\/]\.codex[\\/]worktrees[\\/]/.test(value);
-}
-
 function getThreadTitleInfo(record: Record<string, unknown>): {
   title: string;
   titleSource: AppServerThreadTitleSource;
@@ -330,64 +329,11 @@ function getThreadTitleInfo(record: Record<string, unknown>): {
   };
 }
 
-async function extractProjectKeyFromRollout(
-  rolloutPath: string | undefined
-): Promise<string | undefined> {
-  if (!rolloutPath || !(await pathExists(rolloutPath))) {
-    return undefined;
-  }
-
-  let fallbackPath: string | undefined;
-
-  try {
-    const contents = await readFile(rolloutPath, "utf8");
-
-    for (const line of contents.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-
-      const record = asRecord(JSON.parse(trimmed));
-      if (record?.type !== "session_meta") {
-        continue;
-      }
-
-      const payload = asRecord(record.payload);
-      const cwd = pickString(payload ?? {}, ["cwd"]);
-      if (!cwd) {
-        continue;
-      }
-
-      if (await pathExists(cwd)) {
-        return cwd;
-      }
-
-      if (!fallbackPath && !isLikelyCodexWorktreePath(cwd)) {
-        fallbackPath = cwd;
-      }
-    }
-  } catch {
-    return undefined;
-  }
-
-  return fallbackPath;
-}
-
 async function resolveThreadProjectKey(
   thread: RawCodexThreadSummary
 ): Promise<string | undefined> {
   const projectKey = thread.projectKey?.trim();
-  if (projectKey && await pathExists(projectKey)) {
-    return projectKey;
-  }
-
-  const rolloutProjectKey = await extractProjectKeyFromRollout(thread.rolloutPath);
-  if (rolloutProjectKey) {
-    return rolloutProjectKey;
-  }
-
-  return projectKey;
+  return projectKey || undefined;
 }
 
 function normalizeConversationRole(
@@ -1345,93 +1291,6 @@ function isRequestTimeoutError(error: unknown, method: string): boolean {
   return text.toLowerCase().includes(`json-rpc timeout: ${method.toLowerCase()}`);
 }
 
-async function runGit(projectKey: string, args: string[]): Promise<string> {
-  const result = await execFile("git", ["-C", projectKey, ...args], {
-    env: process.env
-  });
-  return result.stdout.trim();
-}
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function parseGitWorktrees(output: string): string[] {
-  return output
-    .split("\n")
-    .filter((line) => line.startsWith("worktree "))
-    .map((line) => line.slice("worktree ".length).trim())
-    .filter(Boolean);
-}
-
-function findContainingWorktree(
-  currentPath: string,
-  worktreePaths: string[]
-): string | undefined {
-  const matches = worktreePaths
-    .map((worktreePath) => path.resolve(worktreePath))
-    .filter(
-      (worktreePath) =>
-        currentPath === worktreePath || currentPath.startsWith(`${worktreePath}${path.sep}`)
-    )
-    .sort((left, right) => right.length - left.length);
-
-  return matches[0];
-}
-
-async function resolveLinkedDirectories(
-  projectKey?: string
-): Promise<LinkedDirectorySummary[]> {
-  if (!projectKey) {
-    return [];
-  }
-
-  const normalizedPath = projectKey.trim();
-  if (!normalizedPath) {
-    return [];
-  }
-
-  const currentPath = path.resolve(normalizedPath);
-  if (!(await pathExists(currentPath))) {
-    return [];
-  }
-
-  try {
-    const repoRoot = await runGit(normalizedPath, ["rev-parse", "--show-toplevel"]);
-    const worktreeList = await runGit(normalizedPath, ["worktree", "list", "--porcelain"]);
-    const worktreePaths = parseGitWorktrees(worktreeList);
-    const primaryPath = path.resolve(worktreePaths[0] || repoRoot);
-    const currentWorktreePath = findContainingWorktree(currentPath, worktreePaths)
-      ?? path.resolve(repoRoot);
-    const isWorktree = currentWorktreePath !== primaryPath;
-
-    return [
-      {
-        id: primaryPath,
-        path: primaryPath,
-        worktreePath: isWorktree ? currentWorktreePath : undefined,
-        label: path.basename(primaryPath) || primaryPath,
-        kind: isWorktree ? "worktree" : "local"
-      }
-    ];
-  } catch {
-    const fallbackPath = path.resolve(normalizedPath);
-    return [
-      {
-        id: fallbackPath,
-        path: fallbackPath,
-        label: path.basename(fallbackPath) || fallbackPath,
-        kind: "local"
-      }
-    ];
-  }
-}
-
 function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
   const items = extractThreadRecords(value);
   const summaries = new Map<string, RawCodexThreadSummary>();
@@ -1446,6 +1305,11 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
     }
 
     const sessionRecord = asRecord(record.session);
+    const gitInfoRecord =
+      asRecord(record.gitInfo) ??
+      asRecord(record.git_info) ??
+      asRecord(sessionRecord?.gitInfo) ??
+      asRecord(sessionRecord?.git_info);
     const projectKey =
       pickString(record, ["projectKey", "project_key", "cwd"]) ??
       pickString(sessionRecord ?? {}, ["cwd", "projectKey", "project_key"]);
@@ -1486,9 +1350,6 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
           ? undefined
           : summary,
       projectKey,
-      rolloutPath:
-        pickString(record, ["path", "rolloutPath", "rollout_path"]) ??
-        pickString(sessionRecord ?? {}, ["path", "rolloutPath", "rollout_path"]),
       createdAt: normalizeEpochTimestamp(
         pickNumber(record, ["createdAt", "created_at"]) ??
           pickNumber(sessionRecord ?? {}, ["createdAt", "created_at"])
@@ -1498,10 +1359,15 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
           pickNumber(sessionRecord ?? {}, ["updatedAt", "updated_at", "lastActivityAt"])
       ),
       gitBranch:
-        pickString(asRecord(record.gitInfo) ?? {}, ["branch"]) ??
-        pickString(asRecord(record.git_info) ?? {}, ["branch"]) ??
+        pickString(gitInfoRecord ?? {}, ["branch"]) ??
         pickString(asRecord(sessionRecord?.gitInfo) ?? {}, ["branch"]) ??
-        pickString(asRecord(sessionRecord?.git_info) ?? {}, ["branch"])
+        pickString(asRecord(sessionRecord?.git_info) ?? {}, ["branch"]),
+      gitOriginUrl: pickString(gitInfoRecord ?? {}, [
+        "originUrl",
+        "origin_url",
+        "remoteUrl",
+        "remote_url",
+      ]),
     });
   }
 
@@ -1515,26 +1381,28 @@ function buildThreadDiscoveryPayloads(
   archived?: boolean
 ): unknown[] {
   const searchTerm = filter?.trim() || undefined;
+  const baseParams = {
+    archived,
+    limit: 50,
+    sortKey: "updated_at",
+    sourceKinds: ["cli", "vscode"],
+  } as const;
 
   return [
     {
+      ...baseParams,
       searchTerm,
-      archived,
-      limit: 100
     },
     {
+      ...baseParams,
       query: searchTerm,
-      archived,
-      limit: 100
     },
     {
+      ...baseParams,
       filter: searchTerm,
-      archived,
-      limit: 100
     },
     {
-      archived,
-      limit: 100
+      ...baseParams,
     },
     {}
   ];
@@ -1601,6 +1469,89 @@ function mergeArchivedThreadMetadata(params: {
     .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
 }
 
+function normalizeGitOriginUrl(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const sshMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
+  const candidate = sshMatch
+    ? `${sshMatch[1]}/${sshMatch[2]}`
+    : trimmed.replace(/^[a-z]+:\/\//i, "");
+
+  const normalized = candidate
+    .replace(/\.git$/i, "")
+    .replace(/^ssh\//i, "")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+
+  return normalized || undefined;
+}
+
+type EnrichedCodexThread = AppServerThreadSummary & {
+  gitOriginUrl?: string;
+};
+
+function hydrateMissingLinkedDirectoriesFromSiblingRepos(
+  threads: EnrichedCodexThread[]
+): EnrichedCodexThread[] {
+  const donorDirectoriesByOrigin = new Map<string, LinkedDirectorySummary[]>();
+
+  for (const thread of threads) {
+    if (thread.linkedDirectories.length === 0) {
+      continue;
+    }
+
+    const normalizedOrigin = normalizeGitOriginUrl(thread.gitOriginUrl);
+    if (!normalizedOrigin || donorDirectoriesByOrigin.has(normalizedOrigin)) {
+      continue;
+    }
+
+    const rootDirectories = thread.linkedDirectories.filter(
+      (directory) => !directory.worktreePath
+    );
+    donorDirectoriesByOrigin.set(
+      normalizedOrigin,
+      rootDirectories.length > 0 ? rootDirectories : thread.linkedDirectories
+    );
+  }
+
+  return threads.map((thread) => {
+    if (thread.linkedDirectories.length > 0) {
+      return thread;
+    }
+
+    const normalizedOrigin = normalizeGitOriginUrl(thread.gitOriginUrl);
+    if (!normalizedOrigin) {
+      return thread;
+    }
+
+    const donorDirectories = donorDirectoriesByOrigin.get(normalizedOrigin);
+    if (!donorDirectories || donorDirectories.length === 0) {
+      return thread;
+    }
+
+    const linkedDirectories = donorDirectories.map((directory) => {
+      if (!thread.projectKey || thread.projectKey === directory.path) {
+        return directory;
+      }
+
+      return {
+        ...directory,
+        worktreePath: thread.projectKey,
+        kind: "worktree" as const,
+      };
+    });
+
+    return {
+      ...thread,
+      linkedDirectories,
+    };
+  });
+}
+
 function buildThreadResumePayloads(params: {
   threadId: string;
   cwd?: string;
@@ -1663,9 +1614,9 @@ async function requestWithFallbacks(params: {
 
 export class CodexAppServerClient {
   private readonly connection: JsonRpcConnection;
-  private readonly directoryResolver: (
+  private readonly threadDirectoryEnricher: (
     projectKey?: string
-  ) => Promise<LinkedDirectorySummary[]>;
+  ) => Promise<ThreadDirectoryEnrichment>;
   private initialized = false;
   private initializationPromise: Promise<void> | null = null;
   private initializeResult: InitializeResult | null = null;
@@ -1688,7 +1639,14 @@ export class CodexAppServerClient {
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options.connectionObserver
     );
-    this.directoryResolver = options.directoryResolver ?? resolveLinkedDirectories;
+    const directoryResolver = options.directoryResolver;
+    this.threadDirectoryEnricher =
+      options.threadDirectoryEnricher ??
+      (directoryResolver
+        ? async (projectKey?: string) => ({
+            linkedDirectories: await directoryResolver(projectKey),
+          })
+        : createThreadDirectoryEnricher());
     this.connection.setNotificationHandler(async (method, params) => {
       if (!KNOWN_NOTIFICATION_METHODS.has(method)) {
         logUnhandledCodexMessage({
@@ -1789,17 +1747,21 @@ export class CodexAppServerClient {
       archivedThreads: extractThreadsFromValue(archivedResult),
     });
 
-    return await Promise.all(
+    const enrichedThreads = await Promise.all(
       threads.map(async (thread) => {
         const projectKey = await resolveThreadProjectKey(thread);
+        const enrichment = await this.threadDirectoryEnricher(projectKey);
         return {
           ...thread,
           projectKey,
-          linkedDirectories: await this.directoryResolver(projectKey),
-          source: "codex"
+          linkedDirectories: enrichment.linkedDirectories,
+          observedGitBranch: enrichment.observedGitBranch,
+          source: "codex" as const
         };
       })
     );
+
+    return hydrateMissingLinkedDirectoriesFromSiblingRepos(enrichedThreads);
   }
 
   async listSkills(params?: {

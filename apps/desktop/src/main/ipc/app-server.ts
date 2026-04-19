@@ -51,8 +51,32 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
   appServerLog.info(event, payload);
 }
 
+function directoryStatusesEqual(
+  left: NavigationSnapshot["directories"],
+  right: NavigationSnapshot["directories"],
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((directory, index) => {
+    const candidate = right[index];
+    if (!candidate || directory.key !== candidate.key) {
+      return false;
+    }
+
+    const leftStatus = directory.gitStatus;
+    const rightStatus = candidate.gitStatus;
+    return JSON.stringify(leftStatus ?? null) === JSON.stringify(rightStatus ?? null);
+  });
+}
+
 class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
+  private readonly previousDirectoriesByBackend = new Map<
+    AppServerBackendScope,
+    NavigationSnapshot["directories"]
+  >();
 
   async listThreads(
     request: AppServerListThreadsRequest = {}
@@ -143,20 +167,23 @@ class DesktopAppServerService {
       ...directory,
       gitStatus: directoryStatuses[directory.key],
     }));
+    const previousDirectories = this.previousDirectoriesByBackend.get(backend);
+    const directoriesUnchanged = previousDirectories
+      ? directoryStatusesEqual(previousDirectories, directories)
+      : false;
+    this.previousDirectoriesByBackend.set(backend, directories);
 
     logDebug("getNavigationSnapshot", {
       backend,
       count: snapshot.threads.length,
       inboxCount: snapshot.inboxThreadKeys.length,
-      unchanged: snapshot.unchanged,
+      unchanged: snapshot.unchanged && directoriesUnchanged,
     });
 
     return {
       ...snapshot,
       directories,
-      unchanged:
-        snapshot.unchanged &&
-        !directories.some((directory) => directory.gitStatus !== undefined),
+      unchanged: snapshot.unchanged && directoriesUnchanged,
     };
   }
 

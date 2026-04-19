@@ -1,7 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AppServerNotification } from "@pwragnt/shared";
-import type { ProtocolCaptureEventRecord } from "./capture-store";
+import {
+  readProtocolCaptureFile,
+  type CapturedProtocolEnvelopeRecord,
+  type ProtocolCaptureEnvelope,
+  type ProtocolCaptureEventRecord,
+  type ProtocolCaptureStringReplacement,
+} from "./capture-store";
 import type {
   ReplayFixture,
   ReplayRequestStep,
@@ -9,19 +15,6 @@ import type {
   ReplayStep,
 } from "./replay-fixture";
 import { validateReplayFixture } from "./replay-fixture";
-
-type JsonRpcEnvelope = {
-  jsonrpc?: string;
-  id?: string | number | null;
-  method?: string;
-  params?: unknown;
-  result?: unknown;
-  error?: {
-    code?: number;
-    message?: string;
-    data?: unknown;
-  };
-};
 
 type CaptureIndexEntry = {
   backend: "codex" | "grok";
@@ -34,13 +27,10 @@ type CaptureIndexEntry = {
 
 type CapturedEnvelopeRecord = {
   record: ProtocolCaptureEventRecord;
-  envelope: JsonRpcEnvelope;
+  envelope: ProtocolCaptureEnvelope;
 };
 
-export type StringReplacement = {
-  match: string;
-  replace: string;
-};
+export type StringReplacement = ProtocolCaptureStringReplacement;
 
 export type DeriveReplayFixtureOptions = {
   capturePath: string;
@@ -274,44 +264,6 @@ export async function exportSessionCapture(
   };
 }
 
-export async function readProtocolCaptureFile(
-  filePath: string,
-  redactions: StringReplacement[] = []
-): Promise<CapturedEnvelopeRecord[]> {
-  const contents = await fs.readFile(filePath, "utf8");
-  const output: CapturedEnvelopeRecord[] = [];
-
-  for (const [index, rawLine] of contents.split(/\r?\n/).entries()) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-
-    let parsedLine: unknown;
-    try {
-      parsedLine = JSON.parse(line) as unknown;
-    } catch (error) {
-      throw new Error(
-        `Invalid JSONL record ${index + 1} in ${filePath}: ${String(error)}`
-      );
-    }
-
-    const redactedRecord = applyReplacements(
-      parsedLine,
-      redactions
-    ) as ProtocolCaptureEventRecord;
-    const record = validateCaptureRecord(redactedRecord, filePath, index + 1);
-    const envelope = parseEnvelope(record.raw, filePath, record.sequence);
-
-    output.push({
-      record,
-      envelope,
-    });
-  }
-
-  return output.sort((left, right) => left.record.sequence - right.record.sequence);
-}
-
 async function readCaptureIndex(
   indexPath: string
 ): Promise<Record<string, CaptureIndexEntry>> {
@@ -492,115 +444,4 @@ function slugStepBase(value: string): string {
     .replace(/^-+|-+$/g, "");
 
   return slug || "step";
-}
-
-function validateCaptureRecord(
-  value: ProtocolCaptureEventRecord,
-  filePath: string,
-  lineNumber: number
-): ProtocolCaptureEventRecord {
-  if (
-    value.backend !== "codex"
-    && value.backend !== "grok"
-  ) {
-    throw new Error(
-      `Invalid capture record ${lineNumber} in ${filePath}: unsupported backend`
-    );
-  }
-  if (!value.captureId?.trim()) {
-    throw new Error(
-      `Invalid capture record ${lineNumber} in ${filePath}: missing captureId`
-    );
-  }
-  if (
-    value.direction !== "inbound"
-    && value.direction !== "outbound"
-  ) {
-    throw new Error(
-      `Invalid capture record ${lineNumber} in ${filePath}: unsupported direction`
-    );
-  }
-  if (
-    value.kind !== "request"
-    && value.kind !== "response"
-    && value.kind !== "notification"
-  ) {
-    throw new Error(
-      `Invalid capture record ${lineNumber} in ${filePath}: unsupported kind`
-    );
-  }
-  if (
-    typeof value.sequence !== "number"
-    || !Number.isInteger(value.sequence)
-    || value.sequence < 1
-  ) {
-    throw new Error(
-      `Invalid capture record ${lineNumber} in ${filePath}: missing sequence`
-    );
-  }
-  if (!Array.isArray(value.threadIds)) {
-    throw new Error(
-      `Invalid capture record ${lineNumber} in ${filePath}: missing threadIds`
-    );
-  }
-  if (typeof value.raw !== "string" || !value.raw.trim()) {
-    throw new Error(
-      `Invalid capture record ${lineNumber} in ${filePath}: missing raw envelope`
-    );
-  }
-
-  return value;
-}
-
-function parseEnvelope(
-  raw: string,
-  filePath: string,
-  sequence: number
-): JsonRpcEnvelope {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch (error) {
-    throw new Error(
-      `Invalid JSON-RPC envelope for sequence ${sequence} in ${filePath}: ${String(error)}`
-    );
-  }
-
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(
-      `Invalid JSON-RPC envelope for sequence ${sequence} in ${filePath}: expected object`
-    );
-  }
-
-  return parsed as JsonRpcEnvelope;
-}
-
-function applyReplacements(value: unknown, replacements: StringReplacement[]): unknown {
-  if (replacements.length === 0) {
-    return value;
-  }
-
-  if (typeof value === "string") {
-    return replacements.reduce((current, replacement) => {
-      if (!replacement.match) {
-        return current;
-      }
-      return current.split(replacement.match).join(replacement.replace);
-    }, value);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => applyReplacements(entry, replacements));
-  }
-
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entryValue]) => [
-      key,
-      applyReplacements(entryValue, replacements),
-    ])
-  );
 }

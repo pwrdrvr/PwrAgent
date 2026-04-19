@@ -687,11 +687,13 @@ export class DesktopBackendRegistry {
       })),
     ];
 
+    const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
+      backend: "codex",
+      threadIds: [...new Set(allThreads.map((thread) => thread.id))],
+    });
+
     for (const thread of allThreads) {
-      const overlay = await this.overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId: thread.id,
-      });
+      const overlay = overlaysByThreadId[thread.id];
       const preferredMode = overlay?.executionMode;
       const existing = threadsById.get(thread.id);
       const normalizedThread = {

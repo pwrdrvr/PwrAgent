@@ -28,6 +28,10 @@ type LaunchResult = {
 export async function launchElectronApp(params: {
   fixturePath: string;
   env?: Record<string, string | undefined>;
+  windowSize?: {
+    width: number;
+    height: number;
+  };
 }): Promise<LaunchResult> {
   const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-desktop-e2e-"));
   const electronApp = await electron.launch({
@@ -50,6 +54,33 @@ export async function launchElectronApp(params: {
       )
     )
     .toBe(true);
+
+  if (params.windowSize) {
+    await electronApp.evaluate(
+      ({ BrowserWindow }, size) => {
+        const window = BrowserWindow.getAllWindows()[0];
+        if (!window) {
+          throw new Error("Expected an Electron BrowserWindow for replay E2E sizing");
+        }
+
+        window.setMinimumSize(0, 0);
+        window.setContentSize(size.width, size.height);
+      },
+      params.windowSize
+    );
+
+    await expect
+      .poll(async () =>
+        await window.evaluate(() => ({
+          innerHeight: globalThis.innerHeight,
+          innerWidth: globalThis.innerWidth,
+        }))
+      )
+      .toMatchObject({
+        innerHeight: params.windowSize.height,
+        innerWidth: params.windowSize.width,
+      });
+  }
 
   return {
     electronApp,

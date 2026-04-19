@@ -827,7 +827,6 @@ textarea {
   overflow-y: auto;
   padding-right: 4px;
   padding-bottom: 72px;
-  scroll-behavior: smooth;
 }
 
 .transcript-list__scroll-bottom {

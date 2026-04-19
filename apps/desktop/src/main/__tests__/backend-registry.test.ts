@@ -10,16 +10,19 @@ import type {
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 
 function createOverlayStoreMock(params?: { executionMode?: "default" | "full-access" }) {
+  const overlay = params?.executionMode
+    ? {
+        backend: "codex" as const,
+        threadId: "thread-1",
+        executionMode: params.executionMode,
+        extraLinkedDirectories: [],
+      }
+    : undefined;
+
   return {
-    getThreadOverlayState: async () =>
-      params?.executionMode
-        ? {
-            backend: "codex",
-            threadId: "thread-1",
-            executionMode: params.executionMode,
-            extraLinkedDirectories: [],
-          }
-        : undefined,
+    getThreadOverlayState: async () => overlay,
+    getThreadOverlayStates: async ({ threadIds }: { threadIds: string[] }) =>
+      Object.fromEntries(threadIds.map((threadId) => [threadId, threadId === "thread-1" ? overlay : undefined])),
     setThreadExecutionMode: async ({
       backend,
       threadId,
