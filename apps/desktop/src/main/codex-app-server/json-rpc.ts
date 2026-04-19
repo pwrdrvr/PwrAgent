@@ -26,7 +26,8 @@ export type JsonRpcNotificationHandler = (
 
 export type JsonRpcRequestHandler = (
   method: string,
-  params: unknown
+  params: unknown,
+  id?: JsonRpcId,
 ) => Promise<unknown>;
 
 export interface JsonRpcTransport {
@@ -184,7 +185,7 @@ export class JsonRpcConnection {
     }
 
     try {
-      const result = await this.requestHandler(method, envelope.params);
+      const result = await this.requestHandler(method, envelope.params, envelope.id);
       await this.sendEnvelope({
         jsonrpc: "2.0",
         id: envelope.id,

@@ -444,6 +444,10 @@ class MockTransport implements JsonRpcTransport {
   setCloseHandler(handler: (error?: Error) => void): void {
     this.closeHandler = handler;
   }
+
+  emitInbound(payload: unknown): void {
+    this.messageHandler(JSON.stringify(payload));
+  }
 }
 
 vi.mock("../codex-app-server/stdio-transport", () => {
@@ -1421,6 +1425,59 @@ describe("CodexAppServerClient", () => {
       threadId: "thread-2",
       runId: "turn-1"
     });
+
+    await client.close();
+  });
+
+  it("normalizes approval requests from rpc envelope ids and nested thread metadata", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    client.onRequest((request) => {
+      requests.push(request as { method: string; params: Record<string, unknown> });
+      return { decision: "decline" };
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      id: "rpc-approval-1",
+      method: "turn/requestApproval",
+      params: {
+        thread: {
+          id: "thread-2"
+        },
+        turn: {
+          id: "turn-7"
+        },
+        reason: "command requires approval: npm view dive",
+        command: "npm view dive"
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(requests).toEqual([
+      {
+        method: "turn/requestApproval",
+        params: expect.objectContaining({
+          threadId: "thread-2",
+          runId: "turn-7",
+          requestId: "rpc-approval-1",
+          reason: "command requires approval: npm view dive",
+          command: "npm view dive"
+        })
+      }
+    ]);
 
     await client.close();
   });
