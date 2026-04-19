@@ -89,7 +89,7 @@ describe("Grok live smoke", () => {
     async () => {
       const { notifications, server } = createLiveServer();
 
-      const marker = `smoke-${Date.now().toString(36)}`;
+      const marker = "sunny meadow checkpoint";
       const created = await server.request("thread/start", {
         cwd: "/tmp/live-smoke",
         model: grokModel,
@@ -104,7 +104,7 @@ describe("Grok live smoke", () => {
         input: [
           {
             type: "text",
-            text: `Reply with this token exactly. Do not use any tools or inspect the workspace. No explanation: ${marker}`,
+            text: `Reply with only these words: ${marker}`,
           },
         ],
       })) as { threadId: string; runId: string };
@@ -138,7 +138,7 @@ describe("Grok live smoke", () => {
         input: [
           {
             type: "text",
-            text: "What token did you just return? Reply with the token only. Do not use any tools.",
+            text: "Repeat the same words from your previous reply.",
           },
         ],
       })) as { threadId: string; runId: string };
@@ -156,8 +156,7 @@ describe("Grok live smoke", () => {
       const replay = await server.request("thread/read", { threadId: "thread-live" });
       expect(replay).toMatchObject({
         threadId: "thread-live",
-        lastUserMessage:
-          "What token did you just return? Reply with the token only. Do not use any tools.",
+        lastUserMessage: "Repeat the same words from your previous reply.",
       });
       expect((replay as { lastAssistantMessage?: string }).lastAssistantMessage).toContain(marker);
     },
