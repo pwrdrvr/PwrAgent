@@ -197,6 +197,16 @@ export class DesktopBackendRegistry {
     if (codexCapture) {
       this.captureStores.push(codexCapture.store);
     }
+    const grokCapture = options?.grokClient
+      || replayClients
+      ? undefined
+      : createProtocolCaptureFromEnv({
+          backend: "grok",
+          userDataPath: app.getPath("userData"),
+        });
+    if (grokCapture) {
+      this.captureStores.push(grokCapture.store);
+    }
 
     this.codexDefaultClient =
       options?.codexClient ??
@@ -214,7 +224,9 @@ export class DesktopBackendRegistry {
     this.grokClient =
       options?.grokClient ??
       replayClients?.grokClient ??
-      new GrokAppServerClient();
+      new GrokAppServerClient({
+        connectionObserver: grokCapture?.observer,
+      });
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
     this.createScratchProjectDirectory =
       options?.createScratchProjectDirectory ?? createScratchProjectDirectory;
