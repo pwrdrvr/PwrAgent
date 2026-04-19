@@ -77,7 +77,15 @@ class MockTransport implements JsonRpcTransport {
 
     if (payload.method === "thread/list") {
       const params = JSON.parse(message) as {
-        params?: { archived?: boolean; searchTerm?: string; query?: string; filter?: string };
+        params?: {
+          archived?: boolean;
+          limit?: number;
+          searchTerm?: string;
+          query?: string;
+          filter?: string;
+          sortKey?: string;
+          sourceKinds?: string[];
+        };
       };
       const searchTerm =
         params.params?.searchTerm ?? params.params?.query ?? params.params?.filter;
@@ -121,6 +129,155 @@ class MockTransport implements JsonRpcTransport {
                       path: "/tmp/forked-worktree-rollout.jsonl",
                     }
                   ]
+            }
+          })
+        );
+        return;
+      }
+
+      if (searchTerm === "updated-at-sort") {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data: params.params?.archived
+                ? []
+                : params.params?.sortKey === "updated_at"
+                  ? [
+                      {
+                        id: "thread-recent",
+                        name: "Recent search-product thread",
+                        updatedAt: 1_776_200_000,
+                        cwd: "/Users/huntharo/GIPHY/search-product",
+                      },
+                      {
+                        id: "thread-borderline",
+                        name: "Borderline search-product thread",
+                        updatedAt: 1_772_510_658,
+                        cwd: "/Users/huntharo/GIPHY/search-product",
+                      },
+                    ]
+                  : [
+                      {
+                        id: "thread-recent",
+                        name: "Recent search-product thread",
+                        updatedAt: 1_776_200_000,
+                        cwd: "/Users/huntharo/GIPHY/search-product",
+                      },
+                      {
+                        id: "thread-stale-created-order",
+                        name: "Stale created-order thread",
+                        updatedAt: 1_772_251_018,
+                        cwd: "/Users/huntharo/GIPHY/search-product",
+                      },
+                    ]
+            }
+          })
+        );
+        return;
+      }
+
+      if (searchTerm === "search-product-parity") {
+        const matchesCodexWindow =
+          params.params?.limit === 50 &&
+          params.params?.sortKey === "updated_at" &&
+          JSON.stringify(params.params?.sourceKinds) === JSON.stringify(["cli", "vscode"]);
+
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data: params.params?.archived
+                ? []
+                : matchesCodexWindow
+                  ? [
+                      {
+                        id: "thread-projmgr",
+                        name: "search-product ProjMgr",
+                        updatedAt: 1_776_298_236,
+                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        gitInfo: {
+                          branch: "main",
+                          originUrl: "git@github.com:Giphy/search-product.git",
+                        },
+                      },
+                      {
+                        id: "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
+                        name: "Plan Slidev theme extraction",
+                        updatedAt: 1_776_179_110,
+                        cwd: "/Users/huntharo/.codex/worktrees/be87/search-product",
+                        path: "/tmp/missing-worktree-rollout.jsonl",
+                        gitInfo: {
+                          branch: "codex/plan-slidev-theme-extraction",
+                          originUrl: "git@github.com:Giphy/search-product.git",
+                        },
+                      },
+                      {
+                        id: "thread-deck",
+                        name: "Create Project Manager deck",
+                        updatedAt: 1_776_019_529,
+                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        gitInfo: {
+                          branch: "main",
+                          originUrl: "git@github.com:Giphy/search-product.git",
+                        },
+                      },
+                    ]
+                  : [
+                      {
+                        id: "thread-projmgr",
+                        name: "search-product ProjMgr",
+                        updatedAt: 1_776_298_236,
+                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        gitInfo: {
+                          branch: "main",
+                          originUrl: "git@github.com:Giphy/search-product.git",
+                        },
+                      },
+                      {
+                        id: "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
+                        name: "Plan Slidev theme extraction",
+                        updatedAt: 1_776_179_110,
+                        cwd: "/Users/huntharo/.codex/worktrees/be87/search-product",
+                        path: "/tmp/missing-worktree-rollout.jsonl",
+                        gitInfo: {
+                          branch: "codex/plan-slidev-theme-extraction",
+                          originUrl: "git@github.com:Giphy/search-product.git",
+                        },
+                      },
+                      {
+                        id: "thread-deck",
+                        name: "Create Project Manager deck",
+                        updatedAt: 1_776_019_529,
+                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        gitInfo: {
+                          branch: "main",
+                          originUrl: "git@github.com:Giphy/search-product.git",
+                        },
+                      },
+                      {
+                        id: "019cb1de-230c-71f1-a833-8880f2ea1a4a",
+                        name: "is this thing on?",
+                        updatedAt: 1_772_510_658,
+                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        gitInfo: {
+                          branch: "main",
+                          originUrl: "git@github.com:Giphy/search-product.git",
+                        },
+                      },
+                      {
+                        id: "019c9cc2-6ea3-7d40-817d-9590d9118bbd",
+                        name: "Gather Reddit feedback screenshots",
+                        updatedAt: 1_772_391_226,
+                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        gitInfo: {
+                          branch: "main",
+                          originUrl: "git@github.com:Giphy/search-product.git",
+                        },
+                      },
+                    ]
             }
           })
         );
@@ -563,13 +720,17 @@ describe("CodexAppServerClient", () => {
         expect.objectContaining({
           params: {
             archived: false,
-            limit: 100
+            limit: 50,
+            sortKey: "updated_at",
+            sourceKinds: ["cli", "vscode"],
           }
         }),
         expect.objectContaining({
           params: {
             archived: true,
-            limit: 100
+            limit: 50,
+            sortKey: "updated_at",
+            sourceKinds: ["cli", "vscode"],
           }
         })
       ])
@@ -601,14 +762,18 @@ describe("CodexAppServerClient", () => {
           params: {
             searchTerm: "web-app",
             archived: false,
-            limit: 100
+            limit: 50,
+            sortKey: "updated_at",
+            sourceKinds: ["cli", "vscode"],
           }
         }),
         expect.objectContaining({
           params: {
             searchTerm: "web-app",
             archived: true,
-            limit: 100
+            limit: 50,
+            sortKey: "updated_at",
+            sourceKinds: ["cli", "vscode"],
           }
         })
       ])
@@ -744,6 +909,111 @@ describe("CodexAppServerClient", () => {
     const derivedThread = threads.find((thread) => thread.id === "thread-1");
 
     expect(derivedThread?.summary).toBeUndefined();
+
+    await client.close();
+  });
+
+  it("requests updated-at sorted interactive threads so stale created-order entries do not leak into the first page", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const threads = await client.listThreads({ filter: "updated-at-sort" });
+
+    expect(threads.map((thread) => thread.id)).toEqual([
+      "thread-recent",
+      "thread-borderline",
+    ]);
+    expect(threads.find((thread) => thread.id === "thread-stale-created-order")).toBeUndefined();
+
+    const transport = MockTransport.instances.at(-1);
+    const threadListRequests = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> })
+      .filter((payload) => payload.method === "thread/list");
+    expect(threadListRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: expect.objectContaining({
+            searchTerm: "updated-at-sort",
+            sortKey: "updated_at",
+            sourceKinds: ["cli", "vscode"],
+          }),
+        }),
+      ]),
+    );
+
+    await client.close();
+  });
+
+  it("matches Codex Desktop search-product parity for stale roots and deleted worktrees", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      threadDirectoryEnricher: async (projectKey) => {
+        if (projectKey === "/Users/huntharo/GIPHY/search-product") {
+          return {
+            linkedDirectories: [
+              {
+                id: "/Users/huntharo/GIPHY/search-product",
+                label: "search-product",
+                path: "/Users/huntharo/GIPHY/search-product",
+                kind: "local",
+              },
+            ],
+            observedGitBranch: "main",
+          };
+        }
+
+        return {
+          linkedDirectories: [],
+        };
+      },
+    });
+
+    const threads = await client.listThreads({ filter: "search-product-parity" });
+
+    expect(threads.map((thread) => thread.id)).toEqual([
+      "thread-projmgr",
+      "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
+      "thread-deck",
+    ]);
+    expect(threads.find((thread) => thread.id === "019cb1de-230c-71f1-a833-8880f2ea1a4a")).toBeUndefined();
+    expect(threads.find((thread) => thread.id === "019c9cc2-6ea3-7d40-817d-9590d9118bbd")).toBeUndefined();
+    expect(
+      threads.find((thread) => thread.id === "019d88a2-0e0b-77f0-bfce-130ae8e37d8f")
+    ).toMatchObject({
+      projectKey: "/Users/huntharo/.codex/worktrees/be87/search-product",
+      linkedDirectories: [
+        {
+          id: "/Users/huntharo/GIPHY/search-product",
+          label: "search-product",
+          path: "/Users/huntharo/GIPHY/search-product",
+          worktreePath: "/Users/huntharo/.codex/worktrees/be87/search-product",
+          kind: "worktree",
+        },
+      ],
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const threadListRequests = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> })
+      .filter((payload) => payload.method === "thread/list");
+    expect(threadListRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: expect.objectContaining({
+            searchTerm: "search-product-parity",
+            limit: 50,
+            sortKey: "updated_at",
+            sourceKinds: ["cli", "vscode"],
+          }),
+        }),
+      ]),
+    );
 
     await client.close();
   });

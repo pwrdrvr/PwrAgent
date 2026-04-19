@@ -96,10 +96,19 @@ desktop replay scenarios do not exercise Codex sidebar directory identity.
   fixture. Its real `thread/list` response includes `cwd`, `path`, and often
   `gitInfo.branch`, which is enough to characterize the supported Codex thread
   identity contract.
+- `codex-directory-parity/raw.capture.jsonl` adds the startup/sidebar parity
+  case for Codex Desktop directory browsing. Its live `thread/list` capture is
+  the evidence for the `limit: 50` updated-at window plus deleted-worktree
+  thread retention, while the curated replay fixture keeps the Electron spec
+  deterministic.
 - `codex-todo-list/replay.fixture.json` remains valid for transcript and plan
   rendering, but it does **not** cover startup/sidebar grouping parity. Like the
   other replay fixtures, it replays already-normalized thread summaries with
   `linkedDirectories: []`.
+- `codex-directory-parity/replay.fixture.json` is the first checked-in replay
+  fixture that asserts directory grouping parity from normalized thread
+  summaries, including a deleted worktree that still belongs under its home
+  repository directory.
 - The current replay-backed Electron specs continue to cover transcript,
   approval, turn lifecycle, diff, and markdown behavior. None of the checked-in
   replay fixtures currently assert home-repo/worktree grouping or branch-drift
@@ -117,6 +126,8 @@ desktop replay scenarios do not exercise Codex sidebar directory identity.
   order when expanded
 - `codex-todo-list/`: selected Codex thread renders a persisted transcript task
   plan
+- `codex-directory-parity/`: Codex startup directory list matches Codex Desktop
+  for stale-root exclusion and deleted-worktree inclusion
 - `grok-todo-list/`: Grok-backed task plan rendering contract for the shared
   transcript plan UI
 - `live-plan-updates/`: live `turn/plan/updated` rendering for in-flight task

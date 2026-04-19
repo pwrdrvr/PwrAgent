@@ -1,0 +1,84 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "codex-directory-parity",
+    "sourceCaptureId": "codex-directory-parity-live"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-projmgr",
+          "title": "search-product ProjMgr",
+          "titleSource": "explicit",
+          "projectKey": "/Users/huntharo/GIPHY/search-product",
+          "updatedAt": 1776298236000,
+          "linkedDirectories": [
+            {
+              "id": "/Users/huntharo/GIPHY/search-product",
+              "label": "search-product",
+              "path": "/Users/huntharo/GIPHY/search-product",
+              "kind": "local"
+            }
+          ],
+          "gitBranch": "main",
+          "source": "codex"
+        },
+        {
+          "id": "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
+          "title": "Plan Slidev theme extraction",
+          "titleSource": "explicit",
+          "projectKey": "/Users/huntharo/.codex/worktrees/be87/search-product",
+          "updatedAt": 1776179110000,
+          "linkedDirectories": [
+            {
+              "id": "/Users/huntharo/GIPHY/search-product",
+              "label": "search-product",
+              "path": "/Users/huntharo/GIPHY/search-product",
+              "worktreePath": "/Users/huntharo/.codex/worktrees/be87/search-product",
+              "kind": "worktree"
+            }
+          ],
+          "gitBranch": "codex/plan-slidev-theme-extraction",
+          "source": "codex"
+        },
+        {
+          "id": "thread-deck",
+          "title": "Create Project Manager deck",
+          "titleSource": "explicit",
+          "projectKey": "/Users/huntharo/GIPHY/search-product",
+          "updatedAt": 1776019529000,
+          "linkedDirectories": [
+            {
+              "id": "/Users/huntharo/GIPHY/search-product",
+              "label": "search-product",
+              "path": "/Users/huntharo/GIPHY/search-product",
+              "kind": "local"
+            }
+          ],
+          "gitBranch": "main",
+          "source": "codex"
+        }
+      ]
+    }
+  ]
+}

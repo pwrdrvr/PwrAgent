@@ -65,6 +65,7 @@ type RawCodexThreadSummary = Omit<
   "source" | "linkedDirectories"
 > & {
   projectKey?: string;
+  gitOriginUrl?: string;
 };
 
 type SkillCatalogEntry = {
@@ -1304,6 +1305,11 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
     }
 
     const sessionRecord = asRecord(record.session);
+    const gitInfoRecord =
+      asRecord(record.gitInfo) ??
+      asRecord(record.git_info) ??
+      asRecord(sessionRecord?.gitInfo) ??
+      asRecord(sessionRecord?.git_info);
     const projectKey =
       pickString(record, ["projectKey", "project_key", "cwd"]) ??
       pickString(sessionRecord ?? {}, ["cwd", "projectKey", "project_key"]);
@@ -1353,10 +1359,15 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
           pickNumber(sessionRecord ?? {}, ["updatedAt", "updated_at", "lastActivityAt"])
       ),
       gitBranch:
-        pickString(asRecord(record.gitInfo) ?? {}, ["branch"]) ??
-        pickString(asRecord(record.git_info) ?? {}, ["branch"]) ??
+        pickString(gitInfoRecord ?? {}, ["branch"]) ??
         pickString(asRecord(sessionRecord?.gitInfo) ?? {}, ["branch"]) ??
-        pickString(asRecord(sessionRecord?.git_info) ?? {}, ["branch"])
+        pickString(asRecord(sessionRecord?.git_info) ?? {}, ["branch"]),
+      gitOriginUrl: pickString(gitInfoRecord ?? {}, [
+        "originUrl",
+        "origin_url",
+        "remoteUrl",
+        "remote_url",
+      ]),
     });
   }
 
@@ -1370,26 +1381,28 @@ function buildThreadDiscoveryPayloads(
   archived?: boolean
 ): unknown[] {
   const searchTerm = filter?.trim() || undefined;
+  const baseParams = {
+    archived,
+    limit: 50,
+    sortKey: "updated_at",
+    sourceKinds: ["cli", "vscode"],
+  } as const;
 
   return [
     {
+      ...baseParams,
       searchTerm,
-      archived,
-      limit: 100
     },
     {
+      ...baseParams,
       query: searchTerm,
-      archived,
-      limit: 100
     },
     {
+      ...baseParams,
       filter: searchTerm,
-      archived,
-      limit: 100
     },
     {
-      archived,
-      limit: 100
+      ...baseParams,
     },
     {}
   ];
@@ -1454,6 +1467,89 @@ function mergeArchivedThreadMetadata(params: {
       return mergeThreadSummaries([thread, archived])[0] ?? thread;
     })
     .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+}
+
+function normalizeGitOriginUrl(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const sshMatch = trimmed.match(/^git@([^:]+):(.+)$/i);
+  const candidate = sshMatch
+    ? `${sshMatch[1]}/${sshMatch[2]}`
+    : trimmed.replace(/^[a-z]+:\/\//i, "");
+
+  const normalized = candidate
+    .replace(/\.git$/i, "")
+    .replace(/^ssh\//i, "")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+
+  return normalized || undefined;
+}
+
+type EnrichedCodexThread = AppServerThreadSummary & {
+  gitOriginUrl?: string;
+};
+
+function hydrateMissingLinkedDirectoriesFromSiblingRepos(
+  threads: EnrichedCodexThread[]
+): EnrichedCodexThread[] {
+  const donorDirectoriesByOrigin = new Map<string, LinkedDirectorySummary[]>();
+
+  for (const thread of threads) {
+    if (thread.linkedDirectories.length === 0) {
+      continue;
+    }
+
+    const normalizedOrigin = normalizeGitOriginUrl(thread.gitOriginUrl);
+    if (!normalizedOrigin || donorDirectoriesByOrigin.has(normalizedOrigin)) {
+      continue;
+    }
+
+    const rootDirectories = thread.linkedDirectories.filter(
+      (directory) => !directory.worktreePath
+    );
+    donorDirectoriesByOrigin.set(
+      normalizedOrigin,
+      rootDirectories.length > 0 ? rootDirectories : thread.linkedDirectories
+    );
+  }
+
+  return threads.map((thread) => {
+    if (thread.linkedDirectories.length > 0) {
+      return thread;
+    }
+
+    const normalizedOrigin = normalizeGitOriginUrl(thread.gitOriginUrl);
+    if (!normalizedOrigin) {
+      return thread;
+    }
+
+    const donorDirectories = donorDirectoriesByOrigin.get(normalizedOrigin);
+    if (!donorDirectories || donorDirectories.length === 0) {
+      return thread;
+    }
+
+    const linkedDirectories = donorDirectories.map((directory) => {
+      if (!thread.projectKey || thread.projectKey === directory.path) {
+        return directory;
+      }
+
+      return {
+        ...directory,
+        worktreePath: thread.projectKey,
+        kind: "worktree" as const,
+      };
+    });
+
+    return {
+      ...thread,
+      linkedDirectories,
+    };
+  });
 }
 
 function buildThreadResumePayloads(params: {
@@ -1651,7 +1747,7 @@ export class CodexAppServerClient {
       archivedThreads: extractThreadsFromValue(archivedResult),
     });
 
-    return await Promise.all(
+    const enrichedThreads = await Promise.all(
       threads.map(async (thread) => {
         const projectKey = await resolveThreadProjectKey(thread);
         const enrichment = await this.threadDirectoryEnricher(projectKey);
@@ -1660,10 +1756,12 @@ export class CodexAppServerClient {
           projectKey,
           linkedDirectories: enrichment.linkedDirectories,
           observedGitBranch: enrichment.observedGitBranch,
-          source: "codex"
+          source: "codex" as const
         };
       })
     );
+
+    return hydrateMissingLinkedDirectoriesFromSiblingRepos(enrichedThreads);
   }
 
   async listSkills(params?: {
