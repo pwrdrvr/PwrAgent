@@ -1,5 +1,8 @@
 import fs from "node:fs";
-import type { AppServerPendingRequestNotification } from "@pwragnt/shared";
+import type {
+  AppServerPendingRequestNotification,
+  ThreadExecutionMode,
+} from "@pwragnt/shared";
 import { ReplayClient } from "./replay-client";
 import type { ReplayFixture, ReplayStepOverride } from "./replay-fixture";
 import { validateReplayFixture } from "./replay-fixture";
@@ -7,9 +10,18 @@ import { validateReplayFixture } from "./replay-fixture";
 const REPLAY_FIXTURE_PATH_ENV = "PWRAGNT_REPLAY_FIXTURE_PATH";
 
 type ReplayDriver = {
-  advance(params?: { stepId?: string; override?: ReplayStepOverride }): Promise<void>;
-  getPendingRequest(): AppServerPendingRequestNotification | undefined;
-  respondToPendingRequest(requestId: string): Promise<void>;
+  advance(params?: {
+    executionMode?: ThreadExecutionMode;
+    stepId?: string;
+    override?: ReplayStepOverride;
+  }): Promise<void>;
+  getPendingRequest(params?: {
+    executionMode?: ThreadExecutionMode;
+  }): AppServerPendingRequestNotification | undefined;
+  respondToPendingRequest(params: {
+    executionMode?: ThreadExecutionMode;
+    requestId: string;
+  }): Promise<void>;
 };
 
 declare global {
@@ -34,11 +46,27 @@ export function createReplayClientsFromEnv():
 
   globalThis.__PWRAGNT_REPLAY_DRIVER__ = {
     advance: async (params) => {
-      await defaultClient.advance(params);
+      await getReplayClient({
+        defaultClient,
+        fullAccessClient,
+        executionMode: params?.executionMode,
+      }).advance({
+        stepId: params?.stepId,
+        override: params?.override,
+      });
     },
-    getPendingRequest: () => defaultClient.getPendingRequest(),
-    respondToPendingRequest: async (requestId) => {
-      await defaultClient.respondToPendingRequest(requestId);
+    getPendingRequest: (params) =>
+      getReplayClient({
+        defaultClient,
+        fullAccessClient,
+        executionMode: params?.executionMode,
+      }).getPendingRequest(),
+    respondToPendingRequest: async (params) => {
+      await getReplayClient({
+        defaultClient,
+        fullAccessClient,
+        executionMode: params.executionMode,
+      }).respondToPendingRequest(params.requestId);
     }
   };
 
@@ -46,6 +74,16 @@ export function createReplayClientsFromEnv():
     defaultClient,
     fullAccessClient
   };
+}
+
+function getReplayClient(params: {
+  defaultClient: ReplayClient;
+  fullAccessClient: ReplayClient;
+  executionMode?: ThreadExecutionMode;
+}): ReplayClient {
+  return params.executionMode === "full-access"
+    ? params.fullAccessClient
+    : params.defaultClient;
 }
 
 function loadReplayFixture(filePath: string): ReplayFixture {

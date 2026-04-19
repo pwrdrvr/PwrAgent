@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ThreadExecutionMode } from "@pwragnt/shared";
 import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
@@ -8,11 +9,17 @@ type LaunchResult = {
   electronApp: ElectronApplication;
   window: Page;
   advance: (params?: {
+    executionMode?: ThreadExecutionMode;
     stepId?: string;
     override?: Record<string, unknown>;
   }) => Promise<void>;
-  getPendingRequest: () => Promise<unknown>;
-  respondToPendingRequest: (requestId: string) => Promise<void>;
+  getPendingRequest: (params?: {
+    executionMode?: ThreadExecutionMode;
+  }) => Promise<unknown>;
+  respondToPendingRequest: (params: {
+    executionMode?: ThreadExecutionMode;
+    requestId: string;
+  }) => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -46,14 +53,16 @@ export async function launchElectronApp(params: {
         await globalThis.__PWRAGNT_REPLAY_DRIVER__?.advance(value);
       }, advanceParams);
     },
-    getPendingRequest: async () =>
-      await electronApp.evaluate(() =>
-        globalThis.__PWRAGNT_REPLAY_DRIVER__?.getPendingRequest()
+    getPendingRequest: async (requestParams) =>
+      await electronApp.evaluate(
+        (_electron, value) =>
+          globalThis.__PWRAGNT_REPLAY_DRIVER__?.getPendingRequest(value),
+        requestParams
       ),
-    respondToPendingRequest: async (requestId: string) => {
+    respondToPendingRequest: async (requestParams) => {
       await electronApp.evaluate(async (_electron, value) => {
         await globalThis.__PWRAGNT_REPLAY_DRIVER__?.respondToPendingRequest(value);
-      }, requestId);
+      }, requestParams);
     },
     close: async () => {
       await electronApp.close();

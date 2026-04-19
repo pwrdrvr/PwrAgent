@@ -2,26 +2,24 @@ import type { ReplayFixture, ReplayRequestStep, ReplayResponseMethod, ReplayResp
 import { validateReplayFixture } from "./replay-fixture";
 
 export class ReplayController {
-  private readonly responseSteps: ReplayResponseStep[];
-  private readonly liveSteps: Array<Exclude<ReplayStep, ReplayResponseStep>>;
-  private responseIndex = 0;
-  private liveIndex = 0;
+  private readonly steps: ReplayStep[];
+  private index = 0;
   private pendingRequest?: ReplayRequestStep;
 
   constructor(private readonly fixture: ReplayFixture) {
     validateReplayFixture(fixture);
-    this.responseSteps = fixture.steps.filter(
-      (step): step is ReplayResponseStep => step.kind === "response"
-    );
-    this.liveSteps = fixture.steps.filter(
-      (step): step is Exclude<ReplayStep, ReplayResponseStep> => step.kind !== "response"
-    );
+    this.steps = fixture.steps;
   }
 
   consumeResponse(method: ReplayResponseMethod): ReplayResponseStep {
-    const nextStep = this.responseSteps[this.responseIndex];
+    const nextStep = this.steps[this.index];
     if (!nextStep) {
       throw new Error(`Replay fixture exhausted before ${method}`);
+    }
+    if (nextStep.kind !== "response") {
+      throw new Error(
+        `Replay fixture expected live step ${nextStep.id} before response ${method}`
+      );
     }
     if (nextStep.method !== method) {
       throw new Error(
@@ -29,7 +27,7 @@ export class ReplayController {
       );
     }
 
-    this.responseIndex += 1;
+    this.index += 1;
 
     if (nextStep.error) {
       throw new Error(
@@ -52,16 +50,21 @@ export class ReplayController {
       );
     }
 
-    const nextStep = this.liveSteps[this.liveIndex];
+    const nextStep = this.steps[this.index];
     if (!nextStep) {
       throw new Error("Replay has no remaining live steps");
+    }
+    if (nextStep.kind === "response") {
+      throw new Error(
+        `Replay fixture expected response ${nextStep.method} before live step ${params.stepId ?? "advance"}`
+      );
     }
     if (params.stepId && nextStep.id !== params.stepId) {
       throw new Error(`Replay expected step ${nextStep.id} before ${params.stepId}`);
     }
 
     const merged = applyOverride(nextStep, params.override);
-    this.liveIndex += 1;
+    this.index += 1;
 
     if (merged.kind === "request") {
       this.pendingRequest = merged;
