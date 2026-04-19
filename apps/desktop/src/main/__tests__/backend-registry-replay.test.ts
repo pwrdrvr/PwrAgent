@@ -5,6 +5,8 @@ import { ReplayClient } from "../testing/replay-client";
 function createOverlayStoreMock() {
   return {
     getThreadOverlayState: async () => undefined,
+    getThreadOverlayStates: async ({ threadIds }: { threadIds: string[] }) =>
+      Object.fromEntries(threadIds.map((threadId) => [threadId, undefined])),
     setThreadExecutionMode: async ({
       backend,
       threadId,

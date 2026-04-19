@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -183,6 +183,39 @@ describe("OverlayStore", () => {
       reasoningEffort: "high",
       fastMode: true,
     });
+  });
+
+  it("does not rewrite the overlay file for read-only thread lookups", async () => {
+    const store = await createStore();
+
+    await store.markThreadSeen({
+      backend: "codex",
+      threadId: "thread-1",
+      seenAt: 2000,
+      seenUpdatedAt: 1000,
+    });
+
+    const overlayPath = path.join(tempDirs[0]!, "overlay-state.json");
+    const beforeStat = await stat(overlayPath);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await expect(
+      store.getThreadOverlayStates({
+        backend: "codex",
+        threadIds: ["thread-1", "thread-2"],
+      }),
+    ).resolves.toEqual({
+      "thread-1": expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        lastSeenAt: 2000,
+      }),
+      "thread-2": undefined,
+    });
+
+    const afterStat = await stat(overlayPath);
+    expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
   });
 
   it("persists correctly when separate store instances write the same file concurrently", async () => {
