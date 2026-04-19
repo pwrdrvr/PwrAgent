@@ -127,13 +127,11 @@ describe("Sidebar", () => {
         launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
-        refreshing={false}
         selectedItemKey="codex:thread-1"
         threads={[sharedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
-        onRefresh={async () => undefined}
         onSelectThread={() => undefined}
       />
     );
@@ -163,13 +161,11 @@ describe("Sidebar", () => {
         launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
-        refreshing={false}
         selectedItemKey={undefined}
         threads={[sharedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={onOpenLaunchpad}
-        onRefresh={async () => undefined}
         onSelectThread={() => undefined}
       />
     );
@@ -203,13 +199,11 @@ describe("Sidebar", () => {
         launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
-        refreshing={false}
         selectedItemKey="codex:thread-1"
         threads={[sharedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
-        onRefresh={async () => undefined}
         onSelectThread={() => undefined}
       />
     );
@@ -236,13 +230,11 @@ describe("Sidebar", () => {
         launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
-        refreshing={false}
         selectedItemKey="codex:thread-1"
         threads={[sharedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={onCreateThread}
         onOpenLaunchpad={async () => undefined}
-        onRefresh={async () => undefined}
         onSelectThread={() => undefined}
       />
     );

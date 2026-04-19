@@ -1,18 +1,18 @@
-import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { ThreadView } from "./features/thread-detail/ThreadView";
-import { getDesktopApi } from "./lib/desktop-api";
+import { useBackendSummaries } from "./lib/useBackendSummaries";
+import { useDesktopApi } from "./lib/desktop-api";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
+import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { useThreadSkills } from "./lib/useThreadSkills";
-import { useThreadTranscript } from "./lib/useThreadTranscript";
 
 export function App() {
-  const desktopApi = getDesktopApi();
+  const desktopApi = useDesktopApi();
   const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);
-  const transcript = useThreadTranscript({
+  const session = useThreadSessionState({
     desktopApi,
-    thread: navigation.selectedThread
+    thread: navigation.selectedThread,
   });
   const skills = useThreadSkills({
     desktopApi,
@@ -23,35 +23,31 @@ export function App() {
   return (
     <div className="app-shell">
       <Sidebar
-        browseMode={navigation.browseMode}
         backends={backendSummaries.backends}
+        browseMode={navigation.browseMode}
         createThreadError={navigation.createThreadError}
+        creatingThread={navigation.creatingThread}
         directories={navigation.directories}
         error={navigation.error}
         fetchedAt={navigation.snapshot?.fetchedAt}
         inboxThreads={navigation.inboxThreads}
         launchpadError={navigation.launchpadError}
         loading={navigation.loading}
-        creatingThread={navigation.creatingThread}
-        refreshing={navigation.refreshing}
         selectedItemKey={navigation.selectedItemKey}
         threads={navigation.threads}
         onBrowseModeChange={navigation.setBrowseMode}
         onCreateThread={navigation.createThread}
         onOpenLaunchpad={navigation.openDirectoryLaunchpad}
-        onRefresh={navigation.refresh}
         onSelectThread={navigation.selectThread}
       />
 
       <main className="app-main">
         <ThreadView
-          addOptimisticUserMessage={transcript.addOptimisticUserMessage}
+          activeRunId={session.activeRunId}
+          addOptimisticUserMessage={session.addOptimisticUserMessage}
           backendError={backendSummaries.error}
           backends={backendSummaries.backends}
-          fetchedAt={transcript.response?.fetchedAt}
-          loading={transcript.loading}
-          loadingMore={transcript.loadingMore}
-          messageCount={transcript.messages.length}
+          clearPendingRequest={session.clearPendingRequest}
           composerDisabled={
             !navigation.selectedThread ||
             !backendSummaries.backends.some(
@@ -61,6 +57,14 @@ export function App() {
             )
           }
           desktopApi={desktopApi}
+          fetchedAt={session.response?.fetchedAt}
+          launchpadError={navigation.launchpadError}
+          loading={session.loading}
+          loadingMore={session.loadingMore}
+          messageCount={session.messages.length}
+          pendingAssistantMessage={session.pendingAssistantMessage}
+          pendingRequest={session.pendingRequest}
+          pendingStatusText={session.pendingStatusText}
           platform={desktopApi?.platform}
           selectedDirectory={navigation.selectedDirectory}
           selectedLaunchpad={navigation.selectedLaunchpad}
@@ -69,13 +73,15 @@ export function App() {
           skillError={skills.error}
           skillLoading={skills.loading}
           skills={skills.skills}
-          transcriptError={transcript.error}
-          transcriptEntries={transcript.entries}
-          transcriptPagination={transcript.response?.replay.pagination}
+          transcriptEntries={session.entries}
+          transcriptError={session.error}
+          transcriptPagination={session.response?.replay.pagination}
           updatingExecutionMode={navigation.updatingThreadExecutionMode}
-          launchpadError={navigation.launchpadError}
-          onLoadOlder={transcript.loadOlder}
+          onActiveRunIdChange={session.setActiveRunId}
+          onEnsureSkillsLoaded={skills.ensureLoaded}
+          onLoadOlder={session.loadOlder}
           onMaterializeLaunchpad={navigation.materializeDirectoryLaunchpad}
+          onPendingStatusChange={session.setPendingStatusText}
           onSetExecutionMode={
             navigation.selectedThread
               ? async (executionMode) =>
@@ -86,10 +92,7 @@ export function App() {
               : undefined
           }
           onUpdateLaunchpad={navigation.updateDirectoryLaunchpad}
-          removeOptimisticMessage={transcript.removeOptimisticMessage}
-          onRefresh={
-            navigation.selectedThread ? transcript.refresh : navigation.refresh
-          }
+          removeOptimisticMessage={session.removeOptimisticMessage}
         />
       </main>
     </div>

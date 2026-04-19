@@ -8,6 +8,7 @@ import {
   waitFor,
   within
 } from "@testing-library/react";
+import type { StartTurnRequest, StartTurnResponse } from "@pwragnt/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 
@@ -18,6 +19,30 @@ describe("App", () => {
 
   it("renders the live thread shell with transcript history", async () => {
     const copyText = vi.fn(async () => undefined);
+    const listSkills = vi.fn(async () => ({
+      backend: "codex" as const,
+      fetchedAt: Date.now(),
+      data: [
+        {
+          cwd: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
+          skills: [
+            {
+              name: "frontend-design",
+              description: "Design and verify renderer UI work.",
+              path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+              enabled: true
+            }
+          ]
+        }
+      ]
+    }));
+    const startTurn = vi.fn<
+      (request: StartTurnRequest) => Promise<StartTurnResponse>
+    >(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      runId: "turn-1"
+    }));
     const interruptTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
@@ -120,23 +145,7 @@ describe("App", () => {
       value: {
         copyText,
         ping: () => "pong",
-        listSkills: async () => ({
-          backend: "codex",
-          fetchedAt: Date.now(),
-          data: [
-            {
-              cwd: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
-              skills: [
-                {
-                  name: "frontend-design",
-                  description: "Design and verify renderer UI work.",
-                  path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
-                  enabled: true
-                }
-              ]
-            }
-          ]
-        }),
+        listSkills,
         listBackends: async () => ({
           fetchedAt: Date.now(),
           backends: [
@@ -249,11 +258,7 @@ describe("App", () => {
           });
         },
         platform: "darwin",
-        startTurn: async () => ({
-          backend: "codex",
-          threadId: "thread-1",
-          runId: "turn-1"
-        }),
+        startTurn,
         interruptTurn,
         onAgentEvent: () => () => undefined,
         versions: {
@@ -272,9 +277,6 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "recents" })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Refresh threads" })
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New thread" })).toBeInTheDocument();
     expect(
@@ -323,16 +325,27 @@ describe("App", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 
-    const reply = screen.getByLabelText("Reply");
+    const reply = screen.getByLabelText("Reply") as HTMLTextAreaElement;
     fireEvent.change(reply, {
       target: { value: "$frontend-design what can this skill do" }
     });
+    reply.setSelectionRange(reply.value.length, reply.value.length);
+    fireEvent.click(reply);
+
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
-      expect(
-        screen.getByText("what can this skill do").closest("article")
-      ).toHaveClass("transcript-message--user");
+      expect(startTurn).toHaveBeenCalledTimes(1);
+    });
+    expect(startTurn.mock.calls[0]?.[0]).toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [
+        {
+          type: "text",
+          text: expect.stringContaining("what can this skill do")
+        }
+      ]
     });
     expect(
       screen.getByText("The Codex client is wired and the thread browser is live.")
@@ -345,7 +358,6 @@ describe("App", () => {
         selector: ".composer__meta"
       })
     ).not.toBeInTheDocument();
-    expect(screen.getAllByText("$frontend-design").length).toBeGreaterThan(0);
     expect(screen.getByText("3 messages")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));

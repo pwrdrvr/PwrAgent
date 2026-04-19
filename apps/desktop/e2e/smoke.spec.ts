@@ -5,7 +5,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const smokeSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
-test("loads the desktop shell from a replay fixture", async () => {
+test("loads the desktop shell without eager skill or manual refresh requests", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       smokeSpecDir,
@@ -22,6 +22,12 @@ test("loads the desktop shell from a replay fixture", async () => {
       })
     ).toBeVisible();
     await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
+    await expect(
+      app.window.getByRole("button", { name: /Refresh threads/i })
+    ).toHaveCount(0);
+    await expect(
+      app.window.getByRole("button", { name: /^Refresh$/i })
+    ).toHaveCount(0);
     await expect(
       app.window.getByRole("button", {
         name: "Open context rail"

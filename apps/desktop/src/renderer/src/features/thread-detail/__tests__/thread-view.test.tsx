@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppServerNotification } from "@pwragnt/shared";
+import type { AppServerNotification, AppServerPendingRequestNotification } from "@pwragnt/shared";
 import { ThreadView } from "../ThreadView";
 
 afterEach(() => {
@@ -157,9 +157,9 @@ describe("ThreadView", () => {
             text: "The desktop client now reads the full transcript."
           }
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={async () => undefined}
         skillLoading={false}
       />
     );
@@ -265,9 +265,9 @@ describe("ThreadView", () => {
             text: "The thread still loads."
           }
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={vi.fn(async () => undefined)}
       />
     );
 
@@ -354,9 +354,9 @@ describe("ThreadView", () => {
             ]
           }
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={async () => undefined}
       />
     );
 
@@ -435,9 +435,9 @@ describe("ThreadView", () => {
           ]
         }
       ],
+      clearPendingRequest: () => undefined,
       onLoadOlder: async () => undefined,
       removeOptimisticMessage: (_id: string) => undefined,
-      onRefresh: async () => undefined,
     };
 
     const { rerender } = render(
@@ -482,38 +482,20 @@ describe("ThreadView", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders live assistant commentary from item/agentMessage/delta notifications", async () => {
-    let agentEventHandler:
-      | ((event: {
-          backend: "codex";
-          notification:
-            | {
-                method: "item/agentMessage/delta";
-                params: {
-                  threadId: string;
-                  itemId: string;
-                  delta: string;
-                };
-              }
-            | {
-                method: "turn/completed";
-                params: {
-                  threadId: string;
-                  runId: string;
-                  turn: {
-                    id: string;
-                    status: "completed";
-                    output: Array<{
-                      type: "text";
-                      text: string;
-                    }>;
-                  };
-                };
-              };
-        }) => void)
-      | undefined;
+  it("renders live assistant commentary passed in from session state", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Plan the app-server protocol",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
 
-    render(
+    const { rerender } = render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[
@@ -547,10 +529,6 @@ describe("ThreadView", () => {
         ]}
         composerDisabled={false}
         desktopApi={{
-          onAgentEvent: (callback) => {
-            agentEventHandler = callback as typeof agentEventHandler;
-            return () => undefined;
-          },
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
@@ -560,17 +538,7 @@ describe("ThreadView", () => {
         loading={false}
         loadingMore={false}
         messageCount={1}
-        selectedThread={{
-          id: "thread-2",
-          title: "Plan the app-server protocol",
-          titleSource: "explicit",
-          source: "codex",
-          updatedAt: Date.now(),
-          linkedDirectories: [],
-          inbox: {
-            inInbox: false
-          }
-        }}
+        selectedThread={selectedThread}
         skills={[]}
         transcriptEntries={[
           {
@@ -580,36 +548,77 @@ describe("ThreadView", () => {
             text: "Run npm view dive"
           }
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={vi.fn(async () => undefined)}
       />
     );
 
-    await act(async () => {
-      agentEventHandler?.({
-        backend: "codex",
-        notification: {
-          method: "item/agentMessage/delta",
-          params: {
+    rerender(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          startTurn: async () => ({
+            backend: "codex",
             threadId: "thread-2",
-            itemId: "msg-1",
-            delta: "I ran ",
-          },
-        },
-      });
-      agentEventHandler?.({
-        backend: "codex",
-        notification: {
-          method: "item/agentMessage/delta",
-          params: {
-            threadId: "thread-2",
-            itemId: "msg-1",
-            delta: "`npm view dive`",
-          },
-        },
-      });
-    });
+            runId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "msg-1",
+          role: "assistant",
+          phase: "commentary",
+          text: "I ran `npm view dive`"
+        }}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Run npm view dive"
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
 
     expect(screen.getByText("I ran")).toBeInTheDocument();
     expect(screen.getByText("npm view dive")).toBeInTheDocument();
@@ -617,28 +626,64 @@ describe("ThreadView", () => {
       "transcript-message--assistant"
     );
 
-    await act(async () => {
-      agentEventHandler?.({
-        backend: "codex",
-        notification: {
-          method: "turn/completed",
-          params: {
+    rerender(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          startTurn: async () => ({
+            backend: "codex",
             threadId: "thread-2",
             runId: "turn-1",
-            turn: {
-              id: "turn-1",
-              status: "completed",
-              output: [
-                {
-                  type: "text",
-                  text: "done",
-                },
-              ],
-            },
-          },
-        },
-      });
-    });
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Run npm view dive"
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
 
     expect(screen.queryByText("I ran")).not.toBeInTheDocument();
   });
@@ -729,9 +774,9 @@ describe("ThreadView", () => {
             text: "Render the task list."
           }
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={vi.fn(async () => undefined)}
       />
     );
 
@@ -830,9 +875,9 @@ describe("ThreadView", () => {
           },
           livePlan
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={vi.fn(async () => undefined)}
       />
     );
 
@@ -840,22 +885,28 @@ describe("ThreadView", () => {
   });
 
   it("maps command approval actions to native decision values and dismisses the approval card", async () => {
-    let agentEventHandler:
-      | ((event: {
-          backend: "codex";
-          notification: {
-            method: string;
-            params: Record<string, unknown>;
-          };
-        }) => void)
-      | undefined;
     const submitServerRequest = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-2",
       requestId: "req-1",
     }));
+    let currentPendingRequest: AppServerPendingRequestNotification | undefined = {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-2",
+        requestId: "req-1",
+        availableDecisions: ["accept", "decline", "cancel"],
+        command: "npm view dive",
+      },
+    };
+    let currentPendingStatus: string | undefined = "Waiting for approval";
+    const clearPendingRequest = vi.fn((_requestId: string, nextStatus?: string) => {
+      currentPendingRequest = undefined;
+      currentPendingStatus = nextStatus;
+      rerenderThreadView();
+    });
 
-    render(
+    const { rerender } = render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[
@@ -889,10 +940,6 @@ describe("ThreadView", () => {
         ]}
         composerDisabled={false}
         desktopApi={{
-          onAgentEvent: (callback) => {
-            agentEventHandler = callback as typeof agentEventHandler;
-            return () => undefined;
-          },
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
@@ -903,6 +950,8 @@ describe("ThreadView", () => {
         loading={false}
         loadingMore={false}
         messageCount={1}
+        pendingRequest={currentPendingRequest}
+        pendingStatusText={currentPendingStatus}
         selectedThread={{
           id: "thread-2",
           title: "Plan the app-server protocol",
@@ -923,26 +972,85 @@ describe("ThreadView", () => {
             text: "Run npm view dive"
           }
         ]}
+        clearPendingRequest={clearPendingRequest}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={vi.fn(async () => undefined)}
       />
     );
 
-    await act(async () => {
-      agentEventHandler?.({
-        backend: "codex",
-        notification: {
-          method: "item/commandExecution/requestApproval",
-          params: {
-            threadId: "thread-2",
-            requestId: "req-1",
-            availableDecisions: ["accept", "decline", "cancel"],
-            command: "npm view dive",
-          },
-        },
-      });
-    });
+    const rerenderThreadView = () => {
+      rerender(
+        <ThreadView
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+              capabilities: {
+                listThreads: true,
+                createThread: false,
+                resumeThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: false,
+                steerTurn: false,
+                transcriptPagination: true,
+                toolUse: false,
+                approvalRequests: true,
+                multiDirectoryThreads: true
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+              ],
+            }
+          ]}
+          composerDisabled={false}
+          desktopApi={{
+            startTurn: async () => ({
+              backend: "codex",
+              threadId: "thread-2",
+              runId: "turn-1",
+            }),
+            submitServerRequest,
+          }}
+          loading={false}
+          loadingMore={false}
+          messageCount={1}
+          pendingRequest={currentPendingRequest}
+          pendingStatusText={currentPendingStatus}
+          selectedThread={{
+            id: "thread-2",
+            title: "Plan the app-server protocol",
+            titleSource: "explicit",
+            source: "codex",
+            updatedAt: Date.now(),
+            linkedDirectories: [],
+            inbox: {
+              inInbox: false
+            }
+          }}
+          skills={[]}
+          transcriptEntries={[
+            {
+              type: "message",
+              id: "message-1",
+              role: "user",
+              text: "Run npm view dive"
+            }
+          ]}
+          clearPendingRequest={clearPendingRequest}
+          onLoadOlder={async () => undefined}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    };
 
     expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
 
@@ -963,20 +1071,23 @@ describe("ThreadView", () => {
         screen.queryByRole("group", { name: "Pending approval" })
       ).not.toBeInTheDocument();
     });
+    expect(clearPendingRequest).toHaveBeenCalledWith("req-1", "Thinking");
   });
 
   it("clears a stale approval card when assistant output resumes", async () => {
-    let agentEventHandler:
-      | ((event: {
-          backend: "codex";
-          notification: {
-            method: string;
-            params: Record<string, unknown>;
-          };
-        }) => void)
-      | undefined;
+    const selectedThread = {
+      id: "thread-2",
+      title: "Plan the app-server protocol",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
 
-    render(
+    const { rerender } = render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[
@@ -1010,10 +1121,6 @@ describe("ThreadView", () => {
         ]}
         composerDisabled={false}
         desktopApi={{
-          onAgentEvent: (callback) => {
-            agentEventHandler = callback as typeof agentEventHandler;
-            return () => undefined;
-          },
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
@@ -1023,17 +1130,16 @@ describe("ThreadView", () => {
         loading={false}
         loadingMore={false}
         messageCount={1}
-        selectedThread={{
-          id: "thread-2",
-          title: "Plan the app-server protocol",
-          titleSource: "explicit",
-          source: "codex",
-          updatedAt: Date.now(),
-          linkedDirectories: [],
-          inbox: {
-            inInbox: false
-          }
+        pendingRequest={{
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-2",
+            requestId: "req-1",
+            command: "npm view dive",
+          },
         }}
+        pendingStatusText="Waiting for approval"
+        selectedThread={selectedThread}
         skills={[]}
         transcriptEntries={[
           {
@@ -1043,42 +1149,81 @@ describe("ThreadView", () => {
             text: "Run npm view dive"
           }
         ]}
+        clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        onRefresh={vi.fn(async () => undefined)}
       />
     );
-
-    await act(async () => {
-      agentEventHandler?.({
-        backend: "codex",
-        notification: {
-          method: "item/commandExecution/requestApproval",
-          params: {
-            threadId: "thread-2",
-            requestId: "req-1",
-            command: "npm view dive",
-          },
-        },
-      });
-    });
 
     expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
     expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
 
-    await act(async () => {
-      agentEventHandler?.({
-        backend: "codex",
-        notification: {
-          method: "item/agentMessage/delta",
-          params: {
+    rerender(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: true,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          startTurn: async () => ({
+            backend: "codex",
             threadId: "thread-2",
-            itemId: "msg-1",
-            delta: "The request was handled.",
-          },
-        },
-      });
-    });
+            runId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "msg-1",
+          role: "assistant",
+          phase: "commentary",
+          text: "The request was handled."
+        }}
+        pendingStatusText="Thinking"
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Run npm view dive"
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
 
     expect(
       screen.queryByRole("group", { name: "Pending approval" })

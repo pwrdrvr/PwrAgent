@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
   AppServerTurnInputItem,
@@ -30,6 +30,133 @@ function getDirectoryKeyFromLaunchpadSelection(selectionKey?: string): string | 
   }
 
   return selectionKey.slice("launchpad:".length);
+}
+
+function linkedDirectoriesEqual(
+  left: NavigationThreadSummary["linkedDirectories"],
+  right: NavigationThreadSummary["linkedDirectories"]
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((directory, index) => {
+    const candidate = right[index];
+    return (
+      directory?.id === candidate?.id &&
+      directory?.label === candidate?.label &&
+      directory?.path === candidate?.path &&
+      directory?.worktreePath === candidate?.worktreePath &&
+      directory?.kind === candidate?.kind
+    );
+  });
+}
+
+function threadInboxEqual(
+  left: NavigationThreadSummary["inbox"],
+  right: NavigationThreadSummary["inbox"]
+): boolean {
+  return (
+    left.inInbox === right.inInbox &&
+    left.reason === right.reason &&
+    left.lastSeenAt === right.lastSeenAt &&
+    left.lastSeenUpdatedAt === right.lastSeenUpdatedAt
+  );
+}
+
+function threadSummariesEqual(
+  left: NavigationThreadSummary,
+  right: NavigationThreadSummary
+): boolean {
+  return (
+    left.id === right.id &&
+    left.source === right.source &&
+    left.title === right.title &&
+    left.titleSource === right.titleSource &&
+    left.summary === right.summary &&
+    left.projectKey === right.projectKey &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt &&
+    left.gitBranch === right.gitBranch &&
+    left.executionMode === right.executionMode &&
+    linkedDirectoriesEqual(left.linkedDirectories, right.linkedDirectories) &&
+    threadInboxEqual(left.inbox, right.inbox)
+  );
+}
+
+function reconcileNavigationSnapshot(
+  previous: NavigationSnapshot | undefined,
+  next: NavigationSnapshot
+): NavigationSnapshot {
+  if (!previous) {
+    return next;
+  }
+
+  const previousByThreadKey = new Map(
+    previous.threads.map((thread) => [
+      buildThreadIdentityKey(thread.source, thread.id),
+      thread,
+    ])
+  );
+
+  return {
+    ...next,
+    threads: next.threads.map((thread) => {
+      const previousThread = previousByThreadKey.get(
+        buildThreadIdentityKey(thread.source, thread.id)
+      );
+      return previousThread && threadSummariesEqual(previousThread, thread)
+        ? previousThread
+        : thread;
+    }),
+  };
+}
+
+function markThreadSeenInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    seenUpdatedAt?: number;
+  }
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (buildThreadIdentityKey(thread.source, thread.id) !== threadKey) {
+      return thread;
+    }
+
+    if (!thread.inbox.inInbox && thread.inbox.lastSeenUpdatedAt === params.seenUpdatedAt) {
+      return thread;
+    }
+
+    changed = true;
+    return {
+      ...thread,
+      inbox: {
+        ...thread.inbox,
+        inInbox: false,
+        reason: undefined,
+        lastSeenAt: Date.now(),
+        lastSeenUpdatedAt: params.seenUpdatedAt,
+      },
+    };
+  });
+
+  if (!changed) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    inboxThreadKeys: snapshot.inboxThreadKeys.filter((candidate) => candidate !== threadKey),
+    threads,
+  };
 }
 
 function applyThreadNameUpdate(
@@ -139,13 +266,13 @@ function hasSelectionKey(
   if (launchpadDirectoryKey) {
     return response.directories.some(
       (directory) =>
-        directory.key === launchpadDirectoryKey && Boolean(directory.launchpad),
+        directory.key === launchpadDirectoryKey && Boolean(directory.launchpad)
     );
   }
 
   return (
     response.threads.some(
-      (thread) => buildThreadIdentityKey(thread.source, thread.id) === selectionKey,
+      (thread) => buildThreadIdentityKey(thread.source, thread.id) === selectionKey
     ) || selectionKey === optimisticThreadKey
   );
 }
@@ -272,96 +399,92 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     useState<string>();
   const [state, setState] = useState<NavigationState>({
     loading: true,
-    refreshing: false
+    refreshing: false,
   });
 
-  const refresh = useCallback(async (
-    preferredSelectionKey?: string,
-    preferredOptimisticThread?: NavigationThreadSummary
-  ): Promise<void> => {
-    if (!desktopApi?.getNavigationSnapshot) {
-      setState({
-        loading: false,
-        refreshing: false,
-        error: "Desktop bridge is missing getNavigationSnapshot().",
-        response: undefined
-      });
-      return;
-    }
+  const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
 
-    setState((current) => ({
-      ...current,
-      loading: !current.response,
-      refreshing: Boolean(current.response),
-      error: undefined
-    }));
+  optimisticThreadRef.current = optimisticThread;
 
-    try {
-      const response = await desktopApi.getNavigationSnapshot();
-      const optimisticSelection = preferredOptimisticThread ?? optimisticThread;
-      const optimisticThreadKey = optimisticSelection
-        ? buildThreadIdentityKey(optimisticSelection.source, optimisticSelection.id)
-        : undefined;
-      const effectivePreferredSelectionKey = preferredSelectionKey ?? selectedItemKey;
-
-      setState((current) => {
-        if (current.response && response.unchanged && !preferredSelectionKey) {
-          return {
-            ...current,
-            loading: false,
-            refreshing: false,
-            error: undefined
-          };
-        }
-
-        return {
+  const refresh = useCallback(
+    async (
+      preferredSelectionKey?: string,
+      preferredOptimisticThread?: NavigationThreadSummary
+    ): Promise<void> => {
+      if (!desktopApi?.getNavigationSnapshot) {
+        setState({
           loading: false,
           refreshing: false,
-          error: undefined,
-          response
-        };
-      });
-
-      if (
-        optimisticThreadKey &&
-        response.threads.some(
-          (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey,
-        )
-      ) {
-        setOptimisticThread(undefined);
+          error: "Desktop bridge is missing getNavigationSnapshot().",
+          response: undefined,
+        });
+        return;
       }
 
-      setSelectedItemKey((current) => {
-        const candidate = preferredSelectionKey ?? current ?? effectivePreferredSelectionKey;
-        if (candidate && hasSelectionKey(response, candidate, optimisticThreadKey)) {
-          return candidate;
+      setState((current) => ({
+        ...current,
+        loading: !current.response,
+        refreshing: Boolean(current.response),
+        error: undefined,
+      }));
+
+      try {
+        const response = await desktopApi.getNavigationSnapshot();
+        const optimisticSelection = preferredOptimisticThread ?? optimisticThreadRef.current;
+        const optimisticThreadKey = optimisticSelection
+          ? buildThreadIdentityKey(optimisticSelection.source, optimisticSelection.id)
+          : undefined;
+
+        setState((current) => {
+          if (current.response && response.unchanged && !preferredSelectionKey) {
+            return {
+              ...current,
+              loading: false,
+              refreshing: false,
+              error: undefined,
+            };
+          }
+
+          return {
+            loading: false,
+            refreshing: false,
+            error: undefined,
+            response: reconcileNavigationSnapshot(current.response, response),
+          };
+        });
+
+        if (
+          optimisticThreadKey &&
+          response.threads.some(
+            (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+          )
+        ) {
+          setOptimisticThread(undefined);
         }
 
-        return getFallbackSelectionKey(response, optimisticThreadKey);
-      });
-    } catch (error) {
-      setState((current) => ({
-        loading: false,
-        refreshing: false,
-        response: current.response,
-        error: error instanceof Error ? error.message : String(error)
-      }));
-    }
-  }, [desktopApi, optimisticThread, selectedItemKey]);
+        setSelectedItemKey((current) => {
+          const candidate = preferredSelectionKey ?? current;
+          if (candidate && hasSelectionKey(response, candidate, optimisticThreadKey)) {
+            return candidate;
+          }
+
+          return getFallbackSelectionKey(response, optimisticThreadKey);
+        });
+      } catch (error) {
+        setState((current) => ({
+          loading: false,
+          refreshing: false,
+          response: current.response,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      }
+    },
+    [desktopApi]
+  );
 
   useEffect(() => {
     void refresh();
-  }, [desktopApi, refresh]);
-
-  useEffect(() => {
-    if (!desktopApi?.onWindowFocus) {
-      return;
-    }
-
-    return desktopApi.onWindowFocus(() => {
-      void refresh();
-    });
-  }, [desktopApi, refresh]);
+  }, [refresh]);
 
   useEffect(() => {
     if (!desktopApi?.onAgentEvent) {
@@ -440,7 +563,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     const inboxThreadKeys = new Set(state.response?.inboxThreadKeys ?? []);
     return threads.filter((thread) =>
       inboxThreadKeys.has(buildThreadIdentityKey(thread.source, thread.id)) ||
-      thread.inbox.inInbox,
+      thread.inbox.inInbox
     );
   }, [state.response?.inboxThreadKeys, threads]);
 
@@ -452,12 +575,12 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     return undefined;
   }, [selectedItemKey]);
 
-  const selectedThread = useMemo(
+  const selectedThread = useMemo<NavigationThreadSummary | undefined>(
     () =>
       selectedThreadKey
         ? threads.find(
             (thread) =>
-              buildThreadIdentityKey(thread.source, thread.id) === selectedThreadKey,
+              buildThreadIdentityKey(thread.source, thread.id) === selectedThreadKey
           )
         : undefined,
     [selectedThreadKey, threads]
@@ -496,10 +619,17 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         await markThreadSeenRequest({
           backend: threadToMarkSeen.source,
           threadId: threadToMarkSeen.id,
-          seenUpdatedAt: threadToMarkSeen.updatedAt
+          seenUpdatedAt: threadToMarkSeen.updatedAt,
         });
         if (!cancelled) {
-          await refresh();
+          setState((current) => ({
+            ...current,
+            response: markThreadSeenInSnapshot(current.response, {
+              backend: threadToMarkSeen.source,
+              threadId: threadToMarkSeen.id,
+              seenUpdatedAt: threadToMarkSeen.updatedAt,
+            }),
+          }));
         }
       } finally {
         if (!cancelled) {
@@ -513,7 +643,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     return () => {
       cancelled = true;
     };
-  }, [markThreadSeen, pendingSeenThreadKey, refresh, selectedThread]);
+  }, [markThreadSeen, pendingSeenThreadKey, selectedThread]);
 
   const selectThread = useCallback((thread: NavigationThreadSummary): void => {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
@@ -553,8 +683,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           updatedAt: optimisticUpdatedAt,
           inbox: {
             inInbox: true,
-            reason: "new-thread"
-          }
+            reason: "new-thread",
+          },
         };
         setOptimisticThread(nextOptimisticThread);
         setSelectedItemKey(nextThreadKey);
@@ -566,7 +696,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         setCreatingThread(undefined);
       }
     },
-    [refresh, startThread],
+    [refresh, startThread]
   );
 
   const openDirectoryLaunchpad = useCallback(
@@ -597,7 +727,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           response: applyLaunchpadUpdate(
             current.response,
             response.launchpad,
-            response.defaults,
+            response.defaults
           ),
         }));
         setSelectedItemKey(buildLaunchpadSelectionKey(directory.key));
@@ -605,7 +735,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [desktopApi],
+    [desktopApi]
   );
 
   const updateDirectoryLaunchpad = useCallback(
@@ -630,14 +760,14 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           response: applyLaunchpadUpdate(
             current.response,
             response.launchpad,
-            response.defaults,
+            response.defaults
           ),
         }));
       } catch (error) {
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [desktopApi],
+    [desktopApi]
   );
 
   const resetDirectoryLaunchpad = useCallback(
@@ -656,7 +786,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           response: applyLaunchpadReset(
             current.response,
             response.directoryKey,
-            response.defaults,
+            response.defaults
           ),
         }));
         setSelectedItemKey((current) =>
@@ -675,7 +805,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
                     },
                 optimisticThread
                   ? buildThreadIdentityKey(optimisticThread.source, optimisticThread.id)
-                  : undefined,
+                  : undefined
               )
             : current
         );
@@ -683,7 +813,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [desktopApi, directories, optimisticThread, state.response, threads],
+    [desktopApi, directories, optimisticThread, state.response, threads]
   );
 
   const materializeDirectoryLaunchpad = useCallback(
@@ -728,7 +858,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
             ? applyLaunchpadReset(
                 current.response,
                 directoryKey,
-                current.response.launchpadDefaults,
+                current.response.launchpadDefaults
               )
             : current.response,
         }));
@@ -737,7 +867,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [desktopApi, directories, refresh],
+    [desktopApi, directories, refresh]
   );
 
   const updateThreadExecutionMode = useCallback(
@@ -819,6 +949,6 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     setBrowseMode,
     selectThread,
     snapshot: state.response,
-    threads
+    threads,
   };
 }

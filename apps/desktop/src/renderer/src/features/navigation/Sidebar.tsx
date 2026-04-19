@@ -27,7 +27,6 @@ type SidebarProps = {
     executionMode: ThreadExecutionMode;
   };
   launchpadError?: string;
-  refreshing: boolean;
   selectedItemKey?: string;
   threads: NavigationThreadSummary[];
   onBrowseModeChange: (browseMode: BrowseMode) => void;
@@ -39,7 +38,6 @@ type SidebarProps = {
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
-  onRefresh: () => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
 };
 
@@ -63,9 +61,9 @@ export function Sidebar(props: SidebarProps) {
               : backend.available
                 ? "Thread creation unavailable"
                 : backend.unavailableReason ?? "Unavailable",
-        })),
+        }))
       ),
-    [props.backends],
+    [props.backends]
   );
   const hasCreateThreadOptions = createThreadOptions.some((option) => option.enabled);
 
@@ -120,17 +118,6 @@ export function Sidebar(props: SidebarProps) {
               </div>
             ) : null}
           </div>
-
-          <button
-            aria-label="Refresh threads"
-            className="button button--ghost"
-            type="button"
-            onClick={() => {
-              void props.onRefresh();
-            }}
-          >
-            {props.refreshing ? "Syncing" : "Refresh"}
-          </button>
         </div>
       </header>
 
@@ -212,6 +199,6 @@ function formatTimestamp(timestamp: number): string {
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
   }).format(timestamp);
 }

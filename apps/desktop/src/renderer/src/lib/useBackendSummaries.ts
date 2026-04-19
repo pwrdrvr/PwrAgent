@@ -41,15 +41,5 @@ export function useBackendSummaries(desktopApi?: DesktopApi): BackendSummaryStat
     void refresh();
   }, [refresh]);
 
-  useEffect(() => {
-    if (!desktopApi?.onWindowFocus) {
-      return;
-    }
-
-    return desktopApi.onWindowFocus(() => {
-      void refresh();
-    });
-  }, [desktopApi, refresh]);
-
   return state;
 }

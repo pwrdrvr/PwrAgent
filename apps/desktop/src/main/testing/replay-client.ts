@@ -33,6 +33,8 @@ export class ReplayClient {
       request: AppServerPendingRequestNotification
     ) => Promise<unknown> | unknown
   >();
+  private initializeResult?: InitializeResult;
+  private initializePromise?: Promise<InitializeResult>;
 
   constructor(private readonly controller: ReplayController) {}
 
@@ -45,10 +47,11 @@ export class ReplayClient {
   }
 
   async getInitializeResult(): Promise<InitializeResult> {
-    return asInitializeResult(this.controller.consumeResponse("initialize").result);
+    return await this.ensureInitialized();
   }
 
   async listThreads(_params?: { filter?: string }): Promise<AppServerThreadSummary[]> {
+    await this.ensureInitialized();
     return asThreadList(this.controller.consumeResponse("thread/list").result);
   }
 
@@ -56,6 +59,7 @@ export class ReplayClient {
     cwd?: string;
     cwds?: string[];
   }): Promise<AppServerListSkillsResponse["data"]> {
+    await this.ensureInitialized();
     return asSkillList(this.controller.consumeResponse("skills/list").result);
   }
 
@@ -84,6 +88,7 @@ export class ReplayClient {
     before?: string;
     limit?: number;
   }): Promise<AppServerReadThreadResponse["replay"]> {
+    await this.ensureInitialized();
     return asThreadReplay(this.controller.consumeResponse("thread/read").result);
   }
 
@@ -95,6 +100,7 @@ export class ReplayClient {
     serviceTier?: string;
     reasoningEffort?: string;
   }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
     return this.controller.consumeResponse("thread/start").result as {
       threadId: string;
     };
@@ -105,6 +111,7 @@ export class ReplayClient {
     input: AppServerTurnInputItem[];
     model?: string;
   }): Promise<{ threadId: string; runId: string }> {
+    await this.ensureInitialized();
     return this.controller.consumeResponse("turn/start").result as {
       threadId: string;
       runId: string;
@@ -115,6 +122,7 @@ export class ReplayClient {
     threadId: string;
     runId: string;
   }): Promise<{ threadId: string; runId: string }> {
+    await this.ensureInitialized();
     return this.controller.consumeResponse("turn/interrupt").result as {
       threadId: string;
       runId: string;
@@ -147,5 +155,22 @@ export class ReplayClient {
 
   async respondToPendingRequest(requestId: string): Promise<void> {
     this.controller.resolvePendingRequest(requestId);
+  }
+
+  private async ensureInitialized(): Promise<InitializeResult> {
+    if (this.initializeResult) {
+      return this.initializeResult;
+    }
+
+    if (!this.initializePromise) {
+      this.initializePromise = Promise.resolve(
+        asInitializeResult(this.controller.consumeResponse("initialize").result)
+      ).then((result) => {
+        this.initializeResult = result;
+        return result;
+      });
+    }
+
+    return await this.initializePromise;
   }
 }

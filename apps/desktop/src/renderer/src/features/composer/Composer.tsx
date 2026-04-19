@@ -18,6 +18,7 @@ import {
 import { SkillChip } from "./SkillChip";
 
 type ComposerProps = {
+  activeRunId?: string;
   addOptimisticUserMessage?: (text: string) => string;
   backends?: BackendSummary[];
   desktopApi?: DesktopApi;
@@ -25,13 +26,14 @@ type ComposerProps = {
   disabled?: boolean;
   launchpad?: NavigationLaunchpadDraft;
   launchpadError?: string;
+  onActiveRunIdChange?: (runId?: string) => void;
+  onEnsureSkillsLoaded?: () => void | Promise<void>;
   pendingRequestActive?: boolean;
   onMaterializeLaunchpad?: (
     directoryKey: string,
     input?: Array<{ type: "text"; text: string }>
   ) => Promise<void>;
   onPendingStatusChange?: (status?: string) => void;
-  onRefresh: () => Promise<void>;
   onUpdateLaunchpad?: (
     directoryKey: string,
     patch: Partial<
@@ -120,12 +122,15 @@ export function Composer(props: ComposerProps) {
   }, [trigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
 
   useEffect(() => {
+    if (!trigger) {
+      return;
+    }
+
+    void props.onEnsureSkillsLoaded?.();
+  }, [props.onEnsureSkillsLoaded, trigger]);
+
+  useEffect(() => {
     if (!isLaunchpad) {
-      setDraft("");
-      setSending(false);
-      setInterrupting(false);
-      updateActiveRunId(undefined);
-      setActiveOptimisticMessageId(undefined);
       return;
     }
 
@@ -149,9 +154,20 @@ export function Composer(props: ComposerProps) {
   }, [props.thread?.id, props.thread?.source]);
 
   useEffect(() => {
+    updateActiveRunId(props.activeRunId);
+
+    if (!props.activeRunId) {
+      setSending(false);
+      setInterrupting(false);
+    }
+  }, [props.activeRunId]);
+
+  useEffect(() => {
     if (!props.desktopApi?.onAgentEvent || !props.thread) {
       return;
     }
+
+    const thread = props.thread;
 
     return props.desktopApi.onAgentEvent((event) => {
       const notificationThreadId =
@@ -172,11 +188,7 @@ export function Composer(props: ComposerProps) {
           ? (event.notification.params.turn as { id?: unknown })
           : undefined;
 
-      if (event.backend !== props.thread?.source) {
-        return;
-      }
-
-      if (notificationThreadId !== props.thread.id) {
+      if (event.backend !== thread.source || notificationThreadId !== thread.id) {
         return;
       }
 
@@ -185,6 +197,7 @@ export function Composer(props: ComposerProps) {
         typeof startedTurnRecord?.id === "string"
       ) {
         updateActiveRunId(startedTurnRecord.id);
+        props.onActiveRunIdChange?.(startedTurnRecord.id);
       }
 
       if (
@@ -203,8 +216,8 @@ export function Composer(props: ComposerProps) {
         setSending(false);
         setInterrupting(false);
         updateActiveRunId(undefined);
+        props.onActiveRunIdChange?.(undefined);
         setActiveOptimisticMessageId(undefined);
-        void props.onRefresh();
         return;
       }
 
@@ -216,17 +229,17 @@ export function Composer(props: ComposerProps) {
         setSending(false);
         setInterrupting(false);
         updateActiveRunId(undefined);
+        props.onActiveRunIdChange?.(undefined);
         setActiveOptimisticMessageId(undefined);
-        void props.onRefresh();
       }
     });
   }, [
     activeOptimisticMessageId,
     props.desktopApi,
+    props.onActiveRunIdChange,
     props.onPendingStatusChange,
-    props.onRefresh,
     props.removeOptimisticMessage,
-    props.thread
+    props.thread,
   ]);
 
   useEffect(() => {
@@ -287,8 +300,8 @@ export function Composer(props: ComposerProps) {
         input: [{ type: "text", text }],
       });
       updateActiveRunId(response.runId);
+      props.onActiveRunIdChange?.(response.runId);
       setDraft("");
-      await props.onRefresh();
     } catch (error) {
       if (optimisticMessageId) {
         props.removeOptimisticMessage?.(optimisticMessageId);
@@ -297,6 +310,7 @@ export function Composer(props: ComposerProps) {
       setSending(false);
       setInterrupting(false);
       updateActiveRunId(undefined);
+      props.onActiveRunIdChange?.(undefined);
       setActiveOptimisticMessageId(undefined);
       setSendError(error instanceof Error ? error.message : String(error));
     }
@@ -418,7 +432,7 @@ export function Composer(props: ComposerProps) {
           ref={inputRef}
           id="thread-composer"
           className="composer__input"
-          disabled={Boolean(props.thread && sending)}
+          disabled={sending}
           placeholder={
             isLaunchpad
               ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`
@@ -728,7 +742,7 @@ export function Composer(props: ComposerProps) {
 
 function formatLaunchpadWorkspaceLabel(
   launchpad?: NavigationLaunchpadDraft,
-  directory?: NavigationDirectorySummary,
+  directory?: NavigationDirectorySummary
 ): string | undefined {
   if (!launchpad) {
     return undefined;
