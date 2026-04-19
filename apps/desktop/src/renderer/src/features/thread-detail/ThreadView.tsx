@@ -5,30 +5,22 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
   AppServerThreadPlanEntry,
-  AppServerSkillSummary,
   AppServerThreadReplayPagination,
+  AppServerSkillSummary,
   BackendSummary,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragnt/shared";
-import { Composer } from "../composer/Composer";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { Composer } from "../composer/Composer";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import { ThreadHeader } from "./ThreadHeader";
 import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
 import { TranscriptList } from "./TranscriptList";
-
-function formatRendererLogPayload(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
 
 function arePlanEntriesEquivalent(
   left: AppServerThreadPlanEntry,
@@ -49,9 +41,11 @@ function arePlanEntriesEquivalent(
 }
 
 type ThreadViewProps = {
+  activeRunId?: string;
   addOptimisticUserMessage: (text: string) => string;
   backendError?: string;
   backends: BackendSummary[];
+  clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   composerDisabled: boolean;
   desktopApi?: DesktopApi;
   fetchedAt?: number;
@@ -59,6 +53,9 @@ type ThreadViewProps = {
   loading: boolean;
   loadingMore: boolean;
   messageCount: number;
+  pendingAssistantMessage?: AppServerThreadMessageEntry;
+  pendingRequest?: AppServerPendingRequestNotification;
+  pendingStatusText?: string;
   platform?: string;
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
@@ -67,15 +64,18 @@ type ThreadViewProps = {
   skillError?: string;
   skillLoading?: boolean;
   skills: AppServerSkillSummary[];
-  transcriptError?: string;
   transcriptEntries: AppServerThreadEntry[];
+  transcriptError?: string;
   transcriptPagination?: AppServerThreadReplayPagination;
   updatingExecutionMode?: ThreadExecutionMode;
+  onActiveRunIdChange?: (runId?: string) => void;
+  onEnsureSkillsLoaded?: () => void | Promise<void>;
   onLoadOlder: () => Promise<void>;
   onMaterializeLaunchpad?: (
     directoryKey: string,
     input?: Array<{ type: "text"; text: string }>
   ) => Promise<void>;
+  onPendingStatusChange?: (status?: string) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
   onUpdateLaunchpad?: (
     directoryKey: string,
@@ -97,29 +97,25 @@ type ThreadViewProps = {
     >
   ) => Promise<void>;
   removeOptimisticMessage: (id: string) => void;
-  onRefresh: () => Promise<void>;
 };
 
 export function ThreadView(props: ThreadViewProps) {
-  const [pendingStatusText, setPendingStatusText] = useState<string>();
-  const [pendingAssistantMessage, setPendingAssistantMessage] =
-    useState<AppServerThreadMessageEntry>();
   const [pendingPlanEntry, setPendingPlanEntry] =
     useState<AppServerThreadPlanEntry>();
-  const [pendingRequest, setPendingRequest] =
-    useState<AppServerPendingRequestNotification>();
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
   const [pendingRequestError, setPendingRequestError] = useState<string>();
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
 
   useEffect(() => {
-    setPendingAssistantMessage(undefined);
     setPendingPlanEntry(undefined);
-    setPendingRequest(undefined);
     setPendingRequestBusy(false);
     setPendingRequestError(undefined);
     setExpandedImage(undefined);
-  }, [props.selectedThread?.id, props.selectedThread?.source, props.selectedLaunchpad?.directoryKey]);
+  }, [
+    props.selectedLaunchpad?.directoryKey,
+    props.selectedThread?.id,
+    props.selectedThread?.source,
+  ]);
 
   const selectedThread = props.selectedThread;
   const selectedLaunchpad = props.selectedLaunchpad;
@@ -144,15 +140,15 @@ export function ThreadView(props: ThreadViewProps) {
     }
 
     return props.desktopApi.onAgentEvent((event) => {
-      const method = event.notification.method;
-      const statusRecord =
-        method === "thread/status/changed" &&
-        typeof event.notification.params.status === "object" &&
-        event.notification.params.status !== null
-          ? (event.notification.params.status as { type?: unknown })
-          : undefined;
+      if (
+        event.notification.method !== "turn/plan/updated" ||
+        event.backend !== selectedThread.source ||
+        event.notification.params.threadId !== selectedThread.id
+      ) {
+        return;
+      }
+
       const planRecord =
-        method === "turn/plan/updated" &&
         typeof event.notification.params.plan === "object" &&
         event.notification.params.plan !== null
           ? (event.notification.params.plan as {
@@ -160,115 +156,34 @@ export function ThreadView(props: ThreadViewProps) {
               steps?: unknown;
             })
           : undefined;
-      if (
-        event.backend !== selectedThread.source ||
-        event.notification.params.threadId !== selectedThread.id
-      ) {
+
+      if (!Array.isArray(planRecord?.steps)) {
         return;
       }
 
-      if (
-        method.endsWith("/requestApproval") &&
-        "requestId" in event.notification.params
-      ) {
-        setPendingRequest(
-          event.notification as AppServerPendingRequestNotification
-        );
-        setPendingRequestBusy(false);
-        setPendingRequestError(undefined);
-        setPendingStatusText("Waiting for approval");
-        return;
-      }
+      const explanation =
+        typeof planRecord.explanation === "string" && planRecord.explanation.trim()
+          ? planRecord.explanation.trim()
+          : undefined;
 
-      if (
-        method === "turn/plan/updated" &&
-        Array.isArray(planRecord?.steps)
-      ) {
-        const explanation =
-          typeof planRecord.explanation === "string" &&
-          planRecord.explanation.trim()
-            ? planRecord.explanation.trim()
-            : undefined;
-        setPendingPlanEntry({
-          type: "plan",
-          id: `live-plan-${
-            typeof event.notification.params.runId === "string"
-              ? event.notification.params.runId
-              : selectedThread.id
-          }`,
-          createdAt: Date.now(),
-          ...(explanation ? { explanation } : {}),
-          steps: planRecord.steps
-        });
-        return;
-      }
-
-      if (
-        method === "item/agentMessage/delta" &&
-        "itemId" in event.notification.params &&
-        typeof event.notification.params.itemId === "string" &&
-        typeof event.notification.params.delta === "string"
-      ) {
-        setPendingRequest(undefined);
-        setPendingRequestBusy(false);
-        setPendingRequestError(undefined);
-        setPendingStatusText("Thinking");
-        const { itemId, delta } = event.notification.params;
-        setPendingAssistantMessage((current) => ({
-          type: "message",
-          id: itemId,
-          role: "assistant",
-          text: current?.id === itemId ? `${current.text}${delta}` : delta,
-        }));
-        return;
-      }
-
-      if (
-        method === "serverRequest/resolved" &&
-        "requestId" in event.notification.params
-      ) {
-        const requestId = event.notification.params.requestId;
-        setPendingRequest((current) =>
-          current?.params.requestId === requestId ? undefined : current
-        );
-        setPendingRequestBusy(false);
-        setPendingRequestError(undefined);
-        setPendingStatusText("Thinking");
-        return;
-      }
-
-      if (
-        method === "turn/completed" ||
-        method === "turn/failed" ||
-        method === "turn/cancelled" ||
-        (method === "thread/status/changed" && statusRecord?.type === "idle")
-      ) {
-        setPendingAssistantMessage(undefined);
-        setPendingRequest(undefined);
-        setPendingRequestBusy(false);
-        setPendingRequestError(undefined);
-        if (method !== "turn/completed") {
-          setPendingStatusText(undefined);
-        }
-      }
-
-      if (method.includes("/request")) {
-        console.error(
-          `[pwragnt:thread-view] unhandled thread request event ${formatRendererLogPayload({
-            backend: event.backend,
-            threadId: selectedThread.id,
-            method,
-            params: event.notification.params,
-          })}`
-        );
-      }
+      setPendingPlanEntry({
+        type: "plan",
+        id: `live-plan-${
+          typeof event.notification.params.runId === "string"
+            ? event.notification.params.runId
+            : selectedThread.id
+        }`,
+        createdAt: Date.now(),
+        ...(explanation ? { explanation } : {}),
+        steps: planRecord.steps,
+      });
     });
   }, [props.desktopApi, selectedThread]);
 
   async function respondToPendingRequest(
     decision: "approve" | "decline" | "cancel"
   ): Promise<void> {
-    if (!props.desktopApi?.submitServerRequest || !selectedThread || !pendingRequest) {
+    if (!props.desktopApi?.submitServerRequest || !selectedThread || !props.pendingRequest) {
       setPendingRequestError("Desktop bridge is missing submitServerRequest().");
       return;
     }
@@ -281,14 +196,16 @@ export function ThreadView(props: ThreadViewProps) {
         backend: selectedThread.source,
         threadId: selectedThread.id,
         runId:
-          typeof pendingRequest.params.runId === "string"
-            ? pendingRequest.params.runId
+          typeof props.pendingRequest.params.runId === "string"
+            ? props.pendingRequest.params.runId
             : undefined,
-        requestId: pendingRequest.params.requestId,
-        response: buildPendingRequestResponse(pendingRequest, decision),
+        requestId: props.pendingRequest.params.requestId,
+        response: buildPendingRequestResponse(props.pendingRequest, decision),
       });
-      setPendingRequest(undefined);
-      setPendingStatusText(decision === "approve" ? "Thinking" : undefined);
+      props.clearPendingRequest(
+        props.pendingRequest.params.requestId,
+        decision === "approve" ? "Thinking" : undefined
+      );
     } catch (error) {
       setPendingRequestError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -345,7 +262,9 @@ export function ThreadView(props: ThreadViewProps) {
               <span className="thread-header__stat-label">Branch</span>
               <strong>
                 {selectedLaunchpad.workMode === "worktree"
-                  ? selectedLaunchpad.branchName ?? props.selectedDirectory.gitStatus?.currentBranch ?? "Pick one"
+                  ? selectedLaunchpad.branchName ??
+                    props.selectedDirectory.gitStatus?.currentBranch ??
+                    "Pick one"
                   : props.selectedDirectory.gitStatus?.currentBranch ?? "Not attached"}
               </strong>
             </div>
@@ -362,15 +281,6 @@ export function ThreadView(props: ThreadViewProps) {
                 {syncLabel ? ` • ${syncLabel}` : ""}
               </p>
             </div>
-            <button
-              className="button button--ghost"
-              type="button"
-              onClick={() => {
-                void props.onRefresh();
-              }}
-            >
-              Refresh
-            </button>
           </div>
 
           <dl className="launchpad-grid">
@@ -400,8 +310,8 @@ export function ThreadView(props: ThreadViewProps) {
           disabled={!launchpadBackend?.available}
           launchpad={selectedLaunchpad}
           launchpadError={props.launchpadError}
+          onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
           onMaterializeLaunchpad={props.onMaterializeLaunchpad}
-          onRefresh={props.onRefresh}
           onUpdateLaunchpad={props.onUpdateLaunchpad}
           skillError={props.skillError}
           skillLoading={props.skillLoading}
@@ -428,33 +338,24 @@ export function ThreadView(props: ThreadViewProps) {
                 {props.messageCount} message{props.messageCount === 1 ? "" : "s"}
               </p>
             </div>
-            <button
-              className="button button--ghost"
-              type="button"
-              onClick={() => {
-                void props.onRefresh();
-              }}
-            >
-              Refresh
-            </button>
           </div>
 
           <TranscriptList
-            error={props.transcriptError}
             entries={props.transcriptEntries}
+            error={props.transcriptError}
             loading={props.loading}
             loadingMore={props.loadingMore}
-            pendingAssistantMessage={pendingAssistantMessage}
-            pendingPlanEntry={pendingPlanEntry}
-            pendingRequest={pendingRequest}
-            pendingRequestBusy={pendingRequestBusy}
-            pendingStatusText={pendingStatusText}
             pagination={props.transcriptPagination}
-            threadId={selectedThread!.id}
+            pendingAssistantMessage={props.pendingAssistantMessage}
+            pendingPlanEntry={pendingPlanEntry}
+            pendingRequest={props.pendingRequest}
+            pendingRequestBusy={pendingRequestBusy}
+            pendingStatusText={props.pendingStatusText}
             skills={props.skills}
+            threadId={selectedThread!.id}
+            onLoadOlder={props.onLoadOlder}
             onOpenImage={setExpandedImage}
             onRespondToPendingRequest={respondToPendingRequest}
-            onLoadOlder={props.onLoadOlder}
           />
           {pendingRequestError ? (
             <p className="transcript-error">{pendingRequestError}</p>
@@ -479,14 +380,16 @@ export function ThreadView(props: ThreadViewProps) {
       ) : null}
 
       <Composer
+        activeRunId={props.activeRunId}
         addOptimisticUserMessage={props.addOptimisticUserMessage}
         backends={props.backends}
         desktopApi={props.desktopApi}
         disabled={props.composerDisabled}
-        pendingRequestActive={Boolean(pendingRequest)}
-        onPendingStatusChange={setPendingStatusText}
-        onRefresh={props.onRefresh}
+        onActiveRunIdChange={props.onActiveRunIdChange}
+        onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
+        onPendingStatusChange={props.onPendingStatusChange}
         onSetExecutionMode={props.onSetExecutionMode}
+        pendingRequestActive={Boolean(props.pendingRequest)}
         removeOptimisticMessage={props.removeOptimisticMessage}
         setExecutionModeError={props.setExecutionModeError}
         skillError={props.skillError}
@@ -501,7 +404,7 @@ export function ThreadView(props: ThreadViewProps) {
 
 function buildPendingRequestResponse(
   request: AppServerPendingRequestNotification,
-  decision: "approve" | "decline" | "cancel",
+  decision: "approve" | "decline" | "cancel"
 ): { decision: string } {
   const availableDecision = selectAvailableDecision(request.params, decision);
   if (availableDecision) {
@@ -535,7 +438,7 @@ function buildPendingRequestResponse(
 
 function selectAvailableDecision(
   params: AppServerPendingRequestNotification["params"],
-  decision: "approve" | "decline" | "cancel",
+  decision: "approve" | "decline" | "cancel"
 ): string | undefined {
   const rawDecisions =
     readDecisionStrings(params.availableDecisions) ?? readDecisionStrings(params.decisions);
@@ -551,7 +454,7 @@ function selectAvailableDecision(
         : ["cancel", "abort", "stop"];
 
   return rawDecisions.find((value) =>
-    acceptedAliases.some((alias) => value.toLowerCase().includes(alias)),
+    acceptedAliases.some((alias) => value.toLowerCase().includes(alias))
   );
 }
 
