@@ -568,6 +568,27 @@ describe("App", () => {
         runId: "turn-1"
       })
     );
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId
+      }: {
+        backend: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend,
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false
+          }
+        }
+      })
+    );
     let navigationCallCount = 0;
 
     Object.defineProperty(window, "pwragnt", {

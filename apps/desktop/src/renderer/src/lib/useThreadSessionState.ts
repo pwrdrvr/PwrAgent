@@ -19,6 +19,7 @@ export type ThreadViewportState = {
 
 type ThreadSessionEntry = {
   activeRunId?: string;
+  completionHydrationRetries: number;
   error?: string;
   expectOwnUpdate: boolean;
   hydratedUpdatedAt?: number;
@@ -26,6 +27,7 @@ type ThreadSessionEntry = {
   lastTouchedAt: number;
   loading: boolean;
   loadingMore: boolean;
+  needsHydrationAfterCompletion: boolean;
   optimisticEntries: AppServerThreadMessageEntry[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingRequest?: AppServerPendingRequestNotification;
@@ -38,11 +40,13 @@ type ThreadSessionState = Record<string, ThreadSessionEntry>;
 
 function createEmptyThreadSessionEntry(): ThreadSessionEntry {
   return {
+    completionHydrationRetries: 0,
     expectOwnUpdate: false,
     interacted: false,
     lastTouchedAt: Date.now(),
     loading: false,
     loadingMore: false,
+    needsHydrationAfterCompletion: false,
     optimisticEntries: [],
   };
 }
@@ -176,6 +180,21 @@ function readCompletedTurnText(
   return text || undefined;
 }
 
+function didHydrateCompletedTurn(
+  previousResponse: AppServerReadThreadResponse | undefined,
+  nextResponse: AppServerReadThreadResponse
+): boolean {
+  const previousMessages = previousResponse?.replay.messages.length ?? 0;
+  const previousEntries = previousResponse?.replay.entries.length ?? 0;
+
+  return (
+    nextResponse.replay.messages.length > previousMessages ||
+    nextResponse.replay.entries.length > previousEntries ||
+    nextResponse.replay.lastAssistantMessage !==
+      previousResponse?.replay.lastAssistantMessage
+  );
+}
+
 export function useThreadSessionState(params: {
   desktopApi?: DesktopApi;
   thread?: NavigationThreadSummary;
@@ -269,16 +288,30 @@ export function useThreadSessionState(params: {
           return;
         }
 
-        updateSession(targetThreadKey, (current) => ({
-          ...current,
-          error: undefined,
-          expectOwnUpdate: false,
-          hydratedUpdatedAt: targetThread.updatedAt,
-          lastTouchedAt: Date.now(),
-          loading: false,
-          optimisticEntries: pruneOptimisticEntries(current.optimisticEntries, response),
-          response,
-        }));
+        updateSession(targetThreadKey, (current) => {
+          const hydratedCompletedTurn = didHydrateCompletedTurn(current.response, response);
+          const needsHydrationAfterCompletion =
+            current.needsHydrationAfterCompletion && !hydratedCompletedTurn;
+          const completionHydrationRetries = needsHydrationAfterCompletion
+            ? current.completionHydrationRetries + 1
+            : 0;
+
+          return {
+            ...current,
+            error: undefined,
+            expectOwnUpdate: false,
+            hydratedUpdatedAt:
+              needsHydrationAfterCompletion && completionHydrationRetries < 2
+                ? undefined
+                : targetThread.updatedAt,
+            lastTouchedAt: Date.now(),
+            loading: false,
+            completionHydrationRetries,
+            needsHydrationAfterCompletion,
+            optimisticEntries: pruneOptimisticEntries(current.optimisticEntries, response),
+            response,
+          };
+        });
       } catch (error) {
         if (requestVersionsRef.current[targetThreadKey] !== requestVersion) {
           return;
@@ -324,6 +357,11 @@ export function useThreadSessionState(params: {
     }
 
     if (thread.updatedAt == null || session.hydratedUpdatedAt === thread.updatedAt) {
+      return;
+    }
+
+    if (session.needsHydrationAfterCompletion) {
+      void loadLatest(thread);
       return;
     }
 
@@ -484,13 +522,15 @@ export function useThreadSessionState(params: {
           return {
             ...current,
             activeRunId: undefined,
+            completionHydrationRetries: 0,
             error: undefined,
             expectOwnUpdate: true,
-            hydratedUpdatedAt: shouldInvalidateHydration
+            hydratedUpdatedAt: !completedText || shouldInvalidateHydration
               ? undefined
               : current.hydratedUpdatedAt,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
+            needsHydrationAfterCompletion: !completedText,
             pendingAssistantMessage: undefined,
             pendingRequest: undefined,
             pendingStatusText: undefined,
@@ -505,9 +545,11 @@ export function useThreadSessionState(params: {
           return {
             ...current,
             activeRunId: undefined,
+            completionHydrationRetries: 0,
             error: undefined,
             expectOwnUpdate: false,
             lastTouchedAt: nextLastTouchedAt,
+            needsHydrationAfterCompletion: false,
             pendingAssistantMessage: undefined,
             pendingRequest: undefined,
             pendingStatusText: undefined,

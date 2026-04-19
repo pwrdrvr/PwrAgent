@@ -355,4 +355,147 @@ describe("useThreadSessionState", () => {
       expect(result.current.entries).toHaveLength(2);
     });
   });
+
+  it("rereads a partially hydrated transcript after turn completion when only the user message is present", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const readThread = vi
+      .fn()
+      .mockImplementationOnce(
+        async ({
+          backend,
+          threadId,
+        }: {
+          backend?: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [
+              {
+                type: "message" as const,
+                id: `${threadId}-message-1`,
+                role: "user" as const,
+                text: "Let's test creating a new thread again",
+              },
+            ],
+            messages: [
+              {
+                id: `${threadId}-message-1`,
+                role: "user" as const,
+                text: "Let's test creating a new thread again",
+              },
+            ],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        })
+      )
+      .mockImplementationOnce(
+        async ({
+          backend,
+          threadId,
+        }: {
+          backend?: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [
+              {
+                type: "message" as const,
+                id: `${threadId}-message-1`,
+                role: "user" as const,
+                text: "Let's test creating a new thread again",
+              },
+              {
+                type: "message" as const,
+                id: `${threadId}-message-2`,
+                role: "assistant" as const,
+                text: "The new thread is live and the reply has been hydrated.",
+              },
+            ],
+            messages: [
+              {
+                id: `${threadId}-message-1`,
+                role: "user" as const,
+                text: "Let's test creating a new thread again",
+              },
+              {
+                id: `${threadId}-message-2`,
+                role: "assistant" as const,
+                text: "The new thread is live and the reply has been hydrated.",
+              },
+            ],
+            lastAssistantMessage: "The new thread is live and the reply has been hydrated.",
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        })
+      );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread,
+    };
+
+    const thread = buildThread({ id: "thread-1", updatedAt: 2_000 });
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread,
+      })
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+    });
+    expect(result.current.entries).toHaveLength(1);
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              runId: "run-1",
+              turn: {
+                id: "run-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(2);
+    });
+    expect(result.current.entries[1]).toMatchObject({
+      role: "assistant",
+      text: "The new thread is live and the reply has been hydrated.",
+    });
+  });
 });
