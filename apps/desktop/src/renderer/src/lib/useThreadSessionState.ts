@@ -894,6 +894,9 @@ export function useThreadSessionState(params: {
       ),
     [sessions]
   );
+  const pendingStatusText =
+    selectedSession?.pendingStatusText ??
+    (selectedSession?.activeRunId ? "Thinking" : undefined);
 
   return {
     activeRunId: selectedSession?.activeRunId,
@@ -907,7 +910,7 @@ export function useThreadSessionState(params: {
     messages,
     pendingAssistantMessage: selectedSession?.pendingAssistantMessage,
     pendingRequest: selectedSession?.pendingRequest,
-    pendingStatusText: selectedSession?.pendingStatusText,
+    pendingStatusText,
     removeOptimisticMessage,
     response: selectedSession?.response,
     setActiveRunId,
