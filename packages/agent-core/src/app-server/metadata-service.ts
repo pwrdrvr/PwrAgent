@@ -13,7 +13,7 @@ const DEFAULT_MODELS: ModelSummary[] = [
     label: "Grok 4.20 Reasoning",
     description: "Default Grok reasoning model for the app-server provider.",
     current: true,
-    supportsReasoning: true,
+    supportsReasoning: false,
     supportsFast: false,
     provider: "xai",
   },

@@ -140,7 +140,7 @@ const GROK_FALLBACK_MODELS: BackendModelOption[] = [
     id: "grok-4.20-reasoning",
     label: "Grok 4.20 Reasoning",
     current: true,
-    supportsReasoning: true,
+    supportsReasoning: false,
   },
   {
     id: "grok-4.20-fast",

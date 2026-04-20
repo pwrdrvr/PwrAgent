@@ -88,7 +88,7 @@ describe("Composer", () => {
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
   });
 
-  it("shows Grok reasoning defaults for the reasoning model", () => {
+  it("hides reasoning controls for Grok 4.20 models", () => {
     render(
       <Composer
         backends={[
@@ -98,7 +98,7 @@ describe("Composer", () => {
                 id: "grok-4.20-reasoning",
                 label: "Grok 4.20 Reasoning",
                 current: true,
-                supportsReasoning: true,
+                supportsReasoning: false,
               },
               {
                 id: "grok-4.20-fast",
@@ -106,7 +106,6 @@ describe("Composer", () => {
                 supportsReasoning: false,
               },
             ],
-            reasoningEfforts: ["low", "medium", "high"],
           }),
         ]}
         launchpad={{
@@ -128,7 +127,7 @@ describe("Composer", () => {
     );
 
     expect(screen.getByLabelText("Model")).toHaveValue("grok-4.20-reasoning");
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
+    expect(screen.queryByLabelText("Reasoning")).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
   });
 
