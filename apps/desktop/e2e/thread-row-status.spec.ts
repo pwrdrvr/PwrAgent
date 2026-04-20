@@ -239,6 +239,7 @@ test("shows initiated background turns as thinking, then unread once they finish
 
     await expect(initiatedRow.locator('[data-thread-status="thinking"]')).toHaveCount(0);
     await expect(initiatedRow.locator('[data-thread-status="unread"]')).toBeVisible();
+    await expect(initiatedRow.locator(".thread-row__status-cookie")).toBeVisible();
   } finally {
     await app.close();
     await fixture.cleanup();

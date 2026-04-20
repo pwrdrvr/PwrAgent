@@ -49,9 +49,7 @@ export function ThreadRowStatus(props: ThreadRowStatusProps) {
       data-thread-status="unread"
       title="Unread update"
     >
-      <span aria-hidden="true" className="thread-row__status-dot">
-        !
-      </span>
+      <span aria-hidden="true" className="thread-row__status-cookie" />
     </span>
   );
 }

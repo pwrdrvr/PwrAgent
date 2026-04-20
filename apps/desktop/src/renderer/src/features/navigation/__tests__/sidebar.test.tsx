@@ -254,7 +254,6 @@ describe("Sidebar", () => {
 
     expect(threadButton.querySelector('[data-thread-status="thinking"]')).toBeNull();
     expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
-    expect(threadButton).not.toHaveTextContent("!");
   });
 
   it("shows an unread marker in recents for threads updated since they were seen", () => {
@@ -289,7 +288,10 @@ describe("Sidebar", () => {
     expect(unreadIndicator).not.toBeNull();
     expect(unreadIndicator).toHaveAttribute("aria-label", "Unread update");
     expect(unreadIndicator).toHaveAttribute("title", "Unread update");
-    expect(unreadIndicator).toHaveTextContent("!");
+    expect(
+      threadButton.querySelector('[data-thread-status="unread"] .thread-row__status-cookie')
+    ).not.toBeNull();
+    expect(unreadIndicator).not.toHaveTextContent("!");
   });
 
   it("renders directory rows without the raw chevron glyph affordance", () => {
