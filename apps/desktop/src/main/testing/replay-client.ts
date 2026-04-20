@@ -100,6 +100,7 @@ export class ReplayClient {
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
     return this.controller.consumeResponse("thread/start").result as {
@@ -112,6 +113,9 @@ export class ReplayClient {
     input: AppServerTurnInputItem[];
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string; runId: string }> {
     await this.ensureInitialized();
     return this.controller.consumeResponse("turn/start").result as {

@@ -31,6 +31,7 @@ type CreateThreadParams = {
   sandbox?: string;
   serviceTier?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 };
 
 type ThreadMutation = Partial<Omit<ThreadState, "threadId" | "createdAt">>;
@@ -69,6 +70,7 @@ export class AppServerSessionState {
       sandbox: params.sandbox ?? "workspace-write",
       serviceTier: params.serviceTier,
       reasoningEffort: params.reasoningEffort,
+      fastMode: params.fastMode,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -95,6 +97,9 @@ export class AppServerSessionState {
           summary,
           projectKey: thread.cwd,
           model: thread.model,
+          serviceTier: thread.serviceTier,
+          reasoningEffort: thread.reasoningEffort,
+          fastMode: thread.fastMode,
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
         };

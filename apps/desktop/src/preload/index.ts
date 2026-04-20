@@ -11,6 +11,8 @@ import type {
   MaterializeDirectoryLaunchpadResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
+  SetThreadModelSettingsRequest,
+  SetThreadModelSettingsResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   FocusedDiffAnalysisRequest,
@@ -40,6 +42,7 @@ import {
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
+  AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
@@ -104,6 +107,10 @@ const desktopApi = Object.freeze({
     request: SetThreadExecutionModeRequest
   ): Promise<SetThreadExecutionModeResponse> =>
     await ipcRenderer.invoke(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL, request),
+  setThreadModelSettings: async (
+    request: SetThreadModelSettingsRequest
+  ): Promise<SetThreadModelSettingsResponse> =>
+    await ipcRenderer.invoke(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL, request),
   materializeDirectoryLaunchpad: async (
     request: MaterializeDirectoryLaunchpadRequest
   ): Promise<MaterializeDirectoryLaunchpadResponse> =>

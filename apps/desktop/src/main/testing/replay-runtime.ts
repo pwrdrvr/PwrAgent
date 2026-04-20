@@ -73,12 +73,16 @@ type ReplayRuntimeClient = {
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string }>;
   startTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string; runId: string }>;
   interruptTurn(params: {
     threadId: string;

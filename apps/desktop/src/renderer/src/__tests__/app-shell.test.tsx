@@ -535,19 +535,13 @@ describe("App", () => {
   });
 
   it("creates and sends on a new Grok thread", async () => {
-    const startThread = vi.fn(
-      async ({
-        backend,
-        executionMode,
-      }: {
-        backend: "codex" | "grok";
-        executionMode?: "default" | "full-access";
-      }) => ({
-        backend,
-        threadId: "thread-2",
-        executionMode: executionMode ?? "default",
-      })
-    );
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "grok" as const,
+      threadId: "thread-2",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+      runId: "turn-1",
+    }));
     const startTurn = vi.fn(
       async ({
         backend,
@@ -666,6 +660,11 @@ describe("App", () => {
               fetchedAt: Date.now(),
               unchanged: false,
               inboxThreadKeys: ["codex:thread-1"],
+              directories: [],
+              launchpadDefaults: {
+                backend: "grok",
+                executionMode: "default",
+              },
               threads: [
                 {
                   id: "thread-1",
@@ -691,6 +690,11 @@ describe("App", () => {
             fetchedAt: Date.now(),
             unchanged: false,
             inboxThreadKeys: ["grok:thread-2"],
+            directories: [],
+            launchpadDefaults: {
+              backend: "grok",
+              executionMode: "default",
+            },
             threads: [
               {
                 id: "thread-2",
@@ -795,7 +799,47 @@ describe("App", () => {
             }
           };
         },
-        startThread,
+        ensureDirectoryLaunchpad: async () => ({
+          launchpad: {
+            directoryKey: "unlinked:new-thread",
+            directoryKind: "unlinked" as const,
+            directoryLabel: "New thread",
+            backend: "grok" as const,
+            executionMode: "default" as const,
+            prompt: "",
+            workMode: "local" as const,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          defaults: {
+            backend: "grok" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        updateDirectoryLaunchpad: async ({
+          directoryKey,
+          patch,
+        }: {
+          directoryKey: string;
+          patch: Record<string, unknown>;
+        }) => ({
+          launchpad: {
+            directoryKey,
+            directoryKind: "unlinked" as const,
+            directoryLabel: "New thread",
+            backend: "grok" as const,
+            executionMode: "default" as const,
+            prompt: typeof patch.prompt === "string" ? patch.prompt : "",
+            workMode: "local" as const,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+          defaults: {
+            backend: "grok" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        materializeDirectoryLaunchpad,
         startTurn,
         platform: "darwin",
         versions: {
@@ -812,13 +856,25 @@ describe("App", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
-    fireEvent.click(
-      screen.getByRole("menuitem", {
-        name: "Create thread with Grok in Default Access",
-      })
-    );
+    const newThreadComposer = await screen.findByRole("textbox", { name: "New thread" });
+    fireEvent.change(newThreadComposer, {
+      target: {
+        value: "Start a Grok-backed thread from the sidebar.",
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
 
-    expect(startThread).toHaveBeenCalledWith({ backend: "grok", executionMode: "default" });
+    await waitFor(() => {
+      expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+        directoryKey: "unlinked:new-thread",
+        input: [
+          {
+            type: "text",
+            text: "Start a Grok-backed thread from the sidebar.",
+          },
+        ],
+      });
+    });
     expect(
       await screen.findByRole("heading", { level: 2, name: "Investigate Grok thread" })
     ).toBeInTheDocument();
@@ -829,7 +885,7 @@ describe("App", () => {
       );
     });
 
-    fireEvent.change(screen.getByLabelText("Reply"), {
+    fireEvent.change(await screen.findByLabelText("Reply"), {
       target: {
         value: "Can you check the plugin sdk boundary?"
       }
@@ -839,7 +895,11 @@ describe("App", () => {
     expect(startTurn).toHaveBeenCalledWith({
       backend: "grok",
       threadId: "thread-2",
-      input: [{ type: "text", text: "Can you check the plugin sdk boundary?" }]
+      input: [{ type: "text", text: "Can you check the plugin sdk boundary?" }],
+      model: undefined,
+      reasoningEffort: undefined,
+      serviceTier: undefined,
+      fastMode: undefined,
     });
   });
 
@@ -986,10 +1046,12 @@ describe("App", () => {
   });
 
   it("keeps a newly created Codex thread selected when thread/list lags behind creation", async () => {
-    const startThread = vi.fn(async () => ({
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-new",
       executionMode: "default" as const,
+      workMode: "local" as const,
+      runId: "turn-1",
     }));
     const agentEventListeners = new Set<
       (event: {
@@ -1005,6 +1067,11 @@ describe("App", () => {
       fetchedAt: Date.now(),
       unchanged: false,
       inboxThreadKeys: ["codex:thread-existing"],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
       threads: [
         {
           id: "thread-existing",
@@ -1122,7 +1189,47 @@ describe("App", () => {
             }
           }
         }),
-        startThread,
+        ensureDirectoryLaunchpad: async () => ({
+          launchpad: {
+            directoryKey: "unlinked:new-thread",
+            directoryKind: "unlinked" as const,
+            directoryLabel: "New thread",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt: "",
+            workMode: "local" as const,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          defaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        updateDirectoryLaunchpad: async ({
+          directoryKey,
+          patch,
+        }: {
+          directoryKey: string;
+          patch: Record<string, unknown>;
+        }) => ({
+          launchpad: {
+            directoryKey,
+            directoryKind: "unlinked" as const,
+            directoryLabel: "New thread",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt: typeof patch.prompt === "string" ? patch.prompt : "",
+            workMode: "local" as const,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+          defaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        materializeDirectoryLaunchpad,
         startTurn,
         platform: "darwin",
         versions: {
@@ -1139,20 +1246,27 @@ describe("App", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
-    fireEvent.click(
-      screen.getByRole("menuitem", {
-        name: "Create thread with Codex in Default Access",
-      })
-    );
-
-    expect(startThread).toHaveBeenCalledWith({ backend: "codex", executionMode: "default" });
     expect(
-      await screen.findByRole("heading", { level: 2, name: "Untitled thread" })
+      await screen.findByRole("heading", { level: 2, name: "New thread" })
     ).toBeInTheDocument();
+
+    fireEvent.change(await screen.findByRole("textbox", { name: "New thread" }), {
+      target: {
+        value: "hello new codex thread"
+      }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+
+    await waitFor(() => {
+      expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+        directoryKey: "unlinked:new-thread",
+        input: [{ type: "text", text: "hello new codex thread" }]
+      });
+    });
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: {
-        value: "hello new codex thread"
+        value: "follow up on the new codex thread"
       }
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -1160,7 +1274,11 @@ describe("App", () => {
     expect(startTurn).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-new",
-      input: [{ type: "text", text: "hello new codex thread" }]
+      input: [{ type: "text", text: "follow up on the new codex thread" }],
+      model: undefined,
+      reasoningEffort: undefined,
+      serviceTier: undefined,
+      fastMode: undefined
     });
 
     navigationSnapshot = {
@@ -1168,6 +1286,11 @@ describe("App", () => {
       fetchedAt: Date.now(),
       unchanged: false,
       inboxThreadKeys: ["codex:thread-new"],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
       threads: [
         {
           id: "thread-new",
@@ -1209,9 +1332,12 @@ describe("App", () => {
   });
 
   it("applies explicit thread names from thread/name/updated notifications", async () => {
-    const startThread = vi.fn(async () => ({
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
       backend: "codex" as const,
-      threadId: "thread-new"
+      threadId: "thread-new",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+      runId: "turn-1"
     }));
     const agentEventListeners = new Set<
       (event: {
@@ -1227,6 +1353,11 @@ describe("App", () => {
       fetchedAt: Date.now(),
       unchanged: false,
       inboxThreadKeys: ["codex:thread-existing"],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
       threads: [
         {
           id: "thread-existing",
@@ -1344,7 +1475,47 @@ describe("App", () => {
             }
           }
         }),
-        startThread,
+        ensureDirectoryLaunchpad: async () => ({
+          launchpad: {
+            directoryKey: "unlinked:new-thread",
+            directoryKind: "unlinked" as const,
+            directoryLabel: "New thread",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt: "",
+            workMode: "local" as const,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          defaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        updateDirectoryLaunchpad: async ({
+          directoryKey,
+          patch,
+        }: {
+          directoryKey: string;
+          patch: Record<string, unknown>;
+        }) => ({
+          launchpad: {
+            directoryKey,
+            directoryKind: "unlinked" as const,
+            directoryLabel: "New thread",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt: typeof patch.prompt === "string" ? patch.prompt : "",
+            workMode: "local" as const,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+          defaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        materializeDirectoryLaunchpad,
         startTurn,
         platform: "darwin",
         versions: {
@@ -1361,24 +1532,36 @@ describe("App", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
-    fireEvent.click(
-      screen.getByRole("menuitem", {
-        name: "Create thread with Codex in Default Access"
-      })
-    );
 
-    fireEvent.change(screen.getByLabelText("Reply"), {
+    fireEvent.change(await screen.findByRole("textbox", { name: "New thread" }), {
       target: {
         value: "Name this thread something funny and spunky. Something about potatoes."
       }
     });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+
+    await waitFor(() => {
+      expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+        directoryKey: "unlinked:new-thread",
+        input: [
+          {
+            type: "text",
+            text: "Name this thread something funny and spunky. Something about potatoes."
+          }
+        ]
+      });
+    });
 
     navigationSnapshot = {
       backend: "all",
       fetchedAt: Date.now(),
       unchanged: false,
       inboxThreadKeys: ["codex:thread-new"],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
       threads: [
         {
           id: "thread-new",

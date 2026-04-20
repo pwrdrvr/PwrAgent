@@ -172,7 +172,7 @@ describe("ThreadView", () => {
     );
     expect(document.querySelector(".thread-header__title")).toBeNull();
     expect(document.querySelector(".thread-header__summary")).toBeNull();
-    expect(screen.getByText("Codex")).toBeInTheDocument();
+    expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Open context rail" }));
 
     expect(screen.getByText("No linked directory")).toBeInTheDocument();

@@ -70,6 +70,7 @@ export function App() {
           selectedLaunchpad={navigation.selectedLaunchpad}
           selectedThread={navigation.selectedThread}
           setExecutionModeError={navigation.setThreadExecutionModeError}
+          setThreadModelSettingsError={navigation.setThreadModelSettingsError}
           skillError={skills.error}
           skillLoading={skills.loading}
           skills={skills.skills}
@@ -88,6 +89,15 @@ export function App() {
                   await navigation.setThreadExecutionMode(
                     navigation.selectedThread!,
                     executionMode
+                  )
+              : undefined
+          }
+          onSetThreadModelSettings={
+            navigation.selectedThread
+              ? async (patch) =>
+                  await navigation.setThreadModelSettings(
+                    navigation.selectedThread!,
+                    patch
                   )
               : undefined
           }

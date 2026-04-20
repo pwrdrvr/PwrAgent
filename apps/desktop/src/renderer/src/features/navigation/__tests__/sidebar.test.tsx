@@ -162,7 +162,7 @@ describe("Sidebar", () => {
     );
     expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Cross-project cleanup").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Codex").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
   });
 
   it("opens the directory launchpad from the plus button", () => {
@@ -422,7 +422,7 @@ describe("Sidebar", () => {
     expect(screen.getByText("now main")).toBeInTheDocument();
   });
 
-  it("opens a new-thread picker with enabled and disabled backend options", async () => {
+  it("opens a new-thread draft from the masthead action", async () => {
     const onCreateThread = vi.fn(async () => undefined);
 
     render(
@@ -446,22 +446,6 @@ describe("Sidebar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
 
-    const menu = screen.getByRole("menu", { name: "New thread backend" });
-    expect(menu).toBeInTheDocument();
-    expect(
-      within(menu).getByRole("menuitem", {
-        name: "Create thread with Codex in Default Access",
-      })
-    ).toBeEnabled();
-    expect(
-      within(menu).getByRole("menuitem", {
-        name: "Create thread with Codex in Full Access",
-      })
-    ).toBeEnabled();
-    expect(
-      within(menu).getByRole("menuitem", {
-        name: "Create thread with Grok in Default Access",
-      })
-    ).toBeDisabled();
+    expect(onCreateThread).toHaveBeenCalledTimes(1);
   });
 });

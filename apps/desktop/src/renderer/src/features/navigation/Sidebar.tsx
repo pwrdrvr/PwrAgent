@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type {
   AppServerBackendKind,
   BackendSummary,
@@ -7,8 +7,6 @@ import type {
   ThreadExecutionMode,
 } from "@pwragnt/shared";
 import type { BrowseMode } from "../../lib/useThreadNavigation";
-import { formatBackendLabel } from "../../lib/backend-label";
-import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { DirectoriesList } from "./DirectoriesList";
 import { InboxList } from "./InboxList";
 import { RecentsList } from "./RecentsList";
@@ -30,10 +28,7 @@ type SidebarProps = {
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
   onBrowseModeChange: (browseMode: BrowseMode) => void;
-  onCreateThread: (
-    backend: AppServerBackendKind,
-    executionMode?: ThreadExecutionMode
-  ) => Promise<void>;
+  onCreateThread: () => Promise<void>;
   onOpenLaunchpad: (
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
@@ -42,30 +37,16 @@ type SidebarProps = {
 };
 
 export function Sidebar(props: SidebarProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const createThreadOptions = useMemo(
+  const hasCreateThreadOptions = useMemo(
     () =>
-      props.backends.flatMap((backend) =>
-        backend.executionModes.map((mode) => ({
-          backend,
-          mode,
-          enabled:
-            backend.available &&
-            backend.capabilities.createThread &&
-            mode.available,
-          helperText:
-            backend.available && backend.capabilities.createThread
-              ? mode.available
-                ? "Ready"
-                : mode.unavailableReason ?? "Unavailable"
-              : backend.available
-                ? "Thread creation unavailable"
-                : backend.unavailableReason ?? "Unavailable",
-        }))
+      props.backends.some(
+        (backend) =>
+          backend.available &&
+          backend.capabilities.createThread &&
+          backend.executionModes.some((mode) => mode.available)
       ),
     [props.backends]
   );
-  const hasCreateThreadOptions = createThreadOptions.some((option) => option.enabled);
 
   return (
     <aside className="sidebar" aria-label="Threads">
@@ -75,45 +56,15 @@ export function Sidebar(props: SidebarProps) {
         <div className="sidebar__masthead-actions">
           <div className="sidebar__new-thread">
             <button
-              aria-expanded={menuOpen}
-              aria-haspopup="menu"
               className="button button--primary"
               disabled={!hasCreateThreadOptions || Boolean(props.creatingThread)}
               type="button"
               onClick={() => {
-                setMenuOpen((current) => !current);
+                void props.onCreateThread();
               }}
             >
-              {props.creatingThread
-                ? `Starting ${formatBackendLabel(props.creatingThread.backend)}...`
-                : "New thread"}
+              {props.creatingThread ? "Opening..." : "New thread"}
             </button>
-
-            {menuOpen ? (
-              <div className="sidebar__menu" role="menu" aria-label="New thread backend">
-                {createThreadOptions.map(({ backend, mode, enabled, helperText }) => (
-                  <button
-                    key={`${backend.kind}:${mode.mode}`}
-                    aria-label={`Create thread with ${formatBackendLabel(
-                      backend.kind
-                    )} in ${formatExecutionModeLabel(mode.mode)}`}
-                    className="sidebar__menu-item"
-                    disabled={!enabled || Boolean(props.creatingThread)}
-                    role="menuitem"
-                    type="button"
-                    onClick={() => {
-                      void props.onCreateThread(backend.kind, mode.mode);
-                      setMenuOpen(false);
-                    }}
-                  >
-                    <span className="sidebar__menu-item-title">
-                      {formatBackendLabel(backend.kind)} · {formatExecutionModeLabel(mode.mode)}
-                    </span>
-                    <span className="sidebar__menu-item-detail">{helperText}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
           </div>
         </div>
       </header>

@@ -311,6 +311,7 @@ type ThreadViewProps = {
   selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
   setExecutionModeError?: string;
+  setThreadModelSettingsError?: string;
   skillError?: string;
   skillLoading?: boolean;
   skills: AppServerSkillSummary[];
@@ -332,6 +333,14 @@ type ThreadViewProps = {
     updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
   ) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onSetThreadModelSettings?: (
+    patch: Partial<
+      Pick<
+      NavigationThreadSummary,
+      "model" | "reasoningEffort" | "serviceTier" | "fastMode"
+      >
+    >
+  ) => Promise<void>;
   onTranscriptViewportChange?: (viewport?: {
     distanceFromBottom: number;
     scrollTop: number;
@@ -770,10 +779,12 @@ export function ThreadView(props: ThreadViewProps) {
         onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
         onPendingStatusChange={props.onPendingStatusChange}
         onSetExecutionMode={props.onSetExecutionMode}
+        onSetThreadModelSettings={props.onSetThreadModelSettings}
         pendingRequestActive={Boolean(props.pendingRequest)}
         pendingUserInputActive={Boolean(props.pendingUserInput)}
         removeOptimisticMessage={props.removeOptimisticMessage}
         setExecutionModeError={props.setExecutionModeError}
+        threadModelSettingsError={props.setThreadModelSettingsError}
         skillError={props.skillError}
         skillLoading={props.skillLoading}
         skills={props.skills}

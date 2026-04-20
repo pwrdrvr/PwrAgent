@@ -47,6 +47,11 @@ export class OverlayStore {
             threadId: thread.id,
             executionMode:
               data.threads[threadKey]?.executionMode ?? thread.executionMode ?? "default",
+            model: data.threads[threadKey]?.model ?? thread.model,
+            reasoningEffort:
+              data.threads[threadKey]?.reasoningEffort ?? thread.reasoningEffort,
+            serviceTier: data.threads[threadKey]?.serviceTier ?? thread.serviceTier,
+            fastMode: data.threads[threadKey]?.fastMode ?? thread.fastMode,
             lastSeenAt: params.fetchedAt,
             lastSeenUpdatedAt: thread.updatedAt,
             extraLinkedDirectories:
@@ -112,6 +117,10 @@ export class OverlayStore {
         backend: params.backend,
         threadId: params.threadId,
         executionMode: current?.executionMode ?? "default",
+        model: current?.model,
+        reasoningEffort: current?.reasoningEffort,
+        serviceTier: current?.serviceTier,
+        fastMode: current?.fastMode,
         dismissedAt: current?.dismissedAt,
         snoozedUntil: current?.snoozedUntil,
         lastSeenAt: seenAt,
@@ -207,6 +216,34 @@ export class OverlayStore {
       const nextState: ThreadOverlayState = {
         ...current,
         executionMode: params.executionMode,
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
+  }
+
+  async setThreadModelSettings(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    model?: string;
+    reasoningEffort?: string;
+    serviceTier?: string;
+    fastMode?: boolean;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const nextState: ThreadOverlayState = {
+        ...current,
+        model: params.model,
+        reasoningEffort: params.reasoningEffort,
+        serviceTier: params.serviceTier,
+        fastMode: params.fastMode,
       };
       data.threads[threadKey] = nextState;
       return nextState;

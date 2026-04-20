@@ -6,11 +6,15 @@ import type {
   AppServerThreadReplay,
   AppServerThreadSummary,
   AppServerTurnInputItem,
+  ThreadOverlayState,
 } from "@pwragnt/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 
-function createOverlayStoreMock(params?: { executionMode?: "default" | "full-access" }) {
-  const overlay = params?.executionMode
+function createOverlayStoreMock(params?: {
+  executionMode?: "default" | "full-access";
+  overlays?: Record<string, ThreadOverlayState>;
+}) {
+  const initialOverlay = params?.executionMode
     ? {
         backend: "codex" as const,
         threadId: "thread-1",
@@ -18,11 +22,23 @@ function createOverlayStoreMock(params?: { executionMode?: "default" | "full-acc
         extraLinkedDirectories: [],
       }
     : undefined;
+  const overlays = new Map<string, ThreadOverlayState>(
+    Object.entries(params?.overlays ?? {})
+  );
+  if (initialOverlay) {
+    overlays.set("codex:thread-1", initialOverlay);
+  }
 
   return {
-    getThreadOverlayState: async () => overlay,
+    getThreadOverlayState: async ({
+      backend,
+      threadId,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+    }) => overlays.get(`${backend}:${threadId}`),
     getThreadOverlayStates: async ({ threadIds }: { threadIds: string[] }) =>
-      Object.fromEntries(threadIds.map((threadId) => [threadId, threadId === "thread-1" ? overlay : undefined])),
+      Object.fromEntries(threadIds.map((threadId) => [threadId, overlays.get(`codex:${threadId}`)])),
     setThreadExecutionMode: async ({
       backend,
       threadId,
@@ -37,6 +53,23 @@ function createOverlayStoreMock(params?: { executionMode?: "default" | "full-acc
       executionMode,
       extraLinkedDirectories: [],
     }),
+    setThreadModelSettings: async (settings: {
+      backend: "codex" | "grok";
+      threadId: string;
+      model?: string;
+      reasoningEffort?: string;
+      serviceTier?: string;
+      fastMode?: boolean;
+    }) => {
+      const key = `${settings.backend}:${settings.threadId}`;
+      const next = {
+        ...overlays.get(key),
+        ...settings,
+        extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
   } as unknown as InstanceType<typeof import("@pwragnt/agent-core").OverlayStore>;
 }
 
@@ -56,6 +89,16 @@ class MockBackendClient {
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
+    fastMode?: boolean;
+  };
+  lastStartTurnParams?: {
+    backend?: "codex" | "grok";
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    model?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   };
   lastSetThreadPermissionsParams?: {
     threadId: string;
@@ -65,6 +108,7 @@ class MockBackendClient {
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
+    fastMode?: boolean;
   };
   listThreadsCallCount = 0;
   lastListThreadsParams?: {
@@ -142,13 +186,23 @@ class MockBackendClient {
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string }> {
     this.lastStartThreadParams = params;
     return { threadId: "thread-1" };
   }
 
-  async startTurn(): Promise<{ threadId: string; runId: string }> {
-    return { threadId: "thread-1", runId: "turn-1" };
+  async startTurn(params: {
+    backend?: "codex" | "grok";
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    model?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+  }): Promise<{ threadId: string; runId: string }> {
+    this.lastStartTurnParams = params;
+    return { threadId: params.threadId, runId: "turn-1" };
   }
 
   async setThreadPermissions(params: {
@@ -202,10 +256,10 @@ describe("DesktopBackendRegistry", () => {
 
     const response = await registry.listBackends({ includeUnavailable: true });
 
-    expect(response.backends).toEqual([
+    expect(response.backends).toMatchObject([
       {
         kind: "codex",
-        label: "Codex app server",
+        label: "OpenAI",
         available: true,
         serverName: "Codex App Server",
         serverVersion: "1.0.0",
@@ -236,10 +290,27 @@ describe("DesktopBackendRegistry", () => {
             available: true,
           },
         ],
+        launchpadOptions: {
+          models: [
+            {
+              id: "gpt-5.4",
+              label: "GPT-5.4",
+              current: true,
+              supportsReasoning: true,
+            },
+            {
+              id: "gpt-5.4-pro",
+              label: "GPT-5.4 Pro",
+              supportsReasoning: true,
+            },
+          ],
+          reasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
+          supportsFastMode: true,
+        },
       },
       {
         kind: "grok",
-        label: "Grok app server",
+        label: "Grok",
         available: false,
         methods: [],
         capabilities: {
@@ -331,8 +402,85 @@ describe("DesktopBackendRegistry", () => {
     });
     expect(codexClient.lastStartThreadParams).toEqual({
       cwd: "/Users/test/.pwragnt/projects/2026-04-16-a1b2c3",
+      model: "gpt-5.4",
+      reasoningEffort: "medium",
+      serviceTier: undefined,
+      fastMode: undefined,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
+    });
+
+    await registry.close();
+  });
+
+  it("applies model settings from the selected thread overlay when starting turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-modelled": {
+            backend: "codex",
+            threadId: "thread-modelled",
+            executionMode: "default",
+            model: "gpt-5.4",
+            reasoningEffort: "high",
+            serviceTier: "priority",
+            fastMode: true,
+            extraLinkedDirectories: [],
+          },
+          "codex:thread-other": {
+            backend: "codex",
+            threadId: "thread-other",
+            executionMode: "default",
+            model: "gpt-5.4-pro",
+            reasoningEffort: "low",
+            serviceTier: "standard",
+            fastMode: false,
+            extraLinkedDirectories: [],
+          },
+        },
+      }),
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-modelled",
+      input: [{ type: "text", text: "Use this thread's model settings" }],
+    });
+
+    expect(codexClient.lastStartTurnParams).toEqual({
+      backend: "codex",
+      threadId: "thread-modelled",
+      input: [{ type: "text", text: "Use this thread's model settings" }],
+      model: "gpt-5.4",
+      serviceTier: "priority",
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-plain",
+      input: [{ type: "text", text: "Do not inherit another thread's settings" }],
+    });
+
+    expect(codexClient.lastStartTurnParams).toEqual({
+      backend: "codex",
+      threadId: "thread-plain",
+      input: [{ type: "text", text: "Do not inherit another thread's settings" }],
+      model: "gpt-5.4",
+      serviceTier: undefined,
+      reasoningEffort: "medium",
+      fastMode: undefined,
     });
 
     await registry.close();

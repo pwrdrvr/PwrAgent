@@ -207,6 +207,22 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
             backend,
             threadId,
             executionMode: normalizeExecutionMode(threadRecord.executionMode),
+            model:
+              typeof threadRecord.model === "string"
+                ? threadRecord.model
+                : undefined,
+            reasoningEffort:
+              typeof threadRecord.reasoningEffort === "string"
+                ? threadRecord.reasoningEffort
+                : undefined,
+            serviceTier:
+              typeof threadRecord.serviceTier === "string"
+                ? threadRecord.serviceTier
+                : undefined,
+            fastMode:
+              typeof threadRecord.fastMode === "boolean"
+                ? threadRecord.fastMode
+                : undefined,
             lastSeenAt:
               typeof threadRecord.lastSeenAt === "number"
                 ? threadRecord.lastSeenAt

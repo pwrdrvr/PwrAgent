@@ -48,6 +48,8 @@ body {
 }
 
 button,
+input,
+select,
 textarea {
   font: inherit;
 }
@@ -258,11 +260,14 @@ textarea {
 .thread-row:focus,
 .transcript-activity__toggle:focus,
 .composer__input:focus,
+.composer__select:focus,
 .composer__attachment-remove:focus,
 .button:focus-visible,
 .thread-row:focus-visible,
 .transcript-activity__toggle:focus-visible,
 .composer__input:focus-visible,
+.composer__select:focus-visible,
+.composer__checkbox input:focus-visible,
 .composer__attachment-remove:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -2115,35 +2120,46 @@ textarea {
   gap: 8px;
 }
 
-.composer__control-group {
-  display: flex;
-  min-width: 0;
-  flex: 0 0 auto;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.composer__control-label {
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-}
-
 .composer__select {
+  appearance: none;
   min-width: 168px;
   min-height: 34px;
-  padding: 0 10px;
+  padding: 0 30px 0 10px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  background: var(--bg-input);
+  background-color: var(--bg-input);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 5px 5px;
   color: var(--text-primary);
+}
+
+.composer__select:focus,
+.composer__select:focus-visible {
+  border-color: var(--accent-border);
 }
 
 .composer__select:disabled {
   opacity: 1;
   color: var(--text-secondary);
   cursor: default;
+}
+
+.composer__fixed-value {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .composer__select--compact {
@@ -2158,6 +2174,13 @@ textarea {
   gap: 8px;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.composer__checkbox input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .composer__autocomplete {

@@ -19,6 +19,7 @@ import type {
   AppServerThreadTitleSource,
   AppServerThreadSummary,
   AppServerTurnInputItem,
+  BackendModelOption,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
 import type { JsonRpcObserver } from "../codex-app-server/json-rpc";
@@ -67,6 +68,10 @@ type RawThreadSummary = {
   titleSource?: AppServerThreadTitleSource;
   summary?: string;
   projectKey?: string;
+  model?: string;
+  serviceTier?: string;
+  reasoningEffort?: string;
+  fastMode?: boolean;
   createdAt?: number;
   updatedAt?: number;
 };
@@ -165,6 +170,14 @@ function extractThreadSummaryList(value: unknown): RawThreadSummary[] {
               : typeof record.cwd === "string"
                 ? record.cwd
                 : undefined,
+          model: typeof record.model === "string" ? record.model : undefined,
+          serviceTier:
+            typeof record.serviceTier === "string" ? record.serviceTier : undefined,
+          reasoningEffort:
+            typeof record.reasoningEffort === "string"
+              ? record.reasoningEffort
+              : undefined,
+          fastMode: typeof record.fastMode === "boolean" ? record.fastMode : undefined,
           createdAt:
             typeof record.createdAt === "number" ? record.createdAt : undefined,
           updatedAt:
@@ -375,6 +388,42 @@ function extractSkillsList(value: unknown): SkillCatalogEntry[] {
   });
 }
 
+function extractModelOptions(value: unknown): BackendModelOption[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+
+  const data = Array.isArray((value as { data?: unknown }).data)
+    ? ((value as { data: unknown[] }).data)
+    : [];
+
+  return data.flatMap((entry): BackendModelOption[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+
+    const record = entry as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id.trim() : "";
+    if (!id) {
+      return [];
+    }
+
+    return [
+      {
+        id,
+        label: typeof record.label === "string" ? record.label : undefined,
+        current: typeof record.current === "boolean" ? record.current : undefined,
+        supportsReasoning:
+          typeof record.supportsReasoning === "boolean"
+            ? record.supportsReasoning
+            : undefined,
+        supportsFast:
+          typeof record.supportsFast === "boolean" ? record.supportsFast : undefined,
+      },
+    ];
+  });
+}
+
 export class GrokAppServerClient {
   private readonly directoryResolver: (
     projectKey?: string
@@ -450,6 +499,10 @@ export class GrokAppServerClient {
           summary: normalized.summary,
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
+          model: thread.model,
+          serviceTier: thread.serviceTier,
+          reasoningEffort: thread.reasoningEffort,
+          fastMode: thread.fastMode,
           linkedDirectories: await this.directoryResolver(thread.projectKey),
           source: "grok" as const,
         };
@@ -466,6 +519,13 @@ export class GrokAppServerClient {
     const cwds = [...new Set([...(params?.cwds ?? []), params?.cwd].filter(Boolean))];
     const result = await this.request("skills/list", { cwds });
     return extractSkillsList(result);
+  }
+
+  async listModels(): Promise<BackendModelOption[]> {
+    await this.ensureInitialized();
+
+    const result = await this.request("model/list", {});
+    return extractModelOptions(result);
   }
 
   async readThread(params: {
@@ -492,6 +552,7 @@ export class GrokAppServerClient {
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
@@ -508,8 +569,19 @@ export class GrokAppServerClient {
     threadId: string;
     input: AppServerTurnInputItem[];
     model?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string; runId: string }> {
     await this.ensureInitialized();
+
+    await this.request("thread/resume", {
+      threadId: params.threadId,
+      model: params.model,
+      serviceTier: params.serviceTier,
+      reasoningEffort: params.reasoningEffort,
+      fastMode: params.fastMode,
+    });
 
     const result = await this.request("turn/start", params);
     const threadId = extractThreadId(result);
@@ -548,6 +620,7 @@ export class GrokAppServerClient {
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 

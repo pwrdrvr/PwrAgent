@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { StartTurnRequest } from "@pwragnt/shared";
+import type { BackendSummary, StartTurnRequest } from "@pwragnt/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Composer } from "../Composer";
 
@@ -8,7 +8,186 @@ afterEach(() => {
   cleanup();
 });
 
+function backendSummary(
+  kind: "codex" | "grok",
+  launchpadOptions?: BackendSummary["launchpadOptions"],
+): BackendSummary {
+  return {
+    kind,
+    label: kind,
+    available: true,
+    methods: ["thread/start", "turn/start"],
+    capabilities: {
+      listThreads: true,
+      createThread: true,
+      resumeThread: true,
+      readThread: true,
+      startTurn: true,
+      interruptTurn: true,
+      steerTurn: false,
+      transcriptPagination: true,
+      toolUse: false,
+      approvalRequests: true,
+      multiDirectoryThreads: kind === "codex",
+    },
+    executionModes: [
+      {
+        mode: "default",
+        label: "Default Access",
+        available: true,
+        isDefault: true,
+      },
+    ],
+    launchpadOptions,
+  };
+}
+
 describe("Composer", () => {
+  it("shows OpenAI model and reasoning defaults without a Default option", () => {
+    render(
+      <Composer
+        backends={[
+          backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.4",
+                label: "GPT-5.4",
+                current: true,
+                supportsReasoning: true,
+              },
+              {
+                id: "gpt-5.4-pro",
+                label: "GPT-5.4 Pro",
+                supportsReasoning: true,
+              },
+            ],
+            reasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
+            supportsFastMode: true,
+          }),
+        ]}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.4");
+    expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
+    expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
+  });
+
+  it("shows Grok reasoning defaults for the reasoning model", () => {
+    render(
+      <Composer
+        backends={[
+          backendSummary("grok", {
+            models: [
+              {
+                id: "grok-4.20-reasoning",
+                label: "Grok 4.20 Reasoning",
+                current: true,
+                supportsReasoning: true,
+              },
+              {
+                id: "grok-4.20-fast",
+                label: "Grok 4.20 Fast",
+                supportsReasoning: false,
+              },
+            ],
+            reasoningEfforts: ["low", "medium", "high"],
+          }),
+        ]}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "grok",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByLabelText("Model")).toHaveValue("grok-4.20-reasoning");
+    expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
+    expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
+  });
+
+  it("sends effective model defaults for threads without saved model settings", async () => {
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      runId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        backends={[
+          backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.4",
+                label: "GPT-5.4",
+                current: true,
+                supportsReasoning: true,
+              },
+            ],
+            reasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
+          }),
+        ]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Default model",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Use defaults" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledTimes(1);
+    });
+    expect(startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-5.4",
+        reasoningEffort: "medium",
+      })
+    );
+  });
+
   it("shows thread access in the composer and updates it from the select", async () => {
     const onSetExecutionMode = vi.fn(async () => undefined);
 

@@ -4,6 +4,7 @@ import type {
   AppServerCollaborationModeRequest,
   AppServerTurnInputItem,
   NavigationDirectorySummary,
+  NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
   NavigationThreadSummary,
@@ -13,6 +14,8 @@ import { buildThreadIdentityKey } from "@pwragnt/shared";
 import type { DesktopApi } from "./desktop-api";
 
 export type BrowseMode = "inbox" | "recents" | "directories";
+
+const ROOT_NEW_THREAD_LAUNCHPAD_KEY = "unlinked:new-thread";
 
 type NavigationState = {
   loading: boolean;
@@ -80,6 +83,10 @@ function threadSummariesEqual(
     left.updatedAt === right.updatedAt &&
     left.gitBranch === right.gitBranch &&
     left.executionMode === right.executionMode &&
+    left.model === right.model &&
+    left.reasoningEffort === right.reasoningEffort &&
+    left.serviceTier === right.serviceTier &&
+    left.fastMode === right.fastMode &&
     linkedDirectoriesEqual(left.linkedDirectories, right.linkedDirectories) &&
     threadInboxEqual(left.inbox, right.inbox)
   );
@@ -199,6 +206,45 @@ function applyThreadNameUpdate(
       ...thread,
       title: threadName,
       titleSource: "explicit" as const,
+    };
+  });
+
+  return changed
+    ? {
+        ...snapshot,
+        threads,
+      }
+      : snapshot;
+}
+
+function applyThreadModelSettingsUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    model?: string;
+    reasoningEffort?: string;
+    serviceTier?: string;
+    fastMode?: boolean;
+  }
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+
+    changed = true;
+    return {
+      ...thread,
+      model: params.model,
+      reasoningEffort: params.reasoningEffort,
+      serviceTier: params.serviceTier,
+      fastMode: params.fastMode,
     };
   });
 
@@ -327,6 +373,10 @@ function buildOptimisticThreadFromLaunchpad(params: {
     projectKey: params.launchpad.directoryPath,
     source: params.backend,
     executionMode: params.executionMode,
+    model: params.launchpad.model,
+    reasoningEffort: params.launchpad.reasoningEffort,
+    serviceTier: params.launchpad.serviceTier,
+    fastMode: params.launchpad.fastMode,
     linkedDirectories: params.launchpad.directoryPath
       ? [
           {
@@ -352,7 +402,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
 export function useThreadNavigation(desktopApi?: DesktopApi): {
   browseMode: BrowseMode;
   createThread: (
-    backend: AppServerBackendKind,
+    backend?: AppServerBackendKind,
     executionMode?: ThreadExecutionMode
   ) => Promise<void>;
   createThreadError?: string;
@@ -387,6 +437,16 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     executionMode: ThreadExecutionMode
   ) => Promise<void>;
   setThreadExecutionModeError?: string;
+  setThreadModelSettings: (
+    thread: NavigationThreadSummary,
+    patch: Partial<
+      Pick<
+      NavigationThreadSummary,
+      "model" | "reasoningEffort" | "serviceTier" | "fastMode"
+      >
+    >
+  ) => Promise<void>;
+  setThreadModelSettingsError?: string;
   updatingThreadExecutionMode?: ThreadExecutionMode;
   updateDirectoryLaunchpad: (
     directoryKey: string,
@@ -398,8 +458,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   threads: NavigationThreadSummary[];
 } {
   const markThreadSeen = desktopApi?.markThreadSeen;
-  const startThread = desktopApi?.startThread;
   const setThreadExecutionMode = desktopApi?.setThreadExecutionMode;
+  const setThreadModelSettings = desktopApi?.setThreadModelSettings;
   const [browseMode, setBrowseMode] = useState<BrowseMode>("recents");
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
@@ -415,6 +475,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
     useState<ThreadExecutionMode>();
   const [setThreadExecutionModeError, setSetThreadExecutionModeError] =
+    useState<string>();
+  const [setThreadModelSettingsError, setSetThreadModelSettingsError] =
     useState<string>();
   const [state, setState] = useState<NavigationState>({
     loading: true,
@@ -810,6 +872,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     setCreateThreadError(undefined);
     setLaunchpadError(undefined);
     setSetThreadExecutionModeError(undefined);
+    setSetThreadModelSettingsError(undefined);
     setSelectedItemKey(threadKey);
     setPendingSeenThreadKey(threadKey);
     if (thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen") {
@@ -819,47 +882,51 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
 
   const createThread = useCallback(
     async (
-      backend: AppServerBackendKind,
+      backend?: AppServerBackendKind,
       executionMode: ThreadExecutionMode = "default"
     ): Promise<void> => {
-      if (!startThread) {
-        setCreateThreadError("Desktop bridge is missing startThread().");
+      if (!desktopApi?.ensureDirectoryLaunchpad) {
+        setCreateThreadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
         return;
       }
 
-      setCreatingThread({ backend, executionMode });
+      setCreatingThread({ backend: backend ?? "codex", executionMode });
       setCreateThreadError(undefined);
       setLaunchpadError(undefined);
+      setSetThreadModelSettingsError(undefined);
 
       try {
-        const response = await startThread({ backend, executionMode });
-        const optimisticUpdatedAt = Date.now();
-        const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
-        const nextOptimisticThread: NavigationThreadSummary = {
-          id: response.threadId,
-          title: "Untitled thread",
-          titleSource: "fallback",
-          summary: undefined,
-          source: response.backend,
-          executionMode: response.executionMode,
-          linkedDirectories: [],
-          updatedAt: optimisticUpdatedAt,
-          inbox: {
-            inInbox: true,
-            reason: "new-thread",
-          },
-        };
-        setOptimisticThread(nextOptimisticThread);
-        setSelectedItemKey(nextThreadKey);
-        setPendingSeenThreadKey(nextThreadKey);
-        await refresh(nextThreadKey, nextOptimisticThread);
+        const response = await desktopApi.ensureDirectoryLaunchpad({
+          directoryKey: ROOT_NEW_THREAD_LAUNCHPAD_KEY,
+          directoryKind: "unlinked",
+          directoryLabel: "New thread",
+          preferredBackend: backend,
+        });
+        let launchpad = response.launchpad;
+        let defaults: NavigationLaunchpadDefaults = response.defaults;
+        if (
+          executionMode !== response.launchpad.executionMode &&
+          desktopApi.updateDirectoryLaunchpad
+        ) {
+          const updated = await desktopApi.updateDirectoryLaunchpad({
+            directoryKey: ROOT_NEW_THREAD_LAUNCHPAD_KEY,
+            patch: { executionMode },
+          });
+          launchpad = updated.launchpad;
+          defaults = updated.defaults;
+        }
+        setState((current) => ({
+          ...current,
+          response: applyLaunchpadUpdate(current.response, launchpad, defaults),
+        }));
+        setSelectedItemKey(buildLaunchpadSelectionKey(ROOT_NEW_THREAD_LAUNCHPAD_KEY));
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
       } finally {
         setCreatingThread(undefined);
       }
     },
-    [refresh, startThread]
+    [desktopApi]
   );
 
   const openDirectoryLaunchpad = useCallback(
@@ -875,6 +942,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       setLaunchpadError(undefined);
       setCreateThreadError(undefined);
       setSetThreadExecutionModeError(undefined);
+      setSetThreadModelSettingsError(undefined);
 
       try {
         const response = await desktopApi.ensureDirectoryLaunchpad({
@@ -1087,6 +1155,69 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     [refresh, setThreadExecutionMode]
   );
 
+  const updateThreadModelSettings = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      patch: Partial<
+        Pick<
+          NavigationThreadSummary,
+          "model" | "reasoningEffort" | "serviceTier" | "fastMode"
+        >
+      >
+    ): Promise<void> => {
+      if (!setThreadModelSettings) {
+        setSetThreadModelSettingsError(
+          "Desktop bridge is missing setThreadModelSettings()."
+        );
+        return;
+      }
+
+      const nextSettings = {
+        model: "model" in patch ? patch.model : thread.model,
+        reasoningEffort:
+          "reasoningEffort" in patch
+            ? patch.reasoningEffort
+            : thread.reasoningEffort,
+        serviceTier: "serviceTier" in patch ? patch.serviceTier : thread.serviceTier,
+        fastMode:
+          thread.source === "codex"
+            ? "fastMode" in patch
+              ? patch.fastMode
+              : thread.fastMode
+            : undefined,
+      };
+
+      setSetThreadModelSettingsError(undefined);
+      setOptimisticThread((current) =>
+        current && current.id === thread.id && current.source === thread.source
+          ? { ...current, ...nextSettings }
+          : current
+      );
+      setState((current) => ({
+        ...current,
+        response: applyThreadModelSettingsUpdate(current.response, {
+          backend: thread.source,
+          threadId: thread.id,
+          ...nextSettings,
+        }),
+      }));
+
+      try {
+        await setThreadModelSettings({
+          backend: thread.source,
+          threadId: thread.id,
+          ...nextSettings,
+        });
+      } catch (error) {
+        setSetThreadModelSettingsError(
+          error instanceof Error ? error.message : String(error)
+        );
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      }
+    },
+    [refresh, setThreadModelSettings]
+  );
+
   return {
     browseMode,
     createThread,
@@ -1109,6 +1240,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     selectedThreadKey,
     setThreadExecutionMode: updateThreadExecutionMode,
     setThreadExecutionModeError,
+    setThreadModelSettings: updateThreadModelSettings,
+    setThreadModelSettingsError,
     updatingThreadExecutionMode,
     updateDirectoryLaunchpad,
     setBrowseMode,
