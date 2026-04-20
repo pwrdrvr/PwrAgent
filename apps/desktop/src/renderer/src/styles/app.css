@@ -255,6 +255,7 @@ textarea {
   background: transparent;
   color: var(--text-secondary);
   text-transform: capitalize;
+  transition: none;
 }
 
 .lens-switch__button.is-active {
@@ -269,19 +270,22 @@ textarea {
 }
 
 .button:focus,
-.lens-switch__button:focus,
 .thread-row:focus,
 .transcript-activity__toggle:focus,
 .composer__input:focus,
 .composer__attachment-remove:focus,
 .button:focus-visible,
-.lens-switch__button:focus-visible,
 .thread-row:focus-visible,
 .transcript-activity__toggle:focus-visible,
 .composer__input:focus-visible,
 .composer__attachment-remove:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+.lens-switch__button:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .button--ghost {
