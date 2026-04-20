@@ -900,6 +900,92 @@ describe("useThreadSessionState", () => {
     expect(result.current.activeRunId).toBeUndefined();
   });
 
+  it("surfaces failed turn errors in the transcript state", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: {
+              threadId: "thread-1",
+              runId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "in_progress",
+              },
+            },
+          } as any,
+        });
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBe("Thinking");
+    expect(result.current.activeRunId).toBe("turn-1");
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/failed",
+            params: {
+              threadId: "thread-1",
+              runId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "failed",
+                error: {
+                  message: "Provider completed the turn without assistant text.",
+                },
+              },
+            },
+          } as any,
+        });
+      }
+    });
+
+    expect(result.current.activeRunId).toBeUndefined();
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.error).toBe("Provider completed the turn without assistant text.");
+  });
+
   it("surfaces command execution approval requests from app-server events", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

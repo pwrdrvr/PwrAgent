@@ -28,6 +28,17 @@ describe("Codex turn lifecycle", () => {
     ]);
     expect(notifications).toEqual([
       {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "in_progress",
+          },
+        },
+      },
+      {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
@@ -135,6 +146,17 @@ describe("Codex turn lifecycle", () => {
     expect(provider.runs[0]?.interrupted).toBe(true);
     expect(notifications).toEqual([
       {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "in_progress",
+          },
+        },
+      },
+      {
         method: "turn/cancelled",
         params: {
           threadId: "thread-1",
@@ -162,6 +184,17 @@ describe("Codex turn lifecycle", () => {
 
     expect(notifications).toEqual([
       {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "in_progress",
+          },
+        },
+      },
+      {
         method: "turn/failed",
         params: {
           threadId: "thread-1",
@@ -171,6 +204,50 @@ describe("Codex turn lifecycle", () => {
             status: "failed",
             error: {
               message: "Unauthorized",
+            },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("fails the turn when the provider resolves without assistant text", async () => {
+    const provider = new FakeProvider();
+    const { server, notifications } = createTestHarness({ provider });
+    await server.request("thread/start", { cwd: "/repo/workspace" });
+    await server.request("turn/start", {
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Return something visible" }],
+    });
+    provider.runs[0]?.deferred.resolve({
+      assistantText: "",
+      providerResponseId: "resp_empty",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(notifications).toEqual([
+      {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "in_progress",
+          },
+        },
+      },
+      {
+        method: "turn/failed",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "failed",
+            error: {
+              message: "Provider completed the turn without assistant text.",
             },
           },
         },

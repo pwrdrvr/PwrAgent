@@ -309,15 +309,26 @@ export class CodexAppServer {
           }) ?? thread
         : thread;
     const normalizedInput = normalizeTurnInput(params.input);
+    const runId = this.createRunId();
     const handle = await this.provider.startTurn({
       thread: effectiveThread,
       input: normalizedInput,
       previousResponseId: this.state.getPreviousResponseId(threadId),
       tools: this.toolExecutor,
     });
-    const runId = this.createRunId();
     this.state.appendInput(threadId, normalizedInput);
     this.state.createRun({ runId, threadId, handle });
+    await this.emit({
+      method: "turn/started",
+      params: {
+        threadId,
+        runId,
+        turn: {
+          id: runId,
+          status: "in_progress",
+        },
+      },
+    });
     this.turnRunner.attach({ threadId, runId, handle });
     return { threadId, runId };
   }

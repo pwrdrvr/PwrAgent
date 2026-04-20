@@ -137,6 +137,17 @@ describe("OpenClaw compatibility sequences", () => {
     expect(startedTurn).toEqual({ threadId: "thread-1", runId: "turn-1" });
     expect(notifications).toEqual([
       {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "in_progress",
+          },
+        },
+      },
+      {
         method: "item/started",
         params: {
           threadId: "thread-1",
@@ -147,6 +158,10 @@ describe("OpenClaw compatibility sequences", () => {
             text: "search_code",
             toolName: "search_code",
             arguments: { query: "tool usage" },
+            review: undefined,
+            command: undefined,
+            commandAction: undefined,
+            success: undefined,
           },
         },
       },
@@ -162,6 +177,8 @@ describe("OpenClaw compatibility sequences", () => {
             toolName: "search_code",
             success: true,
             arguments: { query: "tool usage" },
+            review: undefined,
+            command: undefined,
             commandAction: "search",
           },
         },
@@ -341,6 +358,17 @@ describe("OpenClaw compatibility sequences", () => {
       lastAssistantMessage: "Shipped.",
     });
     expect(notifications).toEqual([
+      {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "in_progress",
+          },
+        },
+      },
       {
         method: "turn/completed",
         params: {

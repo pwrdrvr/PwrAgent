@@ -14,6 +14,12 @@ import { GrokAppServerClient } from "../grok-app-server/client";
 import { ProtocolCaptureStore } from "../testing/capture-store";
 import { createProtocolCaptureObserver } from "../testing/protocol-capture";
 
+async function flushAsync(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("GrokAppServerClient", () => {
   it("lists threads, reads replay, and forwards turn notifications", async () => {
     const provider = new FakeProvider();
@@ -152,6 +158,42 @@ describe("GrokAppServerClient", () => {
       },
     });
     expect(notifications).toContain("turn/completed");
+    expect(notifications).toContain("turn/started");
+
+    unsubscribe();
+    await client.close();
+  });
+
+  it("fails a Grok turn that resolves without assistant text", async () => {
+    const provider = new FakeProvider();
+    const server = new CodexAppServer({
+      provider,
+      threadIdGenerator: () => "thread-1",
+      runIdGenerator: () => "turn-1",
+    });
+    const client = new GrokAppServerClient({ server });
+    const notifications: string[] = [];
+    const unsubscribe = client.onNotification((notification) => {
+      notifications.push(notification.method);
+    });
+
+    await client.startThread({ cwd: "/repo/workspace", model: "grok-4.20-reasoning" });
+    const startedTurn = await client.startTurn({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Return a visible answer" }],
+    });
+    provider.runs[0]?.deferred.resolve({
+      assistantText: "",
+      providerResponseId: "resp_empty",
+    });
+    await flushAsync();
+
+    expect(startedTurn).toEqual({ threadId: "thread-1", runId: "turn-1" });
+    expect(notifications).toEqual(["turn/started", "turn/failed"]);
+    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+      lastUserMessage: "Return a visible answer",
+      lastAssistantMessage: undefined,
+    });
 
     unsubscribe();
     await client.close();

@@ -203,8 +203,18 @@ export class TurnRunner {
     runId: string,
     result: ProviderTurnResult,
   ): Promise<void> {
+    const assistantText = result.assistantText?.trim() ?? "";
+    if (!assistantText) {
+      await this.failDefaultTurn(
+        threadId,
+        runId,
+        new Error("Provider completed the turn without assistant text."),
+      );
+      return;
+    }
+
     this.state.completeRun(runId);
-    this.state.appendAssistant(threadId, result.assistantText ?? "");
+    this.state.appendAssistant(threadId, assistantText);
     this.state.setPreviousResponseId(threadId, result.providerResponseId);
     await this.emit({
       method: "turn/completed",
@@ -217,7 +227,7 @@ export class TurnRunner {
           output: [
             {
               type: "text",
-              text: result.assistantText ?? "",
+              text: assistantText,
             },
           ],
         },

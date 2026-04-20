@@ -175,6 +175,17 @@ export type AppServerTurnResult = {
 
 export type AppServerNotification =
   | {
+      method: "turn/started";
+      params: {
+        threadId: string;
+        runId?: string;
+        turn: {
+          id: string;
+          status?: string;
+        };
+      };
+    }
+  | {
       method: "turn/completed";
       params: {
         threadId: string;

@@ -30,10 +30,91 @@ import {
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   BACKEND_LIST_CHANNEL,
 } from "../../shared/ipc";
+import { getMainLogger } from "../log";
 
 let unsubscribeRegistryEvents: (() => void) | undefined;
 
+const isDevelopment = process.env.NODE_ENV !== "production";
+const appServerLog = getMainLogger("pwragnt:app-server");
+
+function logDebug(event: string, payload: Record<string, unknown>): void {
+  if (!isDevelopment) {
+    return;
+  }
+
+  appServerLog.info(event, payload);
+}
+
+function summarizeTurnInput(input: StartTurnRequest["input"]): Record<string, unknown> {
+  const textChars = input
+    .filter((item): item is Extract<StartTurnRequest["input"][number], { type: "text" }> =>
+      item.type === "text"
+    )
+    .reduce((count, item) => count + item.text.length, 0);
+  const imageCount = input.filter((item) => item.type !== "text").length;
+
+  return {
+    inputCount: input.length,
+    textChars,
+    imageCount,
+  };
+}
+
+function summarizeAgentEvent(event: AgentEvent): Record<string, unknown> | undefined {
+  const params = event.notification.params;
+  const turn =
+    "turn" in params && typeof params.turn === "object" && params.turn !== null
+      ? (params.turn as Record<string, unknown>)
+      : undefined;
+  const threadId =
+    "threadId" in params && typeof params.threadId === "string"
+      ? params.threadId
+      : undefined;
+  const runId =
+    "runId" in params && typeof params.runId === "string"
+      ? params.runId
+      : undefined;
+
+  if (!event.notification.method.startsWith("turn/")) {
+    return undefined;
+  }
+
+  const summary: Record<string, unknown> = {
+    backend: event.backend,
+    method: event.notification.method,
+    threadId: threadId ?? null,
+    runId: runId ?? null,
+  };
+
+  if (event.notification.method === "turn/completed") {
+    const output = Array.isArray(turn?.output) ? turn.output : [];
+    summary.outputTextChars = output.reduce((count, item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return count;
+      }
+
+      const text = (item as Record<string, unknown>).text;
+      return typeof text === "string" ? count + text.length : count;
+    }, 0);
+  }
+
+  if (event.notification.method === "turn/failed") {
+    const error =
+      turn?.error && typeof turn.error === "object" && !Array.isArray(turn.error)
+        ? (turn.error as Record<string, unknown>)
+        : undefined;
+    summary.error = typeof error?.message === "string" ? error.message : null;
+  }
+
+  return summary;
+}
+
 function broadcastAgentEvent(event: AgentEvent): void {
+  const eventSummary = summarizeAgentEvent(event);
+  if (eventSummary) {
+    logDebug("agentEvent", eventSummary);
+  }
+
   for (const window of BrowserWindow.getAllWindows()) {
     if (typeof window.isDestroyed === "function" && window.isDestroyed()) {
       continue;
@@ -84,7 +165,32 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: StartTurnRequest
     ): Promise<StartTurnResponse> => {
-      return await registry.startTurn(request);
+      logDebug("startTurn", {
+        backend: request.backend,
+        threadId: request.threadId,
+        model: request.model ?? null,
+        reasoningEffort: request.reasoningEffort ?? null,
+        serviceTier: request.serviceTier ?? null,
+        fastMode: request.fastMode ?? null,
+        ...summarizeTurnInput(request.input),
+      });
+
+      try {
+        const response = await registry.startTurn(request);
+        logDebug("startTurnResult", {
+          backend: response.backend,
+          threadId: response.threadId,
+          runId: response.runId,
+        });
+        return response;
+      } catch (error) {
+        appServerLog.error("startTurn failed", {
+          backend: request.backend,
+          threadId: request.threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
     },
   );
 
@@ -95,7 +201,23 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: InterruptTurnRequest
     ): Promise<InterruptTurnResponse> => {
-      return await registry.interruptTurn(request);
+      logDebug("interruptTurn", {
+        backend: request.backend,
+        threadId: request.threadId,
+        runId: request.runId,
+      });
+
+      try {
+        return await registry.interruptTurn(request);
+      } catch (error) {
+        appServerLog.error("interruptTurn failed", {
+          backend: request.backend,
+          threadId: request.threadId,
+          runId: request.runId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
     },
   );
 

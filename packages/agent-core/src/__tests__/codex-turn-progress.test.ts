@@ -54,6 +54,17 @@ describe("Codex turn progress", () => {
 
     expect(notifications).toEqual([
       {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "in_progress",
+          },
+        },
+      },
+      {
         method: "item/started",
         params: {
           threadId: "thread-1",
@@ -63,6 +74,11 @@ describe("Codex turn progress", () => {
             type: "plan",
             text: undefined,
             review: undefined,
+            command: undefined,
+            commandAction: undefined,
+            toolName: undefined,
+            success: undefined,
+            arguments: undefined,
           },
         },
       },
@@ -102,6 +118,11 @@ describe("Codex turn progress", () => {
             type: "plan",
             text: "- inspect the code",
             review: undefined,
+            command: undefined,
+            commandAction: undefined,
+            toolName: undefined,
+            success: undefined,
+            arguments: undefined,
           },
         },
       },
