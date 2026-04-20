@@ -66,6 +66,10 @@ class MockBackendClient {
     serviceTier?: string;
     reasoningEffort?: string;
   };
+  listThreadsCallCount = 0;
+  lastListThreadsParams?: {
+    filter?: string;
+  };
 
   constructor(
     private readonly options: {
@@ -96,7 +100,9 @@ class MockBackendClient {
     return this.options.initializeResult ?? {};
   }
 
-  async listThreads(): Promise<AppServerThreadSummary[]> {
+  async listThreads(params?: { filter?: string }): Promise<AppServerThreadSummary[]> {
+    this.listThreadsCallCount += 1;
+    this.lastListThreadsParams = params;
     return this.options.threads ?? [];
   }
 
@@ -451,6 +457,69 @@ describe("DesktopBackendRegistry", () => {
       sandbox: "danger-full-access",
     });
     expect(codexFullAccessClient.lastSetThreadPermissionsParams).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("lists Codex threads only through the default client and reapplies overlay execution mode", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-1",
+          title: "Thread one",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          updatedAt: 2,
+        },
+        {
+          id: "thread-2",
+          title: "Thread two",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          updatedAt: 1,
+        },
+      ],
+    });
+    const codexFullAccessClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-3",
+          title: "Should not appear",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          updatedAt: 3,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({ executionMode: "full-access" }),
+    });
+
+    const threads = await registry.listThreads({ backend: "codex", filter: "thread" });
+
+    expect(threads).toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        executionMode: "full-access",
+      }),
+      expect.objectContaining({
+        id: "thread-2",
+        executionMode: "default",
+      }),
+    ]);
+    expect(codexClient.listThreadsCallCount).toBe(1);
+    expect(codexClient.lastListThreadsParams).toEqual({ filter: "thread" });
+    expect(codexFullAccessClient.listThreadsCallCount).toBe(0);
 
     await registry.close();
   });

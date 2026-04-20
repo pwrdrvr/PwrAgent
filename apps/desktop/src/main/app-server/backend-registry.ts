@@ -670,54 +670,26 @@ export class DesktopBackendRegistry {
   }
 
   private async listCodexThreads(filter?: string): Promise<AppServerThreadSummary[]> {
-    const [defaultThreads, fullAccessThreads] = await Promise.all([
-      this.codexDefaultClient.listThreads({ filter }).catch(() => []),
-      this.codexFullAccessClient.listThreads({ filter }).catch(() => []),
-    ]);
-
-    const threadsById = new Map<string, AppServerThreadSummary>();
-    const allThreads = [
-      ...defaultThreads.map((thread) => ({
-        ...thread,
-        executionMode: "default" as const,
-      })),
-      ...fullAccessThreads.map((thread) => ({
-        ...thread,
-        executionMode: "full-access" as const,
-      })),
-    ];
+    const defaultThreads = await this.codexDefaultClient.listThreads({ filter }).catch(() => []);
+    const allThreads = defaultThreads.map((thread) => ({
+      ...thread,
+      executionMode: "default" as const,
+    }));
 
     const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
       backend: "codex",
-      threadIds: [...new Set(allThreads.map((thread) => thread.id))],
+      threadIds: allThreads.map((thread) => thread.id),
     });
 
-    for (const thread of allThreads) {
-      const overlay = overlaysByThreadId[thread.id];
-      const preferredMode = overlay?.executionMode;
-      const existing = threadsById.get(thread.id);
-      const normalizedThread = {
-        ...thread,
-        executionMode: preferredMode ?? thread.executionMode,
-      };
-
-      if (!existing) {
-        threadsById.set(thread.id, normalizedThread);
-        continue;
-      }
-
-      if (
-        preferredMode
-          ? normalizedThread.executionMode === preferredMode
-          : normalizedThread.executionMode === "default"
-      ) {
-        threadsById.set(thread.id, normalizedThread);
-      }
-    }
-
-    return [...threadsById.values()].sort(
-      (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
-    );
+    return allThreads
+      .map((thread) => {
+        const overlay = overlaysByThreadId[thread.id];
+        return {
+          ...thread,
+          executionMode: overlay?.executionMode ?? thread.executionMode,
+        };
+      })
+      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
   }
 
   private async describeCodexBackend(): Promise<BackendSummary> {
