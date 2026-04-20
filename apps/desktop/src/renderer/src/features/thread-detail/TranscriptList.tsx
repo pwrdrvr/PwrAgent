@@ -11,6 +11,7 @@ import type {
 } from "@pwragnt/shared";
 import { ThinkingScanner } from "./ThinkingScanner";
 import { TranscriptActivity } from "./TranscriptActivity";
+import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
 
@@ -83,6 +84,18 @@ function stripShellLauncher(command: string): string {
   return match ? match[2] : command;
 }
 
+function markdownCodeBlock(text: string, language: string): string {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  const longestFence = [...normalized.matchAll(/`{3,}/g)].reduce(
+    (max, match) => Math.max(max, match[0].length),
+    2
+  );
+  const fence = "`".repeat(longestFence + 1);
+  const languageTag = language.trim();
+
+  return `${fence}${languageTag}\n${normalized}\n${fence}`;
+}
+
 function commandFromActions(params: Record<string, unknown>): string {
   const actions = params.commandActions;
   if (!Array.isArray(actions) || actions.length === 0) {
@@ -123,12 +136,13 @@ function pendingRequestPrompt(request: AppServerPendingRequestNotification): str
 
   const reason = typeof request.params.reason === "string" ? request.params.reason.trim() : "";
   const command = approvalDisplayCommand(request.params);
+  const commandBlock = command ? `Command:\n\n${markdownCodeBlock(command, "sh")}` : "";
 
-  if (reason && command) {
-    return `${reason}\n\nCommand: ${command}`;
+  if (reason && commandBlock) {
+    return `${reason}\n\n${commandBlock}`;
   }
-  if (command) {
-    return `Command: ${command}`;
+  if (commandBlock) {
+    return commandBlock;
   }
   if (reason) {
     return reason;
@@ -412,9 +426,10 @@ export function TranscriptList(props: TranscriptListProps) {
                 {props.pendingRequest.method}
               </span>
             </div>
-            <p className="transcript-request__prompt">
-              {pendingRequestPrompt(props.pendingRequest)}
-            </p>
+            <ThreadMarkdown
+              className="transcript-request__prompt"
+              text={pendingRequestPrompt(props.pendingRequest)}
+            />
             <div className="transcript-request__actions">
               <button
                 className="button button--primary"

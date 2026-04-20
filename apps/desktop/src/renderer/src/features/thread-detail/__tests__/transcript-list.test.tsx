@@ -905,7 +905,7 @@ describe("TranscriptList", () => {
   });
 
   it("shows command approval reason and command when no prompt is provided", () => {
-    render(
+    const { container } = render(
       <TranscriptList
         entries={[]}
         loading={false}
@@ -926,12 +926,15 @@ describe("TranscriptList", () => {
 
     expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
     expect(screen.getByText(/Network access is required/)).toBeInTheDocument();
-    expect(screen.getByText(/Command: npm view dive/)).toBeInTheDocument();
+    expect(screen.getByText("Command:")).toBeInTheDocument();
+    expect(container.querySelector(".transcript-request pre code")).toHaveTextContent(
+      "npm view dive"
+    );
     expect(screen.queryByText(/\/bin\/zsh -lc/)).not.toBeInTheDocument();
   });
 
   it("prefers parsed command actions for command approval display", () => {
-    render(
+    const { container } = render(
       <TranscriptList
         entries={[]}
         loading={false}
@@ -957,7 +960,10 @@ describe("TranscriptList", () => {
     );
 
     expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
-    expect(screen.getByText(/Command: npm view dive/)).toBeInTheDocument();
+    expect(screen.getByText("Command:")).toBeInTheDocument();
+    expect(container.querySelector(".transcript-request pre code")).toHaveTextContent(
+      "npm view dive"
+    );
     expect(screen.queryByText(/\/bin\/zsh -lc/)).not.toBeInTheDocument();
   });
 });
