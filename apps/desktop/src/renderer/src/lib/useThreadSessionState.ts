@@ -12,6 +12,12 @@ import { buildThreadIdentityKey } from "@pwragnt/shared";
 import type { DesktopApi } from "./desktop-api";
 
 const MAX_VIEW_ONLY_THREADS = 10;
+const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
+  "turn/requestApproval",
+  "review/requestApproval",
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+]);
 
 export type ThreadViewportState = {
   distanceFromBottom: number;
@@ -208,7 +214,7 @@ function isApprovalRequestNotification(
   notification: { method: string; params: Record<string, unknown> }
 ): notification is AppServerPendingRequestNotification {
   return (
-    notification.method.endsWith("/requestApproval") &&
+    SUPPORTED_APPROVAL_REQUEST_METHODS.has(notification.method) &&
     typeof notification.params.requestId === "string"
   );
 }
