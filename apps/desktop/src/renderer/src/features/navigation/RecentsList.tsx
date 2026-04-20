@@ -1,9 +1,11 @@
 import type { NavigationThreadSummary } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
 import { ThreadMetaChips } from "./ThreadMetaChips";
+import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
 
 type RecentsListProps = {
   selectedThreadKey?: string;
+  thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
   onSelectThread: (thread: NavigationThreadSummary) => void;
 };
@@ -14,6 +16,7 @@ export function RecentsList(props: RecentsListProps) {
       {props.threads.map((thread) => {
         const selected =
           buildThreadIdentityKey(thread.source, thread.id) === props.selectedThreadKey;
+        const status = getThreadRowStatus(thread, props.thinkingThreadKeys);
         return (
           <button
             key={buildThreadIdentityKey(thread.source, thread.id)}
@@ -23,7 +26,10 @@ export function RecentsList(props: RecentsListProps) {
             onClick={() => props.onSelectThread(thread)}
           >
             <span className="thread-row__header">
-              <span className="thread-row__title">{thread.title}</span>
+              <span className="thread-row__heading">
+                <ThreadRowStatus status={status} />
+                <span className="thread-row__title">{thread.title}</span>
+              </span>
               <span className="thread-row__time">
                 {formatRelativeTime(thread.updatedAt)}
               </span>

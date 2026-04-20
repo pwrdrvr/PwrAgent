@@ -28,6 +28,7 @@ type SidebarProps = {
   };
   launchpadError?: string;
   selectedItemKey?: string;
+  thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
   onBrowseModeChange: (browseMode: BrowseMode) => void;
   onCreateThread: (
@@ -177,6 +178,7 @@ export function Sidebar(props: SidebarProps) {
             <DirectoriesList
               directories={props.directories}
               selectedItemKey={props.selectedItemKey}
+              thinkingThreadKeys={props.thinkingThreadKeys}
               threads={props.threads}
               onOpenLaunchpad={props.onOpenLaunchpad}
               onSelectThread={props.onSelectThread}
@@ -184,6 +186,7 @@ export function Sidebar(props: SidebarProps) {
           ) : (
             <RecentsList
               selectedThreadKey={props.selectedItemKey}
+              thinkingThreadKeys={props.thinkingThreadKeys}
               threads={props.threads}
               onSelectThread={props.onSelectThread}
             />

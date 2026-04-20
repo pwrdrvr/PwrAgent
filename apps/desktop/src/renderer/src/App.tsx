@@ -34,6 +34,7 @@ export function App() {
         launchpadError={navigation.launchpadError}
         loading={navigation.loading}
         selectedItemKey={navigation.selectedItemKey}
+        thinkingThreadKeys={session.thinkingThreadKeys}
         threads={navigation.threads}
         onBrowseModeChange={navigation.setBrowseMode}
         onCreateThread={navigation.createThread}

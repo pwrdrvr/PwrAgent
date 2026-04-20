@@ -367,6 +367,14 @@ textarea {
   gap: 12px;
 }
 
+.thread-row__heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+}
+
 .thread-row__title,
 .directory-group__title,
 .context-list__label {
@@ -389,6 +397,23 @@ textarea {
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 500;
+}
+
+.thread-row__status-indicator {
+  display: inline-flex;
+  width: 14px;
+  min-width: 14px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+}
+
+.thread-row__status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(184, 255, 77, 0.42);
 }
 
 .thread-row__summary {
@@ -1252,6 +1277,11 @@ textarea {
   box-shadow: inset 0 0 0 1px rgba(255, 106, 94, 0.14);
 }
 
+.thinking-scanner--mini {
+  width: 14px;
+  height: 6px;
+}
+
 .thinking-scanner__beam {
   position: absolute;
   top: 0;
@@ -1271,6 +1301,13 @@ textarea {
   animation:
     pwragnt-kitt-scan 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite,
     pwragnt-kitt-glow 0.7s ease-in-out infinite;
+}
+
+.thinking-scanner--mini .thinking-scanner__beam {
+  width: 8px;
+  box-shadow:
+    0 0 8px rgba(255, 106, 94, 0.55),
+    0 0 14px rgba(255, 78, 68, 0.24);
 }
 
 .transcript-activity__header {
