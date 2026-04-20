@@ -218,8 +218,10 @@ test("keeps workflow states and narrow desktop layout readable", async ({}, test
     await expect(composer).toBeVisible();
     await expect(approval).toContainText("Approval needed");
     await expect(approval).toContainText(
-      "Read /etc/hosts and tell me the first three lines."
+      "Do you want to allow network access so I can query npm metadata for the dive package?"
     );
+    await expect(approval.getByText("Command:")).toBeVisible();
+    await expect(approval.locator("pre code")).toHaveText("npm view dive");
     await expect(app.window.getByRole("status")).toContainText("Waiting for approval");
     await expect(app.window.locator(".thinking-scanner").first()).toBeVisible();
 
