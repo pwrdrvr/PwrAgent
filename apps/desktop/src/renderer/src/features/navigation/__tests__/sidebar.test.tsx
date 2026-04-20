@@ -179,6 +179,69 @@ describe("Sidebar", () => {
     expect(onOpenLaunchpad).toHaveBeenCalledWith(directories[0], undefined);
   });
 
+  it("shows the thinking indicator instead of unread for an active initiated turn", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={directories}
+        fetchedAt={Date.now()}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        thinkingThreadKeys={{ "codex:thread-1": true }}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const browseSection = screen.getByRole("heading", { level: 2, name: "Browse" }).closest("section");
+    expect(browseSection).not.toBeNull();
+    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
+      name: /Cross-project cleanup/i,
+    });
+
+    expect(threadButton.querySelector('[data-thread-status="thinking"]')).not.toBeNull();
+    expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
+  });
+
+  it("falls back to the unread indicator in recents once the turn is done", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        fetchedAt={Date.now()}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const browseSection = screen.getByRole("heading", { level: 2, name: "Browse" }).closest("section");
+    expect(browseSection).not.toBeNull();
+    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
+      name: /Cross-project cleanup/i,
+    });
+
+    expect(threadButton.querySelector('[data-thread-status="thinking"]')).toBeNull();
+    expect(threadButton.querySelector('[data-thread-status="unread"]')).not.toBeNull();
+  });
+
   it("renders directory rows without the raw chevron glyph affordance", () => {
     render(
       <Sidebar

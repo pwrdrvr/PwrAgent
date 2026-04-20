@@ -217,6 +217,98 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("tracks thinking state for a nonselected thread until the turn completes", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-2", updatedAt: 1_500 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.threadId).toBe("thread-2");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: {
+              id: "run-1",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            runId: "run-1",
+            turn: {
+              id: "run-1",
+              status: "completed",
+              output: [{ type: "text", text: "Finished background work." }],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    });
+  });
+
   it("does not reread an interacted thread when only updatedAt changed on reselect", async () => {
     const readThread = vi.fn(
       async ({

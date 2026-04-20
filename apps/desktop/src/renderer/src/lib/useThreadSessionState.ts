@@ -113,6 +113,16 @@ function hasHydratedTranscriptContent(session: ThreadSessionEntry): boolean {
   );
 }
 
+function hasThinkingState(session: ThreadSessionEntry): boolean {
+  return Boolean(
+    session.activeRunId ||
+      session.pendingStatusText ||
+      session.pendingAssistantMessage ||
+      session.pendingRequest ||
+      (session.expectOwnUpdate && session.optimisticEntries.length > 0)
+  );
+}
+
 function messageMatchesOptimisticEntry(
   message: AppServerThreadMessage,
   entry: AppServerThreadMessageEntry
@@ -254,6 +264,7 @@ export function useThreadSessionState(params: {
   response?: AppServerReadThreadResponse;
   setActiveRunId: (runId?: string) => void;
   setPendingStatusText: (status?: string) => void;
+  thinkingThreadKeys: Record<string, boolean>;
   setViewport: (viewport?: ThreadViewportState) => void;
   viewport?: ThreadViewportState;
 } {
@@ -874,6 +885,16 @@ export function useThreadSessionState(params: {
     [selectedSession?.response?.replay.messages, visibleOptimisticEntries]
   );
 
+  const thinkingThreadKeys = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(sessions)
+          .filter(([, session]) => hasThinkingState(session))
+          .map(([sessionThreadKey]) => [sessionThreadKey, true])
+      ),
+    [sessions]
+  );
+
   return {
     activeRunId: selectedSession?.activeRunId,
     addOptimisticUserMessage,
@@ -891,6 +912,7 @@ export function useThreadSessionState(params: {
     response: selectedSession?.response,
     setActiveRunId,
     setPendingStatusText,
+    thinkingThreadKeys,
     setViewport,
     viewport: selectedSession?.viewport,
   };
