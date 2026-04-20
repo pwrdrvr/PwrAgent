@@ -2146,6 +2146,18 @@ textarea {
   cursor: default;
 }
 
+.composer__fixed-value {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
 .composer__select--compact {
   min-width: 0;
   width: auto;

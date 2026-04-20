@@ -47,6 +47,10 @@ export function materializeNavigationThreads(params: {
     return {
       ...thread,
       executionMode: overlay?.executionMode ?? thread.executionMode ?? "default",
+      model: overlay?.model ?? thread.model,
+      reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
+      serviceTier: overlay?.serviceTier ?? thread.serviceTier,
+      fastMode: overlay?.fastMode ?? thread.fastMode,
       linkedDirectories,
       inbox: deriveInboxState({
         firstSnapshot: params.firstSnapshot,
@@ -116,6 +120,10 @@ export function buildNavigationSnapshotHash(params: {
       updatedAt: thread.updatedAt ?? null,
       gitBranch: thread.gitBranch ?? null,
       executionMode: thread.executionMode ?? "default",
+      model: thread.model ?? null,
+      reasoningEffort: thread.reasoningEffort ?? null,
+      serviceTier: thread.serviceTier ?? null,
+      fastMode: thread.fastMode ?? null,
       linkedDirectories: thread.linkedDirectories.map((directory) => ({
         id: directory.id,
         kind: directory.kind,

@@ -56,6 +56,10 @@ export type AppServerThreadSummary = {
   observedGitBranch?: string;
   source: AppServerBackendKind;
   executionMode?: ThreadExecutionMode;
+  model?: string;
+  serviceTier?: string;
+  reasoningEffort?: string;
+  fastMode?: boolean;
 };
 
 export type AppServerThreadMessage = {

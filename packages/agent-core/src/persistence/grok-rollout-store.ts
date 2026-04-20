@@ -111,6 +111,10 @@ export class GrokRolloutStore implements AppServerSessionStore {
         reasoning_effort: params.thread.reasoningEffort,
         sandbox: params.thread.sandbox,
         service_tier: params.thread.serviceTier,
+        fast_mode:
+          typeof params.thread.fastMode === "boolean"
+            ? params.thread.fastMode
+            : undefined,
         thread_id: params.thread.threadId,
         thread_name: params.thread.threadName,
         updated_at: params.thread.updatedAt,
@@ -186,6 +190,8 @@ function readThreadToml(filePath: string): ThreadState {
     sandbox: asOptionalString(values.sandbox),
     serviceTier: asOptionalString(values.service_tier),
     reasoningEffort: asOptionalString(values.reasoning_effort),
+    fastMode:
+      typeof values.fast_mode === "boolean" ? values.fast_mode : undefined,
     createdAt: asOptionalNumber(values.created_at),
     updatedAt: asOptionalNumber(values.updated_at),
   };

@@ -112,6 +112,10 @@ export type ThreadOverlayState = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   executionMode?: ThreadExecutionMode;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  fastMode?: boolean;
   lastSeenAt?: number;
   lastSeenUpdatedAt?: number;
   dismissedAt?: number;

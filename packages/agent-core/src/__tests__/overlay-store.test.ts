@@ -185,6 +185,62 @@ describe("OverlayStore", () => {
     });
   });
 
+  it("persists thread model settings separately from launchpad defaults", async () => {
+    const store = await createStore();
+
+    await store.setLaunchpadDefaults({
+      backend: "grok",
+      executionMode: "default",
+      model: "grok-4",
+      reasoningEffort: "medium",
+      fastMode: true,
+    });
+    await store.setThreadModelSettings({
+      backend: "codex",
+      threadId: "thread-1",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+    });
+    await store.setThreadModelSettings({
+      backend: "codex",
+      threadId: "thread-2",
+      model: "gpt-5.4-pro",
+      reasoningEffort: "low",
+      fastMode: false,
+    });
+
+    const reloaded = new OverlayStore(path.join(tempDirs[0]!, "overlay-state.json"));
+
+    await expect(
+      reloaded.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+      fastMode: true,
+    });
+    await expect(
+      reloaded.getThreadOverlayState({ backend: "codex", threadId: "thread-2" }),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-2",
+      model: "gpt-5.4-pro",
+      reasoningEffort: "low",
+      fastMode: false,
+    });
+    await expect(reloaded.getLaunchpadDefaults()).resolves.toEqual({
+      backend: "grok",
+      executionMode: "default",
+      model: "grok-4",
+      reasoningEffort: "medium",
+      fastMode: true,
+    });
+  });
+
   it("does not rewrite the overlay file for read-only thread lookups", async () => {
     const store = await createStore();
 

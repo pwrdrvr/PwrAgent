@@ -22,6 +22,7 @@ import type {
   AppServerThreadSummary,
   AppServerTurnInputItem,
   AppServerCollaborationModeRequest,
+  BackendModelOption,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
 import { getMainLogger } from "../log";
@@ -1246,6 +1247,39 @@ function extractSkillCatalog(value: unknown): SkillCatalogEntry[] {
   });
 }
 
+function extractModelOptions(value: unknown): BackendModelOption[] {
+  const record = asRecord(value);
+  const data = Array.isArray(record?.data)
+    ? record.data
+    : Array.isArray(value)
+      ? value
+      : [];
+
+  return data.flatMap((entry): BackendModelOption[] => {
+    const modelRecord = asRecord(entry);
+    if (!modelRecord) {
+      return [];
+    }
+    const id = pickString(modelRecord, ["id", "name", "model"]);
+    if (!id) {
+      return [];
+    }
+
+    return [
+      {
+        id,
+        label: pickString(modelRecord, ["label", "displayName", "display_name"]),
+        current: pickBoolean(modelRecord, ["current", "default"]),
+        supportsReasoning: pickBoolean(modelRecord, [
+          "supportsReasoning",
+          "supports_reasoning",
+        ]),
+        supportsFast: pickBoolean(modelRecord, ["supportsFast", "supports_fast"]),
+      },
+    ];
+  });
+}
+
 function extractRunIdFromValue(value: unknown): string | undefined {
   const record = asRecord(value);
   if (!record) {
@@ -1381,6 +1415,18 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
           ? undefined
           : summary,
       projectKey,
+      model:
+        pickString(record, ["model"]) ??
+        pickString(sessionRecord ?? {}, ["model"]),
+      serviceTier:
+        pickString(record, ["serviceTier", "service_tier"]) ??
+        pickString(sessionRecord ?? {}, ["serviceTier", "service_tier"]),
+      reasoningEffort:
+        pickString(record, ["reasoningEffort", "reasoning_effort"]) ??
+        pickString(sessionRecord ?? {}, ["reasoningEffort", "reasoning_effort"]),
+      fastMode:
+        pickBoolean(record, ["fastMode", "fast_mode"]) ??
+        pickBoolean(sessionRecord ?? {}, ["fastMode", "fast_mode"]),
       createdAt: normalizeEpochTimestamp(
         pickNumber(record, ["createdAt", "created_at"]) ??
           pickNumber(sessionRecord ?? {}, ["createdAt", "created_at"])
@@ -1591,6 +1637,7 @@ function buildThreadResumePayloads(params: {
   sandbox?: string;
   serviceTier?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 }): Array<Record<string, unknown>> {
   const base: Record<string, unknown> = {
     threadId: params.threadId,
@@ -1614,6 +1661,9 @@ function buildThreadResumePayloads(params: {
   }
   if (params.reasoningEffort?.trim()) {
     base.reasoningEffort = params.reasoningEffort.trim();
+  }
+  if (typeof params.fastMode === "boolean") {
+    base.fastMode = params.fastMode;
   }
 
   return [base];
@@ -1891,6 +1941,19 @@ export class CodexAppServerClient {
     return extractSkillCatalog(result);
   }
 
+  async listModels(): Promise<BackendModelOption[]> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["model/list"],
+      payloads: [{}],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    return extractModelOptions(result);
+  }
+
   async readThread(params: {
     threadId: string;
     before?: string;
@@ -1938,6 +2001,7 @@ export class CodexAppServerClient {
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
@@ -1961,6 +2025,9 @@ export class CodexAppServerClient {
     input: AppServerTurnInputItem[];
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string; runId: string }> {
     await this.ensureInitialized();
 
@@ -1969,7 +2036,10 @@ export class CodexAppServerClient {
       methods: ["thread/resume"],
       payloads: buildThreadResumePayloads({
         threadId: params.threadId,
-        model: params.model
+        model: params.model,
+        serviceTier: params.serviceTier,
+        reasoningEffort: params.reasoningEffort,
+        fastMode: params.fastMode
       }),
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     }).catch(() => undefined);

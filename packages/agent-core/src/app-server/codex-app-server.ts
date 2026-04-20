@@ -204,6 +204,7 @@ export class CodexAppServer {
       sandbox: asOptionalString(params.sandbox),
       serviceTier: asOptionalString(params.serviceTier),
       reasoningEffort: asOptionalString(params.reasoningEffort),
+      fastMode: asOptionalBoolean(params.fastMode),
       modelProvider: "xai",
     });
   }
@@ -217,6 +218,7 @@ export class CodexAppServer {
       sandbox: asOptionalString(params.sandbox),
       serviceTier: asOptionalString(params.serviceTier),
       reasoningEffort: asOptionalString(params.reasoningEffort),
+      fastMode: asOptionalBoolean(params.fastMode),
     });
     if (!thread) {
       throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
@@ -294,9 +296,21 @@ export class CodexAppServer {
     if (!thread) {
       throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
     }
+    const effectiveThread =
+      params.model !== undefined ||
+      params.serviceTier !== undefined ||
+      params.reasoningEffort !== undefined ||
+      params.fastMode !== undefined
+        ? this.state.updateThread(threadId, {
+            model: asOptionalString(params.model),
+            serviceTier: asOptionalString(params.serviceTier),
+            reasoningEffort: asOptionalString(params.reasoningEffort),
+            fastMode: asOptionalBoolean(params.fastMode),
+          }) ?? thread
+        : thread;
     const normalizedInput = normalizeTurnInput(params.input);
     const handle = await this.provider.startTurn({
-      thread,
+      thread: effectiveThread,
       input: normalizedInput,
       previousResponseId: this.state.getPreviousResponseId(threadId),
       tools: this.toolExecutor,
@@ -382,6 +396,10 @@ function asRequiredString(value: unknown, message: string): string {
 
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function asOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function asOptionalStringArray(value: unknown): string[] | undefined {

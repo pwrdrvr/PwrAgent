@@ -35,6 +35,9 @@ export type StartTurnRequest = {
   input: AppServerTurnInputItem[];
   model?: string;
   collaborationMode?: AppServerCollaborationModeRequest;
+  serviceTier?: string;
+  reasoningEffort?: string;
+  fastMode?: boolean;
 };
 
 export type StartTurnResponse = {
@@ -66,6 +69,17 @@ export type SetThreadExecutionModeResponse = {
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
 };
+
+export type SetThreadModelSettingsRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  model?: string;
+  serviceTier?: string;
+  reasoningEffort?: string;
+  fastMode?: boolean;
+};
+
+export type SetThreadModelSettingsResponse = SetThreadModelSettingsRequest;
 
 export type SubmitServerRequestRequest = {
   backend: AppServerBackendKind;

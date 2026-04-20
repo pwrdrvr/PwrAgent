@@ -1,7 +1,7 @@
 ---
 title: feat: Add provider and thread model selectors
 type: feat
-status: active
+status: implemented
 date: 2026-04-20
 deepened: 2026-04-20
 origin: docs/brainstorms/2026-04-20-desktop-provider-thread-model-selectors-requirements.md
@@ -142,7 +142,7 @@ flowchart TB
     U4 --> U5
 ```
 
-- [ ] **Unit 1: Populate provider-specific model capability metadata**
+- [x] **Unit 1: Populate provider-specific model capability metadata**
 
 **Goal:** Make backend summaries advertise real model/reasoning/fast option metadata so composer controls can be capability-driven.
 
@@ -183,7 +183,7 @@ flowchart TB
 **Verification:**
 - Backend summaries are the single source of truth for composer model/reasoning/fast visibility.
 
-- [ ] **Unit 2: Persist per-thread model settings in the desktop overlay**
+- [x] **Unit 2: Persist per-thread model settings in the desktop overlay**
 
 **Goal:** Add durable per-thread model, reasoning, service-tier, and fast-mode defaults without changing backend thread history or global launchpad defaults.
 
@@ -226,7 +226,7 @@ flowchart TB
 **Verification:**
 - Per-thread settings are durable, backend/thread-keyed, and separate from sticky new-chat defaults.
 
-- [ ] **Unit 3: Propagate per-thread settings through turn start safely**
+- [x] **Unit 3: Propagate per-thread settings through turn start safely**
 
 **Goal:** Ensure the next turn for a thread uses that thread's saved model settings through a thread-scoped backend update path.
 
@@ -277,7 +277,7 @@ flowchart TB
 **Verification:**
 - Per-thread model settings are observable in backend request payloads and do not affect sibling threads.
 
-- [ ] **Unit 4: Convert new chat creation into a composer-owned draft flow**
+- [x] **Unit 4: Convert new chat creation into a composer-owned draft flow**
 
 **Goal:** Let users choose `Grok` or `OpenAI`, model, reasoning, and fast mode before a new chat's first send.
 
@@ -330,7 +330,7 @@ flowchart TB
 **Verification:**
 - New chats have a genuine pre-send setup state, and provider choice is impossible to change after materialization.
 
-- [ ] **Unit 5: Render and wire composer model controls for launchpads and existing threads**
+- [x] **Unit 5: Render and wire composer model controls for launchpads and existing threads**
 
 **Goal:** Make the composer settings strip show the right provider/model/reasoning/fast controls in both new-chat and existing-thread states.
 

@@ -9,6 +9,8 @@ import type {
   ListBackendsResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
+  SetThreadModelSettingsRequest,
+  SetThreadModelSettingsResponse,
   StartThreadRequest,
   StartThreadResponse,
   StartTurnRequest,
@@ -22,6 +24,7 @@ import {
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
+  AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
@@ -107,6 +110,17 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL);
+  ipcMain.handle(
+    AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
+    async (
+      _event,
+      request: SetThreadModelSettingsRequest
+    ): Promise<SetThreadModelSettingsResponse> => {
+      return await registry.setThreadModelSettings(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.handle(
     AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -138,6 +152,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
+  ipcMain.removeHandler(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL);
   ipcMain.removeHandler(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL);
 }

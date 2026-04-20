@@ -26,6 +26,9 @@ export type AppServerTurnInput = {
   threadId: string;
   input: AppServerTurnInputItem[];
   model?: string;
+  serviceTier?: string;
+  reasoningEffort?: string;
+  fastMode?: boolean;
 };
 
 export type ThreadTitleSource = "explicit" | "derived" | "fallback";
@@ -41,6 +44,7 @@ export type ThreadState = {
   sandbox?: string;
   serviceTier?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
   createdAt?: number;
   updatedAt?: number;
 };

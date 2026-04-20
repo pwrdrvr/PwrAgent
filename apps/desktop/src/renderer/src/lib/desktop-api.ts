@@ -25,6 +25,8 @@ import type {
   ResetDirectoryLaunchpadResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
+  SetThreadModelSettingsRequest,
+  SetThreadModelSettingsResponse,
   StartThreadRequest,
   StartThreadResponse,
   StartTurnRequest,
@@ -55,6 +57,9 @@ export type DesktopApi = {
   setThreadExecutionMode?: (
     request: SetThreadExecutionModeRequest
   ) => Promise<SetThreadExecutionModeResponse>;
+  setThreadModelSettings?: (
+    request: SetThreadModelSettingsRequest
+  ) => Promise<SetThreadModelSettingsResponse>;
   materializeDirectoryLaunchpad?: (
     request: MaterializeDirectoryLaunchpadRequest
   ) => Promise<MaterializeDirectoryLaunchpadResponse>;

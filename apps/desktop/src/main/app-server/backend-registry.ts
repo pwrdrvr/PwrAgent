@@ -12,6 +12,8 @@ import type {
   AppServerBackendKind,
   AppServerCollaborationModeRequest,
   BackendCapabilities,
+  BackendLaunchpadOptions,
+  BackendModelOption,
   BackendSummary,
   ListBackendsRequest,
   ListBackendsResponse,
@@ -25,6 +27,8 @@ import type {
   ResetDirectoryLaunchpadResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
+  SetThreadModelSettingsRequest,
+  SetThreadModelSettingsResponse,
   StartThreadResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
@@ -79,13 +83,18 @@ type BackendClient = {
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string }>;
   startTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string; runId: string }>;
+  listModels?(): Promise<BackendModelOption[]>;
   interruptTurn(params: {
     threadId: string;
     runId: string;
@@ -98,6 +107,7 @@ type BackendClient = {
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string }>;
 };
 
@@ -107,9 +117,26 @@ type PendingServerRequest = {
 };
 
 const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
-  codex: "Codex app server",
-  grok: "Grok app server",
+  codex: "OpenAI",
+  grok: "Grok",
 };
+
+const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
+  {
+    id: "gpt-5.4",
+    label: "GPT-5.4",
+    current: true,
+    supportsReasoning: true,
+  },
+  {
+    id: "gpt-5.4-pro",
+    label: "GPT-5.4 Pro",
+    supportsReasoning: true,
+  },
+];
+
+const OPENAI_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"];
+const GROK_REASONING_EFFORTS = ["low", "medium", "high"];
 
 const EXECUTION_MODE_SUMMARIES: Record<
   ThreadExecutionMode,
@@ -179,6 +206,56 @@ function buildPendingRequestKey(params: {
 
 function mergeMethods(results: InitializeResult[]): string[] {
   return [...new Set(results.flatMap((result) => result.methods ?? []))];
+}
+
+function dedupeModelOptions(models: BackendModelOption[]): BackendModelOption[] {
+  const byId = new Map<string, BackendModelOption>();
+  for (const model of models) {
+    if (!model.id.trim()) {
+      continue;
+    }
+
+    const current = byId.get(model.id);
+    byId.set(model.id, {
+      ...current,
+      ...model,
+      current: current?.current || model.current,
+      supportsReasoning: current?.supportsReasoning || model.supportsReasoning,
+      supportsFast: current?.supportsFast || model.supportsFast,
+    });
+  }
+  return [...byId.values()];
+}
+
+function buildLaunchpadOptions(
+  backend: AppServerBackendKind,
+  models: BackendModelOption[],
+): BackendLaunchpadOptions | undefined {
+  const normalizedModels = dedupeModelOptions(models);
+  if (normalizedModels.length === 0) {
+    return undefined;
+  }
+
+  const supportsReasoning = normalizedModels.some((model) => model.supportsReasoning);
+  const supportsFastMode =
+    backend === "codex" && normalizedModels.some((model) => model.supportsFast);
+
+  return {
+    models: normalizedModels,
+    reasoningEfforts: supportsReasoning
+      ? backend === "codex"
+        ? OPENAI_REASONING_EFFORTS
+        : GROK_REASONING_EFFORTS
+      : undefined,
+    supportsFastMode,
+  };
+}
+
+async function readClientModels(client: BackendClient): Promise<BackendModelOption[]> {
+  if (!client.listModels) {
+    return [];
+  }
+  return await client.listModels();
 }
 
 export class DesktopBackendRegistry {
@@ -355,6 +432,7 @@ export class DesktopBackendRegistry {
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<StartThreadResponse> {
     const { backend, executionMode = "default", ...request } = params;
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
@@ -377,6 +455,21 @@ export class DesktopBackendRegistry {
         executionMode,
       });
     }
+    if (
+      request.model !== undefined ||
+      request.reasoningEffort !== undefined ||
+      request.serviceTier !== undefined ||
+      request.fastMode !== undefined
+    ) {
+      await this.overlayStore.setThreadModelSettings({
+        backend,
+        threadId: result.threadId,
+        model: request.model,
+        reasoningEffort: request.reasoningEffort,
+        serviceTier: request.serviceTier,
+        fastMode: backend === "codex" ? request.fastMode : undefined,
+      });
+    }
 
     return {
       backend,
@@ -391,16 +484,33 @@ export class DesktopBackendRegistry {
     input: AppServerTurnInputItem[];
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; runId: string }> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const turnParams = {
+      ...params,
+      model: params.model ?? overlay?.model,
+      serviceTier: params.serviceTier ?? overlay?.serviceTier,
+      reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
+      fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
+    };
     const result =
       params.backend === "codex"
         ? await this.withCodexThreadClient(params.threadId, async (client) =>
-            await client.startTurn(params),
+            await client.startTurn(turnParams),
           )
         : await this.grokClient.startTurn({
             threadId: params.threadId,
             input: params.input,
-            model: params.model,
+            model: turnParams.model,
+            serviceTier: turnParams.serviceTier,
+            reasoningEffort: turnParams.reasoningEffort,
+            fastMode: turnParams.fastMode,
           });
 
     return {
@@ -459,6 +569,28 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: result.threadId,
       executionMode: params.executionMode,
+    };
+  }
+
+  async setThreadModelSettings(
+    params: SetThreadModelSettingsRequest
+  ): Promise<SetThreadModelSettingsResponse> {
+    await this.overlayStore.setThreadModelSettings({
+      backend: params.backend,
+      threadId: params.threadId,
+      model: params.model,
+      reasoningEffort: params.reasoningEffort,
+      serviceTier: params.serviceTier,
+      fastMode: params.backend === "codex" ? params.fastMode : undefined,
+    });
+
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      model: params.model,
+      reasoningEffort: params.reasoningEffort,
+      serviceTier: params.serviceTier,
+      fastMode: params.backend === "codex" ? params.fastMode : undefined,
     };
   }
 
@@ -548,16 +680,16 @@ export class DesktopBackendRegistry {
     if (request.patch.executionMode) {
       stickyPatch.executionMode = request.patch.executionMode;
     }
-    if (request.patch.model !== undefined) {
+    if ("model" in request.patch) {
       stickyPatch.model = request.patch.model;
     }
-    if (request.patch.reasoningEffort !== undefined) {
+    if ("reasoningEffort" in request.patch) {
       stickyPatch.reasoningEffort = request.patch.reasoningEffort;
     }
-    if (request.patch.serviceTier !== undefined) {
+    if ("serviceTier" in request.patch) {
       stickyPatch.serviceTier = request.patch.serviceTier;
     }
-    if (request.patch.fastMode !== undefined) {
+    if ("fastMode" in request.patch) {
       stickyPatch.fastMode = request.patch.fastMode;
     }
 
@@ -602,6 +734,7 @@ export class DesktopBackendRegistry {
       model: launchpad.model,
       reasoningEffort: launchpad.reasoningEffort,
       serviceTier: launchpad.serviceTier,
+      fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
     });
 
     const input =
@@ -616,6 +749,9 @@ export class DesktopBackendRegistry {
         threadId: startThreadResponse.threadId,
         input,
         model: launchpad.model,
+        reasoningEffort: launchpad.reasoningEffort,
+        serviceTier: launchpad.serviceTier,
+        fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
         collaborationMode: request.collaborationMode,
       });
       runId = turnResponse.runId;
@@ -701,15 +837,20 @@ export class DesktopBackendRegistry {
   }
 
   private async describeCodexBackend(): Promise<BackendSummary> {
-    const [defaultResult, fullAccessResult] = await Promise.allSettled([
+    const [defaultResult, fullAccessResult, defaultModelsResult, fullAccessModelsResult] = await Promise.allSettled([
       this.codexDefaultClient.getInitializeResult(),
       this.codexFullAccessClient.getInitializeResult(),
+      readClientModels(this.codexDefaultClient),
+      readClientModels(this.codexFullAccessClient),
     ]);
     const successful = [defaultResult, fullAccessResult].flatMap((result) =>
       result.status === "fulfilled" ? [result.value] : [],
     );
     const methods = mergeMethods(successful);
     const available = successful.length > 0;
+    const discoveredModels = [defaultModelsResult, fullAccessModelsResult].flatMap((result) =>
+      result.status === "fulfilled" ? result.value : [],
+    );
     const unavailableReason = [defaultResult, fullAccessResult]
       .flatMap((result) =>
         result.status === "rejected"
@@ -726,6 +867,10 @@ export class DesktopBackendRegistry {
       serverVersion: successful[0]?.serverInfo?.version,
       methods,
       capabilities: buildCapabilities(methods, "codex"),
+      launchpadOptions: buildLaunchpadOptions(
+        "codex",
+        discoveredModels.length > 0 ? discoveredModels : OPENAI_FALLBACK_MODELS,
+      ),
       executionModes: [
         {
           mode: "default",
@@ -761,6 +906,7 @@ export class DesktopBackendRegistry {
   ): Promise<BackendSummary> {
     try {
       const initialize = await client.getInitializeResult();
+      const models = await readClientModels(client).catch(() => []);
       const methods = Array.isArray(initialize.methods)
         ? initialize.methods.filter((method): method is string => typeof method === "string")
         : [];
@@ -773,6 +919,7 @@ export class DesktopBackendRegistry {
         serverVersion: initialize.serverInfo?.version,
         methods,
         capabilities: buildCapabilities(methods, kind),
+        launchpadOptions: buildLaunchpadOptions(kind, models),
         executionModes: [
           {
             mode: "default",
