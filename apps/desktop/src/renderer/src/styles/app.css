@@ -1252,7 +1252,7 @@ textarea {
   padding: 14px 16px;
   border: 1px solid var(--accent-border);
   border-radius: 8px;
-  background: rgba(184, 255, 77, 0.08);
+  background: var(--bg-row-active);
 }
 
 .transcript-image-lightbox {
@@ -1361,7 +1361,7 @@ textarea {
 .transcript-questionnaire__option:focus-visible,
 .transcript-questionnaire__option.is-selected {
   border-color: var(--accent-border);
-  background: rgba(184, 255, 77, 0.12);
+  background: var(--accent-soft);
   outline: none;
 }
 
