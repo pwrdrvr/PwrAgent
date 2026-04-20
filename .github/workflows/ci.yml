@@ -76,6 +76,9 @@ jobs:
   desktop-e2e:
     name: Desktop E2E
     runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-noble
+      options: --user 1001
     needs: install-deps
     timeout-minutes: 20
     steps:
@@ -84,9 +87,6 @@ jobs:
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
-
-      - name: Install Playwright Linux dependencies
-        run: pnpm --filter @pwragnt/desktop exec playwright install --with-deps
 
       - name: Run desktop replay-backed Electron tests
         run: xvfb-run --auto-servernum pnpm run test:desktop-e2e
