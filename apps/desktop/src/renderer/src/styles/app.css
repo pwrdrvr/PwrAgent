@@ -2115,21 +2115,6 @@ textarea {
   gap: 8px;
 }
 
-.composer__control-group {
-  display: flex;
-  min-width: 0;
-  flex: 0 0 auto;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.composer__control-label {
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-}
-
 .composer__select {
   min-width: 168px;
   min-height: 34px;

@@ -695,53 +695,45 @@ export function Composer(props: ComposerProps) {
           aria-label={props.launchpad ? "New thread settings" : "Thread settings"}
         >
           {props.launchpad && providerOptions.length > 0 ? (
-            <div className="composer__control-group">
-              <label className="composer__control-label" htmlFor="composer-provider">
-                Provider
-              </label>
-              <select
-                id="composer-provider"
-                className="composer__select"
-                value={props.launchpad.backend}
-                onChange={(event) => {
-                  const currentLaunchpad = props.launchpad;
-                  if (!currentLaunchpad) {
-                    return;
-                  }
-                  const nextBackend = event.target.value as NavigationLaunchpadDraft["backend"];
-                  const nextBackendSummary = props.backends?.find(
-                    (candidate) => candidate.kind === nextBackend
-                  );
-                  const executionModeStillAvailable = nextBackendSummary?.executionModes.some(
-                    (mode) =>
-                      mode.available && mode.mode === currentLaunchpad.executionMode
-                  );
-                  handleLaunchpadPatch({
-                    backend: nextBackend,
-                    executionMode: executionModeStillAvailable
-                      ? currentLaunchpad.executionMode
-                      : "default",
-                    model: undefined,
-                    reasoningEffort: undefined,
-                    serviceTier: undefined,
-                    fastMode: undefined,
-                  });
-                }}
-              >
-                {providerOptions.map((candidate) => (
-                  <option key={candidate.kind} value={candidate.kind}>
-                    {formatBackendLabel(candidate.kind)}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <select
+              id="composer-provider"
+              aria-label="Provider"
+              className="composer__select"
+              value={props.launchpad.backend}
+              onChange={(event) => {
+                const currentLaunchpad = props.launchpad;
+                if (!currentLaunchpad) {
+                  return;
+                }
+                const nextBackend = event.target.value as NavigationLaunchpadDraft["backend"];
+                const nextBackendSummary = props.backends?.find(
+                  (candidate) => candidate.kind === nextBackend
+                );
+                const executionModeStillAvailable = nextBackendSummary?.executionModes.some(
+                  (mode) => mode.available && mode.mode === currentLaunchpad.executionMode
+                );
+                handleLaunchpadPatch({
+                  backend: nextBackend,
+                  executionMode: executionModeStillAvailable
+                    ? currentLaunchpad.executionMode
+                    : "default",
+                  model: undefined,
+                  reasoningEffort: undefined,
+                  serviceTier: undefined,
+                  fastMode: undefined,
+                });
+              }}
+            >
+              {providerOptions.map((candidate) => (
+                <option key={candidate.kind} value={candidate.kind}>
+                  {formatBackendLabel(candidate.kind)}
+                </option>
+              ))}
+            </select>
           ) : props.thread ? (
-            <div className="composer__control-group">
-              <span className="composer__control-label">Provider</span>
-              <span className="composer__fixed-value">
-                {formatBackendLabel(props.thread.source)}
-              </span>
-            </div>
+            <span className="composer__fixed-value" aria-label="Provider">
+              {formatBackendLabel(props.thread.source)}
+            </span>
           ) : null}
 
           {availableExecutionModes.length > 0 &&
@@ -836,106 +828,94 @@ export function Composer(props: ComposerProps) {
           ) : null}
 
           {(props.launchpad || props.thread) && backend?.launchpadOptions?.models?.length ? (
-            <div className="composer__control-group">
-              <label className="composer__control-label" htmlFor="composer-model">
-                Model
-              </label>
-              <select
-                id="composer-model"
-                className="composer__select"
-                value={currentSettings?.model ?? ""}
-                onChange={(event) => {
-                  const model = event.target.value || undefined;
-                  const nextModelOption = backend.launchpadOptions?.models?.find(
-                    (option) => option.id === model
-                  );
-                  const nextSupportsReasoning =
-                    nextModelOption?.supportsReasoning ??
-                    Boolean(backend.launchpadOptions?.reasoningEfforts?.length);
-                  const nextSupportsFast =
-                    backend.kind === "codex"
-                      ? nextModelOption?.supportsFast ??
-                        backend.launchpadOptions?.supportsFastMode ??
-                        false
-                      : false;
-                  const patch = {
-                    model,
-                    ...(nextSupportsReasoning ? {} : { reasoningEffort: undefined }),
-                    ...(nextSupportsFast ? {} : { fastMode: undefined }),
-                  };
-                  if (props.launchpad) {
-                    handleLaunchpadPatch(patch);
-                    return;
-                  }
-                  handleThreadModelSettingsPatch(patch);
-                }}
-              >
-                <option value="">Default</option>
-                {backend.launchpadOptions.models.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label ?? model.id}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <select
+              id="composer-model"
+              aria-label="Model"
+              className="composer__select"
+              value={currentSettings?.model ?? ""}
+              onChange={(event) => {
+                const model = event.target.value || undefined;
+                const nextModelOption = backend.launchpadOptions?.models?.find(
+                  (option) => option.id === model
+                );
+                const nextSupportsReasoning =
+                  nextModelOption?.supportsReasoning ??
+                  Boolean(backend.launchpadOptions?.reasoningEfforts?.length);
+                const nextSupportsFast =
+                  backend.kind === "codex"
+                    ? nextModelOption?.supportsFast ??
+                      backend.launchpadOptions?.supportsFastMode ??
+                      false
+                    : false;
+                const patch = {
+                  model,
+                  ...(nextSupportsReasoning ? {} : { reasoningEffort: undefined }),
+                  ...(nextSupportsFast ? {} : { fastMode: undefined }),
+                };
+                if (props.launchpad) {
+                  handleLaunchpadPatch(patch);
+                  return;
+                }
+                handleThreadModelSettingsPatch(patch);
+              }}
+            >
+              <option value="">Default</option>
+              {backend.launchpadOptions.models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.label ?? model.id}
+                </option>
+              ))}
+            </select>
           ) : null}
 
           {(props.launchpad || props.thread) &&
           supportsReasoning &&
           backend?.launchpadOptions?.reasoningEfforts?.length ? (
-            <div className="composer__control-group">
-              <label className="composer__control-label" htmlFor="composer-reasoning">
-                Reasoning
-              </label>
-              <select
-                id="composer-reasoning"
-                className="composer__select"
-                value={currentSettings?.reasoningEffort ?? ""}
-                onChange={(event) => {
-                  const reasoningEffort = event.target.value || undefined;
-                  if (props.launchpad) {
-                    handleLaunchpadPatch({ reasoningEffort });
-                    return;
-                  }
-                  handleThreadModelSettingsPatch({ reasoningEffort });
-                }}
-              >
-                <option value="">Default</option>
-                {backend.launchpadOptions.reasoningEfforts.map((effort) => (
-                  <option key={effort} value={effort}>
-                    {effort}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <select
+              id="composer-reasoning"
+              aria-label="Reasoning"
+              className="composer__select"
+              value={currentSettings?.reasoningEffort ?? ""}
+              onChange={(event) => {
+                const reasoningEffort = event.target.value || undefined;
+                if (props.launchpad) {
+                  handleLaunchpadPatch({ reasoningEffort });
+                  return;
+                }
+                handleThreadModelSettingsPatch({ reasoningEffort });
+              }}
+            >
+              <option value="">Default</option>
+              {backend.launchpadOptions.reasoningEfforts.map((effort) => (
+                <option key={effort} value={effort}>
+                  {effort}
+                </option>
+              ))}
+            </select>
           ) : null}
 
           {(props.launchpad || props.thread) && backend?.launchpadOptions?.serviceTiers?.length ? (
-            <div className="composer__control-group">
-              <label className="composer__control-label" htmlFor="composer-service-tier">
-                Service tier
-              </label>
-              <select
-                id="composer-service-tier"
-                className="composer__select"
-                value={currentSettings?.serviceTier ?? ""}
-                onChange={(event) => {
-                  const serviceTier = event.target.value || undefined;
-                  if (props.launchpad) {
-                    handleLaunchpadPatch({ serviceTier });
-                    return;
-                  }
-                  handleThreadModelSettingsPatch({ serviceTier });
-                }}
-              >
-                <option value="">Default</option>
-                {backend.launchpadOptions.serviceTiers.map((tier) => (
-                  <option key={tier} value={tier}>
-                    {tier}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <select
+              id="composer-service-tier"
+              aria-label="Service tier"
+              className="composer__select"
+              value={currentSettings?.serviceTier ?? ""}
+              onChange={(event) => {
+                const serviceTier = event.target.value || undefined;
+                if (props.launchpad) {
+                  handleLaunchpadPatch({ serviceTier });
+                  return;
+                }
+                handleThreadModelSettingsPatch({ serviceTier });
+              }}
+            >
+              <option value="">Default</option>
+              {backend.launchpadOptions.serviceTiers.map((tier) => (
+                <option key={tier} value={tier}>
+                  {tier}
+                </option>
+              ))}
+            </select>
           ) : null}
 
           {(props.launchpad || props.thread) && supportsFast ? (
