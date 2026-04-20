@@ -10,6 +10,12 @@ export type NormalizedResponseOutput = {
   assistantText: string;
   providerResponseId?: string;
   functionCalls: NormalizedFunctionCall[];
+  sources: Array<{
+    id?: string;
+    sourceType?: string;
+    url?: string;
+    title?: string;
+  }>;
 };
 
 export function normalizeXaiResponse(response: unknown): NormalizedResponseOutput {
@@ -21,6 +27,7 @@ export function normalizeXaiResponse(response: unknown): NormalizedResponseOutpu
       assistantText: directOutputText,
       providerResponseId,
       functionCalls: collectFunctionCalls(record),
+      sources: collectSources(record),
     };
   }
 
@@ -42,6 +49,7 @@ export function normalizeXaiResponse(response: unknown): NormalizedResponseOutpu
     assistantText: chunks.join("\n").trim(),
     providerResponseId,
     functionCalls: collectFunctionCalls(record),
+    sources: collectSources(record),
   };
 }
 
@@ -62,6 +70,25 @@ export function parseNormalizedFunctionArguments(
     throw new InvalidToolArgumentsError(toolName, "arguments must decode to an object");
   }
   return parsed as Record<string, unknown>;
+}
+
+function collectSources(record: Record<string, unknown>): NormalizedResponseOutput["sources"] {
+  const rawSources = Array.isArray(record.sources)
+    ? record.sources
+    : Array.isArray(record.citations)
+      ? record.citations
+      : [];
+  return rawSources.flatMap((source) => {
+    const sourceRecord = asRecord(source);
+    const url = readString(sourceRecord, ["url"]);
+    const title = readString(sourceRecord, ["title"]);
+    const id = readString(sourceRecord, ["id"]);
+    const sourceType = readString(sourceRecord, ["sourceType", "type"]);
+    if (!url && !title && !id) {
+      return [];
+    }
+    return [stripUndefined({ id, sourceType, url, title })];
+  });
 }
 
 function collectFunctionCalls(
@@ -106,4 +133,10 @@ function readString(
     }
   }
   return undefined;
+}
+
+function stripUndefined<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined),
+  ) as T;
 }

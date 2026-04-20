@@ -1,4 +1,4 @@
-import type { AppServerNotification } from "./protocol.js";
+import type { AppServerNotification, ThreadReplayItem } from "./protocol.js";
 import { AppServerSessionState } from "./session-state.js";
 import { PendingInputCoordinator } from "./pending-input.js";
 import type {
@@ -82,7 +82,7 @@ export class TurnRunner {
     switch (event.type) {
       case "item_started":
       case "item_completed":
-        this.state.upsertItem(execution.threadId, {
+        const item: ThreadReplayItem = stripUndefined({
           id: event.item.id,
           type: event.item.type,
           status: event.type === "item_started" ? "in_progress" : "completed",
@@ -94,24 +94,15 @@ export class TurnRunner {
           success: event.item.success,
           arguments: event.item.arguments,
           data: event.item.data,
+          sources: event.item.sources,
         });
+        this.state.upsertItem(execution.threadId, item);
         await this.emit({
           method: event.type === "item_started" ? "item/started" : "item/completed",
           params: {
             threadId: execution.threadId,
             runId: execution.runId,
-            item: {
-              id: event.item.id,
-              type: event.item.type,
-              text: event.item.text,
-              review: event.item.review,
-              command: event.item.command,
-              commandAction: event.item.commandAction,
-              toolName: event.item.toolName,
-              success: event.item.success,
-              arguments: event.item.arguments,
-              data: event.item.data,
-            },
+            item,
           },
         });
         return;
@@ -229,7 +220,10 @@ export class TurnRunner {
     }
 
     this.state.completeRun(runId);
-    this.state.appendAssistant(threadId, assistantText);
+    this.state.appendAssistant(threadId, assistantText, {
+      sources: result.sources,
+      data: result.providerMetadata ? { providerMetadata: result.providerMetadata } : undefined,
+    });
     this.state.setPreviousResponseId(threadId, result.providerResponseId);
     await this.emit({
       method: "turn/completed",
@@ -271,4 +265,10 @@ export class TurnRunner {
       },
     });
   }
+}
+
+function stripUndefined<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entryValue]) => entryValue !== undefined),
+  ) as T;
 }

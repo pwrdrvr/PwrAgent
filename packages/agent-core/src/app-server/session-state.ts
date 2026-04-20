@@ -162,7 +162,11 @@ export class AppServerSessionState {
     });
   }
 
-  appendAssistant(threadId: string, text: string): void {
+  appendAssistant(
+    threadId: string,
+    text: string,
+    metadata?: Pick<ThreadReplayItem, "sources" | "data">,
+  ): void {
     const trimmed = text.trim();
     if (!trimmed) {
       this.touchThread(threadId);
@@ -174,6 +178,8 @@ export class AppServerSessionState {
       status: "completed",
       role: "assistant",
       text: trimmed,
+      sources: metadata?.sources,
+      data: metadata?.data,
     });
   }
 
@@ -226,6 +232,8 @@ export class AppServerSessionState {
       toolName: existing?.toolName,
       success: existing?.success,
       arguments: existing?.arguments,
+      data: existing?.data,
+      sources: existing?.sources,
     });
   }
 

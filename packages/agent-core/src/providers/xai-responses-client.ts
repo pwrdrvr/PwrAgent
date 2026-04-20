@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import type { AppServerTurnInputItem } from "../app-server/protocol.js";
 import type { ToolDescriptor } from "../tools/tool-contract.js";
 
@@ -22,16 +24,30 @@ export type XaiResponseCreateRequest = {
       strict?: boolean;
     };
   };
-  tools?: XaiFunctionTool[];
+  tools?: XaiTool[];
   parallelToolCalls?: boolean;
   signal?: AbortSignal;
 };
+
+export type XaiTool = XaiFunctionTool | XaiServerTool;
 
 export type XaiFunctionTool = {
   type: "function";
   name: string;
   description: string;
   parameters: Record<string, unknown>;
+};
+
+export type XaiServerTool = {
+  type: "x_search" | "web_search";
+  allowed_x_handles?: string[];
+  excluded_x_handles?: string[];
+  allowed_domains?: string[];
+  excluded_domains?: string[];
+  from_date?: string;
+  to_date?: string;
+  enable_image_understanding?: boolean;
+  enable_video_understanding?: boolean;
 };
 
 export class XaiResponsesClient {
@@ -117,8 +133,10 @@ export function buildFunctionCallOutputInput(
   };
 }
 
-export function buildXaiInput(items: AppServerTurnInputItem[]): Array<Record<string, unknown>> {
-  return items.map((item) => {
+export async function buildXaiInput(
+  items: AppServerTurnInputItem[],
+): Promise<Array<Record<string, unknown>>> {
+  return await Promise.all(items.map(async (item) => {
     if (item.type === "text") {
       return {
         role: "user",
@@ -133,7 +151,33 @@ export function buildXaiInput(items: AppServerTurnInputItem[]): Array<Record<str
     }
     return {
       role: "user",
-      content: [{ type: "input_image", image_url: `file://${item.path}` }],
+      content: [{ type: "input_image", image_url: await localImageToDataUrl(item.path) }],
     };
-  });
+  }));
+}
+
+async function localImageToDataUrl(filePath: string): Promise<string> {
+  const mediaType = mediaTypeForImagePath(filePath);
+  const data = await readFile(filePath);
+  return `data:${mediaType};base64,${data.toString("base64")}`;
+}
+
+function mediaTypeForImagePath(filePath: string): string {
+  switch (path.extname(filePath).toLowerCase()) {
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".bmp":
+      return "image/bmp";
+    case ".svg":
+      return "image/svg+xml";
+    default:
+      throw new Error(`Unsupported local image type for ${filePath}`);
+  }
 }

@@ -15,6 +15,7 @@ describe("normalizeXaiResponse", () => {
       assistantText: "Direct output",
       providerResponseId: "resp_direct",
       functionCalls: [],
+      sources: [],
     });
   });
 
@@ -23,6 +24,7 @@ describe("normalizeXaiResponse", () => {
       assistantText: "All green.",
       providerResponseId: "resp_123",
       functionCalls: [],
+      sources: [],
     });
   });
 
@@ -36,6 +38,7 @@ describe("normalizeXaiResponse", () => {
       assistantText: "",
       providerResponseId: "resp_empty",
       functionCalls: [],
+      sources: [],
     });
   });
 
@@ -61,6 +64,36 @@ describe("normalizeXaiResponse", () => {
           callId: "call_1",
           name: "search_code",
           argumentsText: "{\"query\":\"needle\"}",
+        },
+      ],
+      sources: [],
+    });
+  });
+
+  it("collects response sources when present", () => {
+    expect(
+      normalizeXaiResponse({
+        id: "resp_sources",
+        output_text: "Grounded.",
+        sources: [
+          {
+            id: "src_1",
+            sourceType: "url",
+            url: "https://example.com",
+            title: "Example",
+          },
+        ],
+      }),
+    ).toEqual({
+      assistantText: "Grounded.",
+      providerResponseId: "resp_sources",
+      functionCalls: [],
+      sources: [
+        {
+          id: "src_1",
+          sourceType: "url",
+          url: "https://example.com",
+          title: "Example",
         },
       ],
     });

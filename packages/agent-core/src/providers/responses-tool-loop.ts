@@ -87,7 +87,7 @@ async function runResponsesToolLoop(params: {
   const xaiTools = tools.length > 0 ? buildXaiFunctionTools(tools) : undefined;
   let response = await params.client.createResponse({
     model: params.params.thread.model,
-    input: buildXaiInput(params.params.input),
+    input: await buildXaiInput(params.params.input),
     previousResponseId: params.params.previousResponseId,
     tools: xaiTools,
     signal: params.signal,
@@ -100,6 +100,7 @@ async function runResponsesToolLoop(params: {
       return {
         assistantText: normalized.assistantText,
         providerResponseId: normalized.providerResponseId,
+        sources: normalized.sources,
       };
     }
     if (round >= params.maxToolRounds) {

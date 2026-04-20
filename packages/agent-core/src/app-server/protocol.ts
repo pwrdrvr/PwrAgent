@@ -97,6 +97,15 @@ export type ThreadReplayItem = {
   success?: boolean;
   arguments?: Record<string, unknown>;
   data?: Record<string, unknown>;
+  sources?: AppServerSource[];
+};
+
+export type AppServerSource = {
+  id?: string;
+  sourceType?: string;
+  url?: string;
+  title?: string;
+  providerMetadata?: Record<string, unknown>;
 };
 
 export type ModelSummary = {
@@ -239,12 +248,13 @@ export type AppServerNotification =
           command?: string;
           commandAction?: AppServerCommandAction;
           toolName?: string;
-          success?: boolean;
-          arguments?: Record<string, unknown>;
-          data?: Record<string, unknown>;
+            success?: boolean;
+            arguments?: Record<string, unknown>;
+            data?: Record<string, unknown>;
+            sources?: AppServerSource[];
+          };
         };
-      };
-    }
+      }
   | {
       method: "item/commandExecution/outputDelta";
       params: {

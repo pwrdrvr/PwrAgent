@@ -1,23 +1,51 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { GrokProvider } from "../providers/grok-provider.js";
 import { XaiResponsesClient, buildXaiInput } from "../providers/xai-responses-client.js";
 import { makeXaiResponse } from "../testing/xai-fixtures.js";
 
 describe("buildXaiInput", () => {
-  it("maps text and image items to xAI input content", () => {
-    expect(
+  it("maps text and local image items to xAI input content", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "grok-input-"));
+    const imagePath = path.join(tempDir, "screenshot.png");
+    await writeFile(imagePath, Buffer.from([1, 2, 3, 4]));
+    try {
+      await expect(
+        buildXaiInput([
+          { type: "text", text: "Describe this screenshot" },
+          { type: "localImage", path: imagePath },
+        ]),
+      ).resolves.toEqual([
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "Describe this screenshot" }],
+        },
+        {
+          role: "user",
+          content: [{ type: "input_image", image_url: "data:image/png;base64,AQIDBA==" }],
+        },
+      ]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes public and data URL images through unchanged", async () => {
+    await expect(
       buildXaiInput([
         { type: "text", text: "Describe this screenshot" },
-        { type: "localImage", path: "/tmp/screenshot.png" },
+        { type: "image", url: "https://example.com/screenshot.png" },
       ]),
-    ).toEqual([
+    ).resolves.toEqual([
       {
         role: "user",
         content: [{ type: "input_text", text: "Describe this screenshot" }],
       },
       {
         role: "user",
-        content: [{ type: "input_image", image_url: "file:///tmp/screenshot.png" }],
+        content: [{ type: "input_image", image_url: "https://example.com/screenshot.png" }],
       },
     ]);
   });
@@ -114,14 +142,16 @@ describe("XaiResponsesClient", () => {
 });
 
 describe("GrokProvider", () => {
-  it("uses the thread model and previous response id when starting a turn", async () => {
-    const fetchImpl = vi.fn(async () => ({
-      ok: true,
-      json: async () => makeXaiResponse({ id: "resp_next", text: "Shipped." }),
+  it("uses the thread model when starting an AI SDK turn", async () => {
+    const streamTextImpl = vi.fn(() => ({
+      text: Promise.resolve("Shipped."),
+      response: Promise.resolve({ id: "resp_next" }),
+      sources: Promise.resolve([]),
+      providerMetadata: Promise.resolve(undefined),
     }));
     const provider = new GrokProvider({
       apiKey: "test-key",
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      streamTextImpl,
     });
 
     const activeTurn = provider.startTurn({
@@ -130,26 +160,25 @@ describe("GrokProvider", () => {
         model: "grok-4.20-reasoning",
       },
       input: [{ type: "text", text: "Ship it" }],
-      previousResponseId: "resp_prev",
     });
 
     await expect(activeTurn.result).resolves.toEqual({
       assistantText: "Shipped.",
       providerResponseId: "resp_next",
+      sources: [],
+      providerMetadata: undefined,
     });
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "https://api.x.ai/v1/responses",
+    expect(streamTextImpl).toHaveBeenCalledWith(
       expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer test-key",
+        model: expect.objectContaining({
+          modelId: "grok-4.20-reasoning",
         }),
-        body: JSON.stringify({
-          model: "grok-4.20-reasoning",
-          input: [{ role: "user", content: [{ type: "input_text", text: "Ship it" }] }],
-          previous_response_id: "resp_prev",
-          stream: false,
-        }),
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Ship it" }],
+          },
+        ],
       }),
     );
   });
@@ -157,9 +186,9 @@ describe("GrokProvider", () => {
   it("surfaces transport failures as provider errors", async () => {
     const provider = new GrokProvider({
       apiKey: "test-key",
-      fetchImpl: vi.fn(async () => {
+      streamTextImpl: vi.fn(() => {
         throw new Error("network down");
-      }) as unknown as typeof fetch,
+      }),
     });
 
     const activeTurn = provider.startTurn({

@@ -1,7 +1,7 @@
 ---
 title: refactor: Convert Grok App Server to AI SDK xAI
 type: refactor
-status: active
+status: completed
 date: 2026-04-20
 ---
 
@@ -187,7 +187,7 @@ Retire or quarantine the hand-rolled Responses client tests, add live-gated xAI 
 
 ## Implementation Units
 
-- [ ] **Unit 1: Add AI SDK dependencies and provider runtime boundary**
+- [x] **Unit 1: Add AI SDK dependencies and provider runtime boundary**
 
 **Goal:** Create a thin, testable AI SDK xAI runtime while keeping `GrokProvider` as the app-server-facing provider.
 
@@ -219,7 +219,7 @@ Retire or quarantine the hand-rolled Responses client tests, add live-gated xAI 
 - Missing API key and failing fetch paths produce clear provider errors.
 - Model-selection behavior is deterministic for known model ids and has a safe default.
 
-- [ ] **Unit 2: Build AI SDK messages and fix local image input**
+- [x] **Unit 2: Build AI SDK messages and fix local image input**
 
 **Goal:** Convert app-server turn input into AI SDK messages and ensure local image files are read into model-accessible content.
 
@@ -255,7 +255,7 @@ Retire or quarantine the hand-rolled Responses client tests, add live-gated xAI 
 - Non-image local file path fails clearly in the initial pass.
 - Existing Codex app-server lifecycle tests that include `localImage` still pass or are adjusted to the shared contract intentionally.
 
-- [ ] **Unit 3: Move the main Grok turn loop to AI SDK streaming**
+- [x] **Unit 3: Move the main Grok turn loop to AI SDK streaming**
 
 **Goal:** Replace the manual raw Responses loop with AI SDK `streamText` while preserving app-server turn semantics.
 
@@ -292,7 +292,7 @@ Retire or quarantine the hand-rolled Responses client tests, add live-gated xAI 
 - Exceeding max tool rounds fails with a clear error.
 - AI SDK response sources are preserved in the result or replay metadata.
 
-- [ ] **Unit 4: Add xAI server-side search wrappers and source preservation**
+- [x] **Unit 4: Add xAI server-side search wrappers and source preservation**
 
 **Goal:** Expose xAI web/X search through local app-server tools that call AI SDK Responses server-side tools, while preserving citations.
 
@@ -330,7 +330,7 @@ Retire or quarantine the hand-rolled Responses client tests, add live-gated xAI 
 - Nested AI SDK `sources` become `data.sources` and are not dropped by provider events/replay.
 - Search tool failures produce failed tool outputs instead of crashing the entire turn when recoverable.
 
-- [ ] **Unit 5: Update app-server replay/result metadata for citations and provider data**
+- [x] **Unit 5: Update app-server replay/result metadata for citations and provider data**
 
 **Goal:** Preserve source/citation data from AI SDK responses and search tools through app-server state without requiring immediate rich UI rendering.
 
@@ -366,7 +366,7 @@ Retire or quarantine the hand-rolled Responses client tests, add live-gated xAI 
 - Existing clients that ignore the new optional fields still parse old responses.
 - No raw provider citation data is required to render the text transcript.
 
-- [ ] **Unit 6: Retire hand-rolled Responses payload tests and add live-gated smoke coverage**
+- [x] **Unit 6: Retire hand-rolled Responses payload tests and add live-gated smoke coverage**
 
 **Goal:** Complete the migration by removing stale raw-payload assumptions and covering the new AI SDK integration with deterministic mocks plus opt-in live checks.
 
