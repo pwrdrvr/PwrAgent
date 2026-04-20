@@ -405,6 +405,180 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("keeps thinking visible during metadata notifications for an active turn", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      result.current.setActiveRunId("turn-1");
+      result.current.setPendingStatusText("Thinking");
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/tokenUsage/updated",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              tokenUsage: {
+                modelContextWindow: 258400,
+              },
+            },
+          } as any,
+        });
+        listener({
+          backend: "codex",
+          notification: {
+            method: "account/rateLimits/updated",
+            params: {
+              rateLimits: {
+                limitId: "codex",
+                planType: "pro",
+              },
+            },
+          } as any,
+        });
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/commandExecution/outputDelta",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              itemId: "call-1",
+              delta: "To github.com:pwrdrvr/PwrAgnt.git\n",
+            },
+          } as any,
+        });
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBe("Thinking");
+    expect(result.current.activeRunId).toBe("turn-1");
+  });
+
+  it("keeps thinking visible when an idle status arrives before turn completion", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      result.current.setActiveRunId("turn-1");
+      result.current.setPendingStatusText("Thinking");
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/status/changed",
+            params: {
+              threadId: "thread-1",
+              status: {
+                type: "idle",
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBe("Thinking");
+    expect(result.current.activeRunId).toBe("turn-1");
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              runId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.activeRunId).toBeUndefined();
+  });
+
   it("rereads a partially hydrated transcript after turn completion when only the user message is present", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

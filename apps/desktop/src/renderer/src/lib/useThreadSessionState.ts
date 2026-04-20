@@ -581,6 +581,10 @@ export function useThreadSessionState(params: {
               : undefined;
 
           if (statusType === "idle") {
+            if (current.activeRunId || current.pendingStatusText) {
+              return current;
+            }
+
             return {
               ...current,
               activeRunId: undefined,

@@ -225,6 +225,10 @@ export function Composer(props: ComposerProps) {
         event.notification.method === "thread/status/changed" &&
         statusRecord?.type === "idle"
       ) {
+        if (activeRunIdRef.current) {
+          return;
+        }
+
         props.onPendingStatusChange?.(undefined);
         setSending(false);
         setInterrupting(false);
