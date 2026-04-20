@@ -27,6 +27,196 @@ describe("useThreadSessionState", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps the optimistic user message ahead of the completed assistant reply", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: `${threadId}-message-1`,
+              role: "assistant" as const,
+              text: `Loaded ${threadId}`,
+            },
+          ],
+          messages: [
+            {
+              id: `${threadId}-message-1`,
+              role: "assistant" as const,
+              text: `Loaded ${threadId}`,
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.addOptimisticUserMessage("Please fix transcript ordering.");
+    });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            runId: "run-1",
+            turn: {
+              output: [{ type: "text", text: "Transcript ordering is fixed." }],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+        )
+      ).toEqual([
+        "assistant:Loaded thread-1",
+        "user:Please fix transcript ordering.",
+        "assistant:Transcript ordering is fixed.",
+      ]);
+    });
+
+    expect(
+      result.current.response?.replay.messages.map(
+        (message) => `${message.role}:${message.text}`
+      )
+    ).toEqual([
+      "assistant:Loaded thread-1",
+      "user:Please fix transcript ordering.",
+      "assistant:Transcript ordering is fixed.",
+    ]);
+  });
+
+  it("materializes a new thread in user-then-assistant order on completion", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-empty", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    act(() => {
+      result.current.addOptimisticUserMessage("Start a new ordered thread.");
+    });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-empty",
+            runId: "run-2",
+            turn: {
+              output: [{ type: "text", text: "The new thread is ordered." }],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+        )
+      ).toEqual([
+        "user:Start a new ordered thread.",
+        "assistant:The new thread is ordered.",
+      ]);
+    });
+  });
+
   it("does not reread an interacted thread when only updatedAt changed on reselect", async () => {
     const readThread = vi.fn(
       async ({

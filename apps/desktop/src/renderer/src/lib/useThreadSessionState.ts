@@ -112,31 +112,39 @@ function hasHydratedTranscriptContent(session: ThreadSessionEntry): boolean {
   );
 }
 
-function appendAssistantMessage(
+function appendMessageEntries(
   response: AppServerReadThreadResponse | undefined,
   params: {
     backend: NavigationThreadSummary["source"];
     threadId: NavigationThreadSummary["id"];
   },
-  message: AppServerThreadMessageEntry
+  entries: AppServerThreadMessageEntry[]
 ): AppServerReadThreadResponse {
   const baseResponse = response ?? buildEmptyResponse(params);
-  const assistantMessage: AppServerThreadMessage = {
-    id: message.id,
-    role: message.role,
-    text: message.text,
-    parts: message.parts,
-    createdAt: message.createdAt,
-  };
+  const nextMessages: AppServerThreadMessage[] = entries.map(
+    ({ type: _type, ...message }) => message
+  );
+  let lastUserMessage = baseResponse.replay.lastUserMessage;
+  let lastAssistantMessage = baseResponse.replay.lastAssistantMessage;
+
+  for (const message of nextMessages) {
+    if (message.role === "user") {
+      lastUserMessage = message.text;
+      continue;
+    }
+
+    lastAssistantMessage = message.text;
+  }
 
   return {
     ...baseResponse,
     fetchedAt: Date.now(),
     replay: {
       ...baseResponse.replay,
-      entries: mergeItems(baseResponse.replay.entries, [message]),
-      messages: mergeItems(baseResponse.replay.messages, [assistantMessage]),
-      lastAssistantMessage: message.text,
+      entries: mergeItems(baseResponse.replay.entries, entries),
+      messages: mergeItems(baseResponse.replay.messages, nextMessages),
+      lastUserMessage,
+      lastAssistantMessage,
     },
   };
 }
@@ -511,25 +519,32 @@ export function useThreadSessionState(params: {
           const completedText =
             readCompletedTurnText(event.notification.params) ??
             current.pendingAssistantMessage?.text;
+          const nextEntries = [...current.optimisticEntries];
+
+          if (completedText) {
+            nextEntries.push({
+              type: "message",
+              id:
+                current.pendingAssistantMessage?.id ??
+                `${event.notification.params.runId}:assistant`,
+              role: "assistant",
+              text: completedText,
+              createdAt: Date.now(),
+            });
+          }
+
           const nextResponse =
-            completedText
-              ? appendAssistantMessage(current.response, {
+            nextEntries.length > 0
+              ? appendMessageEntries(current.response, {
                   backend: event.backend,
                   threadId: notificationThreadId,
-                }, {
-                  type: "message",
-                  id:
-                    current.pendingAssistantMessage?.id ??
-                    `${event.notification.params.runId}:assistant`,
-                  role: "assistant",
-                  text: completedText,
-                  createdAt: Date.now(),
-                })
+                }, nextEntries)
               : current.response;
           const shouldInvalidateHydration =
             !completedText &&
             !hasHydratedTranscriptContent({
               ...current,
+              optimisticEntries: [],
               pendingAssistantMessage: undefined,
               pendingRequest: undefined,
               response: nextResponse,
@@ -547,6 +562,7 @@ export function useThreadSessionState(params: {
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
             needsHydrationAfterCompletion: !completedText,
+            optimisticEntries: [],
             pendingAssistantMessage: undefined,
             pendingRequest: undefined,
             pendingStatusText: undefined,
