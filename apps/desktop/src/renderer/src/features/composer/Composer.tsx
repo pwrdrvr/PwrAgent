@@ -330,6 +330,9 @@ export function Composer(props: ComposerProps) {
         );
         setDraft("");
         setImageAttachments([]);
+        if (collaborationMode) {
+          setPlanModeEnabled(false);
+        }
       } catch (error) {
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
@@ -358,6 +361,9 @@ export function Composer(props: ComposerProps) {
       props.onActiveRunIdChange?.(response.runId);
       setDraft("");
       setImageAttachments([]);
+      if (collaborationMode) {
+        setPlanModeEnabled(false);
+      }
     } catch (error) {
       if (optimisticMessageId) {
         props.removeOptimisticMessage?.(optimisticMessageId);

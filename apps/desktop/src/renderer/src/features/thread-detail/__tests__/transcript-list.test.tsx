@@ -310,6 +310,7 @@ describe("TranscriptList", () => {
             type: "plan",
             id: "plan-1",
             explanation: "Keep the renderer and replay contract aligned.",
+            markdown: "## Final plan\n\nUse the transcript plan renderer for durable output.",
             steps: [
               { step: "Normalize replay", status: "pending" },
               { step: "Render transcript plan card", status: "pending" },
@@ -331,6 +332,10 @@ describe("TranscriptList", () => {
     expect(screen.getByText("Normalize replay")).toBeInTheDocument();
     expect(screen.getByText("Render transcript plan card")).toBeInTheDocument();
     expect(screen.getByText("Verify with tests")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Final plan" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Use the transcript plan renderer for durable output.")
+    ).toBeInTheDocument();
     expect(screen.getAllByText("Pending")).toHaveLength(3);
   });
 

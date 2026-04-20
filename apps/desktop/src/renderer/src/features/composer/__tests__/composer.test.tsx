@@ -880,5 +880,8 @@ describe("Composer", () => {
       },
     });
     expect(onPendingStatusChange).toHaveBeenCalledWith("Planning");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Plan mode")).not.toBeChecked();
+    });
   });
 });

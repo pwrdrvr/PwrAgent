@@ -136,6 +136,7 @@ export type AppServerThreadPlanEntry = {
   id: string;
   createdAt?: number;
   explanation?: string;
+  markdown?: string;
   steps: AppServerThreadPlanStep[];
 };
 

@@ -8,6 +8,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
   AppServerThreadPlanEntry,
+  AppServerThreadPlanStep,
   AppServerTurnInputItem,
   AppServerThreadReplayPagination,
   AppServerSkillSummary,
@@ -34,11 +35,17 @@ function arePlanEntriesEquivalent(
   left: AppServerThreadPlanEntry,
   right: AppServerThreadPlanEntry
 ): boolean {
-  if ((left.explanation ?? "").trim() !== (right.explanation ?? "").trim()) {
-    return false;
+  const leftMarkdown = (left.markdown ?? "").trim();
+  const rightMarkdown = (right.markdown ?? "").trim();
+  if (leftMarkdown || rightMarkdown) {
+    return leftMarkdown === rightMarkdown;
   }
 
   if (left.steps.length !== right.steps.length) {
+    return false;
+  }
+
+  if ((left.explanation ?? "").trim() !== (right.explanation ?? "").trim()) {
     return false;
   }
 
@@ -74,6 +81,87 @@ function summarizeDiff(diff: string): { additions: number; removals: number } {
   }
 
   return { additions, removals };
+}
+
+function getPlanNotificationItemId(params: Record<string, unknown>): string | undefined {
+  if (typeof params.itemId === "string") {
+    return params.itemId;
+  }
+
+  if (
+    typeof params.item === "object" &&
+    params.item !== null &&
+    "id" in params.item &&
+    typeof params.item.id === "string"
+  ) {
+    return params.item.id;
+  }
+
+  return undefined;
+}
+
+function getPlanNotificationRunId(params: Record<string, unknown>): string | undefined {
+  return typeof params.runId === "string"
+    ? params.runId
+    : typeof params.turnId === "string"
+      ? params.turnId
+      : undefined;
+}
+
+function isCompletedPlanItem(params: Record<string, unknown>): params is {
+  item: { type: string; text?: unknown; markdown?: unknown };
+} {
+  return (
+    typeof params.item === "object" &&
+    params.item !== null &&
+    "type" in params.item &&
+    typeof params.item.type === "string" &&
+    params.item.type.trim().toLowerCase() === "plan"
+  );
+}
+
+function readCompletedPlanMarkdown(params: Record<string, unknown>): string | undefined {
+  if (!isCompletedPlanItem(params)) {
+    return undefined;
+  }
+
+  const markdown =
+    typeof params.item.markdown === "string"
+      ? params.item.markdown
+      : typeof params.item.text === "string"
+        ? params.item.text
+        : "";
+  const trimmed = markdown.trim();
+  return trimmed || undefined;
+}
+
+function normalizeLivePlanSteps(value: unknown): AppServerThreadPlanStep[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry): AppServerThreadPlanStep[] => {
+    if (typeof entry !== "object" || entry === null) {
+      return [];
+    }
+
+    const stepRecord = entry as Record<string, unknown>;
+    const step = typeof stepRecord.step === "string" ? stepRecord.step.trim() : "";
+    if (!step) {
+      return [];
+    }
+
+    const rawStatus =
+      typeof stepRecord.status === "string" ? stepRecord.status.trim().toLowerCase() : "";
+    const status: AppServerThreadPlanStep["status"] =
+      rawStatus === "completed"
+        ? "completed"
+        : rawStatus === "in_progress" || rawStatus === "inprogress"
+          ? "in_progress"
+          : "pending";
+
+    return [{ step, status }];
+  });
 }
 
 function getBasename(path: string): string {
@@ -374,6 +462,46 @@ export function ThreadView(props: ThreadViewProps) {
         return;
       }
 
+      if (event.notification.method === "item/plan/delta") {
+        const params = event.notification.params as Record<string, unknown>;
+        const delta = typeof params.delta === "string" ? params.delta : "";
+        if (!delta) {
+          return;
+        }
+
+        const itemId = getPlanNotificationItemId(params);
+        const runId = getPlanNotificationRunId(params) ?? itemId ?? selectedThread.id;
+        setPendingPlanEntry((current) => ({
+          type: "plan",
+          id: `live-plan-${runId}`,
+          createdAt: current?.createdAt ?? Date.now(),
+          ...(current?.explanation ? { explanation: current.explanation } : {}),
+          markdown: `${current?.markdown ?? ""}${delta}`,
+          steps: current?.steps ?? [],
+        }));
+        return;
+      }
+
+      if (event.notification.method === "item/completed") {
+        const params = event.notification.params as Record<string, unknown>;
+        const markdown = readCompletedPlanMarkdown(params);
+        if (!markdown) {
+          return;
+        }
+
+        const itemId = getPlanNotificationItemId(params);
+        const runId = getPlanNotificationRunId(params) ?? itemId ?? selectedThread.id;
+        setPendingPlanEntry((current) => ({
+          type: "plan",
+          id: `live-plan-${runId}`,
+          createdAt: current?.createdAt ?? Date.now(),
+          ...(current?.explanation ? { explanation: current.explanation } : {}),
+          markdown,
+          steps: current?.steps ?? [],
+        }));
+        return;
+      }
+
       if (event.notification.method !== "turn/plan/updated") {
         return;
       }
@@ -395,18 +523,20 @@ export function ThreadView(props: ThreadViewProps) {
         typeof planRecord.explanation === "string" && planRecord.explanation.trim()
           ? planRecord.explanation.trim()
           : undefined;
+      const steps = normalizeLivePlanSteps(planRecord.steps);
 
-      setPendingPlanEntry({
+      const runId =
+        typeof event.notification.params.runId === "string"
+          ? event.notification.params.runId
+          : selectedThread.id;
+      setPendingPlanEntry((current) => ({
         type: "plan",
-        id: `live-plan-${
-          typeof event.notification.params.runId === "string"
-            ? event.notification.params.runId
-            : selectedThread.id
-        }`,
-        createdAt: Date.now(),
+        id: `live-plan-${runId}`,
+        createdAt: current?.createdAt ?? Date.now(),
         ...(explanation ? { explanation } : {}),
-        steps: planRecord.steps,
-      });
+        ...(current?.markdown ? { markdown: current.markdown } : {}),
+        steps,
+      }));
     });
   }, [props.desktopApi, selectedThread]);
 

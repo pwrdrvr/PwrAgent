@@ -102,6 +102,10 @@ function isApprovalLikeMethod(method: string): boolean {
   return method.endsWith("/requestApproval");
 }
 
+function isHandledServerRequestMethod(method: string): boolean {
+  return isApprovalLikeMethod(method) || method === "item/tool/requestUserInput";
+}
+
 function isRequestLikeMethod(method: string): boolean {
   return method.includes("/request");
 }
@@ -152,6 +156,19 @@ function pickString(
     const trimmed = value.trim();
     if (trimmed) {
       return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function pickRawString(
+  record: Record<string, unknown>,
+  keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
     }
   }
   return undefined;
@@ -626,6 +643,7 @@ function normalizePlanSteps(value: unknown): AppServerThreadPlanStep[] {
 
 function normalizePlanPayload(value: unknown): {
   explanation?: string;
+  markdown?: string;
   steps: AppServerThreadPlanStep[];
 } | undefined {
   const record = asRecord(value);
@@ -646,13 +664,18 @@ function normalizePlanPayload(value: unknown): {
   const explanation =
     pickString(record, ["explanation", "summary"]) ??
     pickString(nestedPlanRecord ?? {}, ["explanation", "summary"]);
+  const markdown =
+    pickRawString(record, ["markdown"]) ??
+    pickRawString(nestedPlanRecord ?? {}, ["markdown"]) ??
+    collectLegacyMessageText(record);
 
-  if (steps.length === 0 && !explanation) {
+  if (steps.length === 0 && !explanation && !markdown.trim()) {
     return undefined;
   }
 
   return {
     ...(explanation ? { explanation } : {}),
+    ...(markdown.trim() ? { markdown: markdown.trim() } : {}),
     steps,
   };
 }
@@ -731,6 +754,7 @@ function extractPlanEntryFromItem(
       id: itemId,
       createdAt,
       ...(explanation ? { explanation } : {}),
+      ...(normalizedPayload?.markdown ? { markdown: normalizedPayload.markdown } : {}),
       steps,
     };
   }
@@ -770,6 +794,7 @@ function extractPlanEntryFromItem(
     ...(normalizedPayload.explanation
       ? { explanation: normalizedPayload.explanation }
       : {}),
+    ...(normalizedPayload.markdown ? { markdown: normalizedPayload.markdown } : {}),
     steps: normalizedPayload.steps,
   };
 }
@@ -1761,7 +1786,7 @@ export class CodexAppServerClient {
         throw new Error(`No desktop request handler registered for ${method}`);
       }
 
-      if (!isApprovalLikeMethod(method)) {
+      if (!isHandledServerRequestMethod(method)) {
         logUnhandledCodexMessage({
           kind: "request",
           method,
