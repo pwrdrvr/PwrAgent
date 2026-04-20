@@ -76,9 +76,6 @@ jobs:
   desktop-e2e:
     name: Desktop E2E
     runs-on: ubuntu-latest
-    container:
-      image: mcr.microsoft.com/playwright:v1.59.1-noble
-      options: --user 1001
     needs: install-deps
     timeout-minutes: 20
     steps:
