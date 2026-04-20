@@ -1,4 +1,5 @@
 import type { AppServerThreadPlanEntry } from "@pwragnt/shared";
+import { ThreadMarkdown } from "./ThreadMarkdown";
 
 type TranscriptPlanProps = {
   entry: AppServerThreadPlanEntry;
@@ -62,6 +63,13 @@ export function TranscriptPlan(props: TranscriptPlanProps) {
             </li>
           ))}
         </ol>
+      ) : null}
+
+      {props.entry.markdown ? (
+        <ThreadMarkdown
+          className="transcript-plan__markdown"
+          text={props.entry.markdown}
+        />
       ) : null}
     </aside>
   );

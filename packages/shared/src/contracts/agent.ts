@@ -34,6 +34,7 @@ export type StartTurnRequest = {
   threadId: ThreadIdentifier;
   input: AppServerTurnInputItem[];
   model?: string;
+  collaborationMode?: AppServerCollaborationModeRequest;
 };
 
 export type StartTurnResponse = {
@@ -132,6 +133,7 @@ export type ResetDirectoryLaunchpadResponse = {
 export type MaterializeDirectoryLaunchpadRequest = {
   directoryKey: string;
   input?: AppServerTurnInputItem[];
+  collaborationMode?: AppServerCollaborationModeRequest;
 };
 
 export type MaterializeDirectoryLaunchpadResponse = {
@@ -145,4 +147,13 @@ export type MaterializeDirectoryLaunchpadResponse = {
 export type AgentEvent = {
   backend: AppServerBackendKind;
   notification: AppServerNotification;
+};
+
+export type AppServerCollaborationModeRequest = {
+  mode: "default" | "plan";
+  settings?: {
+    model?: string;
+    reasoningEffort?: string;
+    developerInstructions?: string | null;
+  };
 };

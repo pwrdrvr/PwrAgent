@@ -1,5 +1,6 @@
 import { type ClipboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AppServerCollaborationModeRequest,
   AppServerSkillSummary,
   AppServerThreadImagePart,
   AppServerTurnInputItem,
@@ -34,9 +35,11 @@ type ComposerProps = {
   onActiveRunIdChange?: (runId?: string) => void;
   onEnsureSkillsLoaded?: () => void | Promise<void>;
   pendingRequestActive?: boolean;
+  pendingUserInputActive?: boolean;
   onMaterializeLaunchpad?: (
     directoryKey: string,
-    input?: AppServerTurnInputItem[]
+    input?: AppServerTurnInputItem[],
+    collaborationMode?: AppServerCollaborationModeRequest
   ) => Promise<void>;
   onPendingStatusChange?: (status?: string) => void;
   onUpdateLaunchpad?: (
@@ -90,6 +93,7 @@ export function Composer(props: ComposerProps) {
   const [activeRunId, setActiveRunId] = useState<string | undefined>(undefined);
   const [sendError, setSendError] = useState<string>();
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>([]);
+  const [planModeEnabled, setPlanModeEnabled] = useState(false);
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
   const isLaunchpad = Boolean(props.launchpad && props.directory);
@@ -301,6 +305,14 @@ export function Composer(props: ComposerProps) {
       ...(text ? [{ type: "text" as const, text }] : []),
       ...imageParts.map(({ url }) => ({ type: "image" as const, url })),
     ];
+    const collaborationMode = planModeEnabled && supportsPlanMode
+      ? ({
+          mode: "plan",
+          settings: {
+            developerInstructions: null,
+          },
+        } satisfies AppServerCollaborationModeRequest)
+      : undefined;
 
     if (input.length === 0 || props.disabled) {
       return;
@@ -311,9 +323,16 @@ export function Composer(props: ComposerProps) {
 
     if (props.launchpad && props.onMaterializeLaunchpad) {
       try {
-        await props.onMaterializeLaunchpad(props.launchpad.directoryKey, input);
+        await props.onMaterializeLaunchpad(
+          props.launchpad.directoryKey,
+          input,
+          collaborationMode
+        );
         setDraft("");
         setImageAttachments([]);
+        if (collaborationMode) {
+          setPlanModeEnabled(false);
+        }
       } catch (error) {
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
@@ -327,7 +346,7 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    props.onPendingStatusChange?.("Thinking");
+    props.onPendingStatusChange?.(collaborationMode ? "Planning" : "Thinking");
     const optimisticMessageId = props.addOptimisticUserMessage?.(text, imageParts);
     setActiveOptimisticMessageId(optimisticMessageId);
 
@@ -336,11 +355,15 @@ export function Composer(props: ComposerProps) {
         backend: props.thread.source,
         threadId: props.thread.id,
         input,
+        collaborationMode,
       });
       updateActiveRunId(response.runId);
       props.onActiveRunIdChange?.(response.runId);
       setDraft("");
       setImageAttachments([]);
+      if (collaborationMode) {
+        setPlanModeEnabled(false);
+      }
     } catch (error) {
       if (optimisticMessageId) {
         props.removeOptimisticMessage?.(optimisticMessageId);
@@ -379,7 +402,11 @@ export function Composer(props: ComposerProps) {
     } catch (error) {
       setInterrupting(false);
       props.onPendingStatusChange?.(
-        props.pendingRequestActive ? "Waiting for approval" : "Thinking"
+        props.pendingRequestActive
+          ? "Waiting for approval"
+          : props.pendingUserInputActive
+            ? "Waiting for input"
+            : "Thinking"
       );
       setSendError(error instanceof Error ? error.message : String(error));
     }
@@ -480,6 +507,8 @@ export function Composer(props: ComposerProps) {
   const availableExecutionModes =
     backend?.executionModes.filter((mode) => mode.available) ?? [];
   const workspaceLabel = formatThreadWorkspaceLabel(props.thread);
+  const supportsPlanMode =
+    (props.launchpad?.backend ?? props.thread?.source) === "codex";
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
@@ -804,6 +833,20 @@ export function Composer(props: ComposerProps) {
               <span>Fast mode</span>
             </label>
           ) : null}
+
+          {supportsPlanMode ? (
+            <label className="composer__checkbox">
+              <input
+                checked={planModeEnabled}
+                disabled={sending}
+                type="checkbox"
+                onChange={(event) => {
+                  setPlanModeEnabled(event.target.checked);
+                }}
+              />
+              <span>Plan mode</span>
+            </label>
+          ) : null}
         </div>
       ) : null}
 
@@ -834,6 +877,10 @@ export function Composer(props: ComposerProps) {
       ) : props.pendingRequestActive ? (
         <p className="composer__meta">
           Waiting for approval before this turn can continue.
+        </p>
+      ) : props.pendingUserInputActive ? (
+        <p className="composer__meta">
+          Waiting for input before this turn can continue.
         </p>
       ) : props.launchpad ? (
         <p className="composer__meta">

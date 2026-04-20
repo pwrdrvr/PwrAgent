@@ -1311,6 +1311,7 @@ describe("CodexAppServerClient", () => {
                 type: "plan",
                 id: "plan-1",
                 explanation: "Keep the transcript contract stable.",
+                markdown: "## Final plan\n\nShip the transcript renderer in small steps.",
                 steps: [
                   { step: "Normalize replay", status: "completed" },
                   { step: "Render live plan progress", status: "in_progress" }
@@ -1350,12 +1351,98 @@ describe("CodexAppServerClient", () => {
         id: "plan-1",
         createdAt: 1_763_500_200_000,
         explanation: "Keep the transcript contract stable.",
+        markdown: "## Final plan\n\nShip the transcript renderer in small steps.",
         steps: [
           { step: "Normalize replay", status: "completed" },
           { step: "Render live plan progress", status: "in_progress" }
         ]
       }
     ]);
+
+    await client.close();
+  });
+
+  it("normalizes request_user_input requests from rpc envelope ids", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    client.onRequest((request) => {
+      requests.push(request as { method: string; params: Record<string, unknown> });
+      return {
+        answers: {
+          breakfast: {
+            answers: ["Bagels"]
+          }
+        }
+      };
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      id: "rpc-input-1",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-7",
+        itemId: "call-1",
+        questions: [
+          {
+            id: "breakfast",
+            header: "Breakfast",
+            question: "What should we eat?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              {
+                label: "Bagels",
+                description: "Good with cream cheese."
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(requests).toEqual([
+      {
+        method: "item/tool/requestUserInput",
+        params: expect.objectContaining({
+          threadId: "thread-2",
+          runId: "turn-7",
+          turnId: "turn-7",
+          itemId: "call-1",
+          requestId: "rpc-input-1",
+          questions: expect.any(Array)
+        })
+      }
+    ]);
+    expect(
+      transport!.sentMessages
+        .map((message) => JSON.parse(message) as { id?: string; result?: unknown })
+        .find((message) => message.id === "rpc-input-1")
+    ).toEqual({
+      jsonrpc: "2.0",
+      id: "rpc-input-1",
+      result: {
+        answers: {
+          breakfast: {
+            answers: ["Bagels"]
+          }
+        }
+      }
+    });
 
     await client.close();
   });
@@ -1620,6 +1707,59 @@ describe("CodexAppServerClient", () => {
     const startIndex = rpcMethods.indexOf("turn/start");
     expect(resumeIndex).toBeGreaterThan(-1);
     expect(startIndex).toBeGreaterThan(resumeIndex);
+
+    await client.close();
+  });
+
+  it("starts plan-mode turns with a collaboration mode payload", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadResumeResult = {
+      thread: {
+        id: "thread-2"
+      },
+      model: "gpt-5.4",
+      reasoningEffort: "high"
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const result = await client.startTurn({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Plan the fix" }],
+      collaborationMode: {
+        mode: "plan",
+        settings: {
+          developerInstructions: null
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      threadId: "thread-2",
+      runId: "turn-1"
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const startPayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "turn/start");
+
+    expect(startPayload?.params).toMatchObject({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Plan the fix" }],
+      collaborationMode: {
+        mode: "plan",
+        settings: {
+          model: "gpt-5.4",
+          reasoningEffort: "high",
+          developerInstructions: null
+        }
+      }
+    });
 
     await client.close();
   });

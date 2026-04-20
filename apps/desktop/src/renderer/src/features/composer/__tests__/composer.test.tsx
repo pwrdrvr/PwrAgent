@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { StartTurnRequest } from "@pwragnt/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Composer } from "../Composer";
 
@@ -798,5 +799,89 @@ describe("Composer", () => {
 
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     expect(onPendingStatusChange).not.toHaveBeenCalledWith(undefined);
+  });
+
+  it("sends Codex turns with plan collaboration mode when plan mode is enabled", async () => {
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      runId: "turn-1",
+    }));
+    const onPendingStatusChange = vi.fn();
+
+    render(
+      <Composer
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/read", "turn/start"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: true,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        onPendingStatusChange={onPendingStatusChange}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Plan mode",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Plan this change" },
+    });
+    fireEvent.click(screen.getByLabelText("Plan mode"));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledTimes(1);
+    });
+    expect(startTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Plan this change" }],
+      collaborationMode: {
+        mode: "plan",
+        settings: {
+          developerInstructions: null,
+        },
+      },
+    });
+    expect(onPendingStatusChange).toHaveBeenCalledWith("Planning");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Plan mode")).not.toBeChecked();
+    });
   });
 });

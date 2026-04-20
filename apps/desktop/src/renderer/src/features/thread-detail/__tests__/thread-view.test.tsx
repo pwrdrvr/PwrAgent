@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerNotification, AppServerPendingRequestNotification } from "@pwragnt/shared";
+import type { PendingQuestionnaireState } from "../questionnaire";
 import { ThreadView } from "../ThreadView";
 
 afterEach(() => {
@@ -25,7 +26,7 @@ describe("ThreadView", () => {
   });
 
   it("renders a directory-less thread with transcript history and context", () => {
-    render(
+    const { rerender } = render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[
@@ -196,7 +197,7 @@ describe("ThreadView", () => {
       }
     });
 
-    render(
+    const { rerender } = render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[
@@ -879,6 +880,221 @@ describe("ThreadView", () => {
     expect(screen.getAllByText("0 out of 3 tasks completed")).toHaveLength(1);
   });
 
+  it("renders live plan markdown from item plan notifications", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Plan breakfast",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    const { rerender } = render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            runId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Make a breakfast plan."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/plan/delta",
+          params: {
+            threadId: "thread-2",
+            runId: "turn-1",
+            item: {
+              id: "plan-item-1",
+              type: "plan"
+            },
+            delta: "## Breakfast plan\n\n"
+          }
+        } as AppServerNotification,
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/plan/delta",
+          params: {
+            threadId: "thread-2",
+            runId: "turn-1",
+            item: {
+              id: "plan-item-1",
+              type: "plan"
+            },
+            delta: "Choose bagels after checking the cream cheese."
+          }
+        } as AppServerNotification,
+      });
+    });
+
+    expect(screen.getByRole("heading", { name: "Breakfast plan" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Choose bagels after checking the cream cheese.")
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-2",
+            runId: "turn-1",
+            item: {
+              id: "plan-item-1",
+              type: "plan",
+              text: "## Final breakfast plan\n\nEat bagels if the cream cheese passes inspection."
+            }
+          }
+        },
+      });
+    });
+
+    expect(screen.getByRole("heading", { name: "Final breakfast plan" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Eat bagels if the cream cheese passes inspection.")
+    ).toBeInTheDocument();
+
+    rerender(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            runId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Make a breakfast plan."
+          },
+          {
+            type: "plan",
+            id: "persisted-plan-item-1",
+            markdown: "## Final breakfast plan\n\nEat bagels if the cream cheese passes inspection.",
+            steps: []
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    expect(screen.getAllByRole("heading", { name: "Final breakfast plan" })).toHaveLength(1);
+  });
+
   it("renders live diff activity from turn/diff/updated and clears it once replay catches up", async () => {
     const selectedThread = {
       id: "thread-2",
@@ -1277,6 +1493,241 @@ describe("ThreadView", () => {
       ).not.toBeInTheDocument();
     });
     expect(clearPendingRequest).toHaveBeenCalledWith("req-1", "Thinking");
+  });
+
+  it("submits pending questionnaire answers with the request_user_input response shape", async () => {
+    const submitServerRequest = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-2",
+      requestId: "input-request-1",
+    }));
+    let currentPendingUserInput: PendingQuestionnaireState | undefined = {
+      method: "item/tool/requestUserInput",
+      threadId: "thread-2",
+      runId: "turn-1",
+      turnId: "turn-1",
+      itemId: "input-1",
+      requestId: "input-request-1",
+      currentIndex: 0,
+      answers: [null],
+      questions: [
+        {
+          id: "approach",
+          header: "Approach",
+          question: "Which implementation path should I take?",
+          options: [
+            {
+              key: "A",
+              label: "Small patch (Recommended)",
+              description: "Keep this scoped.",
+              recommended: true,
+            },
+            {
+              key: "B",
+              label: "Large refactor",
+              description: "Touch adjacent flows.",
+              recommended: false,
+            },
+          ],
+          allowFreeform: false,
+          secret: false,
+        },
+      ],
+    };
+    let currentPendingStatus: string | undefined = "Waiting for input";
+    const clearPendingRequest = vi.fn((_requestId: string, nextStatus?: string) => {
+      currentPendingUserInput = undefined;
+      currentPendingStatus = nextStatus;
+      rerenderThreadView();
+    });
+    const updatePendingUserInput = vi.fn(
+      (
+        requestId: string,
+        updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
+      ) => {
+        if (currentPendingUserInput?.requestId === requestId) {
+          currentPendingUserInput = updater(currentPendingUserInput);
+          rerenderThreadView();
+        }
+      }
+    );
+
+    const { rerender } = render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: true,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            runId: "turn-1",
+          }),
+          submitServerRequest,
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        pendingStatusText={currentPendingStatus}
+        pendingUserInput={currentPendingUserInput}
+        selectedThread={{
+          id: "thread-2",
+          title: "Plan the app-server protocol",
+          titleSource: "explicit",
+          source: "codex",
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false
+          }
+        }}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Ask me a plan question"
+          }
+        ]}
+        clearPendingRequest={clearPendingRequest}
+        onLoadOlder={async () => undefined}
+        onUpdatePendingUserInput={updatePendingUserInput}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    const rerenderThreadView = () => {
+      rerender(
+        <ThreadView
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+              capabilities: {
+                listThreads: true,
+                createThread: false,
+                resumeThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: false,
+                steerTurn: false,
+                transcriptPagination: true,
+                toolUse: false,
+                approvalRequests: true,
+                multiDirectoryThreads: true
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+              ],
+            }
+          ]}
+          composerDisabled={false}
+          desktopApi={{
+            startTurn: async () => ({
+              backend: "codex",
+              threadId: "thread-2",
+              runId: "turn-1",
+            }),
+            submitServerRequest,
+          }}
+          loading={false}
+          loadingMore={false}
+          messageCount={1}
+          pendingStatusText={currentPendingStatus}
+          pendingUserInput={currentPendingUserInput}
+          selectedThread={{
+            id: "thread-2",
+            title: "Plan the app-server protocol",
+            titleSource: "explicit",
+            source: "codex",
+            updatedAt: Date.now(),
+            linkedDirectories: [],
+            inbox: {
+              inInbox: false
+            }
+          }}
+          skills={[]}
+          transcriptEntries={[
+            {
+              type: "message",
+              id: "message-1",
+              role: "user",
+              text: "Ask me a plan question"
+            }
+          ]}
+          clearPendingRequest={clearPendingRequest}
+          onLoadOlder={async () => undefined}
+          onUpdatePendingUserInput={updatePendingUserInput}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    };
+
+    expect(screen.getByRole("group", { name: "Pending input" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Small patch/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => {
+      expect(submitServerRequest).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-2",
+        runId: "turn-1",
+        requestId: "input-request-1",
+        response: {
+          answers: {
+            approach: {
+              answers: ["Small patch (Recommended)"]
+            }
+          }
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("group", { name: "Pending input" })
+      ).not.toBeInTheDocument();
+    });
+    expect(clearPendingRequest).toHaveBeenCalledWith("input-request-1", "Thinking");
   });
 
   it("clears a stale approval card when assistant output resumes", async () => {

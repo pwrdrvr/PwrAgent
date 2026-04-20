@@ -124,12 +124,14 @@
       "id": "request-approval-1",
       "kind": "request",
       "request": {
-        "method": "turn/requestApproval",
+        "method": "item/commandExecution/requestApproval",
         "params": {
           "threadId": "thread-approval-pending",
-          "runId": "turn-approval-2",
+          "turnId": "turn-approval-2",
+          "itemId": "call-npm-view-dive",
           "requestId": "approval-request-1",
-          "prompt": "Read /etc/hosts and tell me the first three lines."
+          "reason": "Do you want to allow network access so I can query npm metadata for the `dive` package?",
+          "command": "/bin/zsh -lc 'npm view dive'"
         }
       }
     }

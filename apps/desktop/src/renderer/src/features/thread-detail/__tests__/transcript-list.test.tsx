@@ -310,6 +310,7 @@ describe("TranscriptList", () => {
             type: "plan",
             id: "plan-1",
             explanation: "Keep the renderer and replay contract aligned.",
+            markdown: "## Final plan\n\nUse the transcript plan renderer for durable output.",
             steps: [
               { step: "Normalize replay", status: "pending" },
               { step: "Render transcript plan card", status: "pending" },
@@ -331,6 +332,10 @@ describe("TranscriptList", () => {
     expect(screen.getByText("Normalize replay")).toBeInTheDocument();
     expect(screen.getByText("Render transcript plan card")).toBeInTheDocument();
     expect(screen.getByText("Verify with tests")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Final plan" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Use the transcript plan renderer for durable output.")
+    ).toBeInTheDocument();
     expect(screen.getAllByText("Pending")).toHaveLength(3);
   });
 
@@ -902,5 +907,109 @@ describe("TranscriptList", () => {
 
     expect(list.scrollTop).toBe(72);
     expect(scrollToMock).not.toHaveBeenCalled();
+  });
+
+  it("shows command approval reason and command when no prompt is provided", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-1",
+            reason: "Network access is required.",
+            command: "/bin/zsh -lc 'npm view dive'",
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(screen.getByText(/Network access is required/)).toBeInTheDocument();
+    expect(screen.getByText("Command:")).toBeInTheDocument();
+    expect(container.querySelector(".transcript-request pre code")).toHaveTextContent(
+      "npm view dive"
+    );
+    expect(screen.queryByText(/\/bin\/zsh -lc/)).not.toBeInTheDocument();
+  });
+
+  it("prefers parsed command actions for command approval display", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-1",
+            reason: "Network access is required.",
+            command: "/bin/zsh -lc 'npm view dive'",
+            commandActions: [
+              {
+                type: "search",
+                command: "npm view dive",
+              },
+            ],
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(screen.getByText("Command:")).toBeInTheDocument();
+    expect(container.querySelector(".transcript-request pre code")).toHaveTextContent(
+      "npm view dive"
+    );
+    expect(screen.queryByText(/\/bin\/zsh -lc/)).not.toBeInTheDocument();
+  });
+
+  it("renders pending user input without approval actions", () => {
+    render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingUserInput={{
+          method: "item/tool/requestUserInput",
+          threadId: "thread-1",
+          requestId: "input-request-1",
+          currentIndex: 0,
+          answers: [null],
+          questions: [
+            {
+              id: "approach",
+              header: "Approach",
+              question: "Which path should I take?",
+              options: [
+                {
+                  key: "A",
+                  label: "Small patch (Recommended)",
+                  description: "Keep this scoped.",
+                  recommended: true,
+                },
+              ],
+              allowFreeform: false,
+              secret: false,
+            },
+          ],
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Pending input" })).toBeInTheDocument();
+    expect(screen.getByText("Question 1 of 1")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Decline" })).not.toBeInTheDocument();
   });
 });

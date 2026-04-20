@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type {
+  AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification,
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
@@ -7,6 +8,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
   AppServerThreadPlanEntry,
+  AppServerThreadPlanStep,
   AppServerTurnInputItem,
   AppServerThreadReplayPagination,
   AppServerSkillSummary,
@@ -24,16 +26,26 @@ import { ThreadContextPanel } from "./ThreadContextPanel";
 import { ThreadHeader } from "./ThreadHeader";
 import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
 import { TranscriptList } from "./TranscriptList";
+import {
+  buildQuestionnaireResponse,
+  type PendingQuestionnaireState,
+} from "./questionnaire";
 
 function arePlanEntriesEquivalent(
   left: AppServerThreadPlanEntry,
   right: AppServerThreadPlanEntry
 ): boolean {
-  if ((left.explanation ?? "").trim() !== (right.explanation ?? "").trim()) {
-    return false;
+  const leftMarkdown = (left.markdown ?? "").trim();
+  const rightMarkdown = (right.markdown ?? "").trim();
+  if (leftMarkdown || rightMarkdown) {
+    return leftMarkdown === rightMarkdown;
   }
 
   if (left.steps.length !== right.steps.length) {
+    return false;
+  }
+
+  if ((left.explanation ?? "").trim() !== (right.explanation ?? "").trim()) {
     return false;
   }
 
@@ -69,6 +81,87 @@ function summarizeDiff(diff: string): { additions: number; removals: number } {
   }
 
   return { additions, removals };
+}
+
+function getPlanNotificationItemId(params: Record<string, unknown>): string | undefined {
+  if (typeof params.itemId === "string") {
+    return params.itemId;
+  }
+
+  if (
+    typeof params.item === "object" &&
+    params.item !== null &&
+    "id" in params.item &&
+    typeof params.item.id === "string"
+  ) {
+    return params.item.id;
+  }
+
+  return undefined;
+}
+
+function getPlanNotificationRunId(params: Record<string, unknown>): string | undefined {
+  return typeof params.runId === "string"
+    ? params.runId
+    : typeof params.turnId === "string"
+      ? params.turnId
+      : undefined;
+}
+
+function isCompletedPlanItem(params: Record<string, unknown>): params is {
+  item: { type: string; text?: unknown; markdown?: unknown };
+} {
+  return (
+    typeof params.item === "object" &&
+    params.item !== null &&
+    "type" in params.item &&
+    typeof params.item.type === "string" &&
+    params.item.type.trim().toLowerCase() === "plan"
+  );
+}
+
+function readCompletedPlanMarkdown(params: Record<string, unknown>): string | undefined {
+  if (!isCompletedPlanItem(params)) {
+    return undefined;
+  }
+
+  const markdown =
+    typeof params.item.markdown === "string"
+      ? params.item.markdown
+      : typeof params.item.text === "string"
+        ? params.item.text
+        : "";
+  const trimmed = markdown.trim();
+  return trimmed || undefined;
+}
+
+function normalizeLivePlanSteps(value: unknown): AppServerThreadPlanStep[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry): AppServerThreadPlanStep[] => {
+    if (typeof entry !== "object" || entry === null) {
+      return [];
+    }
+
+    const stepRecord = entry as Record<string, unknown>;
+    const step = typeof stepRecord.step === "string" ? stepRecord.step.trim() : "";
+    if (!step) {
+      return [];
+    }
+
+    const rawStatus =
+      typeof stepRecord.status === "string" ? stepRecord.status.trim().toLowerCase() : "";
+    const status: AppServerThreadPlanStep["status"] =
+      rawStatus === "completed"
+        ? "completed"
+        : rawStatus === "in_progress" || rawStatus === "inprogress"
+          ? "in_progress"
+          : "pending";
+
+    return [{ step, status }];
+  });
 }
 
 function getBasename(path: string): string {
@@ -212,6 +305,7 @@ type ThreadViewProps = {
   messageCount: number;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingRequest?: AppServerPendingRequestNotification;
+  pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
   platform?: string;
   selectedDirectory?: NavigationDirectorySummary;
@@ -230,9 +324,14 @@ type ThreadViewProps = {
   onLoadOlder: () => Promise<void>;
   onMaterializeLaunchpad?: (
     directoryKey: string,
-    input?: AppServerTurnInputItem[]
+    input?: AppServerTurnInputItem[],
+    collaborationMode?: AppServerCollaborationModeRequest
   ) => Promise<void>;
   onPendingStatusChange?: (status?: string) => void;
+  onUpdatePendingUserInput?: (
+    requestId: string,
+    updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
+  ) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
   onTranscriptViewportChange?: (viewport?: {
     distanceFromBottom: number;
@@ -363,6 +462,46 @@ export function ThreadView(props: ThreadViewProps) {
         return;
       }
 
+      if (event.notification.method === "item/plan/delta") {
+        const params = event.notification.params as Record<string, unknown>;
+        const delta = typeof params.delta === "string" ? params.delta : "";
+        if (!delta) {
+          return;
+        }
+
+        const itemId = getPlanNotificationItemId(params);
+        const runId = getPlanNotificationRunId(params) ?? itemId ?? selectedThread.id;
+        setPendingPlanEntry((current) => ({
+          type: "plan",
+          id: `live-plan-${runId}`,
+          createdAt: current?.createdAt ?? Date.now(),
+          ...(current?.explanation ? { explanation: current.explanation } : {}),
+          markdown: `${current?.markdown ?? ""}${delta}`,
+          steps: current?.steps ?? [],
+        }));
+        return;
+      }
+
+      if (event.notification.method === "item/completed") {
+        const params = event.notification.params as Record<string, unknown>;
+        const markdown = readCompletedPlanMarkdown(params);
+        if (!markdown) {
+          return;
+        }
+
+        const itemId = getPlanNotificationItemId(params);
+        const runId = getPlanNotificationRunId(params) ?? itemId ?? selectedThread.id;
+        setPendingPlanEntry((current) => ({
+          type: "plan",
+          id: `live-plan-${runId}`,
+          createdAt: current?.createdAt ?? Date.now(),
+          ...(current?.explanation ? { explanation: current.explanation } : {}),
+          markdown,
+          steps: current?.steps ?? [],
+        }));
+        return;
+      }
+
       if (event.notification.method !== "turn/plan/updated") {
         return;
       }
@@ -384,18 +523,20 @@ export function ThreadView(props: ThreadViewProps) {
         typeof planRecord.explanation === "string" && planRecord.explanation.trim()
           ? planRecord.explanation.trim()
           : undefined;
+      const steps = normalizeLivePlanSteps(planRecord.steps);
 
-      setPendingPlanEntry({
+      const runId =
+        typeof event.notification.params.runId === "string"
+          ? event.notification.params.runId
+          : selectedThread.id;
+      setPendingPlanEntry((current) => ({
         type: "plan",
-        id: `live-plan-${
-          typeof event.notification.params.runId === "string"
-            ? event.notification.params.runId
-            : selectedThread.id
-        }`,
-        createdAt: Date.now(),
+        id: `live-plan-${runId}`,
+        createdAt: current?.createdAt ?? Date.now(),
         ...(explanation ? { explanation } : {}),
-        steps: planRecord.steps,
-      });
+        ...(current?.markdown ? { markdown: current.markdown } : {}),
+        steps,
+      }));
     });
   }, [props.desktopApi, selectedThread]);
 
@@ -425,6 +566,33 @@ export function ThreadView(props: ThreadViewProps) {
         props.pendingRequest.params.requestId,
         decision === "approve" ? "Thinking" : undefined
       );
+    } catch (error) {
+      setPendingRequestError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPendingRequestBusy(false);
+    }
+  }
+
+  async function submitPendingUserInput(
+    pendingUserInput: PendingQuestionnaireState
+  ): Promise<void> {
+    if (!props.desktopApi?.submitServerRequest || !selectedThread) {
+      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
+      return;
+    }
+
+    setPendingRequestBusy(true);
+    setPendingRequestError(undefined);
+
+    try {
+      await props.desktopApi.submitServerRequest({
+        backend: selectedThread.source,
+        threadId: selectedThread.id,
+        runId: pendingUserInput.runId,
+        requestId: pendingUserInput.requestId,
+        response: buildQuestionnaireResponse(pendingUserInput),
+      });
+      props.clearPendingRequest(pendingUserInput.requestId, "Thinking");
     } catch (error) {
       setPendingRequestError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -570,14 +738,19 @@ export function ThreadView(props: ThreadViewProps) {
             pendingPlanEntry={pendingPlanEntry}
             pendingRequest={props.pendingRequest}
             pendingRequestBusy={pendingRequestBusy}
+            pendingUserInput={props.pendingUserInput}
             pendingStatusText={props.pendingStatusText}
             restoredViewport={props.transcriptViewport}
             skills={props.skills}
             threadId={`${selectedThread!.source}:${selectedThread!.id}`}
             onLoadOlder={props.onLoadOlder}
             onOpenImage={setExpandedImage}
-            onViewportChange={props.onTranscriptViewportChange}
             onRespondToPendingRequest={respondToPendingRequest}
+            onPendingUserInputChange={(state) => {
+              props.onUpdatePendingUserInput?.(state.requestId, () => state);
+            }}
+            onSubmitPendingUserInput={submitPendingUserInput}
+            onViewportChange={props.onTranscriptViewportChange}
           />
           {pendingRequestError ? (
             <p className="transcript-error">{pendingRequestError}</p>
@@ -612,6 +785,7 @@ export function ThreadView(props: ThreadViewProps) {
         onPendingStatusChange={props.onPendingStatusChange}
         onSetExecutionMode={props.onSetExecutionMode}
         pendingRequestActive={Boolean(props.pendingRequest)}
+        pendingUserInputActive={Boolean(props.pendingUserInput)}
         removeOptimisticMessage={props.removeOptimisticMessage}
         setExecutionModeError={props.setExecutionModeError}
         skillError={props.skillError}

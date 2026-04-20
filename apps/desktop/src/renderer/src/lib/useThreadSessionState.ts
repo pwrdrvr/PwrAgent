@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerPendingRequestNotification,
   AppServerReadThreadResponse,
+  AppServerToolRequestUserInputNotification,
   AppServerThreadEntry,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
@@ -10,8 +11,18 @@ import type {
 } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
 import type { DesktopApi } from "./desktop-api";
+import {
+  createQuestionnaireState,
+  type PendingQuestionnaireState,
+} from "../features/thread-detail/questionnaire";
 
 const MAX_VIEW_ONLY_THREADS = 10;
+const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
+  "turn/requestApproval",
+  "review/requestApproval",
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+]);
 
 export type ThreadViewportState = {
   distanceFromBottom: number;
@@ -33,6 +44,7 @@ type ThreadSessionEntry = {
   optimisticEntries: AppServerThreadMessageEntry[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingRequest?: AppServerPendingRequestNotification;
+  pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
   response?: AppServerReadThreadResponse;
   viewport?: ThreadViewportState;
@@ -109,7 +121,8 @@ function hasHydratedTranscriptContent(session: ThreadSessionEntry): boolean {
     session.response?.replay.entries.length ||
       session.optimisticEntries.length ||
       session.pendingAssistantMessage ||
-      session.pendingRequest
+      session.pendingRequest ||
+      session.pendingUserInput
   );
 }
 
@@ -119,6 +132,7 @@ function hasThinkingState(session: ThreadSessionEntry): boolean {
       session.pendingStatusText ||
       session.pendingAssistantMessage ||
       session.pendingRequest ||
+      session.pendingUserInput ||
       (session.expectOwnUpdate && session.optimisticEntries.length > 0)
   );
 }
@@ -204,6 +218,26 @@ function retainSessionCache(
   ]);
 }
 
+function isApprovalRequestNotification(
+  notification: { method: string; params: Record<string, unknown> }
+): notification is AppServerPendingRequestNotification {
+  return (
+    SUPPORTED_APPROVAL_REQUEST_METHODS.has(notification.method) &&
+    typeof notification.params.requestId === "string"
+  );
+}
+
+function isRequestUserInputNotification(
+  notification: { method: string; params: Record<string, unknown> }
+): notification is AppServerToolRequestUserInputNotification {
+  return (
+    notification.method === "item/tool/requestUserInput" &&
+    typeof notification.params.threadId === "string" &&
+    typeof notification.params.requestId === "string" &&
+    Array.isArray(notification.params.questions)
+  );
+}
+
 function readCompletedTurnText(
   notification: AppServerPendingRequestNotification | AppServerReadThreadResponse["backend"] | unknown
 ): string | undefined {
@@ -259,10 +293,15 @@ export function useThreadSessionState(params: {
   messages: AppServerThreadMessage[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingRequest?: AppServerPendingRequestNotification;
+  pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
   removeOptimisticMessage: (id: string) => void;
   response?: AppServerReadThreadResponse;
   setActiveRunId: (runId?: string) => void;
+  updatePendingUserInput: (
+    requestId: string,
+    updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
+  ) => void;
   setPendingStatusText: (status?: string) => void;
   thinkingThreadKeys: Record<string, boolean>;
   setViewport: (viewport?: ThreadViewportState) => void;
@@ -477,18 +516,28 @@ export function useThreadSessionState(params: {
       updateSession(targetThreadKey, (current) => {
         const nextLastTouchedAt = Date.now();
 
-        if (
-          (event.notification.method === "turn/requestApproval" ||
-            event.notification.method === "review/requestApproval") &&
-          "requestId" in event.notification.params
-        ) {
+        if (isApprovalRequestNotification(event.notification)) {
           return {
             ...current,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
-            pendingRequest:
-              event.notification as AppServerPendingRequestNotification,
+            pendingRequest: event.notification,
             pendingStatusText: "Waiting for approval",
+          };
+        }
+
+        if (isRequestUserInputNotification(event.notification)) {
+          const pendingUserInput = createQuestionnaireState(event.notification);
+          if (!pendingUserInput) {
+            return current;
+          }
+
+          return {
+            ...current,
+            interacted: true,
+            lastTouchedAt: nextLastTouchedAt,
+            pendingStatusText: "Waiting for input",
+            pendingUserInput,
           };
         }
 
@@ -546,6 +595,10 @@ export function useThreadSessionState(params: {
               current.pendingRequest?.params.requestId === event.notification.params.requestId
                 ? undefined
                 : current.pendingRequest,
+            pendingUserInput:
+              current.pendingUserInput?.requestId === event.notification.params.requestId
+                ? undefined
+                : current.pendingUserInput,
             pendingStatusText: "Thinking",
           };
         }
@@ -582,6 +635,7 @@ export function useThreadSessionState(params: {
               optimisticEntries: [],
               pendingAssistantMessage: undefined,
               pendingRequest: undefined,
+              pendingUserInput: undefined,
               response: nextResponse,
             });
 
@@ -600,6 +654,7 @@ export function useThreadSessionState(params: {
             optimisticEntries: [],
             pendingAssistantMessage: undefined,
             pendingRequest: undefined,
+            pendingUserInput: undefined,
             pendingStatusText: undefined,
             response: nextResponse,
           };
@@ -619,6 +674,7 @@ export function useThreadSessionState(params: {
             needsHydrationAfterCompletion: false,
             pendingAssistantMessage: undefined,
             pendingRequest: undefined,
+            pendingUserInput: undefined,
             pendingStatusText: undefined,
           };
         }
@@ -822,8 +878,36 @@ export function useThreadSessionState(params: {
           current.pendingRequest?.params.requestId === requestId
             ? undefined
             : current.pendingRequest,
+        pendingUserInput:
+          current.pendingUserInput?.requestId === requestId
+            ? undefined
+            : current.pendingUserInput,
         pendingStatusText: nextStatus,
       }));
+    },
+    [threadKey, updateSession]
+  );
+
+  const updatePendingUserInput = useCallback(
+    (
+      requestId: string,
+      updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
+    ): void => {
+      if (!threadKey) {
+        return;
+      }
+
+      updateSession(threadKey, (current) => {
+        if (current.pendingUserInput?.requestId !== requestId) {
+          return current;
+        }
+
+        return {
+          ...current,
+          lastTouchedAt: Date.now(),
+          pendingUserInput: updater(current.pendingUserInput),
+        };
+      });
     },
     [threadKey, updateSession]
   );
@@ -910,10 +994,12 @@ export function useThreadSessionState(params: {
     messages,
     pendingAssistantMessage: selectedSession?.pendingAssistantMessage,
     pendingRequest: selectedSession?.pendingRequest,
+    pendingUserInput: selectedSession?.pendingUserInput,
     pendingStatusText,
     removeOptimisticMessage,
     response: selectedSession?.response,
     setActiveRunId,
+    updatePendingUserInput,
     setPendingStatusText,
     thinkingThreadKeys,
     setViewport,

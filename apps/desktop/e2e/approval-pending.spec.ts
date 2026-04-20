@@ -45,11 +45,12 @@ async function openApprovalPendingReplay() {
     app.window.getByRole("group", { name: "Pending approval" })
   ).toBeVisible();
   await expect(app.window.getByText("Approval needed")).toBeVisible();
+  const pendingApproval = app.window.getByRole("group", { name: "Pending approval" });
+  await expect(pendingApproval.getByText("Command:")).toBeVisible();
   await expect(
-    app.window
-      .getByRole("group", { name: "Pending approval" })
-      .getByText("Read /etc/hosts and tell me the first three lines.")
-  ).toBeVisible();
+    pendingApproval.locator("pre code")
+  ).toHaveText("npm view dive");
+  await expect(app.window.getByText(/\/bin\/zsh -lc/)).toHaveCount(0);
   await expect(
     app.window.getByText("Waiting for approval before this turn can continue.")
   ).toBeVisible();
@@ -68,11 +69,12 @@ test("shows pending approval UI without duplicating the turn elsewhere", async (
       app.window.getByRole("group", { name: "Pending approval" })
     ).toBeVisible();
     await expect(app.window.getByText("Approval needed")).toBeVisible();
+    const pendingApproval = app.window.getByRole("group", { name: "Pending approval" });
+    await expect(pendingApproval.getByText("Command:")).toBeVisible();
     await expect(
-      app.window
-        .getByRole("group", { name: "Pending approval" })
-        .getByText("Read /etc/hosts and tell me the first three lines.")
-    ).toBeVisible();
+      pendingApproval.locator("pre code")
+    ).toHaveText("npm view dive");
+    await expect(app.window.getByText(/\/bin\/zsh -lc/)).toHaveCount(0);
     await expect(
       app.window.getByText("Waiting for approval before this turn can continue.")
     ).toBeVisible();

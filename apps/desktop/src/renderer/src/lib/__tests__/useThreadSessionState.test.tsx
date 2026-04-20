@@ -900,6 +900,251 @@ describe("useThreadSessionState", () => {
     expect(result.current.activeRunId).toBeUndefined();
   });
 
+  it("surfaces command execution approval requests from app-server events", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/commandExecution/requestApproval",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              itemId: "call-1",
+              requestId: "approval-1",
+              reason: "Network access is required.",
+              command: "npm view dive",
+            },
+          } as any,
+        });
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBe("Waiting for approval");
+    expect(result.current.pendingRequest).toMatchObject({
+      method: "item/commandExecution/requestApproval",
+      params: {
+        requestId: "approval-1",
+        command: "npm view dive",
+      },
+    });
+  });
+
+  it("does not surface permissions approvals as command approval requests", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/permissions/requestApproval",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              itemId: "call-1",
+              requestId: "approval-1",
+              reason: "Additional permissions are required.",
+              permissions: {
+                type: "full-access",
+              },
+            },
+          } as any,
+        });
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.pendingRequest).toBeUndefined();
+  });
+
+  it("surfaces request_user_input as pending user input instead of approval", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/tool/requestUserInput",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              runId: "turn-1",
+              itemId: "input-1",
+              requestId: "input-request-1",
+              questions: [
+                {
+                  id: "approach",
+                  header: "Approach",
+                  question: "Which path should I take?",
+                  isOther: false,
+                  isSecret: false,
+                  options: [
+                    {
+                      label: "Small patch (Recommended)",
+                      description: "Keep this scoped.",
+                    },
+                    {
+                      label: "Large refactor",
+                      description: "Touch adjacent flows.",
+                    },
+                  ],
+                },
+              ],
+            },
+          } as any,
+        });
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBe("Waiting for input");
+    expect(result.current.pendingRequest).toBeUndefined();
+    expect(result.current.pendingUserInput).toMatchObject({
+      method: "item/tool/requestUserInput",
+      requestId: "input-request-1",
+      questions: [
+        {
+          id: "approach",
+          options: [
+            {
+              key: "A",
+              label: "Small patch (Recommended)",
+              recommended: true,
+            },
+            {
+              key: "B",
+              label: "Large refactor",
+              recommended: false,
+            },
+          ],
+        },
+      ],
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "serverRequest/resolved",
+            params: {
+              threadId: "thread-1",
+              requestId: "input-request-1",
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.pendingUserInput).toBeUndefined();
+    expect(result.current.pendingStatusText).toBe("Thinking");
+  });
+
   it("rereads a partially hydrated transcript after turn completion when only the user message is present", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

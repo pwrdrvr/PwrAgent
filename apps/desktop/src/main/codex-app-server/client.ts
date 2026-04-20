@@ -21,6 +21,7 @@ import type {
   AppServerThreadTitleSource,
   AppServerThreadSummary,
   AppServerTurnInputItem,
+  AppServerCollaborationModeRequest,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
 import { getMainLogger } from "../log";
@@ -37,6 +38,7 @@ import { StdioJsonRpcTransport } from "./stdio-transport";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.4";
 
 type CodexClientOptions = {
   command?: string;
@@ -100,6 +102,10 @@ function isApprovalLikeMethod(method: string): boolean {
   return method.endsWith("/requestApproval");
 }
 
+function isHandledServerRequestMethod(method: string): boolean {
+  return isApprovalLikeMethod(method) || method === "item/tool/requestUserInput";
+}
+
 function isRequestLikeMethod(method: string): boolean {
   return method.includes("/request");
 }
@@ -150,6 +156,19 @@ function pickString(
     const trimmed = value.trim();
     if (trimmed) {
       return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function pickRawString(
+  record: Record<string, unknown>,
+  keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
     }
   }
   return undefined;
@@ -624,6 +643,7 @@ function normalizePlanSteps(value: unknown): AppServerThreadPlanStep[] {
 
 function normalizePlanPayload(value: unknown): {
   explanation?: string;
+  markdown?: string;
   steps: AppServerThreadPlanStep[];
 } | undefined {
   const record = asRecord(value);
@@ -644,13 +664,18 @@ function normalizePlanPayload(value: unknown): {
   const explanation =
     pickString(record, ["explanation", "summary"]) ??
     pickString(nestedPlanRecord ?? {}, ["explanation", "summary"]);
+  const markdown =
+    pickRawString(record, ["markdown"]) ??
+    pickRawString(nestedPlanRecord ?? {}, ["markdown"]) ??
+    collectLegacyMessageText(record);
 
-  if (steps.length === 0 && !explanation) {
+  if (steps.length === 0 && !explanation && !markdown.trim()) {
     return undefined;
   }
 
   return {
     ...(explanation ? { explanation } : {}),
+    ...(markdown.trim() ? { markdown: markdown.trim() } : {}),
     steps,
   };
 }
@@ -729,6 +754,7 @@ function extractPlanEntryFromItem(
       id: itemId,
       createdAt,
       ...(explanation ? { explanation } : {}),
+      ...(normalizedPayload?.markdown ? { markdown: normalizedPayload.markdown } : {}),
       steps,
     };
   }
@@ -768,6 +794,7 @@ function extractPlanEntryFromItem(
     ...(normalizedPayload.explanation
       ? { explanation: normalizedPayload.explanation }
       : {}),
+    ...(normalizedPayload.markdown ? { markdown: normalizedPayload.markdown } : {}),
     steps: normalizedPayload.steps,
   };
 }
@@ -1592,6 +1619,85 @@ function buildThreadResumePayloads(params: {
   return [base];
 }
 
+function extractStringProperty(value: unknown, ...keys: string[]): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function buildCollaborationModePayload(params: {
+  collaborationMode?: AppServerCollaborationModeRequest;
+  fallbackModel?: string;
+  fallbackReasoningEffort?: string;
+}): Record<string, unknown> | undefined {
+  if (!params.collaborationMode) {
+    return undefined;
+  }
+
+  const settings = params.collaborationMode.settings ?? {};
+  const model =
+    settings.model?.trim() ||
+    params.fallbackModel?.trim() ||
+    DEFAULT_CODEX_COLLABORATION_MODEL;
+  const reasoningEffort =
+    settings.reasoningEffort?.trim() || params.fallbackReasoningEffort?.trim();
+  const developerInstructions = Object.hasOwn(settings, "developerInstructions")
+    ? settings.developerInstructions
+    : params.collaborationMode.mode === "plan"
+      ? null
+      : undefined;
+
+  return {
+    mode: params.collaborationMode.mode,
+    settings: {
+      model,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(developerInstructions !== undefined
+        ? { developerInstructions }
+        : {}),
+    },
+  };
+}
+
+function buildTurnStartPayload(params: {
+  threadId: string;
+  input: AppServerTurnInputItem[];
+  model?: string;
+  collaborationMode?: AppServerCollaborationModeRequest;
+  collaborationFallbackModel?: string;
+  collaborationFallbackReasoningEffort?: string;
+}): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    threadId: params.threadId,
+    input: params.input,
+  };
+
+  if (params.model?.trim()) {
+    base.model = params.model.trim();
+  }
+
+  const collaborationMode = buildCollaborationModePayload({
+    collaborationMode: params.collaborationMode,
+    fallbackModel: params.collaborationFallbackModel ?? params.model,
+    fallbackReasoningEffort: params.collaborationFallbackReasoningEffort,
+  });
+  if (collaborationMode) {
+    base.collaborationMode = collaborationMode;
+  }
+
+  return base;
+}
+
 async function requestWithFallbacks(params: {
   client: JsonRpcConnection;
   methods: string[];
@@ -1680,7 +1786,7 @@ export class CodexAppServerClient {
         throw new Error(`No desktop request handler registered for ${method}`);
       }
 
-      if (!isApprovalLikeMethod(method)) {
+      if (!isHandledServerRequestMethod(method)) {
         logUnhandledCodexMessage({
           kind: "request",
           method,
@@ -1854,10 +1960,11 @@ export class CodexAppServerClient {
     threadId: string;
     input: AppServerTurnInputItem[];
     model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
   }): Promise<{ threadId: string; runId: string }> {
     await this.ensureInitialized();
 
-    await requestWithFallbacks({
+    const resumeResult = await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/resume"],
       payloads: buildThreadResumePayloads({
@@ -1870,7 +1977,21 @@ export class CodexAppServerClient {
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["turn/start"],
-      payloads: [params],
+      payloads: [
+        buildTurnStartPayload({
+          threadId: params.threadId,
+          input: params.input,
+          model: params.model,
+          collaborationMode: params.collaborationMode,
+          collaborationFallbackModel:
+            params.model?.trim() || extractStringProperty(resumeResult, "model"),
+          collaborationFallbackReasoningEffort: extractStringProperty(
+            resumeResult,
+            "reasoningEffort",
+            "reasoning_effort"
+          ),
+        }),
+      ],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 

@@ -1,0 +1,174 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "request-user-input",
+    "sourceCaptureId": "synthetic-request-user-input",
+    "threadId": "thread-request-user-input"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list",
+          "turn/start"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-request-user-input",
+          "title": "Request user input replay",
+          "titleSource": "explicit",
+          "summary": "Replay seeded request_user_input prompt",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000002000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Need plan questionnaire coverage."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "Ready for plan questionnaire coverage."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Need plan questionnaire coverage."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "Ready for plan questionnaire coverage."
+          }
+        ],
+        "lastUserMessage": "Need plan questionnaire coverage.",
+        "lastAssistantMessage": "Ready for plan questionnaire coverage.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "turn-start-1",
+      "kind": "response",
+      "method": "turn/start",
+      "result": {
+        "threadId": "thread-request-user-input",
+        "runId": "turn-input-2"
+      }
+    },
+    {
+      "id": "status-active-1",
+      "kind": "notification",
+      "notification": {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "thread-request-user-input",
+          "status": {
+            "type": "active",
+            "activeFlags": []
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-request-user-input",
+          "turn": {
+            "id": "turn-input-2",
+            "status": "inProgress"
+          }
+        }
+      }
+    },
+    {
+      "id": "request-user-input-1",
+      "kind": "request",
+      "request": {
+        "method": "item/tool/requestUserInput",
+        "params": {
+          "threadId": "thread-request-user-input",
+          "turnId": "turn-input-2",
+          "runId": "turn-input-2",
+          "itemId": "request-user-input-call",
+          "requestId": "user-input-request-1",
+          "questions": [
+            {
+              "id": "scope",
+              "header": "Scope",
+              "question": "How much should change?",
+              "isOther": false,
+              "isSecret": false,
+              "options": [
+                {
+                  "label": "Small patch (Recommended)",
+                  "description": "Keep this scoped."
+                },
+                {
+                  "label": "Large refactor",
+                  "description": "Touch adjacent flows."
+                }
+              ]
+            },
+            {
+              "id": "tests",
+              "header": "Tests",
+              "question": "Which test path?",
+              "isOther": false,
+              "isSecret": false,
+              "options": [
+                {
+                  "label": "Unit only",
+                  "description": "Fast coverage."
+                },
+                {
+                  "label": "Unit and E2E",
+                  "description": "Full path."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

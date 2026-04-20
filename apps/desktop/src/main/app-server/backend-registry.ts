@@ -10,6 +10,7 @@ import type {
   AppServerThreadSummary,
   AppServerTurnInputItem,
   AppServerBackendKind,
+  AppServerCollaborationModeRequest,
   BackendCapabilities,
   BackendSummary,
   ListBackendsRequest,
@@ -83,6 +84,7 @@ type BackendClient = {
     threadId: string;
     input: AppServerTurnInputItem[];
     model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
   }): Promise<{ threadId: string; runId: string }>;
   interruptTurn(params: {
     threadId: string;
@@ -388,13 +390,18 @@ export class DesktopBackendRegistry {
     threadId: string;
     input: AppServerTurnInputItem[];
     model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; runId: string }> {
     const result =
       params.backend === "codex"
         ? await this.withCodexThreadClient(params.threadId, async (client) =>
             await client.startTurn(params),
           )
-        : await this.grokClient.startTurn(params);
+        : await this.grokClient.startTurn({
+            threadId: params.threadId,
+            input: params.input,
+            model: params.model,
+          });
 
     return {
       backend: params.backend,
@@ -609,6 +616,7 @@ export class DesktopBackendRegistry {
         threadId: startThreadResponse.threadId,
         input,
         model: launchpad.model,
+        collaborationMode: request.collaborationMode,
       });
       runId = turnResponse.runId;
     }

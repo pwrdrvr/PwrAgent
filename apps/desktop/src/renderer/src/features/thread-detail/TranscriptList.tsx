@@ -10,9 +10,12 @@ import type {
   AppServerThreadReplayPagination
 } from "@pwragnt/shared";
 import { ThinkingScanner } from "./ThinkingScanner";
+import { PendingQuestionnaire } from "./PendingQuestionnaire";
 import { TranscriptActivity } from "./TranscriptActivity";
+import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
+import type { PendingQuestionnaireState } from "./questionnaire";
 
 type TranscriptListProps = {
   entries: AppServerThreadEntry[];
@@ -24,6 +27,7 @@ type TranscriptListProps = {
   pendingPlanEntry?: AppServerThreadPlanEntry;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingRequestBusy?: boolean;
+  pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
   pagination?: AppServerThreadReplayPagination;
   restoredViewport?: {
@@ -38,6 +42,8 @@ type TranscriptListProps = {
     scrollTop: number;
   }) => void;
   onRespondToPendingRequest?: (decision: "approve" | "decline" | "cancel") => Promise<void>;
+  onPendingUserInputChange?: (state: PendingQuestionnaireState) => void;
+  onSubmitPendingUserInput?: (state: PendingQuestionnaireState) => Promise<void>;
   onLoadOlder: () => Promise<void>;
 };
 
@@ -56,6 +62,100 @@ type ScrollSnapshot = {
 const BOTTOM_THRESHOLD_PX = 24;
 type ScrollBottomMode = "instant" | "smooth";
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function firstStringByKeys(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return "";
+}
+
+function stripShellLauncher(command: string): string {
+  const match = command.match(
+    /^(?:\/[/\w]*\/)?(?:bash|zsh|sh|dash|ksh|tcsh|fish)\s+-lc\s+(['"])([\s\S]*)\1\s*$/
+  );
+
+  return match ? match[2] : command;
+}
+
+function markdownCodeBlock(text: string, language: string): string {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  const longestFence = [...normalized.matchAll(/`{3,}/g)].reduce(
+    (max, match) => Math.max(max, match[0].length),
+    2
+  );
+  const fence = "`".repeat(longestFence + 1);
+  const languageTag = language.trim();
+
+  return `${fence}${languageTag}\n${normalized}\n${fence}`;
+}
+
+function commandFromActions(params: Record<string, unknown>): string {
+  const actions = params.commandActions;
+  if (!Array.isArray(actions) || actions.length === 0) {
+    return "";
+  }
+
+  return actions
+    .map((action) => {
+      const record = asRecord(action);
+      const command = record?.command;
+      return typeof command === "string" && command.trim() ? command.trim() : undefined;
+    })
+    .filter((command): command is string => Boolean(command))
+    .join(" && ");
+}
+
+function approvalDisplayCommand(params: Record<string, unknown>): string {
+  const parsedCommand = commandFromActions(params);
+  if (parsedCommand) {
+    return parsedCommand;
+  }
+
+  const rawCommand = firstStringByKeys(params, [
+    "command",
+    "cmd",
+    "displayCommand",
+    "rawCommand",
+    "shellCommand",
+  ]);
+
+  return rawCommand ? stripShellLauncher(rawCommand) : "";
+}
+
+function pendingRequestPrompt(request: AppServerPendingRequestNotification): string {
+  if (typeof request.params.prompt === "string" && request.params.prompt.trim()) {
+    return request.params.prompt.trim();
+  }
+
+  const reason = typeof request.params.reason === "string" ? request.params.reason.trim() : "";
+  const command = approvalDisplayCommand(request.params);
+  const commandBlock = command ? `Command:\n\n${markdownCodeBlock(command, "sh")}` : "";
+
+  if (reason && commandBlock) {
+    return `${reason}\n\n${commandBlock}`;
+  }
+  if (commandBlock) {
+    return commandBlock;
+  }
+  if (reason) {
+    return reason;
+  }
+
+  return "This turn is waiting for approval before it can continue.";
+}
+
 export function TranscriptList(props: TranscriptListProps) {
   const skills = props.skills ?? [];
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -67,6 +167,14 @@ export function TranscriptList(props: TranscriptListProps) {
   const [hasContentBelow, setHasContentBelow] = useState(false);
   const canLoadOlder = Boolean(
     props.pagination?.supportsPagination && props.pagination.hasPreviousPage
+  );
+  const hasPendingContent = Boolean(
+    props.pendingActivityEntry ||
+      props.pendingAssistantMessage ||
+      props.pendingPlanEntry ||
+      props.pendingRequest ||
+      props.pendingUserInput ||
+      props.pendingStatusText
   );
 
   const captureSnapshot = useCallback((): ScrollSnapshot | undefined => {
@@ -83,7 +191,8 @@ export function TranscriptList(props: TranscriptListProps) {
       (props.pendingAssistantMessage ? 1 : 0) +
       (props.pendingPlanEntry ? 1 : 0) +
       (props.pendingStatusText ? 1 : 0) +
-      (props.pendingRequest ? 1 : 0);
+      (props.pendingRequest ? 1 : 0) +
+      (props.pendingUserInput ? 1 : 0);
     const distanceFromBottom = Math.max(
       container.scrollHeight - container.clientHeight - container.scrollTop,
       0
@@ -106,6 +215,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
     props.pendingRequest,
+    props.pendingUserInput,
     props.pendingStatusText,
     props.threadId
   ]);
@@ -190,7 +300,8 @@ export function TranscriptList(props: TranscriptListProps) {
               (props.pendingAssistantMessage ? 1 : 0) +
               (props.pendingPlanEntry ? 1 : 0) +
               (props.pendingStatusText ? 1 : 0) +
-              (props.pendingRequest ? 1 : 0))
+              (props.pendingRequest ? 1 : 0) +
+              (props.pendingUserInput ? 1 : 0))
     );
 
     if (hasPrependedMessages && previousSnapshot) {
@@ -236,6 +347,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
     props.pendingRequest,
+    props.pendingUserInput,
     props.pendingStatusText,
     props.restoredViewport,
     props.threadId,
@@ -243,15 +355,15 @@ export function TranscriptList(props: TranscriptListProps) {
     syncScrollState,
   ]);
 
-  if (props.loading && props.entries.length === 0) {
+  if (props.loading && props.entries.length === 0 && !hasPendingContent) {
     return <p className="transcript-empty">Loading transcript…</p>;
   }
 
-  if (props.error && props.entries.length === 0) {
+  if (props.error && props.entries.length === 0 && !hasPendingContent) {
     return <p className="transcript-error">{props.error}</p>;
   }
 
-  if (props.entries.length === 0) {
+  if (props.entries.length === 0 && !hasPendingContent) {
     return <p className="transcript-empty">No thread history yet.</p>;
   }
 
@@ -314,6 +426,18 @@ export function TranscriptList(props: TranscriptListProps) {
             <span>{props.pendingStatusText}</span>
           </div>
         ) : null}
+        {props.pendingUserInput ? (
+          <PendingQuestionnaire
+            busy={props.pendingRequestBusy}
+            state={props.pendingUserInput}
+            onChange={(state) => {
+              props.onPendingUserInputChange?.(state);
+            }}
+            onSubmit={async (state) => {
+              await props.onSubmitPendingUserInput?.(state);
+            }}
+          />
+        ) : null}
         {props.pendingRequest ? (
           <div className="transcript-request" role="group" aria-label="Pending approval">
             <div className="transcript-request__header">
@@ -324,11 +448,10 @@ export function TranscriptList(props: TranscriptListProps) {
                 {props.pendingRequest.method}
               </span>
             </div>
-            <p className="transcript-request__prompt">
-              {typeof props.pendingRequest.params.prompt === "string"
-                ? props.pendingRequest.params.prompt
-                : "This turn is waiting for approval before it can continue."}
-            </p>
+            <ThreadMarkdown
+              className="transcript-request__prompt"
+              text={pendingRequestPrompt(props.pendingRequest)}
+            />
             <div className="transcript-request__actions">
               <button
                 className="button button--primary"
