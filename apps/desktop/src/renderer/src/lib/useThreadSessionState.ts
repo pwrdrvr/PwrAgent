@@ -204,6 +204,15 @@ function retainSessionCache(
   ]);
 }
 
+function isApprovalRequestNotification(
+  notification: { method: string; params: Record<string, unknown> }
+): notification is AppServerPendingRequestNotification {
+  return (
+    notification.method.endsWith("/requestApproval") &&
+    typeof notification.params.requestId === "string"
+  );
+}
+
 function readCompletedTurnText(
   notification: AppServerPendingRequestNotification | AppServerReadThreadResponse["backend"] | unknown
 ): string | undefined {
@@ -477,17 +486,12 @@ export function useThreadSessionState(params: {
       updateSession(targetThreadKey, (current) => {
         const nextLastTouchedAt = Date.now();
 
-        if (
-          (event.notification.method === "turn/requestApproval" ||
-            event.notification.method === "review/requestApproval") &&
-          "requestId" in event.notification.params
-        ) {
+        if (isApprovalRequestNotification(event.notification)) {
           return {
             ...current,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
-            pendingRequest:
-              event.notification as AppServerPendingRequestNotification,
+            pendingRequest: event.notification,
             pendingStatusText: "Waiting for approval",
           };
         }

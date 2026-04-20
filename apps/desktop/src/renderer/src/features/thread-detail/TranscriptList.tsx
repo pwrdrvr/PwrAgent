@@ -56,6 +56,27 @@ type ScrollSnapshot = {
 const BOTTOM_THRESHOLD_PX = 24;
 type ScrollBottomMode = "instant" | "smooth";
 
+function pendingRequestPrompt(request: AppServerPendingRequestNotification): string {
+  if (typeof request.params.prompt === "string" && request.params.prompt.trim()) {
+    return request.params.prompt.trim();
+  }
+
+  const reason = typeof request.params.reason === "string" ? request.params.reason.trim() : "";
+  const command = typeof request.params.command === "string" ? request.params.command.trim() : "";
+
+  if (reason && command) {
+    return `${reason}\n\nCommand: ${command}`;
+  }
+  if (command) {
+    return `Command: ${command}`;
+  }
+  if (reason) {
+    return reason;
+  }
+
+  return "This turn is waiting for approval before it can continue.";
+}
+
 export function TranscriptList(props: TranscriptListProps) {
   const skills = props.skills ?? [];
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -67,6 +88,13 @@ export function TranscriptList(props: TranscriptListProps) {
   const [hasContentBelow, setHasContentBelow] = useState(false);
   const canLoadOlder = Boolean(
     props.pagination?.supportsPagination && props.pagination.hasPreviousPage
+  );
+  const hasPendingContent = Boolean(
+    props.pendingActivityEntry ||
+      props.pendingAssistantMessage ||
+      props.pendingPlanEntry ||
+      props.pendingRequest ||
+      props.pendingStatusText
   );
 
   const captureSnapshot = useCallback((): ScrollSnapshot | undefined => {
@@ -243,15 +271,15 @@ export function TranscriptList(props: TranscriptListProps) {
     syncScrollState,
   ]);
 
-  if (props.loading && props.entries.length === 0) {
+  if (props.loading && props.entries.length === 0 && !hasPendingContent) {
     return <p className="transcript-empty">Loading transcript…</p>;
   }
 
-  if (props.error && props.entries.length === 0) {
+  if (props.error && props.entries.length === 0 && !hasPendingContent) {
     return <p className="transcript-error">{props.error}</p>;
   }
 
-  if (props.entries.length === 0) {
+  if (props.entries.length === 0 && !hasPendingContent) {
     return <p className="transcript-empty">No thread history yet.</p>;
   }
 
@@ -325,9 +353,7 @@ export function TranscriptList(props: TranscriptListProps) {
               </span>
             </div>
             <p className="transcript-request__prompt">
-              {typeof props.pendingRequest.params.prompt === "string"
-                ? props.pendingRequest.params.prompt
-                : "This turn is waiting for approval before it can continue."}
+              {pendingRequestPrompt(props.pendingRequest)}
             </p>
             <div className="transcript-request__actions">
               <button

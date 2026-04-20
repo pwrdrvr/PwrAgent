@@ -903,4 +903,29 @@ describe("TranscriptList", () => {
     expect(list.scrollTop).toBe(72);
     expect(scrollToMock).not.toHaveBeenCalled();
   });
+
+  it("shows command approval reason and command when no prompt is provided", () => {
+    render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-1",
+            reason: "Network access is required.",
+            command: "npm view dive",
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(screen.getByText(/Network access is required/)).toBeInTheDocument();
+    expect(screen.getByText(/Command: npm view dive/)).toBeInTheDocument();
+  });
 });

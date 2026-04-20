@@ -1249,6 +1249,7 @@ textarea {
   color: var(--text-primary);
   font-size: 14px;
   line-height: 1.55;
+  white-space: pre-wrap;
 }
 
 .transcript-request__actions {

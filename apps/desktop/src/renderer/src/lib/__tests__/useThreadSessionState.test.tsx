@@ -900,6 +900,72 @@ describe("useThreadSessionState", () => {
     expect(result.current.activeRunId).toBeUndefined();
   });
 
+  it("surfaces command execution approval requests from app-server events", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/commandExecution/requestApproval",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              itemId: "call-1",
+              requestId: "approval-1",
+              reason: "Network access is required.",
+              command: "npm view dive",
+            },
+          } as any,
+        });
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBe("Waiting for approval");
+    expect(result.current.pendingRequest).toMatchObject({
+      method: "item/commandExecution/requestApproval",
+      params: {
+        requestId: "approval-1",
+        command: "npm view dive",
+      },
+    });
+  });
+
   it("rereads a partially hydrated transcript after turn completion when only the user message is present", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
