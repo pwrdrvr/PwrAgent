@@ -76,11 +76,12 @@ async function runAiSdkTurn(params: {
   emit: (event: Parameters<ProviderTurnEventListener>[0]) => Promise<void>;
   hasListeners: () => boolean;
 }): Promise<ProviderTurnResult> {
+  const modelMode = selectGrokModelMode(params.params.thread.model);
+  const shouldReplayHistory = modelMode === "chat" || !params.params.previousResponseId;
   const messages = await buildAiSdkMessages({
-    history: params.params.history,
+    history: shouldReplayHistory ? params.params.history : undefined,
     input: params.params.input,
   });
-  const modelMode = selectGrokModelMode(params.params.thread.model);
   const result = params.runtime.streamText({
     model: params.runtime.model({ model: params.params.thread.model, mode: modelMode }),
     messages,

@@ -144,6 +144,7 @@ function createWebSearchTool(params: {
             model: params.runtime.searchModel(),
             prompt: args.query,
             abortSignal: signal,
+            toolChoice: "required",
             tools: {
               web_search: params.runtime.provider.tools.webSearch({
                 allowedDomains: args.allowedDomains,
@@ -214,6 +215,7 @@ function createXSearchTool(params: {
             model: params.runtime.searchModel(),
             prompt: args.query,
             abortSignal: signal,
+            toolChoice: "required",
             tools: {
               x_search: params.runtime.provider.tools.xSearch({
                 allowedXHandles: args.allowedXHandles,

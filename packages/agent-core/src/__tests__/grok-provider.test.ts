@@ -160,6 +160,10 @@ describe("GrokProvider", () => {
         model: "grok-4.20-reasoning",
         reasoningEffort: "medium",
       },
+      history: [
+        { role: "user", text: "Old question" },
+        { role: "assistant", text: "Old answer" },
+      ],
       input: [{ type: "text", text: "Ship it" }],
       previousResponseId: "resp_prev",
     });
@@ -209,6 +213,10 @@ describe("GrokProvider", () => {
         model: "grok-code-fast-1",
         reasoningEffort: "high",
       },
+      history: [
+        { role: "user", text: "Old question" },
+        { role: "assistant", text: "Old answer" },
+      ],
       input: [{ type: "text", text: "Ship it" }],
       previousResponseId: "resp_prev",
     });
@@ -224,6 +232,14 @@ describe("GrokProvider", () => {
           provider: "xai.chat",
         }),
         providerOptions: undefined,
+        messages: [
+          { role: "user", content: "Old question" },
+          { role: "assistant", content: "Old answer" },
+          {
+            role: "user",
+            content: [{ type: "text", text: "Ship it" }],
+          },
+        ],
       }),
     );
   });

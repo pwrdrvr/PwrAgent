@@ -73,6 +73,11 @@ describe("xAI search tool wrappers", () => {
     await expect(activeTurn.result).resolves.toMatchObject({
       assistantText: "Main answer.",
     });
+    expect(generateTextImpl.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        toolChoice: "required",
+      }),
+    );
     const searchTool = (generateTextImpl.mock.calls[0]?.[0] as any).tools.x_search;
     expect(searchTool.args).toEqual({
       allowedXHandles: ["xai"],
@@ -164,6 +169,11 @@ describe("xAI search tool wrappers", () => {
     await expect(activeTurn.result).resolves.toMatchObject({
       assistantText: "Main answer.",
     });
+    expect(generateTextImpl.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        toolChoice: "required",
+      }),
+    );
     const searchTool = (generateTextImpl.mock.calls[0]?.[0] as any).tools.web_search;
     expect(searchTool.args).toEqual({
       allowedDomains: ["ai-sdk.dev"],
