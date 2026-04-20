@@ -29,7 +29,6 @@ export function App() {
         creatingThread={navigation.creatingThread}
         directories={navigation.directories}
         error={navigation.error}
-        fetchedAt={navigation.snapshot?.fetchedAt}
         inboxThreads={navigation.inboxThreads}
         launchpadError={navigation.launchpadError}
         loading={navigation.loading}
@@ -58,7 +57,6 @@ export function App() {
             )
           }
           desktopApi={desktopApi}
-          fetchedAt={session.response?.fetchedAt}
           launchpadError={navigation.launchpadError}
           loading={session.loading}
           loadingMore={session.loadingMore}

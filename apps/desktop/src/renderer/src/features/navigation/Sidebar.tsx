@@ -19,7 +19,6 @@ type SidebarProps = {
   createThreadError?: string;
   directories: NavigationDirectorySummary[];
   error?: string;
-  fetchedAt?: number;
   inboxThreads: NavigationThreadSummary[];
   loading: boolean;
   creatingThread?: {
@@ -69,12 +68,9 @@ export function Sidebar(props: SidebarProps) {
   const hasCreateThreadOptions = createThreadOptions.some((option) => option.enabled);
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" aria-label="Threads">
       <header className="sidebar__masthead">
-        <div>
-          <p className="eyebrow">PwrAgnt</p>
-          <h1 className="sidebar__title">Threads</h1>
-        </div>
+        <p className="eyebrow sidebar__brand">PwrAgnt</p>
 
         <div className="sidebar__masthead-actions">
           <div className="sidebar__new-thread">
@@ -128,43 +124,21 @@ export function Sidebar(props: SidebarProps) {
         <p className="sidebar-error sidebar-error--masthead">{props.launchpadError}</p>
       ) : null}
 
-      <section className="sidebar__section">
-        <div className="sidebar__section-header">
-          <h2>Inbox</h2>
-          <span className="count-pill">{props.inboxThreads.length}</span>
-        </div>
-        <InboxList
-          selectedThreadKey={props.selectedItemKey}
-          threads={props.inboxThreads}
-          onSelectThread={props.onSelectThread}
-        />
-      </section>
-
-      <section className="sidebar__section sidebar__section--fill">
-        <div className="sidebar__section-header">
-          <div>
-            <h2>Browse</h2>
-            <p className="sidebar__supporting-text">
-              {props.threads.length} threads
-              {props.fetchedAt ? ` • ${formatTimestamp(props.fetchedAt)}` : ""}
-            </p>
-          </div>
-
-          <div className="lens-switch" role="tablist" aria-label="Thread lenses">
-            {(["recents", "directories"] as const).map((mode) => (
-              <button
-                key={mode}
-                aria-pressed={props.browseMode === mode}
-                className={`lens-switch__button${
-                  props.browseMode === mode ? " is-active" : ""
-                }`}
-                type="button"
-                onClick={() => props.onBrowseModeChange(mode)}
-              >
-                {mode}
-              </button>
-            ))}
-          </div>
+      <section className="sidebar__section sidebar__section--fill" aria-label="Thread browser">
+        <div className="lens-switch" role="tablist" aria-label="Thread lenses">
+          {(["inbox", "recents", "directories"] as const).map((mode) => (
+            <button
+              key={mode}
+              aria-pressed={props.browseMode === mode}
+              className={`lens-switch__button${
+                props.browseMode === mode ? " is-active" : ""
+              }`}
+              type="button"
+              onClick={() => props.onBrowseModeChange(mode)}
+            >
+              {mode}
+            </button>
+          ))}
         </div>
 
         <div className="sidebar__scroll-region">
@@ -172,8 +146,13 @@ export function Sidebar(props: SidebarProps) {
             <p className="sidebar-empty">Loading threads…</p>
           ) : props.error ? (
             <p className="sidebar-error">{props.error}</p>
-          ) : props.threads.length === 0 ? (
-            <p className="sidebar-empty">No threads yet.</p>
+          ) : props.browseMode === "inbox" ? (
+            <InboxList
+              selectedThreadKey={props.selectedItemKey}
+              thinkingThreadKeys={props.thinkingThreadKeys}
+              threads={props.inboxThreads}
+              onSelectThread={props.onSelectThread}
+            />
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
               directories={props.directories}
@@ -184,24 +163,19 @@ export function Sidebar(props: SidebarProps) {
               onSelectThread={props.onSelectThread}
             />
           ) : (
-            <RecentsList
-              selectedThreadKey={props.selectedItemKey}
-              thinkingThreadKeys={props.thinkingThreadKeys}
-              threads={props.threads}
-              onSelectThread={props.onSelectThread}
-            />
+            props.threads.length === 0 ? (
+              <p className="sidebar-empty">No threads yet.</p>
+            ) : (
+              <RecentsList
+                selectedThreadKey={props.selectedItemKey}
+                thinkingThreadKeys={props.thinkingThreadKeys}
+                threads={props.threads}
+                onSelectThread={props.onSelectThread}
+              />
+            )
           )}
         </div>
       </section>
     </aside>
   );
-}
-
-function formatTimestamp(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(timestamp);
 }

@@ -269,12 +269,9 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(
-      screen.getByRole("heading", { level: 1, name: "Threads" })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { level: 2, name: "Inbox" })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 1, name: "Threads" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "inbox" })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "recents" })
     ).toBeInTheDocument();
@@ -285,13 +282,9 @@ describe("App", () => {
         name: "Build Codex client"
       })
     ).toBeInTheDocument();
-    const inboxHeading = screen.getByRole("heading", { level: 2, name: "Inbox" });
-    const inboxSection = inboxHeading.closest("section");
-    expect(inboxSection).not.toBeNull();
-    expect(within(inboxSection as HTMLElement).getByText("1")).toBeInTheDocument();
     expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
     expect(screen.getAllByText("codex/build-codex-client").length).toBeGreaterThan(0);
-    expect(screen.getByRole("heading", { level: 3, name: "Transcript" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 3, name: "Transcript" })).not.toBeInTheDocument();
     const transcript = screen.getByRole("region", { name: "Transcript" });
     await waitFor(() => {
       expect(transcript).toHaveTextContent("Open the desktop plan and build the Codex client.");
@@ -358,7 +351,7 @@ describe("App", () => {
         selector: ".composer__meta"
       })
     ).not.toBeInTheDocument();
-    expect(screen.getByText("3 messages")).toBeInTheDocument();
+    expect(screen.queryByText("3 messages")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
 
@@ -1607,7 +1600,7 @@ describe("App", () => {
       threadId: "thread-2",
     });
 
-    fireEvent.click(screen.getAllByRole("button", { name: /First cached thread/i })[1]!);
+    fireEvent.click(screen.getByRole("button", { name: /First cached thread/i }));
 
     await screen.findByRole("heading", {
       level: 2,

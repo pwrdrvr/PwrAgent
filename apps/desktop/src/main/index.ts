@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu, shell } from "electron";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import { disposeAppServerIpcHandlers, registerAppServerIpcHandlers } from "./ipc/app-server";
+import { registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
 import { initializeMainLogger } from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
 import { createMainWindow } from "./window";
@@ -41,6 +42,7 @@ export function bootstrapApp(): void {
     installApplicationMenu();
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();
+    registerRendererErrorIpcHandlers();
     createMainWindow({
       startupCpuProfiler,
     });

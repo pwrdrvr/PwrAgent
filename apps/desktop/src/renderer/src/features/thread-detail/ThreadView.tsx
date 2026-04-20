@@ -298,7 +298,6 @@ type ThreadViewProps = {
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   composerDisabled: boolean;
   desktopApi?: DesktopApi;
-  fetchedAt?: number;
   launchpadError?: string;
   loading: boolean;
   loadingMore: boolean;
@@ -710,23 +709,10 @@ export function ThreadView(props: ThreadViewProps) {
 
   return (
     <section className="thread-view">
-      <ThreadHeader
-        fetchedAt={props.fetchedAt}
-        messageCount={props.messageCount}
-        thread={selectedThread!}
-      />
+      <ThreadHeader thread={selectedThread!} />
 
       <div className="thread-view__layout">
         <section className="transcript-panel" aria-label="Transcript">
-          <div className="transcript-panel__header">
-            <div>
-              <h3>Transcript</h3>
-              <p>
-                {props.messageCount} message{props.messageCount === 1 ? "" : "s"}
-              </p>
-            </div>
-          </div>
-
           <TranscriptList
             entries={props.transcriptEntries}
             error={props.transcriptError}

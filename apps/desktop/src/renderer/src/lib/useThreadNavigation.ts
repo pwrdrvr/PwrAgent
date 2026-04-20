@@ -12,7 +12,7 @@ import type {
 import { buildThreadIdentityKey } from "@pwragnt/shared";
 import type { DesktopApi } from "./desktop-api";
 
-export type BrowseMode = "recents" | "directories";
+export type BrowseMode = "inbox" | "recents" | "directories";
 
 type NavigationState = {
   loading: boolean;
@@ -403,6 +403,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const [browseMode, setBrowseMode] = useState<BrowseMode>("recents");
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
+  const [retainedUnreadThread, setRetainedUnreadThread] =
+    useState<NavigationThreadSummary>();
   const [optimisticThread, setOptimisticThread] = useState<NavigationThreadSummary>();
   const [creatingThread, setCreatingThread] = useState<{
     backend: AppServerBackendKind;
@@ -420,6 +422,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   });
 
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
+  const retainedUnreadThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
   const refreshInFlightRef = useRef(false);
   const queuedRefreshRef = useRef<
     | {
@@ -433,6 +436,32 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   );
 
   optimisticThreadRef.current = optimisticThread;
+  retainedUnreadThreadRef.current = retainedUnreadThread;
+
+  const releaseRetainedUnreadThread = useCallback((nextSelectionKey?: string): void => {
+    const retainedThread = retainedUnreadThreadRef.current;
+    if (!retainedThread) {
+      return;
+    }
+
+    const retainedThreadKey = buildThreadIdentityKey(
+      retainedThread.source,
+      retainedThread.id
+    );
+    if (nextSelectionKey === retainedThreadKey) {
+      return;
+    }
+
+    setState((current) => ({
+      ...current,
+      response: markThreadSeenInSnapshot(current.response, {
+        backend: retainedThread.source,
+        threadId: retainedThread.id,
+        seenUpdatedAt: retainedThread.updatedAt,
+      }),
+    }));
+    setRetainedUnreadThread(undefined);
+  }, []);
 
   const performRefresh = useCallback(
     async (
@@ -661,12 +690,27 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const directories = state.response?.directories ?? [];
 
   const inboxThreads = useMemo(() => {
-    const inboxThreadKeys = new Set(state.response?.inboxThreadKeys ?? []);
-    return threads.filter((thread) =>
-      inboxThreadKeys.has(buildThreadIdentityKey(thread.source, thread.id)) ||
-      thread.inbox.inInbox
+    const unreadThreads = threads.filter(
+      (thread) => thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen"
     );
-  }, [state.response?.inboxThreadKeys, threads]);
+    if (!retainedUnreadThread) {
+      return unreadThreads;
+    }
+
+    const retainedThreadKey = buildThreadIdentityKey(
+      retainedUnreadThread.source,
+      retainedUnreadThread.id
+    );
+    if (
+      unreadThreads.some(
+        (thread) => buildThreadIdentityKey(thread.source, thread.id) === retainedThreadKey
+      )
+    ) {
+      return unreadThreads;
+    }
+
+    return [retainedUnreadThread, ...unreadThreads];
+  }, [retainedUnreadThread, threads]);
 
   const selectedThreadKey = useMemo(() => {
     if (selectedItemKey && !getDirectoryKeyFromLaunchpadSelection(selectedItemKey)) {
@@ -699,6 +743,10 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const selectedLaunchpad = selectedDirectory?.launchpad;
 
   useEffect(() => {
+    releaseRetainedUnreadThread(selectedItemKey);
+  }, [releaseRetainedUnreadThread, retainedUnreadThread, selectedItemKey]);
+
+  useEffect(() => {
     const submitMarkThreadSeen = markThreadSeen;
 
     if (
@@ -723,14 +771,24 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           seenUpdatedAt: threadToMarkSeen.updatedAt,
         });
         if (!cancelled) {
-          setState((current) => ({
-            ...current,
-            response: markThreadSeenInSnapshot(current.response, {
-              backend: threadToMarkSeen.source,
-              threadId: threadToMarkSeen.id,
-              seenUpdatedAt: threadToMarkSeen.updatedAt,
-            }),
-          }));
+          const threadKey = buildThreadIdentityKey(
+            threadToMarkSeen.source,
+            threadToMarkSeen.id
+          );
+          if (
+            !retainedUnreadThread ||
+            buildThreadIdentityKey(retainedUnreadThread.source, retainedUnreadThread.id) !==
+              threadKey
+          ) {
+            setState((current) => ({
+              ...current,
+              response: markThreadSeenInSnapshot(current.response, {
+                backend: threadToMarkSeen.source,
+                threadId: threadToMarkSeen.id,
+                seenUpdatedAt: threadToMarkSeen.updatedAt,
+              }),
+            }));
+          }
         }
       } finally {
         if (!cancelled) {
@@ -744,16 +802,20 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     return () => {
       cancelled = true;
     };
-  }, [markThreadSeen, pendingSeenThreadKey, selectedThread]);
+  }, [markThreadSeen, pendingSeenThreadKey, retainedUnreadThread, selectedThread]);
 
   const selectThread = useCallback((thread: NavigationThreadSummary): void => {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    releaseRetainedUnreadThread(threadKey);
     setCreateThreadError(undefined);
     setLaunchpadError(undefined);
     setSetThreadExecutionModeError(undefined);
     setSelectedItemKey(threadKey);
     setPendingSeenThreadKey(threadKey);
-  }, []);
+    if (thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen") {
+      setRetainedUnreadThread(thread);
+    }
+  }, [releaseRetainedUnreadThread]);
 
   const createThread = useCallback(
     async (

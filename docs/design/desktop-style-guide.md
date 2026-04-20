@@ -2,6 +2,8 @@
 
 This guide defines the visual language for the PwrAgnt desktop app. It exists to keep the product from drifting into generic Electron-dark-dashboard styling as more UI gets built.
 
+For exact theme tokens, palette usage, and Tangerine Terminal visual rules, use [docs/UI-THEME.md](../UI-THEME.md).
+
 ## Product Tone
 
 PwrAgnt should feel like a serious operator tool:
@@ -36,16 +38,19 @@ The visual direction is:
 
 ## Visual Thesis
 
-Use a **dark editorial control-room** aesthetic:
+Use a **Tangerine Terminal** aesthetic:
 
-- deep neutral backgrounds
-- soft but readable contrast
+- absolute black foundation
+- near-black structural surfaces
+- crisp warm-white primary text
+- neutral gray metadata
+- sparse tangerine signal
 - crisp typography
 - subtle separators
 - minimal elevation
 - state communicated by emphasis, badges, and row treatment rather than giant colored panels
 
-Avoid the default “blue-black Electron app with random rounded panels” look.
+Avoid the default “blue-black Electron app with random rounded panels” look, and avoid turning the product into an orange novelty terminal. The goal is a serious black-first workstation with a small amount of high-confidence signal.
 
 ## Typography
 
@@ -90,34 +95,35 @@ Rules:
 
 ### Neutral Base
 
-Start from neutral charcoal and slate, not saturated navy.
+Start from absolute black and near-black neutrals, not saturated navy, slate, or charcoal-heavy gray-on-gray.
 
 Suggested palette:
 
-- `--bg-app: #0b0d12`
-- `--bg-sidebar: #11151c`
-- `--bg-panel: #151a22`
-- `--bg-panel-hover: #1a202a`
-- `--bg-row-active: #1b2230`
-- `--border-subtle: rgba(255, 255, 255, 0.08)`
-- `--border-strong: rgba(255, 255, 255, 0.14)`
-- `--text-primary: #f3f5f7`
-- `--text-secondary: #a8b0bb`
-- `--text-muted: #7e8794`
+- `--bg-app: #000000`
+- `--bg-sidebar: #050505`
+- `--bg-panel: #0a0a0a`
+- `--bg-panel-hover: #101010`
+- `--bg-row-active: #120800`
+- `--border-subtle: rgba(247, 243, 235, 0.1)`
+- `--border-strong: rgba(247, 243, 235, 0.2)`
+- `--text-primary: #f7f3eb`
+- `--text-secondary: #b8b0a5`
+- `--text-muted: #8c857a`
 
 ### Accent
 
 Use one accent only. Recommended direction:
 
-- **acid green** or **electric chartreuse** for active state, confirmations, and live emphasis
+- **tangerine** for action, focus, selected state, important command labels, and live emphasis
 
 Suggested accent tokens:
 
-- `--accent: #b8ff4d`
-- `--accent-soft: rgba(184, 255, 77, 0.14)`
-- `--accent-border: rgba(184, 255, 77, 0.36)`
+- `--accent: #ff8a1f`
+- `--accent-strong: #ffa33d`
+- `--accent-soft: rgba(255, 138, 31, 0.12)`
+- `--accent-border: rgba(255, 138, 31, 0.42)`
 
-This gives the product a recognizable signature without turning the whole UI neon.
+Tangerine is a precision signal, not the main reading color. Use it for focus rings, primary action states, selected-row cues, important labels, and small live indicators. Do not use large orange panels, orange page backgrounds, or orange as the default body text color.
 
 ### Status Colors
 
@@ -126,9 +132,11 @@ Keep status colors muted and functional:
 - info: desaturated blue
 - warning: amber
 - danger: red-orange
-- success: accent green
+- success: muted green
 
 Status colors should appear mostly in badges, dots, and subtle row indicators, not full-panel fills.
+
+Critical workflow states should not rely on color alone. Pair status color with text, iconography, placement, shape, or another non-color cue when the state changes what the user should do next.
 
 ## Spacing and Rhythm
 
@@ -167,14 +175,13 @@ The main shell should not look like stacked floating cards on a dark background.
 The sidebar is a structured queue. It should contain:
 
 1. top-level global actions
-2. Inbox
-3. Recents / Directories lens switch
-4. thread or project lists
-5. utility footer items
+2. Inbox / Recents / Directories thread lens switch
+3. thread or project lists
+4. utility footer items
 
 Rules:
 
-- Inbox belongs at the top of the navigation stack
+- Inbox is the leftmost thread lens and should show unread work
 - section headers should be quiet, compact, and utility-first
 - rows should carry metadata inline
 - active row state should be obvious without being loud
@@ -333,6 +340,7 @@ Avoid all of the following:
 - giant empty dark surfaces
 - every section boxed in the same bordered card
 - saturated blue-on-black default Electron look
+- orange-dominant terminal cosplay
 - heavy gradients
 - purple accents
 - oversized radii

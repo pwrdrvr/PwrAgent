@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { RendererErrorReport } from "../../../shared/renderer-error";
 import type {
   AgentEvent,
   AppServerListSkillsRequest,
@@ -79,6 +80,7 @@ export type DesktopApi = {
   resetDirectoryLaunchpad?: (
     request: ResetDirectoryLaunchpadRequest
   ) => Promise<ResetDirectoryLaunchpadResponse>;
+  reportRendererError?: (report: RendererErrorReport) => Promise<void>;
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
   onWindowFocus?: (callback: () => void) => () => void;
   platform?: string;

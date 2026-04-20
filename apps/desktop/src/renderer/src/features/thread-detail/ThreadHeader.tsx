@@ -3,8 +3,6 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 
 type ThreadHeaderProps = {
-  fetchedAt?: number;
-  messageCount: number;
   thread: NavigationThreadSummary;
 };
 
@@ -13,7 +11,9 @@ export function ThreadHeader(props: ThreadHeaderProps) {
     <header className="thread-header">
       <div>
         <div className="thread-header__eyebrow-row">
-          <p className="eyebrow">Thread detail</p>
+          <h2 className="thread-header__compact-title" title={props.thread.title}>
+            {props.thread.title}
+          </h2>
           <span className="thread-row__chip thread-row__chip--backend">
             {formatBackendLabel(props.thread.source)}
           </span>
@@ -21,28 +21,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             {formatExecutionModeLabel(props.thread.executionMode)}
           </span>
         </div>
-        <h2 className="thread-header__title">{props.thread.title}</h2>
-      </div>
-
-      <div className="thread-header__stats">
-        <div>
-          <span className="thread-header__stat-label">Messages</span>
-          <strong>{props.messageCount}</strong>
-        </div>
-        <div>
-          <span className="thread-header__stat-label">Synced</span>
-          <strong>{props.fetchedAt ? formatTimestamp(props.fetchedAt) : "Waiting"}</strong>
-        </div>
       </div>
     </header>
   );
-}
-
-function formatTimestamp(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit"
-  }).format(timestamp);
 }

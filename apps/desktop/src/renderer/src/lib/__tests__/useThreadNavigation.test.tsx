@@ -89,6 +89,91 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("keeps a selected unread thread in Inbox until another item is selected", async () => {
+    const markThreadSeen = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-unread",
+      seenAt: Date.now(),
+      seenUpdatedAt: 2_000,
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-unread"],
+      threads: [
+        {
+          id: "thread-unread",
+          title: "Unread thread",
+          titleSource: "explicit" as const,
+          summary: "Unread thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "updated-since-seen" as const,
+            lastSeenUpdatedAt: 1_000,
+          },
+          updatedAt: 2_000,
+        },
+        {
+          id: "thread-read",
+          title: "Read thread",
+          titleSource: "explicit" as const,
+          summary: "Read thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 1_500,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      markThreadSeen,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.inboxThreads.map((thread) => thread.id)).toEqual([
+        "thread-unread",
+      ]);
+    });
+
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-unread",
+        seenUpdatedAt: 2_000,
+      });
+    });
+    expect(result.current.inboxThreads.map((thread) => thread.id)).toEqual([
+      "thread-unread",
+    ]);
+
+    act(() => {
+      result.current.selectThread(result.current.threads[1]!);
+    });
+
+    await waitFor(() => {
+      expect(result.current.inboxThreads).toHaveLength(0);
+    });
+  });
+
   it("coalesces repeated turn lifecycle notifications into one navigation refresh", async () => {
     const listeners = new Set<(event: any) => void>();
     const getNavigationSnapshot = vi.fn(async () => ({

@@ -92,6 +92,17 @@ const sharedThread = {
   ],
 };
 
+const updatedSinceSeenThread = {
+  ...sharedThread,
+  id: "thread-updated",
+  title: "Updated thread",
+  inbox: {
+    inInbox: true,
+    reason: "updated-since-seen" as const,
+    lastSeenUpdatedAt: sharedThread.updatedAt - 1,
+  },
+};
+
 const directories: NavigationDirectorySummary[] = [
   {
     key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
@@ -115,14 +126,13 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
-  it("keeps Inbox first and renders compact directory rows from directory summaries", () => {
+  it("renders Inbox as the first thread lens and keeps directory rows available", () => {
     render(
       <Sidebar
         backends={backends}
         browseMode="directories"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
@@ -136,8 +146,16 @@ describe("Sidebar", () => {
       />
     );
 
-    const headings = screen.getAllByRole("heading", { level: 2 });
-    expect(headings.map((heading) => heading.textContent)).toEqual(["Inbox", "Browse"]);
+    expect(screen.queryByRole("heading", { level: 2, name: "Browse" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Thread browser" })).toBeInTheDocument();
+    const lensButtons = within(
+      screen.getByRole("tablist", { name: "Thread lenses" })
+    ).getAllByRole("button");
+    expect(lensButtons.map((button) => button.textContent)).toEqual([
+      "inbox",
+      "recents",
+      "directories",
+    ]);
     expect(screen.getByRole("button", { name: "directories" })).toHaveAttribute(
       "aria-pressed",
       "true"
@@ -156,7 +174,6 @@ describe("Sidebar", () => {
         browseMode="directories"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
@@ -186,7 +203,6 @@ describe("Sidebar", () => {
         browseMode="directories"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
@@ -201,24 +217,25 @@ describe("Sidebar", () => {
       />
     );
 
-    const browseSection = screen.getByRole("heading", { level: 2, name: "Browse" }).closest("section");
-    expect(browseSection).not.toBeNull();
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
     const threadButton = within(browseSection as HTMLElement).getByRole("button", {
       name: /Cross-project cleanup/i,
     });
 
-    expect(threadButton.querySelector('[data-thread-status="thinking"]')).not.toBeNull();
+    const thinkingIndicator = threadButton.querySelector('[data-thread-status="thinking"]');
+    expect(thinkingIndicator).not.toBeNull();
+    expect(thinkingIndicator).toHaveAttribute("aria-label", "Thinking");
+    expect(thinkingIndicator).toHaveAttribute("title", "Thinking");
     expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
   });
 
-  it("falls back to the unread indicator in recents once the turn is done", () => {
+  it("does not duplicate new-thread inbox membership as an attention marker in recents", () => {
     render(
       <Sidebar
         backends={backends}
         browseMode="recents"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
@@ -232,14 +249,83 @@ describe("Sidebar", () => {
       />
     );
 
-    const browseSection = screen.getByRole("heading", { level: 2, name: "Browse" }).closest("section");
-    expect(browseSection).not.toBeNull();
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
     const threadButton = within(browseSection as HTMLElement).getByRole("button", {
       name: /Cross-project cleanup/i,
     });
 
     expect(threadButton.querySelector('[data-thread-status="thinking"]')).toBeNull();
+    expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
+  });
+
+  it("shows an unread marker in recents for threads updated since they were seen", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[updatedSinceSeenThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[updatedSinceSeenThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
+      name: /Updated thread/i,
+    });
+
+    expect(threadButton.querySelector('[data-thread-status="thinking"]')).toBeNull();
+    const unreadIndicator = threadButton.querySelector('[data-thread-status="unread"]');
+    expect(unreadIndicator).not.toBeNull();
+    expect(unreadIndicator).toHaveAttribute("aria-label", "Unread update");
+    expect(unreadIndicator).toHaveAttribute("title", "Unread update");
+    expect(
+      threadButton.querySelector('[data-thread-status="unread"] .thread-row__status-cookie')
+    ).not.toBeNull();
+    expect(unreadIndicator).not.toHaveTextContent("!");
+  });
+
+  it("renders unread inbox rows with the same dense treatment as recents", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[updatedSinceSeenThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[sharedThread, updatedSinceSeenThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
+      name: /Updated thread/i,
+    });
+
+    expect(screen.getByRole("button", { name: "inbox" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
     expect(threadButton.querySelector('[data-thread-status="unread"]')).not.toBeNull();
+    expect(within(threadButton).getByText("PwrAgnt")).toBeInTheDocument();
+    expect(screen.queryByText("Cross-project cleanup")).not.toBeInTheDocument();
   });
 
   it("renders directory rows without the raw chevron glyph affordance", () => {
@@ -249,7 +335,6 @@ describe("Sidebar", () => {
         browseMode="directories"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
@@ -281,7 +366,6 @@ describe("Sidebar", () => {
         browseMode="recents"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
@@ -312,7 +396,6 @@ describe("Sidebar", () => {
         browseMode="recents"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[
           {
             ...sharedThread,
@@ -348,7 +431,6 @@ describe("Sidebar", () => {
         browseMode="recents"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
