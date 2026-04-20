@@ -74,4 +74,30 @@ describe("search_code tool", () => {
       commandAction: "search",
     });
   });
+
+  it("stops broad ripgrep searches at the requested match limit", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    await fs.mkdir(path.join(workspace.path, "src"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspace.path, "src", "many.txt"),
+      Array.from({ length: 30_000 }, (_, index) => `BROAD_MARKER_${index}`).join("\n"),
+      "utf8",
+    );
+    const tool = createSearchCodeTool();
+
+    const result = await tool.execute(
+      tool.parseArguments({
+        query: "BROAD_MARKER",
+        fixedStrings: true,
+        limit: 5,
+      }),
+      { cwd: workspace.path },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.matches).toHaveLength(5);
+    expect(result.data?.truncated).toBe(true);
+    expect(result.output.split("\n")).toHaveLength(5);
+  });
 });

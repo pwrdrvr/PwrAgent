@@ -1,4 +1,5 @@
 import type { AppServerCommandAction } from "../app-server/protocol.js";
+import type { ProcessOutputDelta } from "./process-runner.js";
 import { InvalidToolArgumentsError } from "./tool-errors.js";
 
 export type ToolInputSchemaProperty = {
@@ -19,6 +20,7 @@ export type ToolExecutionContext = {
   approvalPolicy?: string;
   sandbox?: string;
   signal?: AbortSignal;
+  onOutputDelta?: (delta: ProcessOutputDelta) => void;
   requestApproval?: (
     request: ToolApprovalRequest,
   ) => Promise<unknown> | unknown;
@@ -76,6 +78,7 @@ export interface ToolExecutor {
       arguments: Record<string, unknown>;
       commandAction?: AppServerCommandAction;
       command?: string;
+      data?: Record<string, unknown>;
     };
   }>;
 }

@@ -424,6 +424,120 @@ describe("GrokProvider tool loop", () => {
     ]);
   });
 
+  it("emits command output deltas from shell tool execution", async () => {
+    const fetchImpl = createFetchSequence([
+      makeXaiFunctionCallResponse({
+        id: "resp_shell_delta",
+        calls: [
+          {
+            callId: "call_shell_delta",
+            name: "shell_command",
+            argumentsText: JSON.stringify({ command: "echo live" }),
+          },
+        ],
+      }),
+      makeXaiResponse({ id: "resp_shell_delta_final", text: "Done." }),
+    ]);
+    const provider = new GrokProvider({
+      apiKey: "test-key",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const tools: ToolDescriptor[] = [
+      {
+        name: "shell_command",
+        description: "Run a shell command.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            command: { type: "string" },
+          },
+          required: ["command"],
+          additionalProperties: false,
+        },
+        readOnly: false,
+      },
+    ];
+    const executor: ToolExecutor = {
+      listTools: () => tools,
+      getTool: (name) => tools.find((tool) => tool.name === name),
+      executeTool: async (invocation, context) => {
+        context.onOutputDelta?.({
+          stream: "stdout",
+          text: "live output",
+          bytes: 11,
+        });
+        return {
+          toolName: invocation.name,
+          arguments: invocation.arguments ?? {},
+          success: true,
+          output: "live output",
+          data: {
+            exitCode: 0,
+            stdoutTruncated: false,
+          },
+          commandAction: "unknown",
+          item: {
+            type: "commandExecution",
+            text: "live output",
+            toolName: invocation.name,
+            success: true,
+            arguments: invocation.arguments ?? {},
+            commandAction: "unknown",
+            command: "echo live",
+            data: {
+              exitCode: 0,
+              stdoutTruncated: false,
+            },
+          },
+        };
+      },
+    };
+
+    const activeTurn = provider.startTurn({
+      thread: {
+        threadId: "thread-123",
+        cwd: "/repo/workspace",
+        model: "grok-4.20-reasoning",
+      },
+      input: [{ type: "text", text: "Run shell." }],
+      tools: executor,
+    });
+    const { events } = collectSubscribedEvents(activeTurn.subscribe);
+
+    await expect(activeTurn.result).resolves.toEqual({
+      assistantText: "Done.",
+      providerResponseId: "resp_shell_delta_final",
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "item_started",
+        item: expect.objectContaining({
+          id: "call_shell_delta",
+          type: "commandExecution",
+        }),
+      }),
+      {
+        type: "item_command_output_delta",
+        itemId: "call_shell_delta",
+        delta: "live output",
+        stream: "stdout",
+        bytes: 11,
+      },
+      expect.objectContaining({
+        type: "item_completed",
+        item: expect.objectContaining({
+          id: "call_shell_delta",
+          type: "commandExecution",
+          data: {
+            exitCode: 0,
+            stdoutTruncated: false,
+          },
+        }),
+      }),
+    ]);
+  });
+
   it("turns malformed tool arguments into a failed tool item instead of crashing", async () => {
     const fetchImpl = createFetchSequence([
       makeXaiFunctionCallResponse({
@@ -529,7 +643,7 @@ describe("GrokProvider tool loop", () => {
     });
 
     await expect(activeTurn.result).rejects.toThrow(
-      "Grok tool loop exceeded the maximum round limit (1)",
+      "Grok tool loop exceeded the maximum round limit (1) before round 2",
     );
   });
 });

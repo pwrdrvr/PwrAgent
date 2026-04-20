@@ -29,10 +29,11 @@ export class LocalToolExecutor implements ToolExecutor {
 
     try {
       const parsedArguments = tool.parseArguments(invocation.arguments ?? {});
+      const normalizedArguments = stripUndefined(parsedArguments);
       const execution = await tool.execute(parsedArguments, context);
       return {
         toolName: tool.name,
-        arguments: parsedArguments,
+        arguments: normalizedArguments,
         success: execution.success,
         output: execution.output,
         data: execution.data,
@@ -42,15 +43,24 @@ export class LocalToolExecutor implements ToolExecutor {
           text: execution.output,
           toolName: tool.name,
           success: execution.success,
-          arguments: parsedArguments,
+          arguments: normalizedArguments,
           commandAction: execution.commandAction,
-          command: execution.command,
+          ...(execution.command ? { command: execution.command } : {}),
+          ...(execution.itemType === "commandExecution" && execution.data
+            ? { data: execution.data }
+            : {}),
         },
       };
     } catch (error) {
       return failureResult(tool.name, invocation.arguments, error);
     }
   }
+}
+
+function stripUndefined<T extends Record<string, unknown>>(value: T): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined),
+  );
 }
 
 function failureResult(

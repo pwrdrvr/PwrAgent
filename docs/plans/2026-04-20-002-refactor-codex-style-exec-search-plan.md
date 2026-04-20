@@ -1,7 +1,7 @@
 ---
 title: "refactor: Codex-style exec and search runtime"
 type: refactor
-status: active
+status: completed
 date: 2026-04-20
 ---
 
@@ -166,7 +166,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Add a shared process runner**
+- [x] **Unit 1: Add a shared process runner**
 
 **Goal:** Create one internal process execution primitive for tool commands that continuously drains output, honors timeout/cancellation, and retains capped diagnostics without failing on output volume.
 
@@ -208,7 +208,7 @@ flowchart TB
 - Existing tools can consume the runner without duplicating process lifecycle code.
 - Tests prove high-output commands do not fail with `maxBuffer`-style errors.
 
-- [ ] **Unit 2: Move ripgrep search and file listing onto the runner**
+- [x] **Unit 2: Move ripgrep search and file listing onto the runner**
 
 **Goal:** Make `search_code` and `list_files` robust for large repositories and broad patterns by using streaming `rg` output and semantic result limits.
 
@@ -252,7 +252,7 @@ flowchart TB
 - No `execFile` maxBuffer path remains in `search_code` or `list_files`.
 - Search/list outputs remain concise enough to feed back into the model loop.
 
-- [ ] **Unit 3: Replace shell_command with streamed process execution**
+- [x] **Unit 3: Replace shell_command with streamed process execution**
 
 **Goal:** Make arbitrary shell execution Codex-like: safe command classification remains, approvals remain, output is drained continuously, final output is capped, and command output deltas can reach the app-server layer.
 
@@ -293,7 +293,7 @@ flowchart TB
 - `shell-command-tool.ts` no longer imports `exec`.
 - Shell command behavior remains approval-compatible and command-action-compatible.
 
-- [ ] **Unit 4: Wire command output deltas through provider and app-server events**
+- [x] **Unit 4: Wire command output deltas through provider and app-server events**
 
 **Goal:** Let command tools stream live output through the existing app-server notification contract while preserving final item completion and replay persistence.
 
@@ -338,7 +338,7 @@ flowchart TB
 - Grok command output can be observed live through app-server notifications.
 - Existing Codex desktop event handling is not regressed.
 
-- [ ] **Unit 5: Surface Grok tool items as desktop activity entries**
+- [x] **Unit 5: Surface Grok tool items as desktop activity entries**
 
 **Goal:** Make Grok `thread/read` replay activity visible in the desktop transcript so tool-heavy turns do not look empty or unreadable after hydration.
 
@@ -376,7 +376,7 @@ flowchart TB
 **Verification:**
 - A Grok turn that used tools has visible hydrated transcript activity after reload.
 
-- [ ] **Unit 6: Improve debug evidence for tool-loop failures**
+- [x] **Unit 6: Improve debug evidence for tool-loop failures**
 
 **Goal:** When a tool loop fails, make logs and rollout files explain which tool, command, cap, exit status, and round produced the failure.
 

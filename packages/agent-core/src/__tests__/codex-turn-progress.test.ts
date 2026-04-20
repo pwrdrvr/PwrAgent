@@ -79,6 +79,7 @@ describe("Codex turn progress", () => {
             toolName: undefined,
             success: undefined,
             arguments: undefined,
+            data: undefined,
           },
         },
       },
@@ -123,6 +124,7 @@ describe("Codex turn progress", () => {
             toolName: undefined,
             success: undefined,
             arguments: undefined,
+            data: undefined,
           },
         },
       },
@@ -139,5 +141,44 @@ describe("Codex turn progress", () => {
         },
       },
     ]);
+  });
+
+  it("emits command output deltas without completing the turn", async () => {
+    const provider = new FakeProvider();
+    const { server, notifications } = createTestHarness({ provider });
+    await server.request("thread/start", { cwd: "/repo/workspace" });
+
+    await server.request("turn/start", {
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Run command" }],
+    });
+
+    await provider.runs[0]?.emit({
+      type: "item_started",
+      item: {
+        id: "command-1",
+        type: "commandExecution",
+        command: "echo hello",
+      },
+    });
+    await provider.runs[0]?.emit({
+      type: "item_command_output_delta",
+      itemId: "command-1",
+      delta: "hello\n",
+      stream: "stdout",
+      bytes: 6,
+    });
+
+    expect(notifications.at(-1)).toEqual({
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-1",
+        runId: "turn-1",
+        itemId: "command-1",
+        delta: "hello\n",
+        stream: "stdout",
+        bytes: 6,
+      },
+    });
   });
 });

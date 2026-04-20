@@ -80,15 +80,65 @@ describe("shell_command tool", () => {
     );
 
     await expect(fs.stat(path.join(workspace.path, "created.txt"))).resolves.toBeTruthy();
-    expect(result).toEqual({
-      success: true,
-      output: "Command executed successfully (no output).",
-      data: {
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: true,
+        output: "Command executed successfully (no output).",
+        data: expect.objectContaining({
+          exitCode: 0,
+          status: "completed",
+        }),
+        commandAction: "unknown",
+        itemType: "commandExecution",
+        command: "touch created.txt",
+      }),
+    );
+  });
+
+  it("completes high-output commands without maxBuffer failures", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    const tool = createShellCommandTool();
+    const command = `${JSON.stringify(process.execPath)} -e "process.stdout.write('A'.repeat(11 * 1024 * 1024))"`;
+
+    const result = await tool.execute(
+      tool.parseArguments({ command }),
+      { cwd: workspace.path, approvalPolicy: "never" },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("output truncated");
+    expect(result.data).toEqual(
+      expect.objectContaining({
         exitCode: 0,
+        status: "completed",
+        stdoutTruncated: true,
+      }),
+    );
+  });
+
+  it("emits shell output deltas before command completion", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    const tool = createShellCommandTool();
+    const deltas: string[] = [];
+    const command = `${JSON.stringify(process.execPath)} -e "process.stdout.write('first'); process.stderr.write('second')"`;
+
+    const result = await tool.execute(
+      tool.parseArguments({ command }),
+      {
+        cwd: workspace.path,
+        approvalPolicy: "never",
+        onOutputDelta: (delta) => {
+          deltas.push(`${delta.stream}:${delta.text}`);
+        },
       },
-      commandAction: "unknown",
-      itemType: "commandExecution",
-      command: "touch created.txt",
-    });
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("first");
+    expect(result.output).toContain("STDERR: second");
+    expect(deltas.join("|")).toContain("stdout:first");
+    expect(deltas.join("|")).toContain("stderr:second");
   });
 });

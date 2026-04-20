@@ -25,6 +25,11 @@ describe("GrokRolloutStore", () => {
         status: "completed",
         command: "rg --files",
         commandAction: "search",
+        data: {
+          exitCode: 0,
+          stdoutTruncated: true,
+          outputLimitBytes: 1024,
+        },
       });
       state.setPreviousResponseId("thread-1", "resp_1");
 
@@ -64,6 +69,11 @@ describe("GrokRolloutStore", () => {
             status: "completed",
             command: "rg --files",
             commandAction: "search",
+            data: {
+              exitCode: 0,
+              stdoutTruncated: true,
+              outputLimitBytes: 1024,
+            },
           },
         ],
         lastUserMessage: "Ship Unit 3",
@@ -85,6 +95,7 @@ describe("GrokRolloutStore", () => {
       expect(rolloutJsonl).toContain('"type":"message"');
       expect(rolloutJsonl).toContain("Ship Unit 3");
       expect(rolloutJsonl).toContain('"command":"rg --files"');
+      expect(rolloutJsonl).toContain('"stdoutTruncated":true');
     } finally {
       await temp.cleanup();
     }

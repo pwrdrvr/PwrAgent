@@ -23,6 +23,7 @@ import type {
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
 import type { JsonRpcObserver } from "../codex-app-server/json-rpc";
+import { summarizeToolActivityItems } from "../app-server/thread-activity";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
 
@@ -206,9 +207,24 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
     lastUserMessage?: unknown;
     lastAssistantMessage?: unknown;
     messages?: Array<{ role?: unknown; text?: unknown }>;
+    items?: unknown[];
   };
 
   const rawMessages = Array.isArray(record.messages) ? record.messages : [];
+  const rawItems = Array.isArray(record.items)
+    ? record.items
+        .map((item) =>
+          item && typeof item === "object" && !Array.isArray(item)
+            ? (item as Record<string, unknown>)
+            : undefined
+        )
+        .filter((item): item is Record<string, unknown> => item !== undefined)
+    : [];
+  const replayFromItems = extractReplayFromItems(rawItems, pagination);
+  if (replayFromItems) {
+    return replayFromItems;
+  }
+
   if (rawMessages.length === 0) {
     const fallbackMessages = [
       typeof record.lastUserMessage === "string"
@@ -306,6 +322,101 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
     lastAssistantMessage,
     pagination,
   };
+}
+
+function extractReplayFromItems(
+  items: Record<string, unknown>[],
+  pagination: AppServerThreadReplay["pagination"],
+): AppServerThreadReplay | undefined {
+  if (!items.some(isActivityReplayItem)) {
+    return undefined;
+  }
+
+  const entries: AppServerThreadEntry[] = [];
+  const messages: Array<{ id: string; role: "user" | "assistant"; text: string }> = [];
+  let pendingActivity: Record<string, unknown>[] = [];
+  let messageIndex = 0;
+
+  const flushActivity = () => {
+    const activity = summarizeToolActivityItems(pendingActivity);
+    pendingActivity = [];
+    if (activity) {
+      entries.push(activity);
+    }
+  };
+
+  for (const item of items) {
+    const message = itemToMessage(item, ++messageIndex);
+    if (message) {
+      flushActivity();
+      entries.push({
+        type: "message",
+        ...message,
+      });
+      messages.push(message);
+      continue;
+    }
+    messageIndex -= 1;
+    if (isActivityReplayItem(item)) {
+      pendingActivity.push(item);
+    }
+  }
+  flushActivity();
+
+  let lastUserMessage: string | undefined;
+  let lastAssistantMessage: string | undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!lastUserMessage && message?.role === "user") {
+      lastUserMessage = message.text;
+    }
+    if (!lastAssistantMessage && message?.role === "assistant") {
+      lastAssistantMessage = message.text;
+    }
+    if (lastUserMessage && lastAssistantMessage) {
+      break;
+    }
+  }
+
+  return {
+    entries,
+    messages,
+    lastUserMessage,
+    lastAssistantMessage,
+    pagination,
+  };
+}
+
+function itemToMessage(
+  item: Record<string, unknown>,
+  index: number,
+): { id: string; role: "user" | "assistant"; text: string } | undefined {
+  const type = typeof item.type === "string" ? item.type : undefined;
+  const role =
+    item.role === "user" || type === "userMessage"
+      ? "user"
+      : item.role === "assistant" || type === "agentMessage"
+        ? "assistant"
+        : undefined;
+  const text = typeof item.text === "string" ? item.text : undefined;
+  if (!role || !text) {
+    return undefined;
+  }
+  return {
+    id: `message-${index}`,
+    role,
+    text,
+  };
+}
+
+function isActivityReplayItem(item: Record<string, unknown>): boolean {
+  const type = typeof item.type === "string" ? item.type : undefined;
+  const toolName = typeof item.toolName === "string" ? item.toolName : undefined;
+  return (
+    type === "dynamicToolCall" ||
+    type === "commandExecution" ||
+    Boolean(toolName)
+  );
 }
 
 function extractThreadId(value: unknown): string | undefined {
