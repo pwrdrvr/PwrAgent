@@ -1,9 +1,15 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import type { AppServerBackendKind, NavigationLaunchpadDefaults } from "@pwragnt/shared";
 import { launchElectronApp } from "./fixtures/electron-app";
+
+async function assertTangerineFocusRing(locator: Locator) {
+  await locator.focus();
+  await expect(locator).toHaveCSS("outline-color", "rgb(255, 138, 31)");
+  await expect(locator).toHaveCSS("outline-style", "solid");
+}
 
 async function createProviderSelectorFixture(params: {
   backend: AppServerBackendKind;
@@ -96,10 +102,16 @@ test("OpenAI new-thread selector uses concrete model and reasoning defaults", as
     await expect(app.window.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
 
     const settings = app.window.getByLabel("New thread settings");
-    await expect(settings.getByLabel("Provider")).toHaveValue("codex");
-    await expect(settings.getByLabel("Model")).toHaveValue("gpt-5.4");
-    await expect(settings.getByLabel("Reasoning")).toHaveValue("medium");
+    const providerSelect = settings.getByLabel("Provider");
+    const modelSelect = settings.getByLabel("Model");
+    const reasoningSelect = settings.getByLabel("Reasoning");
+    await expect(providerSelect).toHaveValue("codex");
+    await expect(modelSelect).toHaveValue("gpt-5.4");
+    await expect(reasoningSelect).toHaveValue("medium");
     await expect(settings.getByRole("option", { name: /^Default$/ })).toHaveCount(0);
+    await assertTangerineFocusRing(providerSelect);
+    await assertTangerineFocusRing(modelSelect);
+    await assertTangerineFocusRing(reasoningSelect);
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -126,15 +138,21 @@ test("Grok new-thread selector defaults to reasoning model with medium reasoning
     await expect(app.window.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
 
     const settings = app.window.getByLabel("New thread settings");
-    await expect(settings.getByLabel("Provider")).toHaveValue("grok");
-    await expect(settings.getByLabel("Model")).toHaveValue("grok-4.20-reasoning");
-    await expect(settings.getByLabel("Reasoning")).toHaveValue("medium");
+    const providerSelect = settings.getByLabel("Provider");
+    const modelSelect = settings.getByLabel("Model");
+    const reasoningSelect = settings.getByLabel("Reasoning");
+    await expect(providerSelect).toHaveValue("grok");
+    await expect(modelSelect).toHaveValue("grok-4.20-reasoning");
+    await expect(reasoningSelect).toHaveValue("medium");
     await expect(settings.getByRole("option", { name: /^Default$/ })).toHaveCount(0);
+    await assertTangerineFocusRing(providerSelect);
+    await assertTangerineFocusRing(modelSelect);
+    await assertTangerineFocusRing(reasoningSelect);
 
-    await settings.getByLabel("Model").selectOption("grok-4.20-fast");
+    await modelSelect.selectOption("grok-4.20-fast");
     await expect(settings.getByLabel("Reasoning")).toHaveCount(0);
 
-    await settings.getByLabel("Model").selectOption("grok-4.20-reasoning");
+    await modelSelect.selectOption("grok-4.20-reasoning");
     await expect(settings.getByLabel("Reasoning")).toHaveValue("medium");
   } finally {
     await app.close();
