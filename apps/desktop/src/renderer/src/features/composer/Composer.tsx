@@ -34,6 +34,7 @@ type ComposerProps = {
   onActiveRunIdChange?: (runId?: string) => void;
   onEnsureSkillsLoaded?: () => void | Promise<void>;
   pendingRequestActive?: boolean;
+  pendingUserInputActive?: boolean;
   onMaterializeLaunchpad?: (
     directoryKey: string,
     input?: AppServerTurnInputItem[]
@@ -379,7 +380,11 @@ export function Composer(props: ComposerProps) {
     } catch (error) {
       setInterrupting(false);
       props.onPendingStatusChange?.(
-        props.pendingRequestActive ? "Waiting for approval" : "Thinking"
+        props.pendingRequestActive
+          ? "Waiting for approval"
+          : props.pendingUserInputActive
+            ? "Waiting for input"
+            : "Thinking"
       );
       setSendError(error instanceof Error ? error.message : String(error));
     }
@@ -834,6 +839,10 @@ export function Composer(props: ComposerProps) {
       ) : props.pendingRequestActive ? (
         <p className="composer__meta">
           Waiting for approval before this turn can continue.
+        </p>
+      ) : props.pendingUserInputActive ? (
+        <p className="composer__meta">
+          Waiting for input before this turn can continue.
         </p>
       ) : props.launchpad ? (
         <p className="composer__meta">

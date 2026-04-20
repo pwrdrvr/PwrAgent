@@ -210,6 +210,37 @@ export type AppServerPendingRequestNotification = {
   };
 };
 
+export type AppServerToolRequestUserInputOption = {
+  label: string;
+  description: string;
+};
+
+export type AppServerToolRequestUserInputQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options: AppServerToolRequestUserInputOption[] | null;
+};
+
+export type AppServerToolRequestUserInputAnswer = {
+  answers: string[];
+};
+
+export type AppServerToolRequestUserInputResponse = {
+  answers: Record<string, AppServerToolRequestUserInputAnswer | undefined>;
+};
+
+export type AppServerToolRequestUserInputNotification = {
+  method: "item/tool/requestUserInput";
+  params: AppServerPendingRequestNotification["params"] & {
+    turnId?: string;
+    itemId?: string;
+    questions: AppServerToolRequestUserInputQuestion[];
+  };
+};
+
 export type AppServerNotification =
   | {
       method: "turn/started";
@@ -323,6 +354,7 @@ export type AppServerNotification =
       method: "turn/requestApproval" | "review/requestApproval";
       params: AppServerPendingRequestNotification["params"];
     }
+  | AppServerToolRequestUserInputNotification
   | {
       method: "thread/status/changed";
       params: {

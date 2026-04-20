@@ -65,6 +65,7 @@ export function App() {
           messageCount={session.messages.length}
           pendingAssistantMessage={session.pendingAssistantMessage}
           pendingRequest={session.pendingRequest}
+          pendingUserInput={session.pendingUserInput}
           pendingStatusText={session.pendingStatusText}
           platform={desktopApi?.platform}
           selectedDirectory={navigation.selectedDirectory}
@@ -94,6 +95,7 @@ export function App() {
           }
           onTranscriptViewportChange={session.setViewport}
           onUpdateLaunchpad={navigation.updateDirectoryLaunchpad}
+          onUpdatePendingUserInput={session.updatePendingUserInput}
           removeOptimisticMessage={session.removeOptimisticMessage}
           transcriptViewport={session.viewport}
         />

@@ -10,10 +10,12 @@ import type {
   AppServerThreadReplayPagination
 } from "@pwragnt/shared";
 import { ThinkingScanner } from "./ThinkingScanner";
+import { PendingQuestionnaire } from "./PendingQuestionnaire";
 import { TranscriptActivity } from "./TranscriptActivity";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
+import type { PendingQuestionnaireState } from "./questionnaire";
 
 type TranscriptListProps = {
   entries: AppServerThreadEntry[];
@@ -25,6 +27,7 @@ type TranscriptListProps = {
   pendingPlanEntry?: AppServerThreadPlanEntry;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingRequestBusy?: boolean;
+  pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
   pagination?: AppServerThreadReplayPagination;
   restoredViewport?: {
@@ -39,6 +42,8 @@ type TranscriptListProps = {
     scrollTop: number;
   }) => void;
   onRespondToPendingRequest?: (decision: "approve" | "decline" | "cancel") => Promise<void>;
+  onPendingUserInputChange?: (state: PendingQuestionnaireState) => void;
+  onSubmitPendingUserInput?: (state: PendingQuestionnaireState) => Promise<void>;
   onLoadOlder: () => Promise<void>;
 };
 
@@ -168,6 +173,7 @@ export function TranscriptList(props: TranscriptListProps) {
       props.pendingAssistantMessage ||
       props.pendingPlanEntry ||
       props.pendingRequest ||
+      props.pendingUserInput ||
       props.pendingStatusText
   );
 
@@ -185,7 +191,8 @@ export function TranscriptList(props: TranscriptListProps) {
       (props.pendingAssistantMessage ? 1 : 0) +
       (props.pendingPlanEntry ? 1 : 0) +
       (props.pendingStatusText ? 1 : 0) +
-      (props.pendingRequest ? 1 : 0);
+      (props.pendingRequest ? 1 : 0) +
+      (props.pendingUserInput ? 1 : 0);
     const distanceFromBottom = Math.max(
       container.scrollHeight - container.clientHeight - container.scrollTop,
       0
@@ -208,6 +215,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
     props.pendingRequest,
+    props.pendingUserInput,
     props.pendingStatusText,
     props.threadId
   ]);
@@ -292,7 +300,8 @@ export function TranscriptList(props: TranscriptListProps) {
               (props.pendingAssistantMessage ? 1 : 0) +
               (props.pendingPlanEntry ? 1 : 0) +
               (props.pendingStatusText ? 1 : 0) +
-              (props.pendingRequest ? 1 : 0))
+              (props.pendingRequest ? 1 : 0) +
+              (props.pendingUserInput ? 1 : 0))
     );
 
     if (hasPrependedMessages && previousSnapshot) {
@@ -338,6 +347,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
     props.pendingRequest,
+    props.pendingUserInput,
     props.pendingStatusText,
     props.restoredViewport,
     props.threadId,
@@ -415,6 +425,18 @@ export function TranscriptList(props: TranscriptListProps) {
             <ThinkingScanner />
             <span>{props.pendingStatusText}</span>
           </div>
+        ) : null}
+        {props.pendingUserInput ? (
+          <PendingQuestionnaire
+            busy={props.pendingRequestBusy}
+            state={props.pendingUserInput}
+            onChange={(state) => {
+              props.onPendingUserInputChange?.(state);
+            }}
+            onSubmit={async (state) => {
+              await props.onSubmitPendingUserInput?.(state);
+            }}
+          />
         ) : null}
         {props.pendingRequest ? (
           <div className="transcript-request" role="group" aria-label="Pending approval">

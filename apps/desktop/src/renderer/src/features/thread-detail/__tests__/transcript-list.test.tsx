@@ -966,4 +966,45 @@ describe("TranscriptList", () => {
     );
     expect(screen.queryByText(/\/bin\/zsh -lc/)).not.toBeInTheDocument();
   });
+
+  it("renders pending user input without approval actions", () => {
+    render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingUserInput={{
+          method: "item/tool/requestUserInput",
+          threadId: "thread-1",
+          requestId: "input-request-1",
+          currentIndex: 0,
+          answers: [null],
+          questions: [
+            {
+              id: "approach",
+              header: "Approach",
+              question: "Which path should I take?",
+              options: [
+                {
+                  key: "A",
+                  label: "Small patch (Recommended)",
+                  description: "Keep this scoped.",
+                  recommended: true,
+                },
+              ],
+              allowFreeform: false,
+              secret: false,
+            },
+          ],
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Pending input" })).toBeInTheDocument();
+    expect(screen.getByText("Question 1 of 1")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Decline" })).not.toBeInTheDocument();
+  });
 });

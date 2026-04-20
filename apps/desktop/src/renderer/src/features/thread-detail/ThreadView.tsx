@@ -24,6 +24,10 @@ import { ThreadContextPanel } from "./ThreadContextPanel";
 import { ThreadHeader } from "./ThreadHeader";
 import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
 import { TranscriptList } from "./TranscriptList";
+import {
+  buildQuestionnaireResponse,
+  type PendingQuestionnaireState,
+} from "./questionnaire";
 
 function arePlanEntriesEquivalent(
   left: AppServerThreadPlanEntry,
@@ -212,6 +216,7 @@ type ThreadViewProps = {
   messageCount: number;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingRequest?: AppServerPendingRequestNotification;
+  pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
   platform?: string;
   selectedDirectory?: NavigationDirectorySummary;
@@ -233,6 +238,10 @@ type ThreadViewProps = {
     input?: AppServerTurnInputItem[]
   ) => Promise<void>;
   onPendingStatusChange?: (status?: string) => void;
+  onUpdatePendingUserInput?: (
+    requestId: string,
+    updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
+  ) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
   onTranscriptViewportChange?: (viewport?: {
     distanceFromBottom: number;
@@ -432,6 +441,33 @@ export function ThreadView(props: ThreadViewProps) {
     }
   }
 
+  async function submitPendingUserInput(
+    pendingUserInput: PendingQuestionnaireState
+  ): Promise<void> {
+    if (!props.desktopApi?.submitServerRequest || !selectedThread) {
+      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
+      return;
+    }
+
+    setPendingRequestBusy(true);
+    setPendingRequestError(undefined);
+
+    try {
+      await props.desktopApi.submitServerRequest({
+        backend: selectedThread.source,
+        threadId: selectedThread.id,
+        runId: pendingUserInput.runId,
+        requestId: pendingUserInput.requestId,
+        response: buildQuestionnaireResponse(pendingUserInput),
+      });
+      props.clearPendingRequest(pendingUserInput.requestId, "Thinking");
+    } catch (error) {
+      setPendingRequestError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPendingRequestBusy(false);
+    }
+  }
+
   if (!selectedThread && !selectedLaunchpad) {
     return (
       <section className="thread-empty-state">
@@ -570,14 +606,19 @@ export function ThreadView(props: ThreadViewProps) {
             pendingPlanEntry={pendingPlanEntry}
             pendingRequest={props.pendingRequest}
             pendingRequestBusy={pendingRequestBusy}
+            pendingUserInput={props.pendingUserInput}
             pendingStatusText={props.pendingStatusText}
             restoredViewport={props.transcriptViewport}
             skills={props.skills}
             threadId={`${selectedThread!.source}:${selectedThread!.id}`}
             onLoadOlder={props.onLoadOlder}
             onOpenImage={setExpandedImage}
-            onViewportChange={props.onTranscriptViewportChange}
             onRespondToPendingRequest={respondToPendingRequest}
+            onPendingUserInputChange={(state) => {
+              props.onUpdatePendingUserInput?.(state.requestId, () => state);
+            }}
+            onSubmitPendingUserInput={submitPendingUserInput}
+            onViewportChange={props.onTranscriptViewportChange}
           />
           {pendingRequestError ? (
             <p className="transcript-error">{pendingRequestError}</p>
@@ -612,6 +653,7 @@ export function ThreadView(props: ThreadViewProps) {
         onPendingStatusChange={props.onPendingStatusChange}
         onSetExecutionMode={props.onSetExecutionMode}
         pendingRequestActive={Boolean(props.pendingRequest)}
+        pendingUserInputActive={Boolean(props.pendingUserInput)}
         removeOptimisticMessage={props.removeOptimisticMessage}
         setExecutionModeError={props.setExecutionModeError}
         skillError={props.skillError}
