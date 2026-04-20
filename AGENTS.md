@@ -4,6 +4,7 @@
 
 - Product requirements live in `docs/brainstorms/`
 - Implementation plans live in `docs/plans/`
+- UI theme tokens and visual language live in [docs/UI-THEME.md](docs/UI-THEME.md)
 - Desktop UI direction lives in [docs/design/desktop-style-guide.md](docs/design/desktop-style-guide.md)
 
 ## Workflow
@@ -23,13 +24,14 @@
 ## Frontend and Desktop UI
 
 - For renderer UI work, follow the desktop style guide before inventing local styling.
+- For colors, tokens, and visual theme decisions, follow the UI theme guide before adding local CSS.
 - Favor thread-first information hierarchy over generic dashboard layout.
 - Do not ship scaffold narration or placeholder implementation copy in user-facing UI.
 
 ## Current Product Direction
 
 - Threads are first-class and may exist without a directory.
-- Inbox sits above Recents and Directories.
+- Inbox, Recents, and Directories share the thread lens switch, with Inbox leftmost.
 - Recents is the default browsing lens.
 - A thread may be associated with multiple linked Git directories.
 

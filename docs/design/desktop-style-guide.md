@@ -2,6 +2,8 @@
 
 This guide defines the visual language for the PwrAgnt desktop app. It exists to keep the product from drifting into generic Electron-dark-dashboard styling as more UI gets built.
 
+For exact theme tokens, palette usage, and Tangerine Terminal visual rules, use [docs/UI-THEME.md](../UI-THEME.md).
+
 ## Product Tone
 
 PwrAgnt should feel like a serious operator tool:
@@ -173,14 +175,13 @@ The main shell should not look like stacked floating cards on a dark background.
 The sidebar is a structured queue. It should contain:
 
 1. top-level global actions
-2. Inbox
-3. Recents / Directories lens switch
-4. thread or project lists
-5. utility footer items
+2. Inbox / Recents / Directories thread lens switch
+3. thread or project lists
+4. utility footer items
 
 Rules:
 
-- Inbox belongs at the top of the navigation stack
+- Inbox is the leftmost thread lens and should show unread work
 - section headers should be quiet, compact, and utility-first
 - rows should carry metadata inline
 - active row state should be obvious without being loud
