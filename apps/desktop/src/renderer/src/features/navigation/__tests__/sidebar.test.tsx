@@ -92,6 +92,17 @@ const sharedThread = {
   ],
 };
 
+const updatedSinceSeenThread = {
+  ...sharedThread,
+  id: "thread-updated",
+  title: "Updated thread",
+  inbox: {
+    inInbox: true,
+    reason: "updated-since-seen" as const,
+    lastSeenUpdatedAt: sharedThread.updatedAt - 1,
+  },
+};
+
 const directories: NavigationDirectorySummary[] = [
   {
     key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
@@ -214,7 +225,7 @@ describe("Sidebar", () => {
     expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
   });
 
-  it("does not duplicate inbox membership as an attention marker in recents", () => {
+  it("does not duplicate new-thread inbox membership as an attention marker in recents", () => {
     render(
       <Sidebar
         backends={backends}
@@ -244,6 +255,41 @@ describe("Sidebar", () => {
     expect(threadButton.querySelector('[data-thread-status="thinking"]')).toBeNull();
     expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
     expect(threadButton).not.toHaveTextContent("!");
+  });
+
+  it("shows an unread marker in recents for threads updated since they were seen", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        fetchedAt={Date.now()}
+        inboxThreads={[updatedSinceSeenThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[updatedSinceSeenThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const browseSection = screen.getByRole("heading", { level: 2, name: "Browse" }).closest("section");
+    expect(browseSection).not.toBeNull();
+    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
+      name: /Updated thread/i,
+    });
+
+    expect(threadButton.querySelector('[data-thread-status="thinking"]')).toBeNull();
+    const unreadIndicator = threadButton.querySelector('[data-thread-status="unread"]');
+    expect(unreadIndicator).not.toBeNull();
+    expect(unreadIndicator).toHaveAttribute("aria-label", "Unread update");
+    expect(unreadIndicator).toHaveAttribute("title", "Unread update");
+    expect(unreadIndicator).toHaveTextContent("!");
   });
 
   it("renders directory rows without the raw chevron glyph affordance", () => {
