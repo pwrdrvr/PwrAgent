@@ -256,20 +256,23 @@ test("top-level new thread rereads the created thread until the assistant reply 
   });
 
   try {
-    await app.window.getByRole("button", { name: "New thread" }).click();
-    await app.window
-      .getByRole("menuitem", { name: "Create thread with Codex in Default Access" })
-      .click();
-
     await expect(
-      app.window.getByRole("heading", { level: 2, name: "Untitled thread" }),
+      app.window.getByRole("region", { name: "Transcript" }).getByText("Existing Codex thread"),
     ).toBeVisible();
 
-    await app.window.getByLabel("Reply").fill("Let's test creating a new thread again");
-    await app.window.getByRole("button", { name: "Send" }).click();
+    await app.window.getByRole("button", { name: "New thread" }).click();
 
     await expect(
-      app.window.getByRole("region", { name: "Transcript" }).getByText("Let's test creating a new thread again"),
+      app.window.getByRole("heading", { level: 2, name: "New thread" }),
+    ).toBeVisible();
+
+    await app.window
+      .getByRole("textbox", { name: "New thread" })
+      .fill("Let's test creating a new thread again");
+    await app.window.getByRole("button", { name: "Start thread" }).click();
+
+    await expect(
+      app.window.getByRole("region", { name: "Transcript" }).getByText("No thread history yet."),
     ).toBeVisible();
 
     await app.advance({ stepId: "turn-started-1" });
@@ -277,6 +280,9 @@ test("top-level new thread rereads the created thread until the assistant reply 
 
     await expect(
       app.window.getByRole("heading", { level: 2, name: "Let's test creating a new thread again" }),
+    ).toBeVisible();
+    await expect(
+      app.window.getByRole("region", { name: "Transcript" }).getByText("Let's test creating a new thread again"),
     ).toBeVisible();
     await expect(
       app.window
