@@ -90,6 +90,8 @@ function normalizeReasoningEffort(
   if (!effort) {
     return undefined;
   }
-  const allowed = mode === "chat" ? ["low", "high"] : ["low", "medium", "high"];
-  return allowed.includes(effort) ? effort : undefined;
+  if (mode === "chat") {
+    return undefined;
+  }
+  return ["low", "medium", "high"].includes(effort) ? effort : undefined;
 }
