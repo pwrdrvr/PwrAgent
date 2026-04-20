@@ -142,7 +142,7 @@ describe("XaiResponsesClient", () => {
 });
 
 describe("GrokProvider", () => {
-  it("uses the thread model when starting an AI SDK turn", async () => {
+  it("uses the Responses API for supported Grok models", async () => {
     const streamTextImpl = vi.fn(() => ({
       text: Promise.resolve("Shipped."),
       response: Promise.resolve({ id: "resp_next" }),
@@ -158,8 +158,10 @@ describe("GrokProvider", () => {
       thread: {
         threadId: "thread-123",
         model: "grok-4.20-reasoning",
+        reasoningEffort: "medium",
       },
       input: [{ type: "text", text: "Ship it" }],
+      previousResponseId: "resp_prev",
     });
 
     await expect(activeTurn.result).resolves.toEqual({
@@ -172,13 +174,56 @@ describe("GrokProvider", () => {
       expect.objectContaining({
         model: expect.objectContaining({
           modelId: "grok-4.20-reasoning",
+          provider: "xai.responses",
         }),
+        providerOptions: {
+          xai: {
+            previousResponseId: "resp_prev",
+          },
+        },
         messages: [
           {
             role: "user",
             content: [{ type: "text", text: "Ship it" }],
           },
         ],
+      }),
+    );
+  });
+
+  it("falls back to Chat API for non-Responses Grok model families", async () => {
+    const streamTextImpl = vi.fn(() => ({
+      text: Promise.resolve("Shipped."),
+      response: Promise.resolve({ id: "resp_next" }),
+      sources: Promise.resolve([]),
+      providerMetadata: Promise.resolve(undefined),
+    }));
+    const provider = new GrokProvider({
+      apiKey: "test-key",
+      streamTextImpl,
+    });
+
+    const activeTurn = provider.startTurn({
+      thread: {
+        threadId: "thread-123",
+        model: "grok-code-fast-1",
+        reasoningEffort: "high",
+      },
+      input: [{ type: "text", text: "Ship it" }],
+      previousResponseId: "resp_prev",
+    });
+
+    await expect(activeTurn.result).resolves.toMatchObject({
+      assistantText: "Shipped.",
+      providerResponseId: "resp_next",
+    });
+    expect(streamTextImpl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          modelId: "grok-code-fast-1",
+          provider: "xai.chat",
+        }),
+        providerOptions: undefined,
       }),
     );
   });

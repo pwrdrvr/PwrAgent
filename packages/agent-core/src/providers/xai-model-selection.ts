@@ -10,6 +10,19 @@ export function resolveGrokModel(model?: string): string {
   return model?.trim() || DEFAULT_GROK_MODEL;
 }
 
+export function selectGrokModelMode(model?: string): XaiModelMode {
+  const modelId = resolveGrokModel(model);
+  if (
+    modelId === "grok-4" ||
+    modelId.startsWith("grok-4.20") ||
+    modelId.startsWith("grok-4-1") ||
+    modelId.startsWith("grok-4-fast")
+  ) {
+    return "responses";
+  }
+  return "chat";
+}
+
 export function selectXaiModel(params: {
   provider: XaiProvider;
   model?: string;

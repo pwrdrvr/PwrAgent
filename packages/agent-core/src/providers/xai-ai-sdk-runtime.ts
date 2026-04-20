@@ -67,12 +67,17 @@ export class XaiAiSdkRuntime {
 }
 
 export function buildXaiProviderOptions(params: {
+  model?: string;
   reasoningEffort?: string;
   previousResponseId?: string;
   mode?: XaiModelMode;
 }): Record<string, Record<string, unknown>> | undefined {
   const xaiOptions: Record<string, unknown> = {};
-  const reasoningEffort = normalizeReasoningEffort(params.reasoningEffort, params.mode);
+  const reasoningEffort = normalizeReasoningEffort(
+    params.reasoningEffort,
+    params.mode,
+    params.model,
+  );
   if (reasoningEffort) {
     xaiOptions.reasoningEffort = reasoningEffort;
   }
@@ -85,13 +90,18 @@ export function buildXaiProviderOptions(params: {
 function normalizeReasoningEffort(
   value: string | undefined,
   mode: XaiModelMode | undefined,
+  model?: string,
 ): string | undefined {
   const effort = value?.trim();
   if (!effort) {
     return undefined;
   }
-  if (mode === "chat") {
+  if (mode === "chat" || !supportsReasoningEffort(model)) {
     return undefined;
   }
   return ["low", "medium", "high"].includes(effort) ? effort : undefined;
+}
+
+function supportsReasoningEffort(model?: string): boolean {
+  return model?.trim().includes("multi-agent") ?? false;
 }
