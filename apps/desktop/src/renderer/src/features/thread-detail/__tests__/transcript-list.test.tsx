@@ -916,7 +916,7 @@ describe("TranscriptList", () => {
             threadId: "thread-1",
             requestId: "approval-1",
             reason: "Network access is required.",
-            command: "npm view dive",
+            command: "/bin/zsh -lc 'npm view dive'",
           },
         }}
         threadId="thread-1"
@@ -927,5 +927,37 @@ describe("TranscriptList", () => {
     expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
     expect(screen.getByText(/Network access is required/)).toBeInTheDocument();
     expect(screen.getByText(/Command: npm view dive/)).toBeInTheDocument();
+    expect(screen.queryByText(/\/bin\/zsh -lc/)).not.toBeInTheDocument();
+  });
+
+  it("prefers parsed command actions for command approval display", () => {
+    render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-1",
+            reason: "Network access is required.",
+            command: "/bin/zsh -lc 'npm view dive'",
+            commandActions: [
+              {
+                type: "search",
+                command: "npm view dive",
+              },
+            ],
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
+    expect(screen.getByText(/Command: npm view dive/)).toBeInTheDocument();
+    expect(screen.queryByText(/\/bin\/zsh -lc/)).not.toBeInTheDocument();
   });
 });

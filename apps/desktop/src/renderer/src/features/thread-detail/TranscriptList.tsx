@@ -56,13 +56,73 @@ type ScrollSnapshot = {
 const BOTTOM_THRESHOLD_PX = 24;
 type ScrollBottomMode = "instant" | "smooth";
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function firstStringByKeys(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return "";
+}
+
+function stripShellLauncher(command: string): string {
+  const match = command.match(
+    /^(?:\/[/\w]*\/)?(?:bash|zsh|sh|dash|ksh|tcsh|fish)\s+-lc\s+(['"])([\s\S]*)\1\s*$/
+  );
+
+  return match ? match[2] : command;
+}
+
+function commandFromActions(params: Record<string, unknown>): string {
+  const actions = params.commandActions;
+  if (!Array.isArray(actions) || actions.length === 0) {
+    return "";
+  }
+
+  return actions
+    .map((action) => {
+      const record = asRecord(action);
+      const command = record?.command;
+      return typeof command === "string" && command.trim() ? command.trim() : undefined;
+    })
+    .filter((command): command is string => Boolean(command))
+    .join(" && ");
+}
+
+function approvalDisplayCommand(params: Record<string, unknown>): string {
+  const parsedCommand = commandFromActions(params);
+  if (parsedCommand) {
+    return parsedCommand;
+  }
+
+  const rawCommand = firstStringByKeys(params, [
+    "command",
+    "cmd",
+    "displayCommand",
+    "rawCommand",
+    "shellCommand",
+  ]);
+
+  return rawCommand ? stripShellLauncher(rawCommand) : "";
+}
+
 function pendingRequestPrompt(request: AppServerPendingRequestNotification): string {
   if (typeof request.params.prompt === "string" && request.params.prompt.trim()) {
     return request.params.prompt.trim();
   }
 
   const reason = typeof request.params.reason === "string" ? request.params.reason.trim() : "";
-  const command = typeof request.params.command === "string" ? request.params.command.trim() : "";
+  const command = approvalDisplayCommand(request.params);
 
   if (reason && command) {
     return `${reason}\n\nCommand: ${command}`;
