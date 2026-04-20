@@ -46,7 +46,8 @@ export function createSearchCodeTool(): ToolDefinition<SearchCodeArguments> {
         },
         path: {
           type: "string",
-          description: "Optional directory path inside the workspace to scope the search.",
+          description:
+            "Optional file or directory path inside the workspace to scope the search.",
         },
         limit: {
           type: "integer",
@@ -120,45 +121,80 @@ async function searchWorkspace(
   limit: number,
   context: ToolExecutionContext,
 ): Promise<SearchMatch[]> {
+  const scope = await describeSearchScope(workspacePath, scopePath);
   const result = await searchWithRipgrep(
-    workspacePath,
-    scopePath,
+    scope,
     arguments_,
     limit,
     context,
   );
   if (result === "missing") {
-    return await searchWithFallback(workspacePath, scopePath, arguments_, limit);
+    return await searchWithFallback(workspacePath, scope, arguments_, limit);
   }
   return result;
 }
 
-async function searchWithRipgrep(
+type SearchScope = {
+  scopePath: string;
+  cwd: string;
+  target: string;
+  prefix: string;
+  isFile: boolean;
+};
+
+async function describeSearchScope(
   workspacePath: string,
   scopePath: string,
+): Promise<SearchScope> {
+  const stats = await fs.stat(scopePath);
+  if (stats.isFile()) {
+    return {
+      scopePath,
+      cwd: workspacePath,
+      target: toPosix(path.relative(workspacePath, scopePath)),
+      prefix: "",
+      isFile: true,
+    };
+  }
+  return {
+    scopePath,
+    cwd: scopePath,
+    target: ".",
+    prefix: path.relative(workspacePath, scopePath),
+    isFile: false,
+  };
+}
+
+async function searchWithRipgrep(
+  scope: SearchScope,
   arguments_: SearchCodeArguments,
   limit: number,
   context: ToolExecutionContext,
 ): Promise<SearchMatch[] | "missing"> {
-  const args = ["--line-number", "--no-heading", "--color", "never"];
+  const args = [
+    "--line-number",
+    "--no-heading",
+    "--with-filename",
+    "--color",
+    "never",
+  ];
   if (arguments_.fixedStrings) {
     args.push("--fixed-strings");
   }
   if (!arguments_.caseSensitive) {
     args.push("--ignore-case");
   }
-  args.push(arguments_.query, ".");
-  const prefix = path.relative(workspacePath, scopePath);
+  args.push(arguments_.query, scope.target);
   const matches: SearchMatch[] = [];
   let pending = "";
   const result = await runProcess({
     command: "rg",
     args,
-    cwd: scopePath,
+    cwd: scope.cwd,
     signal: context.signal,
     onStdoutChunk: (chunk, control) => {
       pending = collectRipgrepMatches({
-        prefix,
+        prefix: scope.prefix,
         input: pending + chunk.toString("utf8"),
         matches,
         limit,
@@ -171,7 +207,7 @@ async function searchWithRipgrep(
   });
   if (pending && matches.length < limit) {
     collectRipgrepMatches({
-      prefix,
+      prefix: scope.prefix,
       input: pending,
       matches,
       limit,
@@ -236,11 +272,13 @@ function parseRipgrepLine(prefix: string, line: string): SearchMatch {
 
 async function searchWithFallback(
   workspacePath: string,
-  scopePath: string,
+  scope: SearchScope,
   arguments_: SearchCodeArguments,
   limit: number,
 ): Promise<SearchMatch[]> {
-  const files = await collectFiles(scopePath, workspacePath, limit * 10);
+  const files = scope.isFile
+    ? [path.relative(workspacePath, scope.scopePath)]
+    : await collectFiles(scope.scopePath, workspacePath, limit * 10);
   const matcher = buildMatcher(arguments_);
   const matches: SearchMatch[] = [];
   for (const file of files) {

@@ -52,7 +52,7 @@ The target is not to copy Codex wholesale. The target is to take Codex's process
 
 ### Relevant Code and Patterns
 
-- `packages/agent-core/src/providers/responses-tool-loop.ts` already runs the xAI tool loop, emits provider item events, handles approval requests, and enforces `DEFAULT_MAX_TOOL_ROUNDS = 12`.
+- `packages/agent-core/src/providers/responses-tool-loop.ts` already runs the xAI tool loop, emits provider item events, handles approval requests, and enforces `DEFAULT_MAX_TOOL_ROUNDS = 100`.
 - `packages/agent-core/src/tools/tool-contract.ts` and `packages/agent-core/src/tools/tool-execution.ts` centralize local tool execution and normalized tool result metadata.
 - `packages/agent-core/src/tools/shell-safety.ts` already classifies `rg`, read-only `git`, `cat`, `head`, `tail`, `ls`, and `find` as safe read-only commands, with unsafe ripgrep flags requiring approval.
 - `packages/agent-core/src/app-server/turn-runner.ts` already maps provider item events into app-server notifications and persisted replay items.

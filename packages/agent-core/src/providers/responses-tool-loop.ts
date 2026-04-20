@@ -25,7 +25,7 @@ import type {
 } from "../tools/tool-contract.js";
 import { ToolError } from "../tools/tool-errors.js";
 
-const DEFAULT_MAX_TOOL_ROUNDS = 12;
+const DEFAULT_MAX_TOOL_ROUNDS = 100;
 
 type StartResponsesToolLoopOptions = {
   client: XaiResponsesClient;
