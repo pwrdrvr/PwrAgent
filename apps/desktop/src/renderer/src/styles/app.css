@@ -2239,6 +2239,47 @@ textarea {
   max-width: 520px;
 }
 
+.renderer-error-boundary {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px;
+  background: var(--bg-app);
+  color: var(--text-primary);
+}
+
+.renderer-error-boundary h1,
+.renderer-error-boundary p {
+  max-width: 680px;
+  margin: 0;
+}
+
+.renderer-error-boundary h1 {
+  font-size: 32px;
+  line-height: 1.1;
+}
+
+.renderer-error-boundary p {
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.renderer-error-boundary pre {
+  max-width: 760px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--danger-soft);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--danger-text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);

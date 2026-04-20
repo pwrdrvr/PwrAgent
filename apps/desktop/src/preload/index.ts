@@ -34,6 +34,7 @@ import type {
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragnt/shared";
+import type { RendererErrorReport } from "../shared/renderer-error";
 import {
   AGENT_EVENT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
@@ -52,6 +53,7 @@ import {
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  RENDERER_ERROR_REPORT_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
 } from "../shared/ipc";
 
@@ -130,6 +132,9 @@ const desktopApi = Object.freeze({
     request: ResetDirectoryLaunchpadRequest,
   ): Promise<ResetDirectoryLaunchpadResponse> =>
     await ipcRenderer.invoke(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+  reportRendererError: async (report: RendererErrorReport): Promise<void> => {
+    await ipcRenderer.invoke(RENDERER_ERROR_REPORT_CHANNEL, report);
+  },
   onWindowFocus: (callback: () => void): (() => void) => {
     const listener = () => callback();
     ipcRenderer.on(WINDOW_FOCUS_SYNC_CHANNEL, listener);

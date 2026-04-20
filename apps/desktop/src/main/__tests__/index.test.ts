@@ -6,6 +6,7 @@ const registerAppServerIpcHandlersMock = vi.fn();
 const disposeAppServerIpcHandlersMock = vi.fn();
 const registerAgentIpcHandlersMock = vi.fn();
 const disposeAgentIpcHandlersMock = vi.fn();
+const registerRendererErrorIpcHandlersMock = vi.fn();
 const initializeMainLoggerMock = vi.fn();
 const setApplicationMenuMock = vi.fn();
 const buildFromTemplateMock = vi.fn(() => ({ kind: "menu" }));
@@ -55,6 +56,10 @@ vi.mock("../ipc/agent-ipc", () => ({
   disposeAgentIpcHandlers: disposeAgentIpcHandlersMock,
 }));
 
+vi.mock("../ipc/renderer-error", () => ({
+  registerRendererErrorIpcHandlers: registerRendererErrorIpcHandlersMock,
+}));
+
 vi.mock("../log", () => ({
   initializeMainLogger: initializeMainLoggerMock,
 }));
@@ -77,6 +82,7 @@ describe("bootstrapApp", () => {
     disposeAppServerIpcHandlersMock.mockReset();
     registerAgentIpcHandlersMock.mockReset();
     disposeAgentIpcHandlersMock.mockReset();
+    registerRendererErrorIpcHandlersMock.mockReset();
     initializeMainLoggerMock.mockReset();
     setApplicationMenuMock.mockReset();
     buildFromTemplateMock.mockClear();
@@ -119,6 +125,7 @@ describe("bootstrapApp", () => {
     });
     expect(registerAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerAgentIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(registerRendererErrorIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(1);
   });
 
