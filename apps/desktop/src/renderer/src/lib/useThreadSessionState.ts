@@ -660,10 +660,29 @@ export function useThreadSessionState(params: {
           };
         }
 
-        if (
-          event.notification.method === "turn/failed" ||
-          event.notification.method === "turn/cancelled"
-        ) {
+        if (event.notification.method === "turn/failed") {
+          const errorMessage =
+            typeof event.notification.params.turn.error?.message === "string" &&
+            event.notification.params.turn.error.message.trim()
+              ? event.notification.params.turn.error.message
+              : "Turn failed.";
+
+          return {
+            ...current,
+            activeRunId: undefined,
+            completionHydrationRetries: 0,
+            error: errorMessage,
+            expectOwnUpdate: false,
+            lastTouchedAt: nextLastTouchedAt,
+            needsHydrationAfterCompletion: false,
+            pendingAssistantMessage: undefined,
+            pendingRequest: undefined,
+            pendingUserInput: undefined,
+            pendingStatusText: undefined,
+          };
+        }
+
+        if (event.notification.method === "turn/cancelled") {
           return {
             ...current,
             activeRunId: undefined,

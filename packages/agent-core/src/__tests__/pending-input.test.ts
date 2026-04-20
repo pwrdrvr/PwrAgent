@@ -54,6 +54,17 @@ describe("Codex pending input", () => {
       expect(provider.runs[0]?.eventResponses).toEqual([{ decision: "approve" }]);
       expect(notifications).toEqual([
         {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            runId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "in_progress",
+            },
+          },
+        },
+        {
           method: "serverRequest/resolved",
           params: {
             threadId: "thread-1",
@@ -182,6 +193,17 @@ describe("Codex pending input", () => {
     expect(provider.runs[0]?.eventResponses).toEqual([{ decision: "cancel" }]);
     expect(notifications).toEqual([
       {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "in_progress",
+          },
+        },
+      },
+      {
         method: "serverRequest/resolved",
         params: {
           threadId: "thread-1",
@@ -252,6 +274,17 @@ describe("Codex pending input", () => {
       { decision: "cancel" },
     ]);
     expect(notifications).toEqual([
+      {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          runId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "in_progress",
+          },
+        },
+      },
       {
         method: "serverRequest/resolved",
         params: {
