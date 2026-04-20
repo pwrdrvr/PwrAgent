@@ -775,6 +775,45 @@ describe("useThreadSessionState", () => {
     expect(result.current.activeRunId).toBe("turn-1");
   });
 
+  it("derives the transcript thinking status from an active run when status text is cleared", async () => {
+    const desktopApi: DesktopApi = {
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      result.current.setPendingStatusText("Thinking");
+      result.current.setActiveRunId("turn-1");
+      result.current.setPendingStatusText(undefined);
+    });
+
+    expect(result.current.activeRunId).toBe("turn-1");
+    expect(result.current.pendingStatusText).toBe("Thinking");
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+  });
+
   it("keeps thinking visible when an idle status arrives before turn completion", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
