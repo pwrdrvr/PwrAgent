@@ -1,7 +1,7 @@
 ---
 title: "feat: Add Tangerine Terminal Visual System"
 type: feat
-status: active
+status: completed
 date: 2026-04-20
 origin: docs/brainstorms/2026-04-20-desktop-tangerine-terminal-visual-system-requirements.md
 ---
@@ -100,7 +100,7 @@ The app currently has centralized styling, but the active palette reads too much
 
 ## Implementation Units
 
-- [ ] **Unit 1: Update Desktop Style Guide**
+- [x] **Unit 1: Update Desktop Style Guide**
 
 **Goal:** Replace the existing chartreuse control-room direction with the Tangerine Terminal design direction so future renderer work has the right source of truth.
 
@@ -129,7 +129,7 @@ The app currently has centralized styling, but the active palette reads too much
 - The style guide no longer recommends chartreuse as the primary accent.
 - The style guide clearly describes the new palette, accent discipline, state guidance, and unchanged desktop constraints.
 
-- [ ] **Unit 2: Establish Tangerine Theme Tokens**
+- [x] **Unit 2: Establish Tangerine Theme Tokens**
 
 **Goal:** Convert `app.css` from the current chartreuse token set into a stronger semantic token layer for black-first Tangerine Terminal styling.
 
@@ -162,7 +162,7 @@ The app currently has centralized styling, but the active palette reads too much
 - Renderer CSS has one coherent token foundation.
 - Theme contract tests prove the token set is complete enough to support component work.
 
-- [ ] **Unit 3: Restyle Shell and Navigation States**
+- [x] **Unit 3: Restyle Shell and Navigation States**
 
 **Goal:** Make the sidebar, thread rows, directory rows, lens switch, chips, status markers, and context rail read as black-first, crisp, and stateful without depending on orange-heavy fills.
 
@@ -201,7 +201,7 @@ The app currently has centralized styling, but the active palette reads too much
 - Sidebar and context rail visually match the black/tangerine system.
 - Navigation state remains accessible and behaviorally unchanged.
 
-- [ ] **Unit 4: Restyle Transcript, Composer, and Work Surfaces**
+- [x] **Unit 4: Restyle Transcript, Composer, and Work Surfaces**
 
 **Goal:** Apply the visual system to the primary work area so transcript reading, pending approvals, plan progress, diff surfaces, composer controls, autocomplete, attachments, and empty/error states feel unified and readable.
 
@@ -242,7 +242,7 @@ The app currently has centralized styling, but the active palette reads too much
 - Primary work surfaces are readable on black and no longer rely on chartreuse panels for assistant/status emphasis.
 - Existing transcript and composer behavior remains unchanged.
 
-- [ ] **Unit 5: Add Visual and Contrast Verification**
+- [x] **Unit 5: Add Visual and Contrast Verification**
 
 **Goal:** Add targeted verification so the new theme is guarded by tests and screenshot review instead of relying only on manual taste.
 

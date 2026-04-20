@@ -32,9 +32,10 @@ export function ThreadRowStatus(props: ThreadRowStatusProps) {
   if (props.status === "thinking") {
     return (
       <span
-        aria-hidden="true"
+        aria-label="Thinking"
         className="thread-row__status-indicator thread-row__status-indicator--thinking"
         data-thread-status="thinking"
+        title="Thinking"
       >
         <ThinkingScanner compact />
       </span>
@@ -43,11 +44,14 @@ export function ThreadRowStatus(props: ThreadRowStatusProps) {
 
   return (
     <span
-      aria-hidden="true"
+      aria-label="Needs attention"
       className="thread-row__status-indicator thread-row__status-indicator--unread"
       data-thread-status="unread"
+      title="Needs attention"
     >
-      <span className="thread-row__status-dot" />
+      <span aria-hidden="true" className="thread-row__status-dot">
+        !
+      </span>
     </span>
   );
 }

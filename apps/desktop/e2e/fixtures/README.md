@@ -138,3 +138,10 @@ desktop replay scenarios do not exercise Codex sidebar directory identity.
   viewport and avoids an extra replay `thread/read`
 - `focused-diff-zoom/`: eligible transcript diffs that condense locally and can
   hide low-signal hunks via the focused diff path
+
+## Visual System Guard
+
+The `tangerine-terminal-theme.spec.ts` Playwright spec reuses existing replay
+fixtures to check the desktop visual system at the composed-app level. It is not
+a pixel-perfect design-regression suite. Prefer computed style, contrast,
+focus/state, and screenshot-review checks over brittle full-page snapshots.

@@ -207,7 +207,10 @@ describe("Sidebar", () => {
       name: /Cross-project cleanup/i,
     });
 
-    expect(threadButton.querySelector('[data-thread-status="thinking"]')).not.toBeNull();
+    const thinkingIndicator = threadButton.querySelector('[data-thread-status="thinking"]');
+    expect(thinkingIndicator).not.toBeNull();
+    expect(thinkingIndicator).toHaveAttribute("aria-label", "Thinking");
+    expect(thinkingIndicator).toHaveAttribute("title", "Thinking");
     expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
   });
 
@@ -239,7 +242,11 @@ describe("Sidebar", () => {
     });
 
     expect(threadButton.querySelector('[data-thread-status="thinking"]')).toBeNull();
-    expect(threadButton.querySelector('[data-thread-status="unread"]')).not.toBeNull();
+    const unreadIndicator = threadButton.querySelector('[data-thread-status="unread"]');
+    expect(unreadIndicator).not.toBeNull();
+    expect(unreadIndicator).toHaveAttribute("aria-label", "Needs attention");
+    expect(unreadIndicator).toHaveAttribute("title", "Needs attention");
+    expect(unreadIndicator).toHaveTextContent("!");
   });
 
   it("renders directory rows without the raw chevron glyph affordance", () => {
