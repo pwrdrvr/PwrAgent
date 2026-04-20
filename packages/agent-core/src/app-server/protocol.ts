@@ -255,6 +255,15 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "turn/diff/updated";
+      params: {
+        threadId: string;
+        turnId?: string;
+        runId?: string;
+        diff: string;
+      };
+    }
+  | {
       method: "serverRequest/resolved";
       params: {
         threadId: string;

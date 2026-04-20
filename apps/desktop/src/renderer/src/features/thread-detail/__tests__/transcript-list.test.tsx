@@ -365,6 +365,59 @@ describe("TranscriptList", () => {
     );
   });
 
+  it("renders a live activity entry before the turn is persisted", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Fix the merge markers"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingActivityEntry={{
+          type: "activity",
+          id: "pending-activity-1",
+          summary: "Edited 1 file",
+          details: [
+            {
+              id: "pending-detail-1",
+              kind: "write",
+              label: "Update useThreadSessionState.ts",
+              path: "/repo/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+              fileDiff: {
+                kind: "update",
+                additions: 1,
+                removals: 2,
+                diff: [
+                  "--- a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+                  "+++ b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+                  "@@ -1,3 +1,2 @@",
+                  "-<<<<<<< HEAD",
+                  "-function appendMessageEntries(",
+                  "+function messageMatchesOptimisticEntry("
+                ].join("\n")
+              }
+            }
+          ]
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const toggle = screen.getByRole("button", { name: /Edited 1 file/i });
+    expect(toggle).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(screen.getByText("Update useThreadSessionState.ts")).toBeInTheDocument();
+    expect(screen.getByText("function messageMatchesOptimisticEntry(")).toBeInTheDocument();
+  });
+
   it("anchors a freshly loaded transcript to the newest entry", () => {
     render(
       <TranscriptList
