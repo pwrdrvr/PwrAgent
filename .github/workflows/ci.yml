@@ -85,9 +85,6 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
 
-      - name: Install Playwright Linux dependencies
-        run: pnpm --filter @pwragnt/desktop exec playwright install --with-deps
-
       - name: Run desktop replay-backed Electron tests
         run: xvfb-run --auto-servernum pnpm run test:desktop-e2e
 
