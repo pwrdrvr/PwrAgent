@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   AppServerPendingRequestNotification,
+  AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
@@ -18,6 +19,7 @@ type TranscriptListProps = {
   error?: string;
   loading: boolean;
   loadingMore: boolean;
+  pendingActivityEntry?: AppServerThreadActivityEntry;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingPlanEntry?: AppServerThreadPlanEntry;
   pendingRequest?: AppServerPendingRequestNotification;
@@ -77,6 +79,7 @@ export function TranscriptList(props: TranscriptListProps) {
     const lastMessageId = props.entries[props.entries.length - 1]?.id;
     const itemCount =
       props.entries.length +
+      (props.pendingActivityEntry ? 1 : 0) +
       (props.pendingAssistantMessage ? 1 : 0) +
       (props.pendingPlanEntry ? 1 : 0) +
       (props.pendingStatusText ? 1 : 0) +
@@ -99,6 +102,7 @@ export function TranscriptList(props: TranscriptListProps) {
     };
   }, [
     props.entries,
+    props.pendingActivityEntry,
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
     props.pendingRequest,
@@ -182,6 +186,7 @@ export function TranscriptList(props: TranscriptListProps) {
           previousSnapshot.pendingStatusText !== props.pendingStatusText ||
       previousSnapshot.itemCount <
             props.entries.length +
+              (props.pendingActivityEntry ? 1 : 0) +
               (props.pendingAssistantMessage ? 1 : 0) +
               (props.pendingPlanEntry ? 1 : 0) +
               (props.pendingStatusText ? 1 : 0) +
@@ -227,6 +232,7 @@ export function TranscriptList(props: TranscriptListProps) {
     syncScrollState();
   }, [
     props.entries,
+    props.pendingActivityEntry,
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
     props.pendingRequest,
@@ -287,6 +293,12 @@ export function TranscriptList(props: TranscriptListProps) {
         )}
         {props.pendingPlanEntry ? (
           <TranscriptPlan key={props.pendingPlanEntry.id} entry={props.pendingPlanEntry} />
+        ) : null}
+        {props.pendingActivityEntry ? (
+          <TranscriptActivity
+            key={props.pendingActivityEntry.id}
+            entry={props.pendingActivityEntry}
+          />
         ) : null}
         {props.pendingAssistantMessage ? (
           <TranscriptMessage

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import type {
   AppServerPendingRequestNotification,
+  AppServerThreadActivityDetail,
+  AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
@@ -38,6 +40,160 @@ function arePlanEntriesEquivalent(
   return left.steps.every((step, index) => {
     const other = right.steps[index];
     return other?.status === step.status && other.step === step.step;
+  });
+}
+
+function summarizeDiff(diff: string): { additions: number; removals: number } {
+  let additions = 0;
+  let removals = 0;
+
+  for (const line of diff.split("\n")) {
+    if (
+      !line ||
+      line.startsWith("+++") ||
+      line.startsWith("---") ||
+      line.startsWith("@@") ||
+      line.startsWith("\\")
+    ) {
+      continue;
+    }
+
+    if (line.startsWith("+")) {
+      additions += 1;
+      continue;
+    }
+
+    if (line.startsWith("-")) {
+      removals += 1;
+    }
+  }
+
+  return { additions, removals };
+}
+
+function getBasename(path: string): string {
+  const segments = path.split(/[\\/]/);
+  return segments[segments.length - 1] || path;
+}
+
+function normalizeDiffPath(path: string | undefined): string | undefined {
+  if (!path || path === "/dev/null") {
+    return undefined;
+  }
+
+  return path.replace(/^[ab]\//, "");
+}
+
+function inferDiffKind(lines: string[]): "add" | "delete" | "update" {
+  const beforeLine = lines.find((line) => line.startsWith("--- "));
+  const afterLine = lines.find((line) => line.startsWith("+++ "));
+
+  if (beforeLine?.slice(4).trim() === "/dev/null") {
+    return "add";
+  }
+
+  if (afterLine?.slice(4).trim() === "/dev/null") {
+    return "delete";
+  }
+
+  return "update";
+}
+
+function buildDiffLabel(kind: "add" | "delete" | "update", path?: string): string {
+  const verb = kind[0]?.toUpperCase() + kind.slice(1);
+  return `${verb} ${path ? getBasename(path) : "file"}`;
+}
+
+function extractDiffDetails(
+  diff: string,
+  entryId: string
+): AppServerThreadActivityDetail[] {
+  const lines = diff.replace(/\r\n?/g, "\n").split("\n");
+  const sections: Array<{ lines: string[] }> = [];
+  let currentSection: { lines: string[] } | undefined;
+
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      if (currentSection?.lines.length) {
+        sections.push(currentSection);
+      }
+      currentSection = { lines: [line] };
+      continue;
+    }
+
+    if (!currentSection) {
+      currentSection = { lines: [] };
+    }
+
+    currentSection.lines.push(line);
+  }
+
+  if (currentSection?.lines.length) {
+    sections.push(currentSection);
+  }
+
+  const normalizedSections = sections.length > 0 ? sections : [{ lines }];
+  const details: AppServerThreadActivityDetail[] = [];
+
+  for (const [index, section] of normalizedSections.entries()) {
+    const rawBefore = section.lines.find((line) => line.startsWith("--- "))?.slice(4).trim();
+    const rawAfter = section.lines.find((line) => line.startsWith("+++ "))?.slice(4).trim();
+    const path = normalizeDiffPath(rawAfter) ?? normalizeDiffPath(rawBefore);
+    const diffText = section.lines.join("\n").trim();
+
+    if (!diffText) {
+      continue;
+    }
+
+    const kind = inferDiffKind(section.lines);
+    const diffSummary = summarizeDiff(diffText);
+
+    details.push({
+      id: `${entryId}-${index + 1}`,
+      kind: "write",
+      label: buildDiffLabel(kind, path),
+      ...(path ? { path } : {}),
+      fileDiff: {
+        kind,
+        diff: diffText,
+        additions: diffSummary.additions,
+        removals: diffSummary.removals,
+      },
+    });
+  }
+
+  return details;
+}
+
+function buildPendingDiffEntry(params: {
+  diff: string;
+  id: string;
+}): AppServerThreadActivityEntry | undefined {
+  const details = extractDiffDetails(params.diff, params.id);
+  if (details.length === 0) {
+    return undefined;
+  }
+
+  return {
+    type: "activity",
+    id: params.id,
+    createdAt: Date.now(),
+    summary: `Edited ${details.length} file${details.length === 1 ? "" : "s"}`,
+    details,
+  };
+}
+
+function activityContainsDiff(
+  candidate: AppServerThreadActivityEntry,
+  pendingEntry: AppServerThreadActivityEntry
+): boolean {
+  return pendingEntry.details.every((pendingDetail) => {
+    const pendingDiff = pendingDetail.fileDiff?.diff;
+    if (!pendingDiff) {
+      return false;
+    }
+
+    return candidate.details.some((detail) => detail.fileDiff?.diff === pendingDiff);
   });
 }
 
@@ -109,6 +265,8 @@ type ThreadViewProps = {
 };
 
 export function ThreadView(props: ThreadViewProps) {
+  const [pendingActivityEntry, setPendingActivityEntry] =
+    useState<AppServerThreadActivityEntry>();
   const [pendingPlanEntry, setPendingPlanEntry] =
     useState<AppServerThreadPlanEntry>();
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
@@ -116,6 +274,7 @@ export function ThreadView(props: ThreadViewProps) {
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
 
   useEffect(() => {
+    setPendingActivityEntry(undefined);
     setPendingPlanEntry(undefined);
     setPendingRequestBusy(false);
     setPendingRequestError(undefined);
@@ -128,6 +287,20 @@ export function ThreadView(props: ThreadViewProps) {
 
   const selectedThread = props.selectedThread;
   const selectedLaunchpad = props.selectedLaunchpad;
+
+  useEffect(() => {
+    if (!pendingActivityEntry) {
+      return;
+    }
+
+    const persistedActivity = props.transcriptEntries.find(
+      (entry): entry is AppServerThreadActivityEntry =>
+        entry.type === "activity" && activityContainsDiff(entry, pendingActivityEntry)
+    );
+    if (persistedActivity) {
+      setPendingActivityEntry(undefined);
+    }
+  }, [pendingActivityEntry, props.transcriptEntries]);
 
   useEffect(() => {
     if (!pendingPlanEntry) {
@@ -149,11 +322,48 @@ export function ThreadView(props: ThreadViewProps) {
     }
 
     return props.desktopApi.onAgentEvent((event) => {
+      const notificationThreadId =
+        "threadId" in event.notification.params &&
+        typeof event.notification.params.threadId === "string"
+          ? event.notification.params.threadId
+          : undefined;
+
       if (
-        event.notification.method !== "turn/plan/updated" ||
         event.backend !== selectedThread.source ||
-        event.notification.params.threadId !== selectedThread.id
+        notificationThreadId !== selectedThread.id
       ) {
+        return;
+      }
+
+      if (
+        event.notification.method === "turn/failed" ||
+        event.notification.method === "turn/cancelled"
+      ) {
+        setPendingActivityEntry(undefined);
+        return;
+      }
+
+      if (event.notification.method === "turn/diff/updated") {
+        if (typeof event.notification.params.diff !== "string") {
+          return;
+        }
+
+        setPendingActivityEntry(
+          buildPendingDiffEntry({
+            diff: event.notification.params.diff,
+            id: `live-diff-${
+              typeof event.notification.params.turnId === "string"
+                ? event.notification.params.turnId
+                : typeof event.notification.params.runId === "string"
+                  ? event.notification.params.runId
+                  : selectedThread.id
+            }`,
+          })
+        );
+        return;
+      }
+
+      if (event.notification.method !== "turn/plan/updated") {
         return;
       }
 
@@ -355,6 +565,7 @@ export function ThreadView(props: ThreadViewProps) {
             loading={props.loading}
             loadingMore={props.loadingMore}
             pagination={props.transcriptPagination}
+            pendingActivityEntry={pendingActivityEntry}
             pendingAssistantMessage={props.pendingAssistantMessage}
             pendingPlanEntry={pendingPlanEntry}
             pendingRequest={props.pendingRequest}

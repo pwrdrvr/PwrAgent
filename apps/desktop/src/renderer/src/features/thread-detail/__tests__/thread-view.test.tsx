@@ -879,6 +879,216 @@ describe("ThreadView", () => {
     expect(screen.getAllByText("0 out of 3 tasks completed")).toHaveLength(1);
   });
 
+  it("renders live diff activity from turn/diff/updated and clears it once replay catches up", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Fix the transcript merge markers",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    const liveDiff = [
+      "diff --git a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "--- a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "+++ b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "@@ -113,2 +113,1 @@",
+      "-<<<<<<< HEAD",
+      "-function appendMessageEntries(",
+      "+function messageMatchesOptimisticEntry("
+    ].join("\n");
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    const { rerender } = render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            runId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Fix the merge markers."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/diff/updated",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-1",
+            diff: liveDiff
+          }
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/diff/updated",
+          params: {
+            threadId: "thread-other",
+            turnId: "turn-2",
+            diff: "diff --git a/ignored.ts b/ignored.ts"
+          }
+        },
+      });
+    });
+
+    const toggle = screen.getByRole("button", { name: /Edited 1 file/i });
+    expect(toggle).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(screen.getByText("Update useThreadSessionState.ts")).toBeInTheDocument();
+    expect(screen.getByText("function messageMatchesOptimisticEntry(")).toBeInTheDocument();
+    expect(screen.queryByText("ignored.ts")).not.toBeInTheDocument();
+
+    rerender(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            runId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={2}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Fix the merge markers."
+          },
+          {
+            type: "activity",
+            id: "activity-1",
+            summary: "Edited 1 file",
+            details: [
+              {
+                id: "detail-1",
+                kind: "write",
+                label: "Update useThreadSessionState.ts",
+                path: "/repo/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+                fileDiff: {
+                  kind: "update",
+                  additions: 1,
+                  removals: 2,
+                  diff: liveDiff
+                }
+              }
+            ]
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    expect(screen.getAllByRole("button", { name: /Edited 1 file/i })).toHaveLength(1);
+  });
+
   it("maps command approval actions to native decision values and dismisses the approval card", async () => {
     const submitServerRequest = vi.fn(async () => ({
       backend: "codex" as const,

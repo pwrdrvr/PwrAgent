@@ -83,6 +83,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "item/completed",
   "item/plan/delta",
   "turn/plan/updated",
+  "turn/diff/updated",
   "serverRequest/resolved",
   "thread/compacted",
   "thread/status/changed",
