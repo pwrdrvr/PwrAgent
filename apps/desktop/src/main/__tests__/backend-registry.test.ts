@@ -305,7 +305,7 @@ describe("DesktopBackendRegistry", () => {
             },
           ],
           reasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
-          supportsFastMode: false,
+          supportsFastMode: true,
         },
       },
       {
@@ -402,6 +402,10 @@ describe("DesktopBackendRegistry", () => {
     });
     expect(codexClient.lastStartThreadParams).toEqual({
       cwd: "/Users/test/.pwragnt/projects/2026-04-16-a1b2c3",
+      model: "gpt-5.4",
+      reasoningEffort: "medium",
+      serviceTier: undefined,
+      fastMode: undefined,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
@@ -473,9 +477,9 @@ describe("DesktopBackendRegistry", () => {
       backend: "codex",
       threadId: "thread-plain",
       input: [{ type: "text", text: "Do not inherit another thread's settings" }],
-      model: undefined,
+      model: "gpt-5.4",
       serviceTier: undefined,
-      reasoningEffort: undefined,
+      reasoningEffort: "medium",
       fastMode: undefined,
     });
 

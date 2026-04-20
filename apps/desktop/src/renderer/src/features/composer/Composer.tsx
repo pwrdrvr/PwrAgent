@@ -94,6 +94,38 @@ type PastedImageFile = {
   type: string;
 };
 
+type ModelOption = NonNullable<
+  NonNullable<BackendSummary["launchpadOptions"]>["models"]
+>[number];
+
+const DEFAULT_REASONING_EFFORT = "medium";
+
+function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
+  const models = backend?.launchpadOptions?.models ?? [];
+  return (
+    models.find((model) => model.current) ??
+    models.find((model) => model.supportsReasoning) ??
+    models[0]
+  );
+}
+
+function getDefaultReasoningEffort(backend?: BackendSummary): string | undefined {
+  const reasoningEfforts = backend?.launchpadOptions?.reasoningEfforts ?? [];
+  return reasoningEfforts.includes(DEFAULT_REASONING_EFFORT)
+    ? DEFAULT_REASONING_EFFORT
+    : reasoningEfforts[0];
+}
+
+function getReasoningEffortValue(
+  backend: BackendSummary | undefined,
+  currentValue: string | undefined,
+): string | undefined {
+  const reasoningEfforts = backend?.launchpadOptions?.reasoningEfforts ?? [];
+  return reasoningEfforts.includes(currentValue ?? "")
+    ? currentValue
+    : getDefaultReasoningEffort(backend);
+}
+
 export function Composer(props: ComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const activeRunIdRef = useRef<string | undefined>(undefined);
@@ -366,10 +398,12 @@ export function Composer(props: ComposerProps) {
         threadId: props.thread.id,
         input,
         collaborationMode,
-        model: props.thread.model,
-        reasoningEffort: props.thread.reasoningEffort,
-        serviceTier: props.thread.serviceTier,
-        fastMode: props.thread.source === "codex" ? props.thread.fastMode : undefined,
+        model: selectedModelOption?.id,
+        reasoningEffort: supportsReasoning ? selectedReasoningEffort : undefined,
+        serviceTier: selectedServiceTier,
+        fastMode: props.thread.source === "codex" && supportsFast
+          ? Boolean(currentSettings?.fastMode)
+          : undefined,
       });
       updateActiveRunId(response.runId);
       props.onActiveRunIdChange?.(response.runId);
@@ -525,20 +559,25 @@ export function Composer(props: ComposerProps) {
     void props.onSetThreadModelSettings(patch);
   };
 
-  const selectedModel = props.launchpad?.model ?? props.thread?.model;
-  const currentModelOption = backend?.launchpadOptions?.models?.find(
-    (option) => option.id === selectedModel
-  );
   const currentSettings = props.launchpad ?? props.thread;
+  const modelOptions = backend?.launchpadOptions?.models ?? [];
+  const selectedModelOption =
+    modelOptions.find((option) => option.id === currentSettings?.model) ??
+    getDefaultModelOption(backend);
   const supportsReasoning =
-    currentModelOption?.supportsReasoning ??
+    selectedModelOption?.supportsReasoning ??
     Boolean(backend?.launchpadOptions?.reasoningEfforts?.length);
+  const selectedReasoningEffort = supportsReasoning
+    ? getReasoningEffortValue(backend, currentSettings?.reasoningEffort)
+    : undefined;
   const supportsFast =
     backend?.kind === "codex"
-      ? currentModelOption?.supportsFast ??
+      ? selectedModelOption?.supportsFast ??
         backend.launchpadOptions?.supportsFastMode ??
         false
       : false;
+  const selectedServiceTier =
+    currentSettings?.serviceTier ?? backend?.launchpadOptions?.serviceTiers?.[0];
   const providerOptions =
     props.backends?.filter(
       (candidate) => candidate.available && candidate.capabilities.createThread
@@ -712,13 +751,16 @@ export function Composer(props: ComposerProps) {
                 const executionModeStillAvailable = nextBackendSummary?.executionModes.some(
                   (mode) => mode.available && mode.mode === currentLaunchpad.executionMode
                 );
+                const nextModelOption = getDefaultModelOption(nextBackendSummary);
                 handleLaunchpadPatch({
                   backend: nextBackend,
                   executionMode: executionModeStillAvailable
                     ? currentLaunchpad.executionMode
                     : "default",
-                  model: undefined,
-                  reasoningEffort: undefined,
+                  model: nextModelOption?.id,
+                  reasoningEffort: nextModelOption?.supportsReasoning
+                    ? getDefaultReasoningEffort(nextBackendSummary)
+                    : undefined,
                   serviceTier: undefined,
                   fastMode: undefined,
                 });
@@ -832,9 +874,9 @@ export function Composer(props: ComposerProps) {
               id="composer-model"
               aria-label="Model"
               className="composer__select"
-              value={currentSettings?.model ?? ""}
+              value={selectedModelOption?.id ?? ""}
               onChange={(event) => {
-                const model = event.target.value || undefined;
+                const model = event.target.value;
                 const nextModelOption = backend.launchpadOptions?.models?.find(
                   (option) => option.id === model
                 );
@@ -849,7 +891,9 @@ export function Composer(props: ComposerProps) {
                     : false;
                 const patch = {
                   model,
-                  ...(nextSupportsReasoning ? {} : { reasoningEffort: undefined }),
+                  reasoningEffort: nextSupportsReasoning
+                    ? getReasoningEffortValue(backend, currentSettings?.reasoningEffort)
+                    : undefined,
                   ...(nextSupportsFast ? {} : { fastMode: undefined }),
                 };
                 if (props.launchpad) {
@@ -859,7 +903,6 @@ export function Composer(props: ComposerProps) {
                 handleThreadModelSettingsPatch(patch);
               }}
             >
-              <option value="">Default</option>
               {backend.launchpadOptions.models.map((model) => (
                 <option key={model.id} value={model.id}>
                   {model.label ?? model.id}
@@ -875,9 +918,9 @@ export function Composer(props: ComposerProps) {
               id="composer-reasoning"
               aria-label="Reasoning"
               className="composer__select"
-              value={currentSettings?.reasoningEffort ?? ""}
+              value={selectedReasoningEffort ?? ""}
               onChange={(event) => {
-                const reasoningEffort = event.target.value || undefined;
+                const reasoningEffort = event.target.value;
                 if (props.launchpad) {
                   handleLaunchpadPatch({ reasoningEffort });
                   return;
@@ -885,7 +928,6 @@ export function Composer(props: ComposerProps) {
                 handleThreadModelSettingsPatch({ reasoningEffort });
               }}
             >
-              <option value="">Default</option>
               {backend.launchpadOptions.reasoningEfforts.map((effort) => (
                 <option key={effort} value={effort}>
                   {effort}
@@ -899,9 +941,9 @@ export function Composer(props: ComposerProps) {
               id="composer-service-tier"
               aria-label="Service tier"
               className="composer__select"
-              value={currentSettings?.serviceTier ?? ""}
+              value={selectedServiceTier ?? ""}
               onChange={(event) => {
-                const serviceTier = event.target.value || undefined;
+                const serviceTier = event.target.value;
                 if (props.launchpad) {
                   handleLaunchpadPatch({ serviceTier });
                   return;
@@ -909,7 +951,6 @@ export function Composer(props: ComposerProps) {
                 handleThreadModelSettingsPatch({ serviceTier });
               }}
             >
-              <option value="">Default</option>
               {backend.launchpadOptions.serviceTiers.map((tier) => (
                 <option key={tier} value={tier}>
                   {tier}

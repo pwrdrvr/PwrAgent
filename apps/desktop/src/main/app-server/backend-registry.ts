@@ -135,8 +135,24 @@ const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
   },
 ];
 
+const GROK_FALLBACK_MODELS: BackendModelOption[] = [
+  {
+    id: "grok-4.20-reasoning",
+    label: "Grok 4.20 Reasoning",
+    current: true,
+    supportsReasoning: true,
+  },
+  {
+    id: "grok-4.20-fast",
+    label: "Grok 4.20 Fast",
+    supportsReasoning: false,
+    supportsFast: true,
+  },
+];
+
 const OPENAI_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"];
 const GROK_REASONING_EFFORTS = ["low", "medium", "high"];
+const DEFAULT_REASONING_EFFORT = "medium";
 
 const EXECUTION_MODE_SUMMARIES: Record<
   ThreadExecutionMode,
@@ -208,30 +224,86 @@ function mergeMethods(results: InitializeResult[]): string[] {
   return [...new Set(results.flatMap((result) => result.methods ?? []))];
 }
 
-function dedupeModelOptions(models: BackendModelOption[]): BackendModelOption[] {
+function inferSupportsReasoning(
+  backend: AppServerBackendKind,
+  model: BackendModelOption,
+): boolean {
+  if (typeof model.supportsReasoning === "boolean") {
+    return model.supportsReasoning;
+  }
+
+  const id = model.id.toLowerCase();
+  if (backend === "grok") {
+    return id.includes("reasoning");
+  }
+
+  return id.startsWith("gpt-5") || id.startsWith("o");
+}
+
+function inferSupportsFast(
+  backend: AppServerBackendKind,
+  model: BackendModelOption,
+): boolean {
+  if (typeof model.supportsFast === "boolean") {
+    return model.supportsFast;
+  }
+
+  return backend === "codex" && model.id.toLowerCase() === "gpt-5.4";
+}
+
+function getBackendFallbackModels(backend: AppServerBackendKind): BackendModelOption[] {
+  return backend === "codex" ? OPENAI_FALLBACK_MODELS : GROK_FALLBACK_MODELS;
+}
+
+function getPreferredModelId(backend: AppServerBackendKind): string {
+  return backend === "codex" ? "gpt-5.4" : "grok-4.20-reasoning";
+}
+
+function dedupeModelOptions(
+  backend: AppServerBackendKind,
+  models: BackendModelOption[],
+): BackendModelOption[] {
   const byId = new Map<string, BackendModelOption>();
   for (const model of models) {
     if (!model.id.trim()) {
       continue;
     }
 
+    const normalizedModel = {
+      ...model,
+      supportsReasoning: inferSupportsReasoning(backend, model),
+      supportsFast: inferSupportsFast(backend, model),
+    };
     const current = byId.get(model.id);
     byId.set(model.id, {
       ...current,
-      ...model,
-      current: current?.current || model.current,
-      supportsReasoning: current?.supportsReasoning || model.supportsReasoning,
-      supportsFast: current?.supportsFast || model.supportsFast,
+      ...normalizedModel,
+      current: current?.current || normalizedModel.current,
+      supportsReasoning: current?.supportsReasoning || normalizedModel.supportsReasoning,
+      supportsFast: current?.supportsFast || normalizedModel.supportsFast,
     });
   }
-  return [...byId.values()];
+
+  const deduped = [...byId.values()];
+  if (deduped.some((model) => model.current)) {
+    return deduped;
+  }
+
+  const preferredModelId = getPreferredModelId(backend);
+  return deduped.map((model) => ({
+    ...model,
+    current: model.id === preferredModelId,
+  }));
 }
 
 function buildLaunchpadOptions(
   backend: AppServerBackendKind,
   models: BackendModelOption[],
 ): BackendLaunchpadOptions | undefined {
-  const normalizedModels = dedupeModelOptions(models);
+  const normalizedModels = dedupeModelOptions(
+    backend,
+    models.length > 0 ? models : getBackendFallbackModels(backend),
+  );
   if (normalizedModels.length === 0) {
     return undefined;
   }
@@ -256,6 +328,64 @@ async function readClientModels(client: BackendClient): Promise<BackendModelOpti
     return [];
   }
   return await client.listModels();
+}
+
+type ModelSettings = {
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  fastMode?: boolean;
+};
+
+function getDefaultModelOption(
+  backend: AppServerBackendKind,
+  options?: BackendLaunchpadOptions,
+): BackendModelOption | undefined {
+  const models = options?.models ?? [];
+  if (models.length === 0) {
+    return undefined;
+  }
+
+  const preferredModelId = getPreferredModelId(backend);
+  return (
+    models.find((model) => model.current) ??
+    models.find((model) => model.id === preferredModelId) ??
+    models.find((model) => model.supportsReasoning) ??
+    models[0]
+  );
+}
+
+function getDefaultReasoningEffort(options?: BackendLaunchpadOptions): string | undefined {
+  const reasoningEfforts = options?.reasoningEfforts ?? [];
+  return reasoningEfforts.includes(DEFAULT_REASONING_EFFORT)
+    ? DEFAULT_REASONING_EFFORT
+    : reasoningEfforts[0];
+}
+
+function resolveModelSettingsFromOptions(
+  backend: AppServerBackendKind,
+  options: BackendLaunchpadOptions | undefined,
+  settings: ModelSettings,
+): ModelSettings {
+  const models = options?.models ?? [];
+  const selectedModel =
+    models.find((model) => model.id === settings.model) ??
+    getDefaultModelOption(backend, options);
+  const supportsReasoning = Boolean(selectedModel?.supportsReasoning);
+  const reasoningEfforts = options?.reasoningEfforts ?? [];
+  const reasoningEffort = supportsReasoning
+    ? reasoningEfforts.includes(settings.reasoningEffort ?? "")
+      ? settings.reasoningEffort
+      : getDefaultReasoningEffort(options)
+    : undefined;
+  const supportsFast = backend === "codex" && Boolean(selectedModel?.supportsFast);
+
+  return {
+    model: selectedModel?.id,
+    reasoningEffort,
+    serviceTier: settings.serviceTier,
+    fastMode: supportsFast ? settings.fastMode : undefined,
+  };
 }
 
 export class DesktopBackendRegistry {
@@ -436,6 +566,7 @@ export class DesktopBackendRegistry {
   }): Promise<StartThreadResponse> {
     const { backend, executionMode = "default", ...request } = params;
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const modelSettings = await this.resolveModelSettings(backend, request);
     const cwd =
       backend === "codex" && !request.cwd?.trim()
         ? await this.createScratchProjectDirectory()
@@ -443,6 +574,7 @@ export class DesktopBackendRegistry {
 
     const result = await this.getClient(backend, executionMode).startThread({
       ...request,
+      ...modelSettings,
       cwd,
       approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
       sandbox: request.sandbox ?? modeSettings.sandbox,
@@ -456,18 +588,15 @@ export class DesktopBackendRegistry {
       });
     }
     if (
-      request.model !== undefined ||
-      request.reasoningEffort !== undefined ||
-      request.serviceTier !== undefined ||
-      request.fastMode !== undefined
+      modelSettings.model !== undefined ||
+      modelSettings.reasoningEffort !== undefined ||
+      modelSettings.serviceTier !== undefined ||
+      modelSettings.fastMode !== undefined
     ) {
       await this.overlayStore.setThreadModelSettings({
         backend,
         threadId: result.threadId,
-        model: request.model,
-        reasoningEffort: request.reasoningEffort,
-        serviceTier: request.serviceTier,
-        fastMode: backend === "codex" ? request.fastMode : undefined,
+        ...modelSettings,
       });
     }
 
@@ -492,17 +621,20 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
     });
-    const turnParams = {
+    const turnParams = await this.resolveModelSettings(params.backend, {
       ...params,
       model: params.model ?? overlay?.model,
       serviceTier: params.serviceTier ?? overlay?.serviceTier,
       reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
       fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
-    };
+    });
     const result =
       params.backend === "codex"
         ? await this.withCodexThreadClient(params.threadId, async (client) =>
-            await client.startTurn(turnParams),
+            await client.startTurn({
+              ...params,
+              ...turnParams,
+            }),
           )
         : await this.grokClient.startTurn({
             threadId: params.threadId,
@@ -512,6 +644,19 @@ export class DesktopBackendRegistry {
             reasoningEffort: turnParams.reasoningEffort,
             fastMode: turnParams.fastMode,
           });
+
+    if (
+      turnParams.model !== undefined ||
+      turnParams.reasoningEffort !== undefined ||
+      turnParams.serviceTier !== undefined ||
+      turnParams.fastMode !== undefined
+    ) {
+      await this.overlayStore.setThreadModelSettings({
+        backend: params.backend,
+        threadId: result.threadId,
+        ...turnParams,
+      });
+    }
 
     return {
       backend: params.backend,
@@ -575,22 +720,17 @@ export class DesktopBackendRegistry {
   async setThreadModelSettings(
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
+    const modelSettings = await this.resolveModelSettings(params.backend, params);
     await this.overlayStore.setThreadModelSettings({
       backend: params.backend,
       threadId: params.threadId,
-      model: params.model,
-      reasoningEffort: params.reasoningEffort,
-      serviceTier: params.serviceTier,
-      fastMode: params.backend === "codex" ? params.fastMode : undefined,
+      ...modelSettings,
     });
 
     return {
       backend: params.backend,
       threadId: params.threadId,
-      model: params.model,
-      reasoningEffort: params.reasoningEffort,
-      serviceTier: params.serviceTier,
-      fastMode: params.backend === "codex" ? params.fastMode : undefined,
+      ...modelSettings,
     };
   }
 
@@ -784,6 +924,36 @@ export class DesktopBackendRegistry {
     await this.codexFullAccessClient.close();
     await this.grokClient.close();
     await Promise.all(this.captureStores.splice(0).map(async (store) => await store.close()));
+  }
+
+  private async resolveModelSettings(
+    backend: AppServerBackendKind,
+    settings: ModelSettings,
+  ): Promise<ModelSettings> {
+    return resolveModelSettingsFromOptions(
+      backend,
+      await this.getBackendLaunchpadOptions(backend),
+      settings,
+    );
+  }
+
+  private async getBackendLaunchpadOptions(
+    backend: AppServerBackendKind,
+  ): Promise<BackendLaunchpadOptions | undefined> {
+    if (backend === "codex") {
+      const models = (
+        await Promise.allSettled([
+          readClientModels(this.codexDefaultClient),
+          readClientModels(this.codexFullAccessClient),
+        ])
+      ).flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+      return buildLaunchpadOptions(backend, models);
+    }
+
+    return buildLaunchpadOptions(
+      backend,
+      await readClientModels(this.grokClient).catch(() => []),
+    );
   }
 
   private subscribeClient(backend: AppServerBackendKind, client: BackendClient): void {
