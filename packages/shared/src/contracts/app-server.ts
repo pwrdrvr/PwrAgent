@@ -332,6 +332,29 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/tokenUsage/updated";
+      params: {
+        threadId: string;
+        turnId?: string;
+        tokenUsage: unknown;
+      };
+    }
+  | {
+      method: "account/rateLimits/updated";
+      params: {
+        rateLimits: unknown;
+      };
+    }
+  | {
+      method: "item/commandExecution/outputDelta";
+      params: {
+        threadId: string;
+        turnId?: string;
+        itemId: string;
+        delta: string;
+      };
+    }
+  | {
       method: "thread/name/updated";
       params: {
         threadId: string;

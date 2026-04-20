@@ -115,9 +115,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   <span
                     aria-hidden="true"
                     className={`directory-row__chevron${expanded ? " is-open" : ""}`}
-                  >
-                    ▾
-                  </span>
+                  />
                 </span>
               </button>
 

@@ -29,24 +29,48 @@ export function useThreadSkills(params: {
   response?: AppServerListSkillsResponse;
   skills: AppServerSkillSummary[];
 } {
-  const { desktopApi, thread } = params;
+  const { desktopApi, launchpad, thread } = params;
   const requestVersionsRef = useRef<Record<string, number>>({});
   const [stateByThreadKey, setStateByThreadKey] = useState<Record<string, SkillState>>({});
-  const threadKey =
-    thread && thread.source === "codex"
-      ? buildThreadIdentityKey(thread.source, thread.id)
-      : undefined;
-  const state = threadKey ? stateByThreadKey[threadKey] : undefined;
+  const skillTarget = useMemo(() => {
+    if (thread && thread.source === "codex") {
+      const cwds = [
+        ...new Set(
+          thread.linkedDirectories
+            .map((directory) => directory.worktreePath ?? directory.path)
+            .filter(Boolean)
+        ),
+      ];
+
+      return {
+        backend: thread.source,
+        cwds,
+        key: buildThreadIdentityKey(thread.source, thread.id),
+      };
+    }
+
+    if (launchpad?.backend === "codex") {
+      const cwds = launchpad.directoryPath?.trim() ? [launchpad.directoryPath.trim()] : [];
+      return {
+        backend: launchpad.backend,
+        cwds,
+        key: `launchpad:${launchpad.backend}:${launchpad.directoryKey}`,
+      };
+    }
+
+    return undefined;
+  }, [launchpad, thread]);
+  const state = skillTarget ? stateByThreadKey[skillTarget.key] : undefined;
 
   const ensureLoaded = useCallback(async (): Promise<void> => {
-    if (!thread || thread.source !== "codex" || !threadKey) {
+    if (!skillTarget) {
       return;
     }
 
     if (!desktopApi?.listSkills) {
       setStateByThreadKey((current) => ({
         ...current,
-        [threadKey]: {
+        [skillTarget.key]: {
           error: "Desktop bridge is missing listSkills().",
           loading: false,
           response: undefined,
@@ -55,24 +79,18 @@ export function useThreadSkills(params: {
       return;
     }
 
-    const currentState = stateByThreadKey[threadKey];
+    const currentState = stateByThreadKey[skillTarget.key];
     if (currentState?.loading || currentState?.response) {
       return;
     }
 
-    const requestVersion = (requestVersionsRef.current[threadKey] ?? 0) + 1;
-    requestVersionsRef.current[threadKey] = requestVersion;
-    const cwds = [
-      ...new Set(
-        thread.linkedDirectories
-          .map((directory) => directory.worktreePath ?? directory.path)
-          .filter(Boolean)
-      ),
-    ];
+    const requestVersion = (requestVersionsRef.current[skillTarget.key] ?? 0) + 1;
+    requestVersionsRef.current[skillTarget.key] = requestVersion;
+    const cwds = skillTarget.cwds;
 
     setStateByThreadKey((current) => ({
       ...current,
-      [threadKey]: {
+      [skillTarget.key]: {
         ...createEmptySkillState(),
         loading: true,
       },
@@ -80,38 +98,38 @@ export function useThreadSkills(params: {
 
     try {
       const response = await desktopApi.listSkills({
-        backend: thread.source,
+        backend: skillTarget.backend,
         cwd: cwds.length === 1 ? cwds[0] : undefined,
         cwds: cwds.length > 0 ? cwds : undefined,
       });
 
-      if (requestVersionsRef.current[threadKey] !== requestVersion) {
+      if (requestVersionsRef.current[skillTarget.key] !== requestVersion) {
         return;
       }
 
       setStateByThreadKey((current) => ({
         ...current,
-        [threadKey]: {
+        [skillTarget.key]: {
           error: undefined,
           loading: false,
           response,
         },
       }));
     } catch (error) {
-      if (requestVersionsRef.current[threadKey] !== requestVersion) {
+      if (requestVersionsRef.current[skillTarget.key] !== requestVersion) {
         return;
       }
 
       setStateByThreadKey((current) => ({
         ...current,
-        [threadKey]: {
+        [skillTarget.key]: {
           error: error instanceof Error ? error.message : String(error),
           loading: false,
           response: undefined,
         },
       }));
     }
-  }, [desktopApi, stateByThreadKey, thread, threadKey]);
+  }, [desktopApi, skillTarget, stateByThreadKey]);
 
   const skills = useMemo(() => {
     const deduped = new Map<string, AppServerSkillSummary>();

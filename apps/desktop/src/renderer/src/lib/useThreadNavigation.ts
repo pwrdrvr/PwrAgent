@@ -152,8 +152,23 @@ function markThreadSeenInSnapshot(
     return snapshot;
   }
 
+  const directories = snapshot.directories ?? [];
+  const threadInboxByKey = new Map(
+    threads.map((thread) => [
+      buildThreadIdentityKey(thread.source, thread.id),
+      thread.inbox.inInbox,
+    ])
+  );
+
   return {
     ...snapshot,
+    directories: directories.map((directory) => ({
+      ...directory,
+      needsAttentionCount: directory.threadKeys.reduce(
+        (count, threadKey) => count + (threadInboxByKey.get(threadKey) ? 1 : 0),
+        0
+      ),
+    })),
     inboxThreadKeys: snapshot.inboxThreadKeys.filter((candidate) => candidate !== threadKey),
     threads,
   };

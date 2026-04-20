@@ -373,6 +373,174 @@ describe("App", () => {
     resolveRefreshRead?.(transcriptResponse);
   });
 
+  it("loads launchpad skill autocomplete from the project directory", async () => {
+    const listSkills = vi.fn(async () => ({
+      backend: "codex" as const,
+      fetchedAt: Date.now(),
+      data: [
+        {
+          cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          skills: [
+            {
+              name: "frontend-design",
+              description: "Design and verify renderer UI work.",
+              path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+              enabled: true,
+              scope: "user",
+            },
+            {
+              name: "desktop-e2e-fixture-seeding",
+              description: "Replay-backed desktop E2E fixtures.",
+              path: "/Users/huntharo/pwrdrvr/PwrAgnt/.agents/skills/desktop-e2e-fixture-seeding/SKILL.md",
+              enabled: true,
+              scope: "local",
+            },
+          ],
+        },
+      ],
+    }));
+
+    Object.defineProperty(window, "pwragnt", {
+      configurable: true,
+      value: {
+        ping: () => "pong",
+        listSkills,
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read", "skills/list", "thread/start", "turn/start"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: true,
+                steerTurn: false,
+                transcriptPagination: true,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: true,
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+                {
+                  mode: "full-access",
+                  label: "Full Access",
+                  available: true,
+                },
+              ],
+            },
+          ],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [
+            {
+              key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+              kind: "directory" as const,
+              label: "PwrAgnt",
+              path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+              threadKeys: [],
+              needsAttentionCount: 0,
+              gitStatus: {
+                currentBranch: "main",
+                branches: ["main", "release"],
+                syncState: "in-sync" as const,
+              },
+              launchpad: {
+                directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+                directoryKind: "directory" as const,
+                directoryLabel: "PwrAgnt",
+                directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                backend: "codex" as const,
+                executionMode: "default" as const,
+                prompt: "",
+                workMode: "local" as const,
+                branchName: "main",
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            },
+          ],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        updateDirectoryLaunchpad: async ({
+          directoryKey,
+          patch,
+        }: {
+          directoryKey: string;
+          patch: Record<string, unknown>;
+        }) => ({
+          directoryKey,
+          launchpad: {
+            directoryKey,
+            directoryKind: "directory" as const,
+            directoryLabel: "PwrAgnt",
+            directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt: typeof patch.prompt === "string" ? patch.prompt : "",
+            workMode: "local" as const,
+            branchName: "main",
+            createdAt: 1,
+            updatedAt: 2,
+          },
+          defaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        versions: {
+          electron: "41.2.1",
+        },
+      },
+    });
+
+    render(<App />);
+
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "PwrAgnt",
+    });
+
+    fireEvent.change(screen.getByRole("textbox", { name: "New thread" }), {
+      target: {
+        value: "$front",
+      },
+    });
+
+    await waitFor(() => {
+      expect(listSkills).toHaveBeenCalledWith({
+        backend: "codex",
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        cwds: ["/Users/huntharo/pwrdrvr/PwrAgnt"],
+      });
+    });
+
+    expect(
+      await screen.findByRole("button", { name: /\$frontend-design/i })
+    ).toBeInTheDocument();
+  });
+
   it("creates and sends on a new Grok thread", async () => {
     const startThread = vi.fn(
       async ({
@@ -398,6 +566,27 @@ describe("App", () => {
         backend,
         threadId,
         runId: "turn-1"
+      })
+    );
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId
+      }: {
+        backend: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend,
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false
+          }
+        }
       })
     );
     let navigationCallCount = 0;

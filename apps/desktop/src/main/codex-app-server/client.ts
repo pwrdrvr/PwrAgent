@@ -86,8 +86,11 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "serverRequest/resolved",
   "thread/compacted",
   "thread/status/changed",
+  "thread/tokenUsage/updated",
   "turn/requestApproval",
   "review/requestApproval",
+  "account/rateLimits/updated",
+  "item/commandExecution/outputDelta",
   "mcpServer/startupStatus/updated",
 ]);
 const codexClientLog = getMainLogger("pwragnt:codex-client");

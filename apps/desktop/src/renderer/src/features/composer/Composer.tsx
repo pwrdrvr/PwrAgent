@@ -225,6 +225,10 @@ export function Composer(props: ComposerProps) {
         event.notification.method === "thread/status/changed" &&
         statusRecord?.type === "idle"
       ) {
+        if (activeRunIdRef.current) {
+          return;
+        }
+
         props.onPendingStatusChange?.(undefined);
         setSending(false);
         setInterrupting(false);
@@ -403,9 +407,10 @@ export function Composer(props: ComposerProps) {
     false;
   const availableExecutionModes =
     backend?.executionModes.filter((mode) => mode.available) ?? [];
-  const workspaceLabel = isLaunchpad
-    ? formatLaunchpadWorkspaceLabel(props.launchpad, props.directory)
-    : formatThreadWorkspaceLabel(props.thread);
+  const workspaceLabel = formatThreadWorkspaceLabel(props.thread);
+  const launchpadWorkspaceOptions = props.launchpad
+    ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
+    : [];
 
   return (
     <form
@@ -553,7 +558,25 @@ export function Composer(props: ComposerProps) {
             </select>
           ) : null}
 
-          {workspaceLabel ? (
+          {props.launchpad ? (
+            <select
+              aria-label="Workspace mode"
+              className="composer__select composer__select--compact"
+              disabled={!props.onUpdateLaunchpad || launchpadWorkspaceOptions.length <= 1}
+              value={props.launchpad.workMode}
+              onChange={(event) => {
+                handleLaunchpadPatch({
+                  workMode: event.target.value as NavigationLaunchpadDraft["workMode"],
+                });
+              }}
+            >
+              {launchpadWorkspaceOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          ) : workspaceLabel ? (
             <select
               aria-label="Workspace mode"
               className="composer__select composer__select--compact"
@@ -759,6 +782,31 @@ function formatLaunchpadWorkspaceLabel(
   return directory?.gitStatus?.currentBranch
     ? `Local (${directory.gitStatus.currentBranch})`
     : "Local";
+}
+
+function buildLaunchpadWorkspaceOptions(
+  launchpad: NavigationLaunchpadDraft,
+  directory?: NavigationDirectorySummary
+): Array<{ value: NavigationLaunchpadDraft["workMode"]; label: string }> {
+  const localLabel = formatLaunchpadWorkspaceLabel(
+    { ...launchpad, workMode: "local" },
+    directory
+  );
+  const canCreateWorktree = Boolean(
+    directory?.path &&
+      directory.kind === "directory" &&
+      (directory.gitStatus?.currentBranch ||
+        (directory.gitStatus?.branches?.length ?? 0) > 0)
+  );
+  const options: Array<{ value: NavigationLaunchpadDraft["workMode"]; label: string }> = [
+    { value: "local", label: localLabel ?? "Local" },
+  ];
+
+  if (canCreateWorktree || launchpad.workMode === "worktree") {
+    options.push({ value: "worktree", label: "New worktree" });
+  }
+
+  return options;
 }
 
 function formatThreadWorkspaceLabel(thread?: NavigationThreadSummary): string | undefined {

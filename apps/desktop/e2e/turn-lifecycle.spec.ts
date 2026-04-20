@@ -5,7 +5,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const turnLifecycleSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
-test("clears transient turn UI after a replayed turn returns idle", async () => {
+test("keeps transient turn UI through metadata and premature idle notifications", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       turnLifecycleSpecDir,
@@ -41,6 +41,22 @@ test("clears transient turn UI after a replayed turn returns idle", async () => 
 
     await app.advance({ stepId: "status-active-1" });
     await app.advance({ stepId: "turn-started-1" });
+    await app.advance({ stepId: "token-usage-1" });
+    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByRole("status")).toContainText("Thinking");
+
+    await app.advance({ stepId: "rate-limits-1" });
+    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByRole("status")).toContainText("Thinking");
+
+    await app.advance({ stepId: "command-output-1" });
+    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByRole("status")).toContainText("Thinking");
+
+    await app.advance({ stepId: "status-idle-midturn" });
+    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByRole("status")).toContainText("Thinking");
+
     await app.advance({ stepId: "assistant-delta-1" });
     await app.advance({ stepId: "assistant-delta-2" });
 
@@ -49,6 +65,11 @@ test("clears transient turn UI after a replayed turn returns idle", async () => 
     ).toBeVisible();
 
     await app.advance({ stepId: "status-idle-1" });
+
+    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByRole("status")).toContainText("Thinking");
+
+    await app.advance({ stepId: "turn-completed-1" });
 
     await expect(
       app.window.getByRole("button", { name: "Stop" })

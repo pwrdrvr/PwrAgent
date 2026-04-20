@@ -121,6 +121,68 @@
       }
     },
     {
+      "id": "token-usage-1",
+      "kind": "notification",
+      "notification": {
+        "method": "thread/tokenUsage/updated",
+        "params": {
+          "threadId": "thread-turn-lifecycle",
+          "turnId": "turn-turn-lifecycle-2",
+          "tokenUsage": {
+            "total": {
+              "inputTokens": 1200,
+              "outputTokens": 12
+            },
+            "last": {
+              "inputTokens": 1200,
+              "outputTokens": 12
+            },
+            "modelContextWindow": 258400
+          }
+        }
+      }
+    },
+    {
+      "id": "rate-limits-1",
+      "kind": "notification",
+      "notification": {
+        "method": "account/rateLimits/updated",
+        "params": {
+          "rateLimits": {
+            "limitId": "codex",
+            "limitName": null,
+            "planType": "pro"
+          }
+        }
+      }
+    },
+    {
+      "id": "command-output-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/commandExecution/outputDelta",
+        "params": {
+          "threadId": "thread-turn-lifecycle",
+          "turnId": "turn-turn-lifecycle-2",
+          "itemId": "call-1",
+          "delta": "command output is still streaming\n"
+        }
+      }
+    },
+    {
+      "id": "status-idle-midturn",
+      "kind": "notification",
+      "notification": {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "thread-turn-lifecycle",
+          "status": {
+            "type": "idle"
+          }
+        }
+      }
+    },
+    {
       "id": "assistant-delta-1",
       "kind": "notification",
       "notification": {

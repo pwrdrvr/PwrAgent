@@ -91,6 +91,87 @@ describe("Composer", () => {
     });
   });
 
+  it("lets a directory launchpad switch from local checkout to a new worktree", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/start"],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          },
+        ]}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "main",
+            branches: ["main", "release"],
+            syncState: "untracked",
+          },
+        }}
+        launchpad={{
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgnt",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    const workspaceMode = screen.getByLabelText("Workspace mode");
+    expect(workspaceMode).toBeEnabled();
+    expect(workspaceMode).toHaveValue("local");
+    expect(screen.getByRole("option", { name: "Local (main)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "New worktree" })).toBeInTheDocument();
+
+    fireEvent.change(workspaceMode, { target: { value: "worktree" } });
+
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+        { workMode: "worktree" }
+      );
+    });
+  });
+
   it("inserts skill markdown from autocomplete and sends it through startTurn", async () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
@@ -382,6 +463,18 @@ describe("Composer", () => {
                     type: string;
                   };
                 };
+              }
+            | {
+                method: "turn/completed";
+                params: {
+                  threadId: string;
+                  runId: string;
+                  turn: {
+                    id: string;
+                    status: "completed";
+                    output: Array<{ type: "text"; text: string }>;
+                  };
+                };
               };
         }) => void)
       | undefined;
@@ -454,6 +547,108 @@ describe("Composer", () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            runId: "turn-99",
+            turn: {
+              id: "turn-99",
+              status: "completed",
+              output: [],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("keeps the stop button visible when idle status arrives before completion", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification:
+            | {
+                method: "turn/started";
+                params: {
+                  threadId: string;
+                  turn: {
+                    id: string;
+                    status: string;
+                  };
+                };
+              }
+            | {
+                method: "thread/status/changed";
+                params: {
+                  threadId: string;
+                  status: {
+                    type: string;
+                  };
+                };
+              };
+        }) => void)
+      | undefined;
+    const onPendingStatusChange = vi.fn();
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            runId: "pending:thread-1",
+          }),
+        }}
+        disabled={false}
+        onActiveRunIdChange={() => undefined}
+        onPendingStatusChange={onPendingStatusChange}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "send then keep thinking" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: {
+              id: "turn-99",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+    });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
           method: "thread/status/changed",
           params: {
             threadId: "thread-1",
@@ -465,8 +660,7 @@ describe("Composer", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
-    });
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(onPendingStatusChange).not.toHaveBeenCalledWith(undefined);
   });
 });
