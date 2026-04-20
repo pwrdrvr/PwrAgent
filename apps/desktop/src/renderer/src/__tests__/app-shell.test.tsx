@@ -269,9 +269,8 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(
-      screen.getByRole("heading", { level: 1, name: "Threads" })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 1, name: "Threads" })).not.toBeInTheDocument();
     expect(
       screen.getByRole("heading", { level: 2, name: "Inbox" })
     ).toBeInTheDocument();

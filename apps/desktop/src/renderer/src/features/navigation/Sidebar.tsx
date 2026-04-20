@@ -69,12 +69,9 @@ export function Sidebar(props: SidebarProps) {
   const hasCreateThreadOptions = createThreadOptions.some((option) => option.enabled);
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" aria-label="Threads">
       <header className="sidebar__masthead">
-        <div>
-          <p className="eyebrow">PwrAgnt</p>
-          <h1 className="sidebar__title">Threads</h1>
-        </div>
+        <p className="eyebrow sidebar__brand">PwrAgnt</p>
 
         <div className="sidebar__masthead-actions">
           <div className="sidebar__new-thread">
@@ -141,8 +138,8 @@ export function Sidebar(props: SidebarProps) {
       </section>
 
       <section className="sidebar__section sidebar__section--fill">
-        <div className="sidebar__section-header">
-          <div>
+        <div className="sidebar__section-header sidebar__section-header--browse">
+          <div className="sidebar__section-title">
             <h2>Browse</h2>
             <p className="sidebar__supporting-text">
               {props.threads.length} threads
