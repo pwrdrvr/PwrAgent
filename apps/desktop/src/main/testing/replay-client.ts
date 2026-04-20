@@ -1,4 +1,5 @@
 import type {
+  AppServerCollaborationModeRequest,
   AppServerListSkillsResponse,
   AppServerNotification,
   AppServerPendingRequestNotification,
@@ -110,6 +111,7 @@ export class ReplayClient {
     threadId: string;
     input: AppServerTurnInputItem[];
     model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
   }): Promise<{ threadId: string; runId: string }> {
     await this.ensureInitialized();
     return this.controller.consumeResponse("turn/start").result as {

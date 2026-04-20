@@ -28,6 +28,7 @@ async function openRequestUserInputReplay() {
   await app.window
     .getByLabel("Reply")
     .fill("Ask the plan questionnaire.");
+  await app.window.getByLabel("Plan mode").check();
   await app.window.getByRole("button", { name: "Send" }).click();
 
   await app.advance({ stepId: "status-active-1" });

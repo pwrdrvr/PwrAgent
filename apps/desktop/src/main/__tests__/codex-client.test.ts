@@ -1624,6 +1624,59 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("starts plan-mode turns with a collaboration mode payload", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadResumeResult = {
+      thread: {
+        id: "thread-2"
+      },
+      model: "gpt-5.4",
+      reasoningEffort: "high"
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const result = await client.startTurn({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Plan the fix" }],
+      collaborationMode: {
+        mode: "plan",
+        settings: {
+          developerInstructions: null
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      threadId: "thread-2",
+      runId: "turn-1"
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const startPayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "turn/start");
+
+    expect(startPayload?.params).toMatchObject({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Plan the fix" }],
+      collaborationMode: {
+        mode: "plan",
+        settings: {
+          model: "gpt-5.4",
+          reasoningEffort: "high",
+          developerInstructions: null
+        }
+      }
+    });
+
+    await client.close();
+  });
+
   it("falls back to the requested thread and a pending run id when turn/start omits ids", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.turnStartResult = {};

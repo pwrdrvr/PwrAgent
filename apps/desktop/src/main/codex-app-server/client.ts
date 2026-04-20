@@ -21,6 +21,7 @@ import type {
   AppServerThreadTitleSource,
   AppServerThreadSummary,
   AppServerTurnInputItem,
+  AppServerCollaborationModeRequest,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
 import { getMainLogger } from "../log";
@@ -37,6 +38,7 @@ import { StdioJsonRpcTransport } from "./stdio-transport";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.4";
 
 type CodexClientOptions = {
   command?: string;
@@ -1592,6 +1594,85 @@ function buildThreadResumePayloads(params: {
   return [base];
 }
 
+function extractStringProperty(value: unknown, ...keys: string[]): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function buildCollaborationModePayload(params: {
+  collaborationMode?: AppServerCollaborationModeRequest;
+  fallbackModel?: string;
+  fallbackReasoningEffort?: string;
+}): Record<string, unknown> | undefined {
+  if (!params.collaborationMode) {
+    return undefined;
+  }
+
+  const settings = params.collaborationMode.settings ?? {};
+  const model =
+    settings.model?.trim() ||
+    params.fallbackModel?.trim() ||
+    DEFAULT_CODEX_COLLABORATION_MODEL;
+  const reasoningEffort =
+    settings.reasoningEffort?.trim() || params.fallbackReasoningEffort?.trim();
+  const developerInstructions = Object.hasOwn(settings, "developerInstructions")
+    ? settings.developerInstructions
+    : params.collaborationMode.mode === "plan"
+      ? null
+      : undefined;
+
+  return {
+    mode: params.collaborationMode.mode,
+    settings: {
+      model,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(developerInstructions !== undefined
+        ? { developerInstructions }
+        : {}),
+    },
+  };
+}
+
+function buildTurnStartPayload(params: {
+  threadId: string;
+  input: AppServerTurnInputItem[];
+  model?: string;
+  collaborationMode?: AppServerCollaborationModeRequest;
+  collaborationFallbackModel?: string;
+  collaborationFallbackReasoningEffort?: string;
+}): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    threadId: params.threadId,
+    input: params.input,
+  };
+
+  if (params.model?.trim()) {
+    base.model = params.model.trim();
+  }
+
+  const collaborationMode = buildCollaborationModePayload({
+    collaborationMode: params.collaborationMode,
+    fallbackModel: params.collaborationFallbackModel ?? params.model,
+    fallbackReasoningEffort: params.collaborationFallbackReasoningEffort,
+  });
+  if (collaborationMode) {
+    base.collaborationMode = collaborationMode;
+  }
+
+  return base;
+}
+
 async function requestWithFallbacks(params: {
   client: JsonRpcConnection;
   methods: string[];
@@ -1854,10 +1935,11 @@ export class CodexAppServerClient {
     threadId: string;
     input: AppServerTurnInputItem[];
     model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
   }): Promise<{ threadId: string; runId: string }> {
     await this.ensureInitialized();
 
-    await requestWithFallbacks({
+    const resumeResult = await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/resume"],
       payloads: buildThreadResumePayloads({
@@ -1870,7 +1952,21 @@ export class CodexAppServerClient {
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["turn/start"],
-      payloads: [params],
+      payloads: [
+        buildTurnStartPayload({
+          threadId: params.threadId,
+          input: params.input,
+          model: params.model,
+          collaborationMode: params.collaborationMode,
+          collaborationFallbackModel:
+            params.model?.trim() || extractStringProperty(resumeResult, "model"),
+          collaborationFallbackReasoningEffort: extractStringProperty(
+            resumeResult,
+            "reasoningEffort",
+            "reasoning_effort"
+          ),
+        }),
+      ],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 

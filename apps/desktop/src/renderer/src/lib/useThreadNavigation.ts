@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
+  AppServerCollaborationModeRequest,
   AppServerTurnInputItem,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
@@ -368,7 +369,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   refresh: () => Promise<void>;
   materializeDirectoryLaunchpad: (
     directoryKey: string,
-    input?: AppServerTurnInputItem[]
+    input?: AppServerTurnInputItem[],
+    collaborationMode?: AppServerCollaborationModeRequest
   ) => Promise<void>;
   openDirectoryLaunchpad: (
     directory: NavigationDirectorySummary,
@@ -918,7 +920,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const materializeDirectoryLaunchpad = useCallback(
     async (
       directoryKey: string,
-      input?: AppServerTurnInputItem[]
+      input?: AppServerTurnInputItem[],
+      collaborationMode?: AppServerCollaborationModeRequest
     ): Promise<void> => {
       if (!desktopApi?.materializeDirectoryLaunchpad) {
         setLaunchpadError("Desktop bridge is missing materializeDirectoryLaunchpad().");
@@ -938,6 +941,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         const response = await desktopApi.materializeDirectoryLaunchpad({
           directoryKey,
           input,
+          collaborationMode,
         });
         const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
           directory,

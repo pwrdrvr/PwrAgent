@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type {
   AppServerBackendKind,
+  AppServerCollaborationModeRequest,
   AppServerListSkillsResponse,
   AppServerNotification,
   AppServerPendingRequestNotification,
@@ -77,6 +78,7 @@ type ReplayRuntimeClient = {
     threadId: string;
     input: AppServerTurnInputItem[];
     model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
   }): Promise<{ threadId: string; runId: string }>;
   interruptTurn(params: {
     threadId: string;
