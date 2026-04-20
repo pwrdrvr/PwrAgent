@@ -126,6 +126,7 @@ export type AppServerThreadActivityDetail = {
   kind: "read" | "write" | "command";
   label: string;
   path?: string;
+  url?: string;
   status?: AppServerThreadActivityStatus;
   fileDiff?: AppServerThreadFileDiff;
 };

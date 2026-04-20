@@ -119,6 +119,12 @@ function normalizeTitleSource(
     : undefined;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 async function resolveLinkedDirectories(
   projectKey?: string
 ): Promise<LinkedDirectorySummary[]> {
@@ -220,11 +226,7 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
   const messages = normalizeRawMessages(rawMessages);
   const rawItems = Array.isArray(record.items)
     ? record.items
-        .map((item) =>
-          item && typeof item === "object" && !Array.isArray(item)
-            ? (item as Record<string, unknown>)
-            : undefined
-        )
+        .map((item) => asRecord(item))
         .filter((item): item is Record<string, unknown> => item !== undefined)
     : [];
   const replayFromItems = extractReplayFromItems(rawItems, pagination);

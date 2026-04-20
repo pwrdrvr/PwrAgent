@@ -415,6 +415,98 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
+  it("surfaces Grok tool calls and search sources in thread replay", async () => {
+    const provider = new FakeProvider();
+    const server = new CodexAppServer({
+      provider,
+      threadIdGenerator: () => "thread-1",
+      runIdGenerator: () => "turn-1",
+    });
+    const client = new GrokAppServerClient({ server });
+
+    await client.startThread({ model: "grok-4.20-reasoning" });
+    await client.startTurn({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Search for Matt Van Horn" }],
+    });
+
+    await provider.runs[0]?.emit({
+      type: "item_started",
+      item: {
+        id: "call-search-web",
+        type: "dynamicToolCall",
+        text: "search_web",
+        toolName: "search_web",
+        arguments: { query: "Matt Van Horn" },
+      },
+    });
+    await provider.runs[0]?.emit({
+      type: "item_completed",
+      item: {
+        id: "call-search-web",
+        type: "dynamicToolCall",
+        text: "Matt Van Horn co-founded Zimride and works on startup investing.",
+        toolName: "search_web",
+        success: true,
+        arguments: { query: "Matt Van Horn" },
+        data: {
+          output: "Matt Van Horn co-founded Zimride and works on startup investing.",
+          sources: [
+            {
+              title: "Matt Van Horn profile",
+              url: "https://example.com/matt-van-horn",
+            },
+          ],
+        },
+      },
+    });
+    provider.runs[0]?.deferred.resolve({
+      assistantText: "I found a profile.",
+      providerResponseId: "resp_1",
+    });
+    await flushAsync();
+
+    const replay = await client.readThread({ threadId: "thread-1" });
+    expect(replay.entries).toEqual([
+      {
+        type: "message",
+        id: "message-1",
+        role: "user",
+        text: "Search for Matt Van Horn",
+      },
+      {
+        type: "activity",
+        id: "activity-call-search-web",
+        summary: "Searched Web",
+        status: "completed",
+        details: [
+          {
+            id: "call-search-web",
+            kind: "read",
+            label:
+              "Searched Web: Matt Van Horn - Matt Van Horn co-founded Zimride and works on startup investing.",
+            status: "completed",
+          },
+          {
+            id: "call-search-web-source-1",
+            kind: "read",
+            label: "Matt Van Horn profile",
+            url: "https://example.com/matt-van-horn",
+            status: "completed",
+          },
+        ],
+      },
+      {
+        type: "message",
+        id: "message-2",
+        role: "assistant",
+        text: "I found a profile.",
+      },
+    ]);
+
+    await client.close();
+  });
+
   it("preserves the full Grok message sequence when last-message summaries are also present", async () => {
     const provider = new FakeProvider();
     const server = new CodexAppServer({
