@@ -5,6 +5,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
   AppServerThreadPlanEntry,
+  AppServerTurnInputItem,
   AppServerThreadReplayPagination,
   AppServerSkillSummary,
   BackendSummary,
@@ -73,7 +74,7 @@ type ThreadViewProps = {
   onLoadOlder: () => Promise<void>;
   onMaterializeLaunchpad?: (
     directoryKey: string,
-    input?: Array<{ type: "text"; text: string }>
+    input?: AppServerTurnInputItem[]
   ) => Promise<void>;
   onPendingStatusChange?: (status?: string) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
