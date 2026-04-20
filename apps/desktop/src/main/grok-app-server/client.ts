@@ -82,6 +82,12 @@ type SkillCatalogEntry = {
   skills: AppServerSkillSummary[];
 };
 
+type ReplayMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+};
+
 function normalizeThreadSummary(thread: RawThreadSummary): RawThreadSummary {
   const normalizedTitleSource = normalizeTitleSource(thread.titleSource);
   const normalizedRawTitle = thread.title?.trim();
@@ -211,6 +217,7 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
   };
 
   const rawMessages = Array.isArray(record.messages) ? record.messages : [];
+  const messages = normalizeRawMessages(rawMessages);
   const rawItems = Array.isArray(record.items)
     ? record.items
         .map((item) =>
@@ -222,53 +229,57 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
     : [];
   const replayFromItems = extractReplayFromItems(rawItems, pagination);
   if (replayFromItems) {
-    return replayFromItems;
+    if (replayFromItems.messages.length > 0 || messages.length === 0) {
+      return replayFromItems;
+    }
+    return buildReplayFromMessages(messages, pagination, activityEntries(replayFromItems));
+  }
+
+  if (messages.length > 0) {
+    return buildReplayFromMessages(messages, pagination);
   }
 
   if (rawMessages.length === 0) {
-    const fallbackMessages = [
-      typeof record.lastUserMessage === "string"
-        ? {
-            id: "message-1",
-            role: "user" as const,
-            text: record.lastUserMessage,
-          }
-        : undefined,
-      typeof record.lastAssistantMessage === "string"
-        ? {
-            id:
-              typeof record.lastUserMessage === "string"
-                ? "message-2"
-                : "message-1",
-            role: "assistant" as const,
-            text: record.lastAssistantMessage,
-          }
-        : undefined,
-    ].filter((message): message is { id: string; role: "user" | "assistant"; text: string } =>
-      Boolean(message)
-    );
-
+    const fallbackMessages = fallbackLastMessages(record);
     if (fallbackMessages.length > 0) {
-      return {
-        entries: fallbackMessages.map((message) => ({
-          type: "message" as const,
-          ...message,
-        })),
-        messages: fallbackMessages,
-        lastUserMessage:
-          typeof record.lastUserMessage === "string"
-            ? record.lastUserMessage
-            : undefined,
-        lastAssistantMessage:
-          typeof record.lastAssistantMessage === "string"
-            ? record.lastAssistantMessage
-            : undefined,
-        pagination,
-      };
+      return buildReplayFromMessages(fallbackMessages, pagination);
     }
   }
 
-  const messages = rawMessages.flatMap((message, index) => {
+  return buildReplayFromMessages([], pagination);
+}
+
+function fallbackLastMessages(record: {
+  lastUserMessage?: unknown;
+  lastAssistantMessage?: unknown;
+}): ReplayMessage[] {
+  return [
+    typeof record.lastUserMessage === "string"
+      ? {
+          id: "message-1",
+          role: "user" as const,
+          text: record.lastUserMessage,
+        }
+      : undefined,
+    typeof record.lastAssistantMessage === "string"
+      ? {
+          id:
+            typeof record.lastUserMessage === "string"
+              ? "message-2"
+              : "message-1",
+          role: "assistant" as const,
+          text: record.lastAssistantMessage,
+        }
+      : undefined,
+  ].filter((message): message is ReplayMessage =>
+    Boolean(message)
+  );
+}
+
+function normalizeRawMessages(
+  rawMessages: Array<{ role?: unknown; text?: unknown }>,
+): ReplayMessage[] {
+  return rawMessages.flatMap((message, index) => {
     if (!message || typeof message !== "object") {
       return [];
     }
@@ -290,24 +301,41 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
       },
     ];
   });
-  const entries: AppServerThreadEntry[] = messages.map((message) => ({
-    type: "message",
-    ...message,
-  }));
+}
+
+function buildReplayFromMessages(
+  messages: ReplayMessage[],
+  pagination: AppServerThreadReplay["pagination"],
+  activityEntries: AppServerThreadEntry[] = [],
+): AppServerThreadReplay {
+  const entries: AppServerThreadEntry[] = [];
+  const lastUserIndex = messages.findLastIndex((message) => message.role === "user");
+  let insertedActivity = false;
+
+  for (const [index, message] of messages.entries()) {
+    entries.push({
+      type: "message",
+      ...message,
+    });
+    if (index === lastUserIndex) {
+      entries.push(...activityEntries);
+      insertedActivity = true;
+    }
+  }
+
+  if (!insertedActivity) {
+    entries.push(...activityEntries);
+  }
 
   let lastUserMessage: string | undefined;
   let lastAssistantMessage: string | undefined;
 
-  for (let index = rawMessages.length - 1; index >= 0; index -= 1) {
-    const message = rawMessages[index];
-    if (!lastUserMessage && message?.role === "user" && typeof message.text === "string") {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!lastUserMessage && message?.role === "user") {
       lastUserMessage = message.text;
     }
-    if (
-      !lastAssistantMessage &&
-      message?.role === "assistant" &&
-      typeof message.text === "string"
-    ) {
+    if (!lastAssistantMessage && message?.role === "assistant") {
       lastAssistantMessage = message.text;
     }
     if (lastUserMessage && lastAssistantMessage) {
@@ -322,6 +350,10 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
     lastAssistantMessage,
     pagination,
   };
+}
+
+function activityEntries(replay: AppServerThreadReplay): AppServerThreadEntry[] {
+  return replay.entries.filter((entry) => entry.type === "activity");
 }
 
 function extractReplayFromItems(

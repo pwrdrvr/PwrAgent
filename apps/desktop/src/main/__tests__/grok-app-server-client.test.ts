@@ -336,6 +336,85 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
+  it("preserves Grok messages when replay items only contain tool activity", async () => {
+    const server = {
+      request: async (method: string): Promise<unknown> => {
+        if (method === "initialize") {
+          return {
+            serverInfo: { name: "@pwragnt/grok-app-server", version: "1.0.0" },
+            methods: ["thread/read"],
+          };
+        }
+        if (method === "thread/read") {
+          return {
+            messages: [
+              { role: "user", text: "Find the code" },
+              { role: "assistant", text: "Found it." },
+            ],
+            items: [
+              {
+                id: "search-1",
+                type: "dynamicToolCall",
+                status: "completed",
+                toolName: "search_code",
+                commandAction: "search",
+                arguments: { path: "src" },
+                success: true,
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+      notify: async () => undefined,
+      onNotification: () => () => undefined,
+    };
+    const client = new GrokAppServerClient({ server });
+
+    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+      entries: [
+        {
+          type: "message",
+          role: "user",
+          text: "Find the code",
+        },
+        {
+          type: "activity",
+          summary: "Explored 1 item",
+          details: [
+            {
+              kind: "read",
+              label: "Searched src",
+              path: "src",
+              status: "completed",
+            },
+          ],
+        },
+        {
+          type: "message",
+          role: "assistant",
+          text: "Found it.",
+        },
+      ],
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          text: "Find the code",
+        },
+        {
+          id: "message-2",
+          role: "assistant",
+          text: "Found it.",
+        },
+      ],
+      lastUserMessage: "Find the code",
+      lastAssistantMessage: "Found it.",
+    });
+
+    await client.close();
+  });
+
   it("preserves the full Grok message sequence when last-message summaries are also present", async () => {
     const provider = new FakeProvider();
     const server = new CodexAppServer({
