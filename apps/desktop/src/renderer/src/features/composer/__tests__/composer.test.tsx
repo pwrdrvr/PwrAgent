@@ -268,6 +268,142 @@ describe("Composer", () => {
     });
   });
 
+  it("sends pasted images with the reply", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      runId: "turn-1",
+    }));
+    const addOptimisticUserMessage = vi.fn(() => "optimistic-1");
+    const imageFile = new File([new Uint8Array([1, 2, 3])], "screenshot.jpeg", {
+      type: "image/jpeg",
+    });
+
+    render(
+      <Composer
+        addOptimisticUserMessage={addOptimisticUserMessage}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        files: [],
+        items: [
+          {
+            kind: "file",
+            type: "image/jpeg",
+            getAsFile: () => imageFile,
+          },
+        ],
+      },
+    });
+    fireEvent.change(textarea, { target: { value: "Describe this screenshot" } });
+
+    expect(await screen.findByAltText("screenshot.jpeg")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          { type: "text", text: "Describe this screenshot" },
+          {
+            type: "image",
+            url: expect.stringMatching(/^data:image\/jpeg;base64,/),
+          },
+        ],
+      });
+    });
+    expect(addOptimisticUserMessage).toHaveBeenCalledWith(
+      "Describe this screenshot",
+      [
+        {
+          type: "image",
+          url: expect.stringMatching(/^data:image\/jpeg;base64,/),
+          alt: "screenshot.jpeg",
+        },
+      ]
+    );
+  });
+
+  it("allows pasted image-only replies", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      runId: "turn-1",
+    }));
+    const imageFile = new File([new Uint8Array([1, 2, 3])], "diagram.png");
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => imageFile,
+          },
+        ],
+      },
+    });
+
+    expect(await screen.findByAltText("diagram.png")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "image",
+            url: expect.stringMatching(/^data:image\/png;base64,/),
+          },
+        ],
+      });
+    });
+  });
+
   it("keeps Shift+Enter available for a newline", () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,

@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ClipboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerSkillSummary,
+  AppServerThreadImagePart,
+  AppServerTurnInputItem,
   BackendSummary,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
@@ -19,7 +21,10 @@ import { SkillChip } from "./SkillChip";
 
 type ComposerProps = {
   activeRunId?: string;
-  addOptimisticUserMessage?: (text: string) => string;
+  addOptimisticUserMessage?: (
+    text: string,
+    imageParts?: AppServerThreadImagePart[]
+  ) => string;
   backends?: BackendSummary[];
   desktopApi?: DesktopApi;
   directory?: NavigationDirectorySummary;
@@ -31,7 +36,7 @@ type ComposerProps = {
   pendingRequestActive?: boolean;
   onMaterializeLaunchpad?: (
     directoryKey: string,
-    input?: Array<{ type: "text"; text: string }>
+    input?: AppServerTurnInputItem[]
   ) => Promise<void>;
   onPendingStatusChange?: (status?: string) => void;
   onUpdateLaunchpad?: (
@@ -63,6 +68,19 @@ type ComposerProps = {
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
 };
 
+type ComposerImageAttachment = {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  url: string;
+};
+
+type PastedImageFile = {
+  file: File;
+  type: string;
+};
+
 export function Composer(props: ComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const activeRunIdRef = useRef<string | undefined>(undefined);
@@ -71,6 +89,7 @@ export function Composer(props: ComposerProps) {
   const [interrupting, setInterrupting] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | undefined>(undefined);
   const [sendError, setSendError] = useState<string>();
+  const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>([]);
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
   const isLaunchpad = Boolean(props.launchpad && props.directory);
@@ -142,6 +161,10 @@ export function Composer(props: ComposerProps) {
   }, [isLaunchpad, props.launchpad?.directoryKey, props.launchpad?.updatedAt]);
 
   useEffect(() => {
+    setImageAttachments([]);
+  }, [props.launchpad?.directoryKey]);
+
+  useEffect(() => {
     if (!props.thread) {
       return;
     }
@@ -151,6 +174,7 @@ export function Composer(props: ComposerProps) {
     setInterrupting(false);
     updateActiveRunId(undefined);
     setActiveOptimisticMessageId(undefined);
+    setImageAttachments([]);
   }, [props.thread?.id, props.thread?.source]);
 
   useEffect(() => {
@@ -268,7 +292,17 @@ export function Composer(props: ComposerProps) {
 
   const submitTurn = async (): Promise<void> => {
     const text = hydrateSkillLabelsWithMarkdown(draft.trim(), mentionedSkills);
-    if (!text || props.disabled) {
+    const imageParts = imageAttachments.map((attachment, index) => ({
+      type: "image" as const,
+      url: attachment.url,
+      alt: formatPastedImageAlt(attachment, index),
+    }));
+    const input: AppServerTurnInputItem[] = [
+      ...(text ? [{ type: "text" as const, text }] : []),
+      ...imageParts.map(({ url }) => ({ type: "image" as const, url })),
+    ];
+
+    if (input.length === 0 || props.disabled) {
       return;
     }
 
@@ -277,9 +311,9 @@ export function Composer(props: ComposerProps) {
 
     if (props.launchpad && props.onMaterializeLaunchpad) {
       try {
-        await props.onMaterializeLaunchpad(props.launchpad.directoryKey, [
-          { type: "text", text },
-        ]);
+        await props.onMaterializeLaunchpad(props.launchpad.directoryKey, input);
+        setDraft("");
+        setImageAttachments([]);
       } catch (error) {
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
@@ -294,18 +328,19 @@ export function Composer(props: ComposerProps) {
     }
 
     props.onPendingStatusChange?.("Thinking");
-    const optimisticMessageId = props.addOptimisticUserMessage?.(text);
+    const optimisticMessageId = props.addOptimisticUserMessage?.(text, imageParts);
     setActiveOptimisticMessageId(optimisticMessageId);
 
     try {
       const response = await props.desktopApi.startTurn({
         backend: props.thread.source,
         threadId: props.thread.id,
-        input: [{ type: "text", text }],
+        input,
       });
       updateActiveRunId(response.runId);
       props.onActiveRunIdChange?.(response.runId);
       setDraft("");
+      setImageAttachments([]);
     } catch (error) {
       if (optimisticMessageId) {
         props.removeOptimisticMessage?.(optimisticMessageId);
@@ -371,6 +406,43 @@ export function Composer(props: ComposerProps) {
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(inserted.nextSelection, inserted.nextSelection);
     });
+  };
+
+  const removeImageAttachment = (id: string): void => {
+    setImageAttachments((current) =>
+      current.filter((attachment) => attachment.id !== id)
+    );
+  };
+
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
+    const pastedFiles = getPastedImageFiles(event.clipboardData);
+    if (pastedFiles.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    setSendError(undefined);
+    void attachPastedImages(pastedFiles);
+  };
+
+  const attachPastedImages = async (files: PastedImageFile[]): Promise<void> => {
+    try {
+      const nextAttachments = await Promise.all(
+        files.map(async ({ file, type }, index) => ({
+          id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+          name: file.name || formatPastedImageName(type, index),
+          size: file.size,
+          type,
+          url: await readFileAsDataUrl(file, type),
+        }))
+      );
+
+      setImageAttachments((current) => [...current, ...nextAttachments]);
+    } catch (error) {
+      setSendError(
+        error instanceof Error ? error.message : "The pasted image could not be read."
+      );
+    }
   };
 
   const handleLaunchpadPatch = (
@@ -448,6 +520,7 @@ export function Composer(props: ComposerProps) {
             setDraft(event.target.value);
             setSendError(undefined);
           }}
+          onPaste={handlePaste}
           onClick={() => {
             setActiveSkillIndex(0);
           }}
@@ -515,6 +588,38 @@ export function Composer(props: ComposerProps) {
           </div>
         ) : null}
       </div>
+
+      {imageAttachments.length > 0 ? (
+        <div className="composer__attachments" aria-label="Pasted images">
+          {imageAttachments.map((attachment, index) => (
+            <div className="composer__attachment" key={attachment.id}>
+              <img
+                className="composer__attachment-preview"
+                src={attachment.url}
+                alt={formatPastedImageAlt(attachment, index)}
+              />
+              <div className="composer__attachment-copy">
+                <span className="composer__attachment-name">
+                  {attachment.name}
+                </span>
+                <span className="composer__attachment-meta">
+                  {formatImageType(attachment.type)} · {formatBytes(attachment.size)}
+                </span>
+              </div>
+              <button
+                aria-label={`Remove ${attachment.name}`}
+                className="composer__attachment-remove"
+                type="button"
+                onClick={() => {
+                  removeImageAttachment(attachment.id);
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {props.launchpad || props.thread ? (
         <div
@@ -751,7 +856,7 @@ export function Composer(props: ComposerProps) {
         ) : null}
         <button
           className="button button--primary"
-          disabled={props.disabled || sending || !draft.trim()}
+          disabled={props.disabled || sending || (!draft.trim() && imageAttachments.length === 0)}
           type="submit"
         >
           {sending
@@ -765,6 +870,105 @@ export function Composer(props: ComposerProps) {
       </div>
     </form>
   );
+}
+
+function getPastedImageFiles(clipboardData: DataTransfer): PastedImageFile[] {
+  const files: PastedImageFile[] = [];
+  const seenFiles = new Set<string>();
+
+  for (const item of Array.from(clipboardData.items)) {
+    if (item.kind !== "file" || !item.type.startsWith("image/")) {
+      continue;
+    }
+
+    const file = item.getAsFile();
+    if (!file) {
+      continue;
+    }
+
+    const key = buildFileKey(file);
+    if (!seenFiles.has(key)) {
+      files.push({ file, type: item.type });
+      seenFiles.add(key);
+    }
+  }
+
+  for (const file of Array.from(clipboardData.files)) {
+    if (!file.type.startsWith("image/")) {
+      continue;
+    }
+
+    const key = buildFileKey(file);
+    if (!seenFiles.has(key)) {
+      files.push({ file, type: file.type });
+      seenFiles.add(key);
+    }
+  }
+
+  return files;
+}
+
+function buildFileKey(file: File): string {
+  return `${file.name}:${file.type}:${file.size}:${file.lastModified}`;
+}
+
+function readFileAsDataUrl(file: File, mimeType: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result === "string" && reader.result.startsWith("data:image/")) {
+        resolve(reader.result);
+        return;
+      }
+
+      if (typeof reader.result === "string") {
+        const dataSeparatorIndex = reader.result.indexOf(",");
+        if (mimeType.startsWith("image/") && dataSeparatorIndex >= 0) {
+          resolve(`data:${mimeType};base64,${reader.result.slice(dataSeparatorIndex + 1)}`);
+          return;
+        }
+      }
+
+      reject(new Error("The pasted image did not produce an image data URL."));
+    });
+    reader.addEventListener("error", () => {
+      reject(reader.error ?? new Error("The pasted image could not be read."));
+    });
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatPastedImageName(type: string, index: number): string {
+  const extension = type.split("/")[1] || "png";
+  return `pasted-image-${index + 1}.${extension}`;
+}
+
+function formatPastedImageAlt(
+  attachment: Pick<ComposerImageAttachment, "name">,
+  index: number
+): string {
+  return attachment.name || `Pasted image ${index + 1}`;
+}
+
+function formatImageType(type: string): string {
+  const subtype = type.split("/")[1];
+  return subtype ? subtype.toUpperCase() : "Image";
+}
+
+function formatBytes(size: number): string {
+  if (!Number.isFinite(size) || size <= 0) {
+    return "Unknown size";
+  }
+
+  if (size < 1024) {
+    return `${size} B`;
+  }
+
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatLaunchpadWorkspaceLabel(

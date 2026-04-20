@@ -5,6 +5,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
+  AppServerThreadImagePart,
   NavigationThreadSummary,
 } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
@@ -98,7 +99,7 @@ function pruneOptimisticEntries(
   return optimisticEntries.filter(
     (entry) =>
       !response.replay.messages.some(
-        (message) => message.role === entry.role && message.text === entry.text
+        (message) => messageMatchesOptimisticEntry(message, entry)
       )
   );
 }
@@ -109,6 +110,26 @@ function hasHydratedTranscriptContent(session: ThreadSessionEntry): boolean {
       session.optimisticEntries.length ||
       session.pendingAssistantMessage ||
       session.pendingRequest
+  );
+}
+
+function messageMatchesOptimisticEntry(
+  message: AppServerThreadMessage,
+  entry: AppServerThreadMessageEntry
+): boolean {
+  if (message.role !== entry.role || message.text !== entry.text) {
+    return false;
+  }
+
+  const entryImages = (entry.parts ?? []).filter((part) => part.type === "image");
+  if (entryImages.length === 0) {
+    return true;
+  }
+
+  const messageImages = (message.parts ?? []).filter((part) => part.type === "image");
+  return (
+    messageImages.length === entryImages.length &&
+    entryImages.every((image, index) => messageImages[index]?.url === image.url)
   );
 }
 
@@ -215,7 +236,10 @@ export function useThreadSessionState(params: {
   thread?: NavigationThreadSummary;
 }): {
   activeRunId?: string;
-  addOptimisticUserMessage: (text: string) => string;
+  addOptimisticUserMessage: (
+    text: string,
+    imageParts?: AppServerThreadImagePart[]
+  ) => string;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   entries: AppServerThreadEntry[];
   error?: string;
@@ -695,12 +719,16 @@ export function useThreadSessionState(params: {
   }, [desktopApi, selectedSession?.response, thread, threadKey, updateSession]);
 
   const addOptimisticUserMessage = useCallback(
-    (text: string): string => {
+    (text: string, imageParts: AppServerThreadImagePart[] = []): string => {
       if (!thread || !threadKey) {
         return `optimistic-${Date.now()}`;
       }
 
       const id = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const parts: AppServerThreadMessageEntry["parts"] = [
+        ...(text ? [{ type: "text" as const, text }] : []),
+        ...imageParts,
+      ];
       updateSession(threadKey, (current) => ({
         ...current,
         expectOwnUpdate: true,
@@ -713,6 +741,7 @@ export function useThreadSessionState(params: {
             id,
             role: "user",
             text,
+            parts,
             createdAt: Date.now(),
           },
         ],

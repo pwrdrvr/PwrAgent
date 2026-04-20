@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerReadThreadResponse,
   AppServerThreadEntry,
+  AppServerThreadImagePart,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
   NavigationThreadSummary
@@ -21,11 +22,34 @@ function mergeItems<T extends { id: string }>(
   return [...deduped.values()];
 }
 
+function messageMatchesOptimisticEntry(
+  message: AppServerThreadMessage,
+  entry: AppServerThreadMessageEntry
+): boolean {
+  if (message.role !== entry.role || message.text !== entry.text) {
+    return false;
+  }
+
+  const entryImages = (entry.parts ?? []).filter((part) => part.type === "image");
+  if (entryImages.length === 0) {
+    return true;
+  }
+
+  const messageImages = (message.parts ?? []).filter((part) => part.type === "image");
+  return (
+    messageImages.length === entryImages.length &&
+    entryImages.every((image, index) => messageImages[index]?.url === image.url)
+  );
+}
+
 export function useThreadTranscript(params: {
   desktopApi?: DesktopApi;
   thread?: NavigationThreadSummary;
 }): {
-  addOptimisticUserMessage: (text: string) => string;
+  addOptimisticUserMessage: (
+    text: string,
+    imageParts?: AppServerThreadImagePart[]
+  ) => string;
   error?: string;
   entries: AppServerThreadEntry[];
   loading: boolean;
@@ -150,8 +174,15 @@ export function useThreadTranscript(params: {
     }
   }, [desktopApi, response, thread]);
 
-  const addOptimisticUserMessage = useCallback((text: string): string => {
+  const addOptimisticUserMessage = useCallback((
+    text: string,
+    imageParts: AppServerThreadImagePart[] = []
+  ): string => {
     const id = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const parts: AppServerThreadMessageEntry["parts"] = [
+      ...(text ? [{ type: "text" as const, text }] : []),
+      ...imageParts
+    ];
     setOptimisticEntries((current) => [
       ...current,
       {
@@ -159,6 +190,7 @@ export function useThreadTranscript(params: {
         id,
         role: "user",
         text,
+        parts,
         createdAt: Date.now()
       }
     ]);
@@ -174,7 +206,7 @@ export function useThreadTranscript(params: {
       optimisticEntries.filter(
         (entry) =>
           !response?.replay.messages.some(
-            (message) => message.role === entry.role && message.text === entry.text
+            (message) => messageMatchesOptimisticEntry(message, entry)
           )
       ),
     [optimisticEntries, response?.replay.messages]
