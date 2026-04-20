@@ -100,7 +100,6 @@ describe("ThreadView", () => {
             runId: "turn-1",
           }),
         }}
-        fetchedAt={Date.now()}
         loading={false}
         loadingMore={false}
         messageCount={2}

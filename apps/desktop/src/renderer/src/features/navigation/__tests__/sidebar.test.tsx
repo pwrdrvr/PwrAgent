@@ -126,14 +126,13 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
-  it("keeps Inbox first and renders compact directory rows from directory summaries", () => {
+  it("renders Inbox as the first thread lens and keeps directory rows available", () => {
     render(
       <Sidebar
         backends={backends}
         browseMode="directories"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
@@ -148,7 +147,15 @@ describe("Sidebar", () => {
     );
 
     const headings = screen.getAllByRole("heading", { level: 2 });
-    expect(headings.map((heading) => heading.textContent)).toEqual(["Inbox", "Browse"]);
+    expect(headings.map((heading) => heading.textContent)).toEqual(["Browse"]);
+    const lensButtons = within(
+      screen.getByRole("tablist", { name: "Thread lenses" })
+    ).getAllByRole("button");
+    expect(lensButtons.map((button) => button.textContent)).toEqual([
+      "inbox",
+      "recents",
+      "directories",
+    ]);
     expect(screen.getByRole("button", { name: "directories" })).toHaveAttribute(
       "aria-pressed",
       "true"
@@ -167,7 +174,6 @@ describe("Sidebar", () => {
         browseMode="directories"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
@@ -197,7 +203,6 @@ describe("Sidebar", () => {
         browseMode="directories"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
@@ -232,7 +237,6 @@ describe("Sidebar", () => {
         browseMode="recents"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
@@ -263,7 +267,6 @@ describe("Sidebar", () => {
         browseMode="recents"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[updatedSinceSeenThread]}
         launchpadError={undefined}
         loading={false}
@@ -294,6 +297,41 @@ describe("Sidebar", () => {
     expect(unreadIndicator).not.toHaveTextContent("!");
   });
 
+  it("renders unread inbox rows with the same dense treatment as recents", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[updatedSinceSeenThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[sharedThread, updatedSinceSeenThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const browseSection = screen.getByRole("heading", { level: 2, name: "Browse" }).closest("section");
+    expect(browseSection).not.toBeNull();
+    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
+      name: /Updated thread/i,
+    });
+
+    expect(screen.getByRole("button", { name: "inbox" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+    expect(threadButton.querySelector('[data-thread-status="unread"]')).not.toBeNull();
+    expect(within(threadButton).getByText("PwrAgnt")).toBeInTheDocument();
+    expect(screen.queryByText("Cross-project cleanup")).not.toBeInTheDocument();
+  });
+
   it("renders directory rows without the raw chevron glyph affordance", () => {
     render(
       <Sidebar
@@ -301,7 +339,6 @@ describe("Sidebar", () => {
         browseMode="directories"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
@@ -333,7 +370,6 @@ describe("Sidebar", () => {
         browseMode="recents"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
@@ -364,7 +400,6 @@ describe("Sidebar", () => {
         browseMode="recents"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[
           {
             ...sharedThread,
@@ -400,7 +435,6 @@ describe("Sidebar", () => {
         browseMode="recents"
         createThreadError={undefined}
         directories={directories}
-        fetchedAt={Date.now()}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}

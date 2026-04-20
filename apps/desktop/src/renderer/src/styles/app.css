@@ -228,8 +228,8 @@ textarea {
 
 .lens-switch {
   display: inline-grid;
-  width: min(100%, 216px);
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(100%, 324px);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-left: auto;
   padding: 3px;
   border: 1px solid var(--border-subtle);
@@ -2044,7 +2044,7 @@ textarea {
 
 .composer__input {
   width: 100%;
-  min-height: 112px;
+  min-height: 144px;
   resize: vertical;
   padding: 12px;
   border: 1px solid var(--border-subtle);

@@ -1,9 +1,11 @@
 import type { NavigationThreadSummary } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
-import { formatBackendLabel } from "../../lib/backend-label";
+import { ThreadMetaChips } from "./ThreadMetaChips";
+import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
 
 type InboxListProps = {
   selectedThreadKey?: string;
+  thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
   onSelectThread: (thread: NavigationThreadSummary) => void;
 };
@@ -12,33 +14,36 @@ export function InboxList(props: InboxListProps) {
   if (props.threads.length === 0) {
     return (
       <p className="sidebar-empty">
-        Nothing is waiting on you.
+        No unread threads.
       </p>
     );
   }
 
   return (
-    <div className="sidebar-list" role="list">
-      {props.threads.slice(0, 4).map((thread) => {
+    <div className="sidebar-list sidebar-list--dense" role="list">
+      {props.threads.map((thread) => {
         const selected =
           buildThreadIdentityKey(thread.source, thread.id) === props.selectedThreadKey;
+        const status = getThreadRowStatus(thread, props.thinkingThreadKeys);
         return (
           <button
             key={buildThreadIdentityKey(thread.source, thread.id)}
             aria-pressed={selected}
-            className={`thread-row thread-row--compact${selected ? " is-selected" : ""}`}
+            className={`thread-row${selected ? " is-selected" : ""}`}
             type="button"
             onClick={() => props.onSelectThread(thread)}
           >
             <span className="thread-row__header">
-              <span className="thread-row__title">{thread.title}</span>
-              <span className="thread-row__chip thread-row__chip--backend">
-                {formatBackendLabel(thread.source)}
+              <span className="thread-row__heading">
+                <ThreadRowStatus status={status} />
+                <span className="thread-row__title">{thread.title}</span>
+              </span>
+              <span className="thread-row__time">
+                {formatRelativeTime(thread.updatedAt)}
               </span>
             </span>
-            <span className="thread-row__time">
-              {formatRelativeTime(thread.updatedAt)}
-            </span>
+
+            <ThreadMetaChips includeLinkedDirectories thread={thread} />
           </button>
         );
       })}

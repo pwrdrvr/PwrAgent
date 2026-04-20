@@ -3,8 +3,6 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 
 type ThreadHeaderProps = {
-  fetchedAt?: number;
-  messageCount: number;
   thread: NavigationThreadSummary;
 };
 
@@ -24,26 +22,6 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           </span>
         </div>
       </div>
-
-      <div className="thread-header__stats">
-        <div>
-          <span className="thread-header__stat-label">Messages</span>
-          <strong>{props.messageCount}</strong>
-        </div>
-        <div>
-          <span className="thread-header__stat-label">Synced</span>
-          <strong>{props.fetchedAt ? formatTimestamp(props.fetchedAt) : "Waiting"}</strong>
-        </div>
-      </div>
     </header>
   );
-}
-
-function formatTimestamp(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit"
-  }).format(timestamp);
 }
