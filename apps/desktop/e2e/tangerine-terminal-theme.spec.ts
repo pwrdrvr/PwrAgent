@@ -50,6 +50,20 @@ async function computedStyle(locator: Locator, property: string): Promise<string
   property);
 }
 
+async function computedPseudoStyle(
+  locator: Locator,
+  pseudoElement: string,
+  property: string
+): Promise<string> {
+  return await locator.evaluate(
+    (element, params) =>
+      getComputedStyle(element, params.pseudoElement)
+        .getPropertyValue(params.property)
+        .trim(),
+    { property, pseudoElement }
+  );
+}
+
 async function assertReadableText(params: {
   background: Locator;
   foreground: Locator;
@@ -120,6 +134,10 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
     await expect(primaryButton).toHaveCSS("background-color", "rgb(18, 8, 0)");
     await expect(primaryButton).toHaveCSS("color", "rgb(255, 179, 92)");
     await expect(selectedRow).toHaveCSS("border-left-color", "rgba(255, 138, 31, 0.42)");
+    expect(await computedPseudoStyle(selectedRow, "::before", "background-color")).toBe(
+      "rgb(255, 138, 31)"
+    );
+    expect(await computedPseudoStyle(selectedRow, "::before", "width")).toBe("3px");
 
     await assertReadableText({
       background: sidebar,

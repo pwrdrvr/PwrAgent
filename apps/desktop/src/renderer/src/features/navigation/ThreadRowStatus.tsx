@@ -2,7 +2,7 @@ import type { NavigationThreadSummary } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 
-export type ThreadRowStatusKind = "thinking" | "unread";
+export type ThreadRowStatusKind = "thinking";
 
 export function getThreadRowStatus(
   thread: NavigationThreadSummary,
@@ -11,10 +11,6 @@ export function getThreadRowStatus(
   const threadKey = buildThreadIdentityKey(thread.source, thread.id);
   if (thinkingThreadKeys?.[threadKey]) {
     return "thinking";
-  }
-
-  if (thread.inbox.inInbox) {
-    return "unread";
   }
 
   return undefined;
@@ -41,17 +37,5 @@ export function ThreadRowStatus(props: ThreadRowStatusProps) {
       </span>
     );
   }
-
-  return (
-    <span
-      aria-label="Needs attention"
-      className="thread-row__status-indicator thread-row__status-indicator--unread"
-      data-thread-status="unread"
-      title="Needs attention"
-    >
-      <span aria-hidden="true" className="thread-row__status-dot">
-        !
-      </span>
-    </span>
-  );
+  return null;
 }

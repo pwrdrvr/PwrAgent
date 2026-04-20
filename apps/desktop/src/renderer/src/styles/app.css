@@ -358,11 +358,12 @@ textarea {
 }
 
 .thread-row {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
   width: 100%;
-  padding: 12px;
+  padding: 12px 12px 12px 14px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -380,7 +381,18 @@ textarea {
 .thread-row.is-selected {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
-  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.thread-row.is-selected::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 5px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  content: "";
+  pointer-events: none;
 }
 
 .thread-row__header {
@@ -777,6 +789,19 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.thread-header__compact-title {
+  max-width: min(58vw, 520px);
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thread-header__stats {

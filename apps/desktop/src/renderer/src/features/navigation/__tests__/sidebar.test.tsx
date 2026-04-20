@@ -214,7 +214,7 @@ describe("Sidebar", () => {
     expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
   });
 
-  it("falls back to the unread indicator in recents once the turn is done", () => {
+  it("does not duplicate inbox membership as an attention marker in recents", () => {
     render(
       <Sidebar
         backends={backends}
@@ -242,11 +242,8 @@ describe("Sidebar", () => {
     });
 
     expect(threadButton.querySelector('[data-thread-status="thinking"]')).toBeNull();
-    const unreadIndicator = threadButton.querySelector('[data-thread-status="unread"]');
-    expect(unreadIndicator).not.toBeNull();
-    expect(unreadIndicator).toHaveAttribute("aria-label", "Needs attention");
-    expect(unreadIndicator).toHaveAttribute("title", "Needs attention");
-    expect(unreadIndicator).toHaveTextContent("!");
+    expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
+    expect(threadButton).not.toHaveTextContent("!");
   });
 
   it("renders directory rows without the raw chevron glyph affordance", () => {

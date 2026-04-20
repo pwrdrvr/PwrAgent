@@ -168,6 +168,10 @@ describe("ThreadView", () => {
     expect(
       screen.getByRole("heading", { level: 2, name: "Plan the app-server protocol" })
     ).toBeInTheDocument();
+    expect(document.querySelector(".thread-header__compact-title")).toHaveTextContent(
+      "Plan the app-server protocol"
+    );
+    expect(document.querySelector(".thread-header__title")).toBeNull();
     expect(document.querySelector(".thread-header__summary")).toBeNull();
     expect(screen.getByText("Codex")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open context rail" }));

@@ -13,7 +13,9 @@ export function ThreadHeader(props: ThreadHeaderProps) {
     <header className="thread-header">
       <div>
         <div className="thread-header__eyebrow-row">
-          <p className="eyebrow">Thread detail</p>
+          <h2 className="thread-header__compact-title" title={props.thread.title}>
+            {props.thread.title}
+          </h2>
           <span className="thread-row__chip thread-row__chip--backend">
             {formatBackendLabel(props.thread.source)}
           </span>
@@ -21,7 +23,6 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             {formatExecutionModeLabel(props.thread.executionMode)}
           </span>
         </div>
-        <h2 className="thread-header__title">{props.thread.title}</h2>
       </div>
 
       <div className="thread-header__stats">
