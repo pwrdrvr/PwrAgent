@@ -146,8 +146,8 @@ describe("Sidebar", () => {
       />
     );
 
-    const headings = screen.getAllByRole("heading", { level: 2 });
-    expect(headings.map((heading) => heading.textContent)).toEqual(["Browse"]);
+    expect(screen.queryByRole("heading", { level: 2, name: "Browse" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Thread browser" })).toBeInTheDocument();
     const lensButtons = within(
       screen.getByRole("tablist", { name: "Thread lenses" })
     ).getAllByRole("button");
@@ -217,8 +217,7 @@ describe("Sidebar", () => {
       />
     );
 
-    const browseSection = screen.getByRole("heading", { level: 2, name: "Browse" }).closest("section");
-    expect(browseSection).not.toBeNull();
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
     const threadButton = within(browseSection as HTMLElement).getByRole("button", {
       name: /Cross-project cleanup/i,
     });
@@ -250,8 +249,7 @@ describe("Sidebar", () => {
       />
     );
 
-    const browseSection = screen.getByRole("heading", { level: 2, name: "Browse" }).closest("section");
-    expect(browseSection).not.toBeNull();
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
     const threadButton = within(browseSection as HTMLElement).getByRole("button", {
       name: /Cross-project cleanup/i,
     });
@@ -280,8 +278,7 @@ describe("Sidebar", () => {
       />
     );
 
-    const browseSection = screen.getByRole("heading", { level: 2, name: "Browse" }).closest("section");
-    expect(browseSection).not.toBeNull();
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
     const threadButton = within(browseSection as HTMLElement).getByRole("button", {
       name: /Updated thread/i,
     });
@@ -317,8 +314,7 @@ describe("Sidebar", () => {
       />
     );
 
-    const browseSection = screen.getByRole("heading", { level: 2, name: "Browse" }).closest("section");
-    expect(browseSection).not.toBeNull();
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
     const threadButton = within(browseSection as HTMLElement).getByRole("button", {
       name: /Updated thread/i,
     });

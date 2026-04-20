@@ -115,6 +115,14 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
   try {
     await openTodoThread(app.window);
 
+    await expect(
+      app.window.getByRole("heading", { name: "Browse" })
+    ).toHaveCount(0);
+    await expect(
+      app.window.getByRole("heading", { name: "Transcript" })
+    ).toHaveCount(0);
+    await expect(app.window.getByText(/^\d+ messages?$/)).toHaveCount(0);
+
     const shell = app.window.locator(".app-shell");
     const sidebar = app.window.locator(".sidebar");
     const transcriptPanel = app.window.locator(".transcript-panel");

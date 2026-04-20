@@ -72,8 +72,6 @@ textarea {
 }
 
 .sidebar__masthead,
-.sidebar__section-header,
-.transcript-panel__header,
 .thread-header {
   display: flex;
   align-items: flex-start;
@@ -185,25 +183,13 @@ textarea {
   overflow: hidden;
 }
 
-.sidebar__section h2,
-.transcript-panel h3,
 .context-panel h3 {
   margin: 0;
   font-size: 14px;
   font-weight: 600;
 }
 
-.sidebar__section-header--browse {
-  align-items: flex-end;
-  flex-wrap: wrap;
-}
-
-.sidebar__section-title {
-  min-width: 0;
-}
-
 .sidebar__supporting-text,
-.transcript-panel__header p,
 .thread-header__summary,
 .thread-empty-state p {
   margin: 4px 0 0;
@@ -228,9 +214,8 @@ textarea {
 
 .lens-switch {
   display: inline-grid;
-  width: min(100%, 324px);
+  width: 100%;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-left: auto;
   padding: 3px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -897,11 +882,6 @@ textarea {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-}
-
-.transcript-panel__header {
-  padding: 16px 16px 12px;
-  border-bottom: 1px solid var(--border-subtle);
 }
 
 .transcript-list {

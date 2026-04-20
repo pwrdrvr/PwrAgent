@@ -115,7 +115,7 @@ The thread lens switch is:
 
 `Inbox` is the leftmost lens and shows unread chats. It should use the same visual row language as Recents, not a separate mini-app above the browser.
 
-Do not show a generic Browse thread count or timestamp above the lens switch. Let the rows carry the useful context.
+Do not show a generic Browse header, thread count, or timestamp above the lens switch. Let the rows carry the useful context.
 
 ### Thread Rows
 
@@ -147,6 +147,8 @@ Avoid oversized "widget" header areas. Do not show message count or synced-at me
 ### Transcript
 
 Transcript surfaces should stay black-first. Message cards can have subtle near-black backgrounds and tangerine borders when they need focus, but large orange fills should be avoided.
+
+Do not show redundant transcript headers or message-count sublabels above the message list. The panel can keep an accessible label, but the visible surface should start with the transcript content.
 
 Do not put cards inside cards. Do not make the transcript feel like an embedded preview.
 
@@ -199,4 +201,3 @@ Before shipping a visual change:
 - check selected, hover, focus, disabled, empty, and unread states
 - inspect screenshots at desktop and narrow widths when layout changes
 - keep E2E or theme-contract coverage current for shared shell behavior
-

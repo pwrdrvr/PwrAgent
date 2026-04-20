@@ -284,7 +284,7 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
     expect(screen.getAllByText("codex/build-codex-client").length).toBeGreaterThan(0);
-    expect(screen.getByRole("heading", { level: 3, name: "Transcript" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 3, name: "Transcript" })).not.toBeInTheDocument();
     const transcript = screen.getByRole("region", { name: "Transcript" });
     await waitFor(() => {
       expect(transcript).toHaveTextContent("Open the desktop plan and build the Codex client.");
@@ -351,7 +351,7 @@ describe("App", () => {
         selector: ".composer__meta"
       })
     ).not.toBeInTheDocument();
-    expect(screen.getByText("3 messages")).toBeInTheDocument();
+    expect(screen.queryByText("3 messages")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
 

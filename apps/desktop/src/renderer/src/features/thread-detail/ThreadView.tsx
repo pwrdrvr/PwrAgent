@@ -713,15 +713,6 @@ export function ThreadView(props: ThreadViewProps) {
 
       <div className="thread-view__layout">
         <section className="transcript-panel" aria-label="Transcript">
-          <div className="transcript-panel__header">
-            <div>
-              <h3>Transcript</h3>
-              <p>
-                {props.messageCount} message{props.messageCount === 1 ? "" : "s"}
-              </p>
-            </div>
-          </div>
-
           <TranscriptList
             entries={props.transcriptEntries}
             error={props.transcriptError}

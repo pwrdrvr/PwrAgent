@@ -124,27 +124,21 @@ export function Sidebar(props: SidebarProps) {
         <p className="sidebar-error sidebar-error--masthead">{props.launchpadError}</p>
       ) : null}
 
-      <section className="sidebar__section sidebar__section--fill">
-        <div className="sidebar__section-header sidebar__section-header--browse">
-          <div className="sidebar__section-title">
-            <h2>Browse</h2>
-          </div>
-
-          <div className="lens-switch" role="tablist" aria-label="Thread lenses">
-            {(["inbox", "recents", "directories"] as const).map((mode) => (
-              <button
-                key={mode}
-                aria-pressed={props.browseMode === mode}
-                className={`lens-switch__button${
-                  props.browseMode === mode ? " is-active" : ""
-                }`}
-                type="button"
-                onClick={() => props.onBrowseModeChange(mode)}
-              >
-                {mode}
-              </button>
-            ))}
-          </div>
+      <section className="sidebar__section sidebar__section--fill" aria-label="Thread browser">
+        <div className="lens-switch" role="tablist" aria-label="Thread lenses">
+          {(["inbox", "recents", "directories"] as const).map((mode) => (
+            <button
+              key={mode}
+              aria-pressed={props.browseMode === mode}
+              className={`lens-switch__button${
+                props.browseMode === mode ? " is-active" : ""
+              }`}
+              type="button"
+              onClick={() => props.onBrowseModeChange(mode)}
+            >
+              {mode}
+            </button>
+          ))}
         </div>
 
         <div className="sidebar__scroll-region">
