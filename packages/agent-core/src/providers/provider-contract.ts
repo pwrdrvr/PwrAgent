@@ -41,7 +41,15 @@ export type ProviderTurnEvent =
         toolName?: string;
         success?: boolean;
         arguments?: Record<string, unknown>;
+        data?: Record<string, unknown>;
       };
+    }
+  | {
+      type: "item_command_output_delta";
+      itemId: string;
+      delta: string;
+      stream?: "stdout" | "stderr";
+      bytes?: number;
     }
   | {
       type: "item_plan_delta";

@@ -93,6 +93,7 @@ export class TurnRunner {
           toolName: event.item.toolName,
           success: event.item.success,
           arguments: event.item.arguments,
+          data: event.item.data,
         });
         await this.emit({
           method: event.type === "item_started" ? "item/started" : "item/completed",
@@ -109,7 +110,21 @@ export class TurnRunner {
               toolName: event.item.toolName,
               success: event.item.success,
               arguments: event.item.arguments,
+              data: event.item.data,
             },
+          },
+        });
+        return;
+      case "item_command_output_delta":
+        await this.emit({
+          method: "item/commandExecution/outputDelta",
+          params: {
+            threadId: execution.threadId,
+            runId: execution.runId,
+            itemId: event.itemId,
+            delta: event.delta,
+            stream: event.stream,
+            bytes: event.bytes,
           },
         });
         return;

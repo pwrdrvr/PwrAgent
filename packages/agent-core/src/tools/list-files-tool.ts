@@ -1,16 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { ToolDefinition, ToolExecutionContext } from "./tool-contract.js";
 import {
   asObjectArguments,
   readOptionalPositiveInteger,
   readOptionalString,
 } from "./tool-contract.js";
+import { runProcess, type ProcessRunResult } from "./process-runner.js";
 import { ToolExecutionFailure } from "./tool-errors.js";
+import { resolveWorkspaceScopePath, toPosix } from "./workspace-paths.js";
 
-const execFileAsync = promisify(execFile);
 const TOOL_NAME = "list_files";
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
@@ -48,16 +47,21 @@ export function createListFilesTool(): ToolDefinition<ListFilesArguments> {
       };
     },
     async execute(arguments_, context) {
-      const root = resolveWorkspacePath(context, arguments_.path);
+      const root = resolveWorkspaceScopePath(context, TOOL_NAME, arguments_.path);
       const limit = Math.min(arguments_.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
-      const files = await listWorkspaceFiles(root.workspacePath, root.scopePath, limit);
-      if (files.length === 0) {
+      const listResult = await listWorkspaceFiles(
+        root.workspacePath,
+        root.scopePath,
+        limit,
+        context,
+      );
+      if (listResult.files.length === 0) {
         return {
           success: true,
           output: `No files found in ${root.displayPath}.`,
           data: {
             path: root.scopeLabel,
-            files: [],
+            files: listResult.files,
             truncated: false,
           },
           commandAction: "listFiles",
@@ -65,11 +69,11 @@ export function createListFilesTool(): ToolDefinition<ListFilesArguments> {
       }
       return {
         success: true,
-        output: files.join("\n"),
+        output: listResult.files.join("\n"),
         data: {
           path: root.scopeLabel,
-          files,
-          truncated: files.length >= limit,
+          files: listResult.files,
+          truncated: listResult.truncated,
         },
         commandAction: "listFiles",
       };
@@ -81,32 +85,16 @@ async function listWorkspaceFiles(
   workspacePath: string,
   scopePath: string,
   limit: number,
-): Promise<string[]> {
-  try {
-    const { stdout } = await execFileAsync(
-      "rg",
-      ["--files", "."],
-      {
-        cwd: scopePath,
-        maxBuffer: 1024 * 1024,
-      },
-    );
-    const prefix = path.relative(workspacePath, scopePath);
-    return stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => (prefix ? path.posix.join(toPosix(prefix), toPosix(line)) : toPosix(line)))
-      .sort((left, right) => left.localeCompare(right))
-      .slice(0, limit);
-  } catch (error) {
-    if (!isCommandMissing(error)) {
-      throw new ToolExecutionFailure(
-        TOOL_NAME,
-        `ripgrep listing failed: ${error instanceof Error ? error.message : String(error)}`,
-        "list_files_failed",
-      );
-    }
+  context: ToolExecutionContext,
+): Promise<{ files: string[]; truncated: boolean }> {
+  const ripgrepResult = await listWorkspaceFilesWithRipgrep(
+    workspacePath,
+    scopePath,
+    limit,
+    context,
+  );
+  if (ripgrepResult !== "missing") {
+    return ripgrepResult;
   }
 
   const results: string[] = [];
@@ -115,7 +103,91 @@ async function listWorkspaceFiles(
     results.push(relative);
     return results.length < limit;
   });
-  return results;
+  return {
+    files: results,
+    truncated: results.length >= limit,
+  };
+}
+
+async function listWorkspaceFilesWithRipgrep(
+  workspacePath: string,
+  scopePath: string,
+  limit: number,
+  context: ToolExecutionContext,
+): Promise<{ files: string[]; truncated: boolean } | "missing"> {
+  const prefix = path.relative(workspacePath, scopePath);
+  const files: string[] = [];
+  let pending = "";
+  const result = await runProcess({
+    command: "rg",
+    args: ["--files", "."],
+    cwd: scopePath,
+    signal: context.signal,
+    onStdoutChunk: (chunk, control) => {
+      pending = collectFileLines({
+        prefix,
+        input: pending + chunk.toString("utf8"),
+        files,
+        limit,
+        final: false,
+      });
+      if (files.length >= limit) {
+        control.stop();
+      }
+    },
+  });
+  if (pending && files.length < limit) {
+    collectFileLines({
+      prefix,
+      input: pending,
+      files,
+      limit,
+      final: true,
+    });
+  }
+  if (result.status === "failed_to_start" && isCommandMissing(result)) {
+    return "missing";
+  }
+  if (result.status !== "completed" && result.status !== "stopped") {
+    throw new ToolExecutionFailure(
+      TOOL_NAME,
+      processFailureMessage("ripgrep listing failed", result),
+      "list_files_failed",
+    );
+  }
+  if (result.exitCode && result.exitCode !== 0) {
+    throw new ToolExecutionFailure(
+      TOOL_NAME,
+      processFailureMessage("ripgrep listing failed", result),
+      "list_files_failed",
+    );
+  }
+  return {
+    files: files.sort((left, right) => left.localeCompare(right)),
+    truncated: result.status === "stopped" || files.length >= limit,
+  };
+}
+
+function collectFileLines(params: {
+  prefix: string;
+  input: string;
+  files: string[];
+  limit: number;
+  final: boolean;
+}): string {
+  const lines = params.input.split(/\r?\n/);
+  const completeLines = params.final ? lines : lines.slice(0, -1);
+  for (const line of completeLines) {
+    if (params.files.length >= params.limit || !line.trim()) {
+      continue;
+    }
+    params.files.push(
+      params.prefix
+        ? path.posix.join(toPosix(params.prefix), toPosix(line.trim()))
+        : toPosix(line.trim()),
+    );
+  }
+  return params.final ? "" : (lines.at(-1) ?? "");
 }
 
 async function walk(
@@ -147,41 +219,22 @@ async function walk(
   return true;
 }
 
-function resolveWorkspacePath(context: ToolExecutionContext, scope: string | undefined) {
-  const workspacePath = context.cwd?.trim();
-  if (!workspacePath) {
-    throw new ToolExecutionFailure(
-      TOOL_NAME,
-      "thread cwd is required for repository tools",
-      "missing_cwd",
-    );
-  }
-  const scopePath = path.resolve(workspacePath, scope ?? ".");
-  const relative = path.relative(workspacePath, scopePath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new ToolExecutionFailure(
-      TOOL_NAME,
-      `path escapes workspace: ${scope ?? "."}`,
-      "path_outside_workspace",
-    );
-  }
-  return {
-    workspacePath,
-    scopePath,
-    scopeLabel: relative ? toPosix(relative) : ".",
-    displayPath: relative ? toPosix(relative) : "workspace",
-  };
-}
-
-function isCommandMissing(error: unknown): boolean {
+function isCommandMissing(result: ProcessRunResult): boolean {
+  const error = result.error;
   return Boolean(
     error &&
-      typeof error === "object" &&
       "code" in error &&
       (error as { code?: string }).code === "ENOENT",
   );
 }
 
-function toPosix(value: string): string {
-  return value.split(path.sep).join(path.posix.sep);
+function processFailureMessage(prefix: string, result: ProcessRunResult): string {
+  return [
+    prefix,
+    result.output || result.error?.message,
+    `status=${result.status}`,
+    `exitCode=${result.exitCode ?? "null"}`,
+  ]
+    .filter(Boolean)
+    .join(": ");
 }

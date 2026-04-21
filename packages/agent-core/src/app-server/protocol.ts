@@ -96,6 +96,7 @@ export type ThreadReplayItem = {
   toolName?: string;
   success?: boolean;
   arguments?: Record<string, unknown>;
+  data?: Record<string, unknown>;
 };
 
 export type ModelSummary = {
@@ -240,7 +241,19 @@ export type AppServerNotification =
           toolName?: string;
           success?: boolean;
           arguments?: Record<string, unknown>;
+          data?: Record<string, unknown>;
         };
+      };
+    }
+  | {
+      method: "item/commandExecution/outputDelta";
+      params: {
+        threadId: string;
+        runId?: string;
+        itemId: string;
+        delta: string;
+        stream?: "stdout" | "stderr";
+        bytes?: number;
       };
     }
   | {

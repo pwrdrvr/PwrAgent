@@ -25,7 +25,7 @@ import type {
 } from "../tools/tool-contract.js";
 import { ToolError } from "../tools/tool-errors.js";
 
-const DEFAULT_MAX_TOOL_ROUNDS = 12;
+const DEFAULT_MAX_TOOL_ROUNDS = 100;
 
 type StartResponsesToolLoopOptions = {
   client: XaiResponsesClient;
@@ -104,7 +104,7 @@ async function runResponsesToolLoop(params: {
     }
     if (round >= params.maxToolRounds) {
       throw new Error(
-        `Grok tool loop exceeded the maximum round limit (${params.maxToolRounds})`,
+        `Grok tool loop exceeded the maximum round limit (${params.maxToolRounds}) before round ${round + 1}`,
       );
     }
     if (!normalized.providerResponseId) {
@@ -139,6 +139,7 @@ async function runResponsesToolLoop(params: {
           toolName: execution.toolName,
           success: execution.success,
           arguments: execution.arguments,
+          data: execution.item.type === "commandExecution" ? execution.data : undefined,
         },
       });
 
@@ -225,6 +226,15 @@ async function executeFunctionCall(params: {
     approvalPolicy: params.thread.approvalPolicy,
     sandbox: params.thread.sandbox,
     signal: params.signal,
+    onOutputDelta: (delta) => {
+      void params.emit({
+        type: "item_command_output_delta",
+        itemId: params.functionCall.callId,
+        delta: delta.text,
+        stream: delta.stream,
+        bytes: delta.bytes,
+      });
+    },
     requestApproval: async (request) =>
       await requestToolApprovalFromProvider({
         request,

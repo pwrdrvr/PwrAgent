@@ -1,7 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { ToolDefinition, ToolExecutionContext } from "./tool-contract.js";
 import {
   asObjectArguments,
@@ -10,9 +8,10 @@ import {
   readOptionalString,
   readRequiredString,
 } from "./tool-contract.js";
+import { runProcess, type ProcessRunResult } from "./process-runner.js";
 import { InvalidToolArgumentsError, ToolExecutionFailure } from "./tool-errors.js";
+import { resolveWorkspaceScopePath, toPosix } from "./workspace-paths.js";
 
-const execFileAsync = promisify(execFile);
 const TOOL_NAME = "search_code";
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -47,7 +46,8 @@ export function createSearchCodeTool(): ToolDefinition<SearchCodeArguments> {
         },
         path: {
           type: "string",
-          description: "Optional directory path inside the workspace to scope the search.",
+          description:
+            "Optional file or directory path inside the workspace to scope the search.",
         },
         limit: {
           type: "integer",
@@ -76,9 +76,15 @@ export function createSearchCodeTool(): ToolDefinition<SearchCodeArguments> {
       };
     },
     async execute(arguments_, context) {
-      const root = resolveWorkspacePath(context, arguments_.path);
+      const root = resolveWorkspaceScopePath(context, TOOL_NAME, arguments_.path);
       const limit = Math.min(arguments_.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
-      const matches = await searchWorkspace(root.workspacePath, root.scopePath, arguments_, limit);
+      const matches = await searchWorkspace(
+        root.workspacePath,
+        root.scopePath,
+        arguments_,
+        limit,
+        context,
+      );
       if (matches.length === 0) {
         return {
           success: true,
@@ -113,49 +119,140 @@ async function searchWorkspace(
   scopePath: string,
   arguments_: SearchCodeArguments,
   limit: number,
+  context: ToolExecutionContext,
 ): Promise<SearchMatch[]> {
-  try {
-    return await searchWithRipgrep(workspacePath, scopePath, arguments_, limit);
-  } catch (error) {
-    if (!isCommandMissing(error)) {
-      if (isNoMatchesError(error)) {
-        return [];
-      }
-      throw new ToolExecutionFailure(
-        TOOL_NAME,
-        `ripgrep search failed: ${error instanceof Error ? error.message : String(error)}`,
-        "search_failed",
-      );
-    }
+  const scope = await describeSearchScope(workspacePath, scopePath);
+  const result = await searchWithRipgrep(
+    scope,
+    arguments_,
+    limit,
+    context,
+  );
+  if (result === "missing") {
+    return await searchWithFallback(workspacePath, scope, arguments_, limit);
   }
-  return await searchWithFallback(workspacePath, scopePath, arguments_, limit);
+  return result;
+}
+
+type SearchScope = {
+  scopePath: string;
+  cwd: string;
+  target: string;
+  prefix: string;
+  isFile: boolean;
+};
+
+async function describeSearchScope(
+  workspacePath: string,
+  scopePath: string,
+): Promise<SearchScope> {
+  const stats = await fs.stat(scopePath);
+  if (stats.isFile()) {
+    return {
+      scopePath,
+      cwd: workspacePath,
+      target: toPosix(path.relative(workspacePath, scopePath)),
+      prefix: "",
+      isFile: true,
+    };
+  }
+  return {
+    scopePath,
+    cwd: scopePath,
+    target: ".",
+    prefix: path.relative(workspacePath, scopePath),
+    isFile: false,
+  };
 }
 
 async function searchWithRipgrep(
-  workspacePath: string,
-  scopePath: string,
+  scope: SearchScope,
   arguments_: SearchCodeArguments,
   limit: number,
-): Promise<SearchMatch[]> {
-  const args = ["--line-number", "--no-heading", "--color", "never"];
+  context: ToolExecutionContext,
+): Promise<SearchMatch[] | "missing"> {
+  const args = [
+    "--line-number",
+    "--no-heading",
+    "--with-filename",
+    "--color",
+    "never",
+  ];
   if (arguments_.fixedStrings) {
     args.push("--fixed-strings");
   }
   if (!arguments_.caseSensitive) {
     args.push("--ignore-case");
   }
-  args.push(arguments_.query, ".");
-  const { stdout } = await execFileAsync("rg", args, {
-    cwd: scopePath,
-    maxBuffer: 1024 * 1024,
+  args.push(arguments_.query, scope.target);
+  const matches: SearchMatch[] = [];
+  let pending = "";
+  const result = await runProcess({
+    command: "rg",
+    args,
+    cwd: scope.cwd,
+    signal: context.signal,
+    onStdoutChunk: (chunk, control) => {
+      pending = collectRipgrepMatches({
+        prefix: scope.prefix,
+        input: pending + chunk.toString("utf8"),
+        matches,
+        limit,
+        final: false,
+      });
+      if (matches.length >= limit) {
+        control.stop();
+      }
+    },
   });
-  const prefix = path.relative(workspacePath, scopePath);
-  return stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => parseRipgrepLine(prefix, line))
-    .slice(0, limit);
+  if (pending && matches.length < limit) {
+    collectRipgrepMatches({
+      prefix: scope.prefix,
+      input: pending,
+      matches,
+      limit,
+      final: true,
+    });
+  }
+  if (result.status === "failed_to_start" && isCommandMissing(result)) {
+    return "missing";
+  }
+  if (result.exitCode === 1) {
+    return matches;
+  }
+  if (result.status !== "completed" && result.status !== "stopped") {
+    throw new ToolExecutionFailure(
+      TOOL_NAME,
+      processFailureMessage("ripgrep search failed", result),
+      "search_failed",
+    );
+  }
+  if (result.exitCode && result.exitCode !== 0) {
+    throw new ToolExecutionFailure(
+      TOOL_NAME,
+      processFailureMessage("ripgrep search failed", result),
+      "search_failed",
+    );
+  }
+  return matches;
+}
+
+function collectRipgrepMatches(params: {
+  prefix: string;
+  input: string;
+  matches: SearchMatch[];
+  limit: number;
+  final: boolean;
+}): string {
+  const lines = params.input.split(/\r?\n/);
+  const completeLines = params.final ? lines : lines.slice(0, -1);
+  for (const line of completeLines) {
+    if (params.matches.length >= params.limit || !line.trim()) {
+      continue;
+    }
+    params.matches.push(parseRipgrepLine(params.prefix, line.trim()));
+  }
+  return params.final ? "" : (lines.at(-1) ?? "");
 }
 
 function parseRipgrepLine(prefix: string, line: string): SearchMatch {
@@ -175,11 +272,13 @@ function parseRipgrepLine(prefix: string, line: string): SearchMatch {
 
 async function searchWithFallback(
   workspacePath: string,
-  scopePath: string,
+  scope: SearchScope,
   arguments_: SearchCodeArguments,
   limit: number,
 ): Promise<SearchMatch[]> {
-  const files = await collectFiles(scopePath, workspacePath, limit * 10);
+  const files = scope.isFile
+    ? [path.relative(workspacePath, scope.scopePath)]
+    : await collectFiles(scope.scopePath, workspacePath, limit * 10);
   const matcher = buildMatcher(arguments_);
   const matches: SearchMatch[] = [];
   for (const file of files) {
@@ -272,52 +371,24 @@ async function walk(
   return true;
 }
 
-function resolveWorkspacePath(context: ToolExecutionContext, scope: string | undefined) {
-  const workspacePath = context.cwd?.trim();
-  if (!workspacePath) {
-    throw new ToolExecutionFailure(
-      TOOL_NAME,
-      "thread cwd is required for repository tools",
-      "missing_cwd",
-    );
-  }
-  const scopePath = path.resolve(workspacePath, scope ?? ".");
-  const relative = path.relative(workspacePath, scopePath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new ToolExecutionFailure(
-      TOOL_NAME,
-      `path escapes workspace: ${scope ?? "."}`,
-      "path_outside_workspace",
-    );
-  }
-  return {
-    workspacePath,
-    scopePath,
-    scopeLabel: relative ? toPosix(relative) : ".",
-    displayPath: relative ? toPosix(relative) : "workspace",
-  };
-}
-
-function isCommandMissing(error: unknown): boolean {
+function isCommandMissing(result: ProcessRunResult): boolean {
+  const error = result.error;
   return Boolean(
     error &&
-      typeof error === "object" &&
       "code" in error &&
       (error as { code?: string }).code === "ENOENT",
   );
 }
 
-function isNoMatchesError(error: unknown): boolean {
-  return Boolean(
-    error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: number }).code === 1,
-  );
-}
-
-function toPosix(value: string): string {
-  return value.split(path.sep).join(path.posix.sep);
+function processFailureMessage(prefix: string, result: ProcessRunResult): string {
+  return [
+    prefix,
+    result.output || result.error?.message,
+    `status=${result.status}`,
+    `exitCode=${result.exitCode ?? "null"}`,
+  ]
+    .filter(Boolean)
+    .join(": ");
 }
 
 function normalizeRelativePath(value: string): string {

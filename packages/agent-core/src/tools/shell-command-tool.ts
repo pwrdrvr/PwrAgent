@@ -1,4 +1,3 @@
-import { exec } from "node:child_process";
 import type { ToolDefinition, ToolExecutionContext } from "./tool-contract.js";
 import {
   asObjectArguments,
@@ -6,7 +5,7 @@ import {
   readRequiredString,
   requestToolApproval,
 } from "./tool-contract.js";
-import { ToolExecutionFailure } from "./tool-errors.js";
+import { runProcess, type ProcessRunResult } from "./process-runner.js";
 import { classifyShellCommand } from "./shell-safety.js";
 import { requireWorkspacePath } from "./workspace-paths.js";
 
@@ -70,29 +69,12 @@ export function createShellCommandTool(): ToolDefinition<ShellCommandArguments> 
           };
         }
       }
-      let result;
-      try {
-        result = await runShellCommand(
-          arguments_.command,
-          cwd,
-          arguments_.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          context,
-        );
-      } catch (error) {
-        if (error instanceof ToolExecutionFailure) {
-          return {
-            success: false,
-            output: error.message,
-            data: {
-              exitCode: null,
-            },
-            commandAction: classification.commandAction,
-            itemType: "commandExecution",
-            command: arguments_.command,
-          };
-        }
-        throw error;
-      }
+      const result = await runShellCommand(
+        arguments_.command,
+        cwd,
+        arguments_.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        context,
+      );
       return {
         ...result,
         commandAction: classification.commandAction,
@@ -109,77 +91,44 @@ async function runShellCommand(
   timeoutMs: number,
   context: ToolExecutionContext,
 ) {
-  return await new Promise<{
-    success: boolean;
-    output: string;
-    data: Record<string, unknown>;
-  }>((resolve, reject) => {
-    let settled = false;
-    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-    const child = exec(
-      command,
-      {
-        cwd,
-        timeout: timeoutMs,
-        maxBuffer: 10 * 1024 * 1024,
-        env: { ...process.env, FORCE_COLOR: "0" },
-      },
-      (error, stdout, stderr) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        if (forceKillTimer) {
-          clearTimeout(forceKillTimer);
-        }
-        context.signal?.removeEventListener("abort", onAbort);
-        const combined = [stdout.trim(), stderr.trim() ? `STDERR: ${stderr.trim()}` : ""]
-          .filter(Boolean)
-          .join("\n");
-        if (error) {
-          reject(
-            new ToolExecutionFailure(
-              TOOL_NAME,
-              combined || error.message,
-              context.signal?.aborted ? "command_cancelled" : "command_failed",
-            ),
-          );
-          return;
-        }
-        resolve({
-          success: true,
-          output: combined || "Command executed successfully (no output).",
-          data: {
-            exitCode: 0,
-          },
-        });
-      },
-    );
-
-    const onAbort = () => {
-      if (settled) {
-        return;
-      }
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        settled = true;
-        reject(new ToolExecutionFailure(TOOL_NAME, "command was cancelled", "command_cancelled"));
-        return;
-      }
-      forceKillTimer = setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          /* already exited */
-        }
-      }, 1_000);
-    };
-
-    if (context.signal?.aborted) {
-      onAbort();
-      return;
-    }
-    context.signal?.addEventListener("abort", onAbort, { once: true });
+  const result = await runProcess({
+    command,
+    cwd,
+    shell: true,
+    timeoutMs,
+    signal: context.signal,
+    onOutputDelta: context.onOutputDelta,
   });
+  const output = result.output || fallbackOutput(result);
+  return {
+    success: result.status === "completed" && result.exitCode === 0,
+    output,
+    data: processResultData(result),
+  };
+}
+
+function fallbackOutput(result: ProcessRunResult): string {
+  if (result.status === "completed" && result.exitCode === 0) {
+    return "Command executed successfully (no output).";
+  }
+  if (result.status === "timed_out") {
+    return "Command timed out.";
+  }
+  if (result.status === "cancelled") {
+    return "Command was cancelled.";
+  }
+  return result.error?.message || "Command failed.";
+}
+
+function processResultData(result: ProcessRunResult): Record<string, unknown> {
+  return {
+    exitCode: result.exitCode,
+    signal: result.signal,
+    status: result.status,
+    stdoutBytes: result.stdoutBytes,
+    stderrBytes: result.stderrBytes,
+    outputLimitBytes: result.outputLimitBytes,
+    stdoutTruncated: result.stdoutTruncated,
+    stderrTruncated: result.stderrTruncated,
+  };
 }

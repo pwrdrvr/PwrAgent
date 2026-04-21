@@ -51,6 +51,56 @@ describe("search_code tool", () => {
     });
   });
 
+  it("searches a single file when path points at a file", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    await fs.mkdir(path.join(workspace.path, "src"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspace.path, "src", "app.ts"),
+      "const FILE_MARKER = true;\nexport { FILE_MARKER };\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(workspace.path, "src", "other.ts"),
+      "const FILE_MARKER = false;\n",
+      "utf8",
+    );
+    const tool = createSearchCodeTool();
+
+    const result = await tool.execute(
+      tool.parseArguments({
+        query: "FILE_MARKER",
+        path: "src/app.ts",
+        fixedStrings: true,
+      }),
+      { cwd: workspace.path },
+    );
+
+    expect(result).toEqual({
+      success: true,
+      output:
+        "src/app.ts:1: const FILE_MARKER = true;\nsrc/app.ts:2: export { FILE_MARKER };",
+      data: {
+        query: "FILE_MARKER",
+        path: "src/app.ts",
+        matches: [
+          {
+            path: "src/app.ts",
+            line: 1,
+            text: "const FILE_MARKER = true;",
+          },
+          {
+            path: "src/app.ts",
+            line: 2,
+            text: "export { FILE_MARKER };",
+          },
+        ],
+        truncated: false,
+      },
+      commandAction: "search",
+    });
+  });
+
   it("returns a successful empty result when there are no matches", async () => {
     const workspace = await createTemporaryTestDirectory();
     cleanups.push(workspace.cleanup);
@@ -73,5 +123,31 @@ describe("search_code tool", () => {
       },
       commandAction: "search",
     });
+  });
+
+  it("stops broad ripgrep searches at the requested match limit", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+    await fs.mkdir(path.join(workspace.path, "src"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspace.path, "src", "many.txt"),
+      Array.from({ length: 30_000 }, (_, index) => `BROAD_MARKER_${index}`).join("\n"),
+      "utf8",
+    );
+    const tool = createSearchCodeTool();
+
+    const result = await tool.execute(
+      tool.parseArguments({
+        query: "BROAD_MARKER",
+        fixedStrings: true,
+        limit: 5,
+      }),
+      { cwd: workspace.path },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.matches).toHaveLength(5);
+    expect(result.data?.truncated).toBe(true);
+    expect(result.output.split("\n")).toHaveLength(5);
   });
 });

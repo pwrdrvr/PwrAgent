@@ -263,8 +263,11 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId?: string;
+        runId?: string;
         itemId: string;
         delta: string;
+        stream?: "stdout" | "stderr";
+        bytes?: number;
       };
     }
   | {

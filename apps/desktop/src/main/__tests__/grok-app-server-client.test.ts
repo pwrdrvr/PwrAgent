@@ -182,6 +182,27 @@ describe("GrokAppServerClient", () => {
       threadId: "thread-1",
       input: [{ type: "text", text: "Return a visible answer" }],
     });
+    await provider.runs[0]?.emit({
+      type: "item_started",
+      item: {
+        id: "tool-1",
+        type: "dynamicToolCall",
+        toolName: "search_code",
+        arguments: { query: "needle" },
+      },
+    });
+    await provider.runs[0]?.emit({
+      type: "item_completed",
+      item: {
+        id: "tool-1",
+        type: "dynamicToolCall",
+        text: "No matches.",
+        toolName: "search_code",
+        success: true,
+        arguments: { query: "needle" },
+        commandAction: "search",
+      },
+    });
     provider.runs[0]?.deferred.resolve({
       assistantText: "",
       providerResponseId: "resp_empty",
@@ -189,13 +210,208 @@ describe("GrokAppServerClient", () => {
     await flushAsync();
 
     expect(startedTurn).toEqual({ threadId: "thread-1", runId: "turn-1" });
-    expect(notifications).toEqual(["turn/started", "turn/failed"]);
+    expect(notifications).toEqual([
+      "turn/started",
+      "item/started",
+      "item/completed",
+      "turn/failed",
+    ]);
     await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+      entries: [
+        {
+          type: "message",
+          role: "user",
+          text: "Return a visible answer",
+        },
+        {
+          type: "activity",
+          summary: "Explored 1 item",
+          details: [
+            {
+              kind: "read",
+              label: "Searched code",
+            },
+          ],
+        },
+      ],
       lastUserMessage: "Return a visible answer",
       lastAssistantMessage: undefined,
     });
 
     unsubscribe();
+    await client.close();
+  });
+
+  it("hydrates Grok tool replay items as transcript activity", async () => {
+    const server = {
+      request: async (method: string): Promise<unknown> => {
+        if (method === "initialize") {
+          return {
+            serverInfo: { name: "@pwragnt/grok-app-server", version: "1.0.0" },
+            methods: ["thread/read"],
+          };
+        }
+        if (method === "thread/read") {
+          return {
+            messages: [
+              { role: "user", text: "Find the code" },
+              { role: "assistant", text: "Found it." },
+            ],
+            items: [
+              {
+                id: "user-1",
+                type: "userMessage",
+                role: "user",
+                text: "Find the code",
+              },
+              {
+                id: "search-1",
+                type: "dynamicToolCall",
+                status: "completed",
+                toolName: "search_code",
+                commandAction: "search",
+                arguments: { path: "src" },
+                success: true,
+              },
+              {
+                id: "shell-1",
+                type: "commandExecution",
+                status: "failed",
+                toolName: "shell_command",
+                command: "rg needle .",
+                commandAction: "search",
+                success: false,
+              },
+              {
+                id: "assistant-1",
+                type: "agentMessage",
+                role: "assistant",
+                text: "Found it.",
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+      notify: async () => undefined,
+      onNotification: () => () => undefined,
+    };
+    const client = new GrokAppServerClient({ server });
+
+    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+      entries: [
+        {
+          type: "message",
+          role: "user",
+          text: "Find the code",
+        },
+        {
+          type: "activity",
+          summary: "Explored 1 item, Ran 1 command",
+          status: "failed",
+          details: [
+            {
+              kind: "read",
+              label: "Searched src",
+              path: "src",
+              status: "completed",
+            },
+            {
+              kind: "command",
+              label: "rg needle .",
+              status: "failed",
+            },
+          ],
+        },
+        {
+          type: "message",
+          role: "assistant",
+          text: "Found it.",
+        },
+      ],
+      lastUserMessage: "Find the code",
+      lastAssistantMessage: "Found it.",
+    });
+
+    await client.close();
+  });
+
+  it("preserves Grok messages when replay items only contain tool activity", async () => {
+    const server = {
+      request: async (method: string): Promise<unknown> => {
+        if (method === "initialize") {
+          return {
+            serverInfo: { name: "@pwragnt/grok-app-server", version: "1.0.0" },
+            methods: ["thread/read"],
+          };
+        }
+        if (method === "thread/read") {
+          return {
+            messages: [
+              { role: "user", text: "Find the code" },
+              { role: "assistant", text: "Found it." },
+            ],
+            items: [
+              {
+                id: "search-1",
+                type: "dynamicToolCall",
+                status: "completed",
+                toolName: "search_code",
+                commandAction: "search",
+                arguments: { path: "src" },
+                success: true,
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+      notify: async () => undefined,
+      onNotification: () => () => undefined,
+    };
+    const client = new GrokAppServerClient({ server });
+
+    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+      entries: [
+        {
+          type: "message",
+          role: "user",
+          text: "Find the code",
+        },
+        {
+          type: "activity",
+          summary: "Explored 1 item",
+          details: [
+            {
+              kind: "read",
+              label: "Searched src",
+              path: "src",
+              status: "completed",
+            },
+          ],
+        },
+        {
+          type: "message",
+          role: "assistant",
+          text: "Found it.",
+        },
+      ],
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          text: "Find the code",
+        },
+        {
+          id: "message-2",
+          role: "assistant",
+          text: "Found it.",
+        },
+      ],
+      lastUserMessage: "Find the code",
+      lastAssistantMessage: "Found it.",
+    });
+
     await client.close();
   });
 
