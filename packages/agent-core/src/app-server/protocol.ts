@@ -45,6 +45,7 @@ export type ThreadState = {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  archived?: boolean;
   createdAt?: number;
   updatedAt?: number;
 };
@@ -266,6 +267,12 @@ export type AppServerNotification =
         delta: string;
         stream?: "stdout" | "stderr";
         bytes?: number;
+      };
+    }
+  | {
+      method: "thread/archived";
+      params: {
+        threadId: string;
       };
     }
   | {

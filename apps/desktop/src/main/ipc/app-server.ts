@@ -2,6 +2,8 @@ import { ipcMain } from "electron";
 import { OverlayStore } from "@pwragnt/agent-core";
 import type {
   AppServerBackendScope,
+  ArchiveThreadRequest,
+  ArchiveThreadResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
@@ -29,6 +31,7 @@ import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
+  APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
@@ -143,6 +146,24 @@ class DesktopAppServerService {
       hasLastUserMessage: Boolean(response.replay.lastUserMessage),
       hasLastAssistantMessage: Boolean(response.replay.lastAssistantMessage),
       hasPreviousPage: response.replay.pagination.hasPreviousPage,
+    });
+
+    return response;
+  }
+
+  async archiveThread(
+    request: ArchiveThreadRequest,
+  ): Promise<ArchiveThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const response = await getDesktopBackendRegistry().archiveThread({
+      ...request,
+      backend,
+    });
+
+    logDebug("archiveThread", {
+      backend,
+      threadId: request.threadId,
+      cleanupCount: response.cleanup.length,
     });
 
     return response;
@@ -293,6 +314,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.readThread(request);
     }
   );
+  ipcMain.removeHandler(APP_SERVER_ARCHIVE_THREAD_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_ARCHIVE_THREAD_CHANNEL,
+    async (
+      _event,
+      request: ArchiveThreadRequest,
+    ): Promise<ArchiveThreadResponse> => {
+      return await appServerService.archiveThread(request);
+    },
+  );
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.handle(
     FOCUSED_DIFF_ANALYZE_CHANNEL,
@@ -359,6 +390,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_ARCHIVE_THREAD_CHANNEL);
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);

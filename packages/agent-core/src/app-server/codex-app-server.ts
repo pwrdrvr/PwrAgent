@@ -41,6 +41,7 @@ const SUPPORTED_METHODS = [
   "thread/start",
   "thread/new",
   "thread/resume",
+  "thread/archive",
   "thread/name/set",
   "thread/read",
   "thread/compact/start",
@@ -140,6 +141,8 @@ export class CodexAppServer {
         return this.startThread(record);
       case "thread/resume":
         return this.resumeThread(record);
+      case "thread/archive":
+        return await this.archiveThread(record);
       case "thread/name/set":
         return this.setThreadName(record);
       case "thread/read":
@@ -238,6 +241,21 @@ export class CodexAppServer {
       params: {
         threadId,
         threadName: thread.threadName,
+      },
+    });
+    return thread;
+  }
+
+  private async archiveThread(params: Record<string, unknown>): Promise<ThreadState> {
+    const threadId = asRequiredString(params.threadId, "thread/archive requires threadId");
+    const thread = this.state.archiveThread(threadId);
+    if (!thread) {
+      throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
+    }
+    await this.emit({
+      method: "thread/archived",
+      params: {
+        threadId,
       },
     });
     return thread;

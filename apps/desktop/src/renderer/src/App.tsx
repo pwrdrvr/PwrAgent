@@ -30,20 +30,17 @@ export function App() {
         directories={navigation.directories}
         error={navigation.error}
         inboxThreads={navigation.inboxThreads}
+        archiveThreadError={navigation.archiveThreadError}
         launchpadError={navigation.launchpadError}
         loading={navigation.loading}
         selectedItemKey={navigation.selectedItemKey}
         thinkingThreadKeys={session.thinkingThreadKeys}
         threads={navigation.threads}
-                onBrowseModeChange={navigation.setBrowseMode}
+        onBrowseModeChange={navigation.setBrowseMode}
         onCreateThread={navigation.createThread}
         onOpenLaunchpad={navigation.openDirectoryLaunchpad}
         onSelectThread={navigation.selectThread}
-        onArchiveThread={async (thread) => {
-          console.log("Archiving thread:", thread.id, thread.title);
-          // TODO: implement confirmation (already in UI), IPC to main for archive + worktree delete, update navigation/session
-          alert(`Archived thread ${thread.title} (worktree would be deleted here)`);
-        }}
+        onArchiveThread={navigation.archiveThread}
       />
 
       <main className="app-main">

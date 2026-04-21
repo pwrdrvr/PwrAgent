@@ -2,6 +2,8 @@ import { app } from "electron";
 import { OverlayStore } from "@pwragnt/agent-core";
 import type {
   AgentEvent,
+  ArchiveThreadRequest,
+  ArchiveThreadResponse,
   AppServerListSkillsResponse,
   AppServerNotification,
   AppServerPendingRequestNotification,
@@ -63,6 +65,7 @@ type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
   listThreads(params?: { filter?: string }): Promise<AppServerThreadSummary[]>;
+  archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   listSkills(params?: {
     cwd?: string;
     cwds?: string[];
@@ -557,6 +560,32 @@ export class DesktopBackendRegistry {
     });
 
     return { data };
+  }
+
+  async archiveThread(
+    request: ArchiveThreadRequest,
+  ): Promise<ArchiveThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const thread = (await this.listThreads({ backend })).find(
+      (candidate) => candidate.id === request.threadId,
+    );
+    const result =
+      backend === "codex"
+        ? await this.withCodexThreadClient(request.threadId, async (client) =>
+            await this.archiveWithClient(client, request.threadId),
+          )
+        : await this.archiveWithClient(this.grokClient, request.threadId);
+
+    const cleanup = thread
+      ? await this.gitDirectoryService.cleanupThreadWorktrees(thread)
+      : [];
+
+    return {
+      backend,
+      threadId: result.threadId,
+      archivedAt: Date.now(),
+      cleanup,
+    };
   }
 
   async readDirectoryStatuses(directories: NavigationDirectorySummary[]): Promise<
@@ -1182,6 +1211,17 @@ export class DesktopBackendRegistry {
     }
 
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  private async archiveWithClient(
+    client: BackendClient,
+    threadId: string,
+  ): Promise<{ threadId: string }> {
+    if (!client.archiveThread) {
+      throw new Error("Selected backend does not support thread archiving");
+    }
+
+    return await client.archiveThread({ threadId });
   }
 
   private async handleServerRequest(

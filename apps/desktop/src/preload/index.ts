@@ -1,6 +1,8 @@
 import { clipboard, contextBridge, ipcRenderer } from "electron";
 import type {
   AgentEvent,
+  ArchiveThreadRequest,
+  ArchiveThreadResponse,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   InterruptTurnRequest,
@@ -53,6 +55,7 @@ import {
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
+  APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   BACKEND_LIST_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -107,6 +110,10 @@ const desktopApi = Object.freeze({
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_READ_THREAD_CHANNEL, request),
+  archiveThread: async (
+    request: ArchiveThreadRequest,
+  ): Promise<ArchiveThreadResponse> =>
+    await ipcRenderer.invoke(APP_SERVER_ARCHIVE_THREAD_CHANNEL, request),
   analyzeFocusedDiff: async (
     request: FocusedDiffAnalysisRequest
   ): Promise<FocusedDiffAnalysisResponse> =>

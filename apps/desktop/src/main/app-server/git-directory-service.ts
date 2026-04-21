@@ -3,6 +3,8 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type {
+  AppServerThreadSummary,
+  ArchiveThreadCleanupResult,
   LaunchpadWorkMode,
   NavigationDirectoryGitStatus,
   NavigationDirectorySummary,
@@ -40,6 +42,42 @@ function buildWorktreeBranchName(params: {
 
 function buildWorktreePath(repoRoot: string, branchName: string): string {
   return path.join(repoRoot, ".worktrees", branchName.replace(/[\\/]/g, "-"));
+}
+
+type WorktreeEntry = {
+  path: string;
+  branch?: string;
+};
+
+function parseGitWorktreeEntries(output: string): WorktreeEntry[] {
+  const entries: WorktreeEntry[] = [];
+  let current: WorktreeEntry | undefined;
+
+  for (const line of output.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      current = {
+        path: line.slice("worktree ".length).trim(),
+      };
+      if (current.path) {
+        entries.push(current);
+      }
+      continue;
+    }
+
+    if (current && line.startsWith("branch ")) {
+      const branch = line
+        .slice("branch ".length)
+        .trim()
+        .replace(/^refs\/heads\//, "");
+      current.branch = branch || undefined;
+    }
+  }
+
+  return entries;
+}
+
+function isProtectedBranch(branch?: string): boolean {
+  return !branch || ["main", "master", "develop", "trunk"].includes(branch);
 }
 
 type CachedDirectoryStatus = {
@@ -216,5 +254,122 @@ export class GitDirectoryService {
       cwd: worktreePath,
       workMode: "worktree",
     };
+  }
+
+  async cleanupThreadWorktrees(
+    thread: Pick<
+      AppServerThreadSummary,
+      "gitBranch" | "linkedDirectories" | "observedGitBranch"
+    >,
+  ): Promise<ArchiveThreadCleanupResult[]> {
+    const candidates = thread.linkedDirectories.flatMap((directory) => {
+      const worktreePath =
+        directory.worktreePath ?? (directory.kind === "worktree" ? directory.path : undefined);
+      if (!worktreePath?.trim()) {
+        return [];
+      }
+
+      return [
+        {
+          repoPath: directory.path,
+          worktreePath,
+        },
+      ];
+    });
+    const uniqueCandidates = [
+      ...new Map(
+        candidates.map((candidate) => [
+          `${path.resolve(candidate.repoPath)}:${path.resolve(candidate.worktreePath)}`,
+          candidate,
+        ]),
+      ).values(),
+    ];
+
+    return await Promise.all(
+      uniqueCandidates.map(async (candidate) =>
+        await this.cleanupWorktreeCandidate(candidate, thread),
+      ),
+    );
+  }
+
+  private async cleanupWorktreeCandidate(
+    candidate: {
+      repoPath: string;
+      worktreePath: string;
+    },
+    thread: Pick<AppServerThreadSummary, "gitBranch" | "observedGitBranch">,
+  ): Promise<ArchiveThreadCleanupResult> {
+    const repoPath = path.resolve(candidate.repoPath);
+    const worktreePath = path.resolve(candidate.worktreePath);
+    const base: ArchiveThreadCleanupResult = {
+      worktreePath,
+      removedWorktree: false,
+      deletedBranch: false,
+    };
+
+    if (repoPath === worktreePath) {
+      return {
+        ...base,
+        skippedReason: "Refusing to remove the primary repository worktree",
+      };
+    }
+
+    try {
+      const repoRoot = await runGit(repoPath, ["rev-parse", "--show-toplevel"]);
+      const worktreeList = await runGit(repoRoot, ["worktree", "list", "--porcelain"]);
+      const entries = parseGitWorktreeEntries(worktreeList);
+      const primaryPath = path.resolve(entries[0]?.path || repoRoot);
+      const entry = entries.find((item) => path.resolve(item.path) === worktreePath);
+
+      if (!entry) {
+        return {
+          ...base,
+          skippedReason: "Worktree is not registered with git",
+        };
+      }
+
+      if (worktreePath === primaryPath) {
+        return {
+          ...base,
+          skippedReason: "Refusing to remove the primary repository worktree",
+        };
+      }
+
+      const branch = entry.branch ?? thread.observedGitBranch ?? thread.gitBranch;
+      await runGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
+
+      const result: ArchiveThreadCleanupResult = {
+        ...base,
+        branch,
+        removedWorktree: true,
+      };
+
+      if (!branch) {
+        return {
+          ...result,
+          skippedReason: "No local branch was associated with the worktree",
+        };
+      }
+
+      if (isProtectedBranch(branch)) {
+        return {
+          ...result,
+          skippedReason: `Refusing to delete protected branch ${branch}`,
+        };
+      }
+
+      await runGit(repoRoot, ["branch", "-D", branch]);
+
+      return {
+        ...result,
+        deletedBranch: true,
+      };
+    } catch (error) {
+      return {
+        ...base,
+        branch: thread.observedGitBranch ?? thread.gitBranch,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 }

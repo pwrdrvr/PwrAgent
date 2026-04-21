@@ -182,6 +182,64 @@ function markThreadSeenInSnapshot(
   };
 }
 
+function removeThreadFromSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+  const threads = snapshot.threads.filter(
+    (thread) => buildThreadIdentityKey(thread.source, thread.id) !== threadKey
+  );
+  if (threads.length === snapshot.threads.length) {
+    return snapshot;
+  }
+
+  const threadInboxByKey = new Map(
+    threads.map((thread) => [
+      buildThreadIdentityKey(thread.source, thread.id),
+      thread.inbox.inInbox,
+    ])
+  );
+
+  return {
+    ...snapshot,
+    directories: snapshot.directories.map((directory) => {
+      const threadKeys = directory.threadKeys.filter((candidate) => candidate !== threadKey);
+      return {
+        ...directory,
+        threadKeys,
+        needsAttentionCount: threadKeys.reduce(
+          (count, candidate) => count + (threadInboxByKey.get(candidate) ? 1 : 0),
+          0
+        ),
+      };
+    }),
+    inboxThreadKeys: snapshot.inboxThreadKeys.filter((candidate) => candidate !== threadKey),
+    threads,
+  };
+}
+
+function getFallbackSelectionAfterRemoval(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    optimisticThreadKey?: string;
+  }
+): string | undefined {
+  const nextSnapshot = removeThreadFromSnapshot(snapshot, params);
+  return nextSnapshot
+    ? getFallbackSelectionKey(nextSnapshot, params.optimisticThreadKey)
+    : undefined;
+}
+
 function applyThreadNameUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: { backend: AppServerBackendKind; threadId: string; threadName?: string }
@@ -414,6 +472,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   error?: string;
   inboxThreads: NavigationThreadSummary[];
   launchpadError?: string;
+  archiveThreadError?: string;
   loading: boolean;
   refreshing: boolean;
   refresh: () => Promise<void>;
@@ -454,10 +513,12 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   ) => Promise<void>;
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
+  archiveThread: (thread: NavigationThreadSummary) => Promise<void>;
   snapshot?: NavigationSnapshot;
   threads: NavigationThreadSummary[];
 } {
   const markThreadSeen = desktopApi?.markThreadSeen;
+  const archiveThreadRequest = desktopApi?.archiveThread;
   const setThreadExecutionMode = desktopApi?.setThreadExecutionMode;
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
   const [browseMode, setBrowseMode] = useState<BrowseMode>("recents");
@@ -472,6 +533,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   }>();
   const [createThreadError, setCreateThreadError] = useState<string>();
   const [launchpadError, setLaunchpadError] = useState<string>();
+  const [archiveThreadError, setArchiveThreadError] = useState<string>();
   const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
     useState<ThreadExecutionMode>();
   const [setThreadExecutionModeError, setSetThreadExecutionModeError] =
@@ -717,6 +779,42 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         return;
       }
 
+      if (method === "thread/archived") {
+        const { threadId } = event.notification.params as {
+          threadId: string;
+        };
+        const threadKey = buildThreadIdentityKey(event.backend, threadId);
+
+        setState((current) => ({
+          ...current,
+          response: removeThreadFromSnapshot(current.response, {
+            backend: event.backend,
+            threadId,
+          }),
+        }));
+        setSelectedItemKey((current) =>
+          current === threadKey
+            ? getFallbackSelectionAfterRemoval(state.response, {
+                backend: event.backend,
+                threadId,
+                optimisticThreadKey: optimisticThreadRef.current
+                  ? buildThreadIdentityKey(
+                      optimisticThreadRef.current.source,
+                      optimisticThreadRef.current.id
+                    )
+                  : undefined,
+              })
+            : current
+        );
+        setRetainedUnreadThread((current) =>
+          current?.source === event.backend && current.id === threadId ? undefined : current
+        );
+        setOptimisticThread((current) =>
+          current?.source === event.backend && current.id === threadId ? undefined : current
+        );
+        return;
+      }
+
       if (
         method === "turn/completed" ||
         method === "turn/failed" ||
@@ -725,7 +823,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         scheduleRefresh();
       }
     });
-  }, [desktopApi, scheduleRefresh]);
+  }, [desktopApi, scheduleRefresh, state.response]);
 
   const threads = useMemo(() => {
     const currentThreads = state.response?.threads ?? [];
@@ -871,6 +969,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     releaseRetainedUnreadThread(threadKey);
     setCreateThreadError(undefined);
     setLaunchpadError(undefined);
+    setArchiveThreadError(undefined);
     setSetThreadExecutionModeError(undefined);
     setSetThreadModelSettingsError(undefined);
     setSelectedItemKey(threadKey);
@@ -893,6 +992,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       setCreatingThread({ backend: backend ?? "codex", executionMode });
       setCreateThreadError(undefined);
       setLaunchpadError(undefined);
+      setArchiveThreadError(undefined);
       setSetThreadModelSettingsError(undefined);
 
       try {
@@ -941,6 +1041,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
 
       setLaunchpadError(undefined);
       setCreateThreadError(undefined);
+      setArchiveThreadError(undefined);
       setSetThreadExecutionModeError(undefined);
       setSetThreadModelSettingsError(undefined);
 
@@ -1103,6 +1204,60 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     [desktopApi, directories, refresh]
   );
 
+  const archiveThread = useCallback(
+    async (thread: NavigationThreadSummary): Promise<void> => {
+      if (!archiveThreadRequest) {
+        setArchiveThreadError("Desktop bridge is missing archiveThread().");
+        return;
+      }
+
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const optimisticThreadKey = optimisticThread
+        ? buildThreadIdentityKey(optimisticThread.source, optimisticThread.id)
+        : undefined;
+
+      setArchiveThreadError(undefined);
+      setCreateThreadError(undefined);
+      setLaunchpadError(undefined);
+      setSetThreadExecutionModeError(undefined);
+      setSetThreadModelSettingsError(undefined);
+      setState((current) => ({
+        ...current,
+        response: removeThreadFromSnapshot(current.response, {
+          backend: thread.source,
+          threadId: thread.id,
+        }),
+      }));
+      setSelectedItemKey((current) =>
+        current === threadKey
+          ? getFallbackSelectionAfterRemoval(state.response, {
+              backend: thread.source,
+              threadId: thread.id,
+              optimisticThreadKey,
+            })
+          : current
+      );
+      setRetainedUnreadThread((current) =>
+        current?.source === thread.source && current.id === thread.id ? undefined : current
+      );
+      setOptimisticThread((current) =>
+        current?.source === thread.source && current.id === thread.id ? undefined : current
+      );
+
+      try {
+        await archiveThreadRequest({
+          backend: thread.source,
+          threadId: thread.id,
+        });
+        await refresh();
+      } catch (error) {
+        setArchiveThreadError(error instanceof Error ? error.message : String(error));
+        await refresh(threadKey);
+      }
+    },
+    [archiveThreadRequest, optimisticThread, refresh, state.response]
+  );
+
   const updateThreadExecutionMode = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -1227,6 +1382,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     error: state.error,
     inboxThreads,
     launchpadError,
+    archiveThreadError,
     loading: state.loading,
     refreshing: state.refreshing,
     refresh: async () => await refresh(),
@@ -1246,6 +1402,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     updateDirectoryLaunchpad,
     setBrowseMode,
     selectThread,
+    archiveThread,
     snapshot: state.response,
     threads,
   };

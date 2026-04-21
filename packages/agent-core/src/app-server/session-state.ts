@@ -84,6 +84,7 @@ export class AppServerSessionState {
 
   listThreads(): ThreadSummary[] {
     return [...this.threads.values()]
+      .filter((thread) => !thread.archived)
       .map((thread) => {
         const title = getThreadTitle(thread);
         const summary = this.summarizeThread(thread.threadId, [
@@ -114,6 +115,10 @@ export class AppServerSessionState {
   setThreadName(threadId: string, threadName: string): ThreadState | undefined {
     const trimmed = threadName.trim();
     return this.updateThread(threadId, { threadName: trimmed || null });
+  }
+
+  archiveThread(threadId: string): ThreadState | undefined {
+    return this.updateThread(threadId, { archived: true });
   }
 
   updateThread(

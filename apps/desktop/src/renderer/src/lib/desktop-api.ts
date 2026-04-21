@@ -7,6 +7,8 @@ import type {
 } from "../../../shared/image-normalization";
 import type {
   AgentEvent,
+  ArchiveThreadRequest,
+  ArchiveThreadResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
@@ -54,6 +56,9 @@ export type DesktopApi = {
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
+  archiveThread?: (
+    request: ArchiveThreadRequest
+  ) => Promise<ArchiveThreadResponse>;
   startThread?: (request: StartThreadRequest) => Promise<StartThreadResponse>;
   startTurn?: (request: StartTurnRequest) => Promise<StartTurnResponse>;
   interruptTurn?: (

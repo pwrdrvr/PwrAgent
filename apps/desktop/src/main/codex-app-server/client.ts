@@ -89,6 +89,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "turn/diff/updated",
   "serverRequest/resolved",
   "thread/compacted",
+  "thread/archived",
   "thread/status/changed",
   "thread/tokenUsage/updated",
   "turn/requestApproval",
@@ -2087,6 +2088,21 @@ export class CodexAppServerClient {
       methods: ["thread/resume"],
       payloads: buildThreadResumePayloads(params),
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    return {
+      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+    };
+  }
+
+  async archiveThread(params: { threadId: string }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/archive"],
+      payloads: [{ threadId: params.threadId }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
     return {

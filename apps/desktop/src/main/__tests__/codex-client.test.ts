@@ -33,6 +33,11 @@ class MockTransport implements JsonRpcTransport {
       id: "turn-1"
     }
   };
+  static threadArchiveResult: unknown = {
+    thread: {
+      id: "thread-2"
+    }
+  };
   static turnInterruptResponseMode: "success" | "timeout" = "success";
 
   readonly sentMessages: string[] = [];
@@ -540,6 +545,17 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/archive") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.threadArchiveResult
+        })
+      );
+      return;
+    }
+
     if (payload.method === "turn/start") {
       this.messageHandler(
         JSON.stringify({
@@ -650,6 +666,11 @@ describe("CodexAppServerClient", () => {
       },
       turn: {
         id: "turn-1"
+      }
+    };
+    MockTransport.threadArchiveResult = {
+      thread: {
+        id: "thread-2"
       }
     };
     MockTransport.turnInterruptResponseMode = "success";
@@ -1639,6 +1660,33 @@ describe("CodexAppServerClient", () => {
 
     expect(created).toEqual({
       threadId: "thread-3"
+    });
+
+    await client.close();
+  });
+
+  it("archives threads through the Codex app server", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await expect(client.archiveThread({ threadId: "thread-2" })).resolves.toEqual({
+      threadId: "thread-2",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const archiveRequest = transport?.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((message) => message.method === "thread/archive");
+
+    expect(archiveRequest).toMatchObject({
+      method: "thread/archive",
+      params: {
+        threadId: "thread-2",
+      },
     });
 
     await client.close();

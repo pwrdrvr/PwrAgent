@@ -839,6 +839,17 @@ export class GrokAppServerClient {
     };
   }
 
+  async archiveThread(params: { threadId: string }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await this.request("thread/archive", {
+      threadId: params.threadId,
+    });
+    return {
+      threadId: extractThreadId(result) ?? params.threadId,
+    };
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;

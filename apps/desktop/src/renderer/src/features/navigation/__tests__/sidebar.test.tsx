@@ -328,6 +328,68 @@ describe("Sidebar", () => {
     expect(screen.queryByText("Cross-project cleanup")).not.toBeInTheDocument();
   });
 
+  it("confirms archive requests from the row archive button", () => {
+    const onArchiveThread = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={onArchiveThread}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Archive thread" }));
+    const dialog = screen.getByRole("dialog", { name: "Archive Thread" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Archive Thread" }));
+
+    expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
+  });
+
+  it("archives directly from the thread context menu", () => {
+    const onArchiveThread = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={onArchiveThread}
+      />
+    );
+
+    const threadButton = screen.getByText("Cross-project cleanup").closest("button");
+    expect(threadButton).not.toBeNull();
+    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
+
+    expect(screen.queryByRole("dialog", { name: "Archive Thread" })).not.toBeInTheDocument();
+    expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
+  });
+
   it("renders directory rows without the raw chevron glyph affordance", () => {
     render(
       <Sidebar

@@ -27,6 +27,7 @@ describe("Codex app-server contract", () => {
         "thread/start",
         "thread/new",
         "thread/resume",
+        "thread/archive",
         "thread/name/set",
         "thread/read",
         "thread/compact/start",
@@ -41,6 +42,49 @@ describe("Codex app-server contract", () => {
         "turn/steer",
         "turn/interrupt",
       ],
+    });
+  });
+
+  it("archives threads without deleting their replay", async () => {
+    const { server, notifications } = createTestHarness();
+
+    await server.request("thread/start", {
+      cwd: "/repo/workspace",
+    });
+
+    await expect(server.request("thread/archive", { threadId: "thread-1" }))
+      .resolves.toMatchObject({
+        threadId: "thread-1",
+        archived: true,
+        threadName: undefined,
+        firstUserMessage: undefined,
+        cwd: "/repo/workspace",
+        model: undefined,
+        modelProvider: "xai",
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        serviceTier: undefined,
+        reasoningEffort: undefined,
+        createdAt: expect.any(Number),
+        updatedAt: expect.any(Number),
+      });
+    await expect(server.request("thread/list", {})).resolves.toEqual({
+      threads: [],
+    });
+    await expect(
+      server.request("thread/read", { threadId: "thread-1" })
+    ).resolves.toMatchObject({
+      threadId: "thread-1",
+      thread: {
+        threadId: "thread-1",
+        cwd: "/repo/workspace",
+      },
+    });
+    expect(notifications).toContainEqual({
+      method: "thread/archived",
+      params: {
+        threadId: "thread-1",
+      },
     });
   });
 

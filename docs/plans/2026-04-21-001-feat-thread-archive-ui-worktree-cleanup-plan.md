@@ -1,7 +1,7 @@
 ---
 title: "feat: Thread archive UI, confirmation, context menu, and worktree deletion"
 type: feat
-status: active
+status: completed
 date: 2026-04-21
 origin: user-directive
 ---
@@ -45,7 +45,7 @@ No existing "archive" UI in thread rows or context menus.
 - Out of scope: Full "Archived" view/lens in sidebar (assume archive hides from active lists for now).
 - Out of scope: Archiving directories vs threads; focus on threads.
 - Out of scope: Changing existing active plan files or deleting brainstorms/plans.
-- Out of scope: Backend changes to Grok rollout for archive events (reuse Codex path where possible).
+- Superseded: Backend changes to Grok rollout for archive events were originally out of scope, but the implementation added `thread/archive` support because the execution directive explicitly required Grok App Server parity.
 
 ## Context & Research
 
@@ -97,27 +97,36 @@ No existing "archive" UI in thread rows or context menus.
 
 ## Implementation Units
 
-- [ ] **Unit 1: Plan and backend/archive handler**
+- [x] **Unit 1: Plan and backend/archive handler**
   - Create/update plan (this doc).
   - Add archiveThread IPC in desktop main (apps/desktop/src/main/ipc/*).
   - Extend codex-app-server/client.ts or grok equivalent for archiving call (thread/archive? or update with archived flag).
   - Implement worktree deletion (new method in backend-registry or tool).
   - Test: unit for worktree cleanup.
 
-- [ ] **Unit 2: UI hover button and confirmation**
+- [x] **Unit 2: UI hover button and confirmation**
   - Update thread list/row in renderer for mouse-over archive icon.
   - Add confirmation dialog (reuse existing modal/confirm pattern per style guide).
   - Wire to IPC on confirm.
   - Follow UI-THEME.md for styling/hover.
 
-- [ ] **Unit 3: Right-click context menu**
+- [x] **Unit 3: Right-click context menu**
   - Add context menu to thread list items.
   - Menu item "Archive Thread" -> direct IPC (no dialog).
   - Style per desktop-style-guide.md (calm, editorial).
 
-- [ ] **Unit 4: Tests and parity**
+- [x] **Unit 4: Tests and parity**
   - Update E2E replay fixture or add test for archive flow.
   - Ensure Grok threads support archived state like Codex.
   - Verify worktree is deleted, thread hidden from active lists.
 
 Start with Unit 1 (plan is decision artifact). Align all changes to desktop style guide and UI theme. Do not invent new copy or patterns.
+
+## Completion Notes
+
+- Added Codex `thread/archive` invocation and Grok App Server `thread/archive` support.
+- Added desktop IPC/preload/renderer archive wiring.
+- Archive removes the thread from active navigation, emits `thread/archived`, and leaves replay readable.
+- Worktree cleanup uses `git worktree remove --force` and deletes the local branch when it is not protected.
+- Sidebar hover archive requires confirmation; right-click context menu archives directly.
+- Verified with focused main/renderer tests, full agent-core tests, and package typechecks.

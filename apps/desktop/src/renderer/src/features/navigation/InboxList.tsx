@@ -1,14 +1,17 @@
 import type { NavigationThreadSummary } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
-import { ThreadMetaChips } from "./ThreadMetaChips";
-import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
+import { ThreadRow } from "./ThreadRow";
 
 type InboxListProps = {
   selectedThreadKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
+  onOpenThreadContextMenu: (
+    thread: NavigationThreadSummary,
+    position: { x: number; y: number }
+  ) => void;
+  onRequestArchiveThread: (thread: NavigationThreadSummary) => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
-  onArchiveThread?: (thread: NavigationThreadSummary) => void;
 };
 
 export function InboxList(props: InboxListProps) {
@@ -20,92 +23,20 @@ export function InboxList(props: InboxListProps) {
     );
   }
 
-    return (
+  return (
     <div className="sidebar-list sidebar-list--dense" role="list">
-      {props.threads.map((thread) => {
-        const selected =
-          buildThreadIdentityKey(thread.source, thread.id) === props.selectedThreadKey;
-        const status = getThreadRowStatus(thread, props.thinkingThreadKeys);
-        return (
-          <button
-            key={buildThreadIdentityKey(thread.source, thread.id)}
-            aria-pressed={selected}
-            className={`thread-row${selected ? " is-selected" : ""}`}
-            type="button"
-            onClick={() => props.onSelectThread(thread)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              // TODO: show context menu with "Archive Thread" (direct, no confirmation)
-              console.log("Context menu for thread", thread.id, "- Archive would go here");
-              if (props.onArchiveThread) {
-                void props.onArchiveThread(thread);
-              }
-            }}
-          >
-            <span className="thread-row__header">
-              <span className="thread-row__heading">
-                <ThreadRowStatus status={status} />
-                <span className="thread-row__title">{thread.title}</span>
-              </span>
-              <span className="thread-row__time">
-                {formatRelativeTime(thread.updatedAt)}
-              </span>
-              {/* Mouse-over archive button (with confirmation per spec) */}
-              <button
-                className="thread-row__archive-button"
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (props.onArchiveThread) {
-                    if (confirm("Archive this thread? This will also delete its worktree.")) {
-                      void props.onArchiveThread(thread);
-                    }
-                  }
-                }}
-                title="Archive thread"
-              >
-                🗄️
-              </button>
-            </span>
-
-            <ThreadMetaChips includeLinkedDirectories thread={thread} />
-          </button>
-        );
-      })}
+      {props.threads.map((thread) => (
+        <ThreadRow
+          key={buildThreadIdentityKey(thread.source, thread.id)}
+          includeLinkedDirectories
+          selectedThreadKey={props.selectedThreadKey}
+          thinkingThreadKeys={props.thinkingThreadKeys}
+          thread={thread}
+          onOpenContextMenu={props.onOpenThreadContextMenu}
+          onRequestArchive={props.onRequestArchiveThread}
+          onSelectThread={props.onSelectThread}
+        />
+      ))}
     </div>
   );
-
-}
-
-function formatRelativeTime(timestamp?: number): string {
-  if (!timestamp) {
-    return "now";
-  }
-
-  const deltaMinutes = Math.max(
-    0,
-    Math.round((Date.now() - timestamp) / (1000 * 60))
-  );
-
-  if (deltaMinutes < 1) {
-    return "now";
-  }
-  if (deltaMinutes < 60) {
-    return `${deltaMinutes}m`;
-  }
-
-  const deltaHours = Math.round(deltaMinutes / 60);
-  if (deltaHours < 24) {
-    return `${deltaHours}h`;
-  }
-
-  const deltaDays = Math.round(deltaHours / 24);
-  if (deltaDays < 7) {
-    return `${deltaDays}d`;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric"
-  }).format(timestamp);
 }

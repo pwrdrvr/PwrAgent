@@ -106,6 +106,7 @@ export class GrokRolloutStore implements AppServerSessionStore {
       threadPath,
       stringifyFlatToml({
         approval_policy: params.thread.approvalPolicy,
+        archived: params.thread.archived,
         created_at: params.thread.createdAt,
         cwd: params.thread.cwd,
         model: params.thread.model,
@@ -191,6 +192,8 @@ function readThreadToml(filePath: string): ThreadState {
     model: asOptionalString(values.model),
     modelProvider: asOptionalString(values.model_provider),
     approvalPolicy: asOptionalString(values.approval_policy),
+    archived:
+      typeof values.archived === "boolean" ? values.archived : undefined,
     sandbox: asOptionalString(values.sandbox),
     serviceTier: asOptionalString(values.service_tier),
     reasoningEffort: asOptionalString(values.reasoning_effort),

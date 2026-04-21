@@ -189,6 +189,27 @@ export type AppServerListThreadsResponse = {
   threads: AppServerThreadSummary[];
 };
 
+export type ArchiveThreadCleanupResult = {
+  worktreePath: string;
+  branch?: string;
+  removedWorktree: boolean;
+  deletedBranch: boolean;
+  skippedReason?: string;
+  error?: string;
+};
+
+export type ArchiveThreadRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type ArchiveThreadResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  archivedAt: number;
+  cleanup: ArchiveThreadCleanupResult[];
+};
+
 export type AppServerReadThreadRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -392,6 +413,12 @@ export type AppServerNotification =
         status: {
           type: string;
         };
+      };
+    }
+  | {
+      method: "thread/archived";
+      params: {
+        threadId: string;
       };
     }
   | {

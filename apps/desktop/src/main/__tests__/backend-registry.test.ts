@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
   AppServerNotification,
@@ -9,6 +9,7 @@ import type {
   ThreadOverlayState,
 } from "@pwragnt/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import type { GitDirectoryService } from "../app-server/git-directory-service";
 
 function createOverlayStoreMock(params?: {
   executionMode?: "default" | "full-access";
@@ -100,6 +101,9 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
   };
+  lastArchiveThreadParams?: {
+    threadId: string;
+  };
   lastSetThreadPermissionsParams?: {
     threadId: string;
     cwd?: string;
@@ -148,6 +152,11 @@ class MockBackendClient {
     this.listThreadsCallCount += 1;
     this.lastListThreadsParams = params;
     return this.options.threads ?? [];
+  }
+
+  async archiveThread(params: { threadId: string }): Promise<{ threadId: string }> {
+    this.lastArchiveThreadParams = params;
+    return { threadId: params.threadId };
   }
 
   async listSkills(): Promise<Array<{ cwd?: string; skills: AppServerSkillSummary[] }>> {
@@ -668,6 +677,79 @@ describe("DesktopBackendRegistry", () => {
     expect(codexClient.listThreadsCallCount).toBe(1);
     expect(codexClient.lastListThreadsParams).toEqual({ filter: "thread" });
     expect(codexFullAccessClient.listThreadsCallCount).toBe(0);
+
+    await registry.close();
+  });
+
+  it("archives a thread and cleans up its linked worktrees", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Archive me",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "worktree",
+          worktreePath: "/repo/.worktrees/archive-me",
+        },
+      ],
+      source: "codex",
+      gitBranch: "codex/archive-me",
+      updatedAt: 2,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [thread],
+    });
+    const cleanupThreadWorktrees = vi.fn(async () => [
+      {
+        worktreePath: "/repo/.worktrees/archive-me",
+        branch: "codex/archive-me",
+        removedWorktree: true,
+        deletedBranch: true,
+      },
+    ]);
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list", "thread/archive"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        cleanupThreadWorktrees,
+        readDirectoryStatuses: async () => ({}),
+      } as unknown as GitDirectoryService,
+    });
+
+    const response = await registry.archiveThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(codexClient.lastArchiveThreadParams).toEqual({ threadId: "thread-1" });
+    expect(cleanupThreadWorktrees).toHaveBeenCalledWith({
+      ...thread,
+      executionMode: "default",
+    });
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      archivedAt: expect.any(Number),
+      cleanup: [
+        {
+          worktreePath: "/repo/.worktrees/archive-me",
+          branch: "codex/archive-me",
+          removedWorktree: true,
+          deletedBranch: true,
+        },
+      ],
+    });
 
     await registry.close();
   });
