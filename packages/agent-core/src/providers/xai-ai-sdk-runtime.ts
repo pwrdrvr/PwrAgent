@@ -9,13 +9,17 @@ export type XaiAiSdkRuntimeOptions = {
   headers?: Record<string, string>;
   model?: string;
   searchModel?: string;
+  searchToolTimeoutMs?: number;
   provider?: XaiProvider;
   streamTextImpl?: (params: Record<string, unknown>) => unknown;
   generateTextImpl?: (params: Record<string, unknown>) => Promise<unknown>;
 };
 
+export const DEFAULT_XAI_SEARCH_TOOL_TIMEOUT_MS = 45_000;
+
 export class XaiAiSdkRuntime {
   readonly provider: XaiProvider;
+  readonly searchToolTimeoutMs: number;
   private readonly defaultModel?: string;
   private readonly defaultSearchModel?: string;
   private readonly streamTextImpl: (params: Record<string, unknown>) => unknown;
@@ -28,6 +32,11 @@ export class XaiAiSdkRuntime {
     }
     this.defaultModel = options.model?.trim() || undefined;
     this.defaultSearchModel = options.searchModel?.trim() || undefined;
+    this.searchToolTimeoutMs =
+      Number.isFinite(options.searchToolTimeoutMs) &&
+      options.searchToolTimeoutMs !== undefined
+        ? Math.max(0, options.searchToolTimeoutMs)
+        : DEFAULT_XAI_SEARCH_TOOL_TIMEOUT_MS;
     this.provider =
       options.provider ??
       createXai({

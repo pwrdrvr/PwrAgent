@@ -172,6 +172,24 @@ function readToolOutputText(item: Record<string, unknown>): string | undefined {
   return output && output !== toolName ? output : undefined;
 }
 
+function readElapsedMs(item: Record<string, unknown>): number | undefined {
+  const data =
+    typeof item.data === "object" && item.data !== null && !Array.isArray(item.data)
+      ? item.data as Record<string, unknown>
+      : undefined;
+  return typeof data?.elapsedMs === "number" && Number.isFinite(data.elapsedMs)
+    ? data.elapsedMs
+    : undefined;
+}
+
+function formatElapsedMs(elapsedMs: number): string {
+  if (elapsedMs < 1_000) {
+    return `${elapsedMs}ms`;
+  }
+  const seconds = elapsedMs / 1_000;
+  return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
+}
+
 function readItemSources(item: Record<string, unknown>): AppServerSource[] {
   const data =
     typeof item.data === "object" && item.data !== null && !Array.isArray(item.data)
@@ -250,12 +268,14 @@ function buildLiveToolDetails(
   const status = normalizeItemStatus(item.status);
   const query = readToolArgument(item, "query") ?? readToolArgument(item, "q");
   const preview = summarizeToolOutput(readToolOutputText(item));
+  const elapsedMs = readElapsedMs(item);
   const details: AppServerThreadActivityDetail[] = [
     {
       id: itemId,
       kind: toolName.startsWith("search_") ? "read" : "command",
       label: [
         formatLiveToolName(toolName, status),
+        elapsedMs ? ` (${formatElapsedMs(elapsedMs)})` : "",
         query ? `: ${query}` : "",
         preview ? ` - ${preview}` : "",
       ].join(""),

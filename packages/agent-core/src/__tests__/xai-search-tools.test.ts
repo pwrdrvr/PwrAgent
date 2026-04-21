@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { GrokProvider } from "../providers/grok-provider.js";
 import type { ProviderTurnEvent } from "../providers/provider-contract.js";
+import { Deferred } from "../testing/test-harness.js";
 
 function createStreamTextWithToolCall(call: {
   id: string;
@@ -14,6 +15,33 @@ function createStreamTextWithToolCall(call: {
         messages: options.messages,
         abortSignal: options.abortSignal,
       });
+      return "Main answer.";
+    })();
+    return {
+      text,
+      response: text.then(() => ({ id: "resp_main" })),
+      sources: Promise.resolve([]),
+      providerMetadata: Promise.resolve(undefined),
+    };
+  });
+}
+
+function createStreamTextWithParallelToolCalls(calls: Array<{
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}>) {
+  return vi.fn((options: any) => {
+    const text = (async () => {
+      await Promise.all(
+        calls.map(async (call) => {
+          await options.tools[call.name].execute(call.input, {
+            toolCallId: call.id,
+            messages: options.messages,
+            abortSignal: options.abortSignal,
+          });
+        }),
+      );
       return "Main answer.";
     })();
     return {
@@ -75,6 +103,8 @@ describe("xAI search tool wrappers", () => {
     });
     expect(generateTextImpl.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
+        system: expect.stringContaining("Return at most 5 findings."),
+        prompt: expect.stringContaining("xAI posts with videos"),
         toolChoice: "required",
       }),
     );
@@ -106,7 +136,7 @@ describe("xAI search tool wrappers", () => {
       },
       {
         type: "item_completed",
-        item: {
+        item: expect.objectContaining({
           id: "call_x",
           type: "dynamicToolCall",
           text: "Search result.",
@@ -120,7 +150,7 @@ describe("xAI search tool wrappers", () => {
             includeImages: true,
             includeVideos: true,
           },
-          data: {
+          data: expect.objectContaining({
             output: "Search result.",
             sources: [
               {
@@ -129,7 +159,10 @@ describe("xAI search tool wrappers", () => {
                 title: "xAI on X",
               },
             ],
-          },
+            startedAt: expect.any(Number),
+            completedAt: expect.any(Number),
+            elapsedMs: expect.any(Number),
+          }),
           sources: [
             {
               sourceType: "url",
@@ -137,7 +170,7 @@ describe("xAI search tool wrappers", () => {
               title: "xAI on X",
             },
           ],
-        },
+        }),
       },
     ]);
   });
@@ -171,6 +204,8 @@ describe("xAI search tool wrappers", () => {
     });
     expect(generateTextImpl.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
+        system: expect.stringContaining("Return at most 5 findings."),
+        prompt: expect.stringContaining("AI SDK docs"),
         toolChoice: "required",
       }),
     );
@@ -224,6 +259,9 @@ describe("xAI search tool wrappers", () => {
           excludedXHandles: ["elonmusk"],
         },
         data: {
+          startedAt: expect.any(Number),
+          completedAt: expect.any(Number),
+          elapsedMs: expect.any(Number),
           success: false,
           output: "search_x cannot set both allowedXHandles and excludedXHandles",
           sources: [],
@@ -231,5 +269,129 @@ describe("xAI search tool wrappers", () => {
         },
       },
     });
+  });
+
+  it("fails a nested X search when it exceeds the wrapper timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const generateTextImpl = vi.fn(
+        (params: Record<string, unknown>) =>
+          new Promise((_resolve, reject) => {
+            const signal = params.abortSignal as AbortSignal | undefined;
+            signal?.addEventListener("abort", () => {
+              const error = new Error("aborted");
+              error.name = "AbortError";
+              reject(error);
+            });
+          }),
+      );
+      const provider = new GrokProvider({
+        apiKey: "test-key",
+        searchToolTimeoutMs: 1_000,
+        streamTextImpl: createStreamTextWithToolCall({
+          id: "call_x",
+          name: "search_x",
+          input: {
+            query: "\"Matt Van Horn\" OR @mattvanhorn OR from:mattvanhorn",
+          },
+        }),
+        generateTextImpl,
+      });
+
+      const activeTurn = provider.startTurn({
+        thread: { threadId: "thread-123", model: "grok-4.20-reasoning" },
+        input: [{ type: "text", text: "Search X." }],
+      });
+      const events = collectSubscribedEvents(activeTurn.subscribe!);
+      const resultPromise = activeTurn.result;
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(resultPromise).resolves.toMatchObject({
+        assistantText: "Main answer.",
+      });
+      expect(events).toContainEqual({
+        type: "item_completed",
+        item: {
+          id: "call_x",
+          type: "dynamicToolCall",
+          text: "search_x timed out after 1 seconds",
+          toolName: "search_x",
+          success: false,
+          arguments: {
+            query: "\"Matt Van Horn\" OR @mattvanhorn OR from:mattvanhorn",
+          },
+          data: {
+            startedAt: expect.any(Number),
+            completedAt: expect.any(Number),
+            elapsedMs: expect.any(Number),
+            success: false,
+            output: "search_x timed out after 1 seconds",
+            sources: [],
+            errorCode: "search_tool_timeout",
+          },
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("completes each parallel search tool call independently", async () => {
+    const deferredCalls = [
+      new Deferred<{ text: string; sources: unknown[] }>(),
+      new Deferred<{ text: string; sources: unknown[] }>(),
+      new Deferred<{ text: string; sources: unknown[] }>(),
+    ];
+    const generateTextImpl = vi.fn(
+      () => deferredCalls[generateTextImpl.mock.calls.length - 1].promise,
+    );
+    const provider = new GrokProvider({
+      apiKey: "test-key",
+      streamTextImpl: createStreamTextWithParallelToolCalls([
+        {
+          id: "call_web",
+          name: "search_web",
+          input: { query: "Matt Van Horn" },
+        },
+        {
+          id: "call_x_primary",
+          name: "search_x",
+          input: { query: "Matt Van Horn" },
+        },
+        {
+          id: "call_x_secondary",
+          name: "search_x",
+          input: { query: "\"Matt Van Horn\" OR @mattvanhorn OR from:mattvanhorn" },
+        },
+      ]),
+      generateTextImpl,
+    });
+
+    const activeTurn = provider.startTurn({
+      thread: { threadId: "thread-123", model: "grok-4.20-reasoning" },
+      input: [{ type: "text", text: "Search everywhere." }],
+    });
+    const events = collectSubscribedEvents(activeTurn.subscribe!);
+
+    deferredCalls[1].resolve({ text: "X result.", sources: [] });
+    deferredCalls[2].resolve({ text: "Specific X result.", sources: [] });
+    deferredCalls[0].resolve({ text: "Web result.", sources: [] });
+
+    await expect(activeTurn.result).resolves.toMatchObject({
+      assistantText: "Main answer.",
+    });
+
+    const startedIds = events
+      .filter((event) => event.type === "item_started")
+      .flatMap((event) => ("item" in event ? [event.item.id] : []))
+      .sort();
+    const completedIds = events
+      .filter((event) => event.type === "item_completed")
+      .flatMap((event) => ("item" in event ? [event.item.id] : []))
+      .sort();
+
+    expect(startedIds).toEqual(["call_web", "call_x_primary", "call_x_secondary"]);
+    expect(completedIds).toEqual(["call_web", "call_x_primary", "call_x_secondary"]);
   });
 });

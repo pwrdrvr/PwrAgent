@@ -40,6 +40,7 @@ export function summarizeToolActivityItems(
       const args = asRecord(item.arguments);
       const query = pickString(args ?? {}, ["query", "q", "search", "term"]);
       const outputText = readToolOutputText(item);
+      const elapsedMs = readElapsedMs(item);
       const displayName = formatSearchToolName(toolName, itemStatus);
       namedToolSummaries.push(formatSearchToolName(toolName, "completed"));
       details.push({
@@ -49,6 +50,7 @@ export function summarizeToolActivityItems(
           displayName,
           query,
           outputText,
+          elapsedMs,
           status: itemStatus,
         }),
         status: itemStatus,
@@ -180,16 +182,18 @@ function formatSearchToolLabel(params: {
   displayName: string;
   query?: string;
   outputText?: string;
+  elapsedMs?: number;
   status?: AppServerThreadActivityStatus;
 }): string {
+  const durationSuffix = params.elapsedMs ? ` (${formatElapsedMs(params.elapsedMs)})` : "";
   const querySuffix = params.query ? `: ${params.query}` : "";
   if (params.status === "in_progress") {
-    return `${params.displayName}${querySuffix}`;
+    return `${params.displayName}${durationSuffix}${querySuffix}`;
   }
   const preview = summarizeToolOutput(params.outputText);
   return preview
-    ? `${params.displayName}${querySuffix} - ${preview}`
-    : `${params.displayName}${querySuffix}`;
+    ? `${params.displayName}${durationSuffix}${querySuffix} - ${preview}`
+    : `${params.displayName}${durationSuffix}${querySuffix}`;
 }
 
 function readToolOutputText(item: Record<string, unknown>): string | undefined {
@@ -210,6 +214,21 @@ function summarizeToolOutput(text: string | undefined): string | undefined {
     return undefined;
   }
   return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;
+}
+
+function readElapsedMs(item: Record<string, unknown>): number | undefined {
+  const data = asRecord(item.data);
+  return typeof data?.elapsedMs === "number" && Number.isFinite(data.elapsedMs)
+    ? data.elapsedMs
+    : undefined;
+}
+
+function formatElapsedMs(elapsedMs: number): string {
+  if (elapsedMs < 1_000) {
+    return `${elapsedMs}ms`;
+  }
+  const seconds = elapsedMs / 1_000;
+  return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
 }
 
 function extractSources(item: Record<string, unknown>): AppServerSource[] {

@@ -11,6 +11,7 @@ import type { XaiAiSdkRuntime } from "./xai-ai-sdk-runtime.js";
 import { normalizeAiSdkSources } from "./ai-sdk-sources.js";
 
 type EmitProviderEvent = (event: ProviderTurnEvent) => Promise<void>;
+const SEARCH_TOOL_MAX_FINDINGS = 5;
 
 export function createAiSdkTools(params: {
   runtime: XaiAiSdkRuntime;
@@ -132,6 +133,7 @@ function createWebSearchTool(params: {
         input,
         toolCallId: options.toolCallId,
         signal: options.abortSignal,
+        timeoutMs: params.runtime.searchToolTimeoutMs,
         emit: params.emit,
         run: async (args, signal) => {
           if (args.allowedDomains && args.excludedDomains) {
@@ -142,7 +144,8 @@ function createWebSearchTool(params: {
           }
           const result = await params.runtime.generateText({
             model: params.runtime.searchModel(),
-            prompt: args.query,
+            system: buildNestedSearchSystemPrompt("web"),
+            prompt: buildNestedSearchPrompt(args.query),
             abortSignal: signal,
             toolChoice: "required",
             tools: {
@@ -203,6 +206,7 @@ function createXSearchTool(params: {
         input,
         toolCallId: options.toolCallId,
         signal: options.abortSignal,
+        timeoutMs: params.runtime.searchToolTimeoutMs,
         emit: params.emit,
         run: async (args, signal) => {
           if (args.allowedXHandles && args.excludedXHandles) {
@@ -213,7 +217,8 @@ function createXSearchTool(params: {
           }
           const result = await params.runtime.generateText({
             model: params.runtime.searchModel(),
-            prompt: args.query,
+            system: buildNestedSearchSystemPrompt("x"),
+            prompt: buildNestedSearchPrompt(args.query),
             abortSignal: signal,
             toolChoice: "required",
             tools: {
@@ -241,10 +246,12 @@ async function executeSearchTool(params: {
   input: unknown;
   toolCallId: string;
   signal?: AbortSignal;
+  timeoutMs: number;
   emit: EmitProviderEvent;
   run: (args: Record<string, any>, signal: AbortSignal | undefined) => Promise<SearchToolOutput>;
 }): Promise<SearchToolOutput> {
   const arguments_ = asRecord(params.input);
+  const startedAt = Date.now();
   await params.emit({
     type: "item_started",
     item: {
@@ -260,7 +267,14 @@ async function executeSearchTool(params: {
     if (params.signal?.aborted) {
       throw new Error("Search tool execution was aborted");
     }
-    const result = await params.run(parseSearchArguments(params.input), params.signal);
+    const result = await runSearchWithTimeout({
+      name: params.name,
+      args: parseSearchArguments(params.input),
+      signal: params.signal,
+      timeoutMs: params.timeoutMs,
+      run: params.run,
+    });
+    const completedAt = Date.now();
     await params.emit({
       type: "item_completed",
       item: {
@@ -273,6 +287,9 @@ async function executeSearchTool(params: {
         data: {
           output: result.output,
           sources: result.sources,
+          startedAt,
+          completedAt,
+          elapsedMs: completedAt - startedAt,
         },
         sources: result.sources.length > 0 ? result.sources : undefined,
       },
@@ -283,12 +300,19 @@ async function executeSearchTool(params: {
       throw error;
     }
     const message = error instanceof Error ? error.message : String(error);
-    const errorCode = error instanceof ToolError ? error.code : "search_tool_failed";
+    const errorCode =
+      error instanceof ToolError || error instanceof SearchToolTimeoutError
+        ? error.code
+        : "search_tool_failed";
+    const completedAt = Date.now();
     const result = {
       success: false,
       output: message,
       sources: [],
       errorCode,
+      startedAt,
+      completedAt,
+      elapsedMs: completedAt - startedAt,
     };
     await params.emit({
       type: "item_completed",
@@ -303,6 +327,56 @@ async function executeSearchTool(params: {
       },
     });
     return result;
+  }
+}
+
+async function runSearchWithTimeout(params: {
+  name: "search_web" | "search_x";
+  args: Record<string, any>;
+  signal?: AbortSignal;
+  timeoutMs: number;
+  run: (args: Record<string, any>, signal: AbortSignal | undefined) => Promise<SearchToolOutput>;
+}): Promise<SearchToolOutput> {
+  if (!params.timeoutMs) {
+    return await params.run(params.args, params.signal);
+  }
+
+  const timeoutController = new AbortController();
+  const relayAbort = () => {
+    timeoutController.abort(params.signal?.reason);
+  };
+  if (params.signal?.aborted) {
+    relayAbort();
+  } else {
+    params.signal?.addEventListener("abort", relayAbort, { once: true });
+  }
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const runPromise = params.run(params.args, timeoutController.signal);
+  runPromise.catch(() => undefined);
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new SearchToolTimeoutError(params.name, params.timeoutMs));
+      timeoutController.abort();
+    }, params.timeoutMs);
+  });
+
+  try {
+    return await Promise.race([runPromise, timeoutPromise]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    params.signal?.removeEventListener("abort", relayAbort);
+  }
+}
+
+class SearchToolTimeoutError extends Error {
+  readonly code = "search_tool_timeout";
+
+  constructor(toolName: string, timeoutMs: number) {
+    super(`${toolName} timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+    this.name = "SearchToolTimeoutError";
   }
 }
 
@@ -411,6 +485,28 @@ function toJsonSchema(schema: ToolInputSchema): Record<string, unknown> {
 
 function itemTypeForToolName(name: string): "dynamicToolCall" | "commandExecution" {
   return name === "shell_command" ? "commandExecution" : "dynamicToolCall";
+}
+
+function buildNestedSearchSystemPrompt(kind: "web" | "x"): string {
+  const target = kind === "x" ? "X posts" : "web results";
+  return [
+    `You are a ${kind.toUpperCase()} search summarizer for a parent agent.`,
+    `Use the provided ${target} tool to answer the query, then return a concise synthesis.`,
+    `Return at most ${SEARCH_TOOL_MAX_FINDINGS} findings.`,
+    "Prefer the most relevant and recent evidence over broad coverage.",
+    "Avoid exhaustive dumps, long preambles, and repeated restatements.",
+    "If the search is weak or inconclusive, say so briefly.",
+  ].join(" ");
+}
+
+function buildNestedSearchPrompt(query: string): string {
+  return [
+    "Search query:",
+    query,
+    "",
+    `Return no more than ${SEARCH_TOOL_MAX_FINDINGS} high-signal findings.`,
+    "Keep the response compact so the parent agent can read it quickly.",
+  ].join("\n");
 }
 
 function extractCommand(arguments_: Record<string, unknown> | undefined): string | undefined {
