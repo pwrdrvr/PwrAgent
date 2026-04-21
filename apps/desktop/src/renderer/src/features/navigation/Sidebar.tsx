@@ -34,6 +34,7 @@ type SidebarProps = {
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
+  onArchiveThread?: (thread: NavigationThreadSummary) => void;
 };
 
 export function Sidebar(props: SidebarProps) {
@@ -98,11 +99,12 @@ export function Sidebar(props: SidebarProps) {
           ) : props.error ? (
             <p className="sidebar-error">{props.error}</p>
           ) : props.browseMode === "inbox" ? (
-            <InboxList
+                        <InboxList
               selectedThreadKey={props.selectedItemKey}
               thinkingThreadKeys={props.thinkingThreadKeys}
               threads={props.inboxThreads}
               onSelectThread={props.onSelectThread}
+              onArchiveThread={props.onArchiveThread}
             />
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
@@ -112,6 +114,7 @@ export function Sidebar(props: SidebarProps) {
               threads={props.threads}
               onOpenLaunchpad={props.onOpenLaunchpad}
               onSelectThread={props.onSelectThread}
+              onArchiveThread={props.onArchiveThread}
             />
           ) : (
             props.threads.length === 0 ? (
@@ -122,6 +125,7 @@ export function Sidebar(props: SidebarProps) {
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 threads={props.threads}
                 onSelectThread={props.onSelectThread}
+                onArchiveThread={props.onArchiveThread}
               />
             )
           )}

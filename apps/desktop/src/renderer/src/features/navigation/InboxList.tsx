@@ -8,6 +8,7 @@ type InboxListProps = {
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
   onSelectThread: (thread: NavigationThreadSummary) => void;
+  onArchiveThread?: (thread: NavigationThreadSummary) => void;
 };
 
 export function InboxList(props: InboxListProps) {
@@ -19,7 +20,7 @@ export function InboxList(props: InboxListProps) {
     );
   }
 
-  return (
+    return (
     <div className="sidebar-list sidebar-list--dense" role="list">
       {props.threads.map((thread) => {
         const selected =
@@ -32,6 +33,14 @@ export function InboxList(props: InboxListProps) {
             className={`thread-row${selected ? " is-selected" : ""}`}
             type="button"
             onClick={() => props.onSelectThread(thread)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              // TODO: show context menu with "Archive Thread" (direct, no confirmation)
+              console.log("Context menu for thread", thread.id, "- Archive would go here");
+              if (props.onArchiveThread) {
+                void props.onArchiveThread(thread);
+              }
+            }}
           >
             <span className="thread-row__header">
               <span className="thread-row__heading">
@@ -41,6 +50,22 @@ export function InboxList(props: InboxListProps) {
               <span className="thread-row__time">
                 {formatRelativeTime(thread.updatedAt)}
               </span>
+              {/* Mouse-over archive button (with confirmation per spec) */}
+              <button
+                className="thread-row__archive-button"
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (props.onArchiveThread) {
+                    if (confirm("Archive this thread? This will also delete its worktree.")) {
+                      void props.onArchiveThread(thread);
+                    }
+                  }
+                }}
+                title="Archive thread"
+              >
+                🗄️
+              </button>
             </span>
 
             <ThreadMetaChips includeLinkedDirectories thread={thread} />
@@ -49,6 +74,7 @@ export function InboxList(props: InboxListProps) {
       })}
     </div>
   );
+
 }
 
 function formatRelativeTime(timestamp?: number): string {

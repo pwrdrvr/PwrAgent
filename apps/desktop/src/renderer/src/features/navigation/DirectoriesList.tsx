@@ -18,6 +18,7 @@ type DirectoriesListProps = {
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
+  onArchiveThread?: (thread: NavigationThreadSummary) => void;
 };
 
 function buildLaunchpadSelectionKey(directoryKey: string): string {
@@ -148,8 +149,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           key={`${directory.key}:${buildThreadIdentityKey(thread.source, thread.id)}`}
                           aria-pressed={selected}
                           className={`thread-row${selected ? " is-selected" : ""}`}
-                          type="button"
+                                                    type="button"
                           onClick={() => props.onSelectThread(thread)}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            // TODO: show context menu with "Archive Thread" (direct, no confirmation)
+                            console.log("Context menu for thread", thread.id, "- Archive would go here");
+                            if (props.onArchiveThread) {
+                              void props.onArchiveThread(thread);
+                            }
+                          }}
                         >
                           <span className="thread-row__header">
                             <span className="thread-row__heading">
