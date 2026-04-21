@@ -60,8 +60,13 @@ function parseImageUrl(url: string): ImagePart {
   if (!["http:", "https:", "data:"].includes(parsed.protocol)) {
     throw new Error(`Unsupported image URL protocol: ${parsed.protocol}`);
   }
-  if (parsed.protocol === "data:" && !url.startsWith("data:image/")) {
-    throw new Error("image data URLs must use an image/* media type");
+  if (parsed.protocol === "data:") {
+    const mediaType = mediaTypeFromDataUrl(url);
+    if (!mediaType || !isSupportedImageMediaType(mediaType)) {
+      throw new Error(
+        "image data URLs must be normalized to image/jpeg or image/png before provider submission",
+      );
+    }
   }
   return {
     type: "image",
@@ -88,7 +93,8 @@ async function readLocalImage(filePath: string): Promise<ImagePart> {
 
 function mediaTypeFromDataUrl(url: string): string | undefined {
   const match = /^data:([^;,]+)[;,]/i.exec(url);
-  return match?.[1]?.toLowerCase();
+  const mediaType = match?.[1]?.toLowerCase();
+  return mediaType === "image/jpg" ? "image/jpeg" : mediaType;
 }
 
 function mediaTypeForImagePath(filePath: string): string {
@@ -98,15 +104,13 @@ function mediaTypeForImagePath(filePath: string): string {
       return "image/jpeg";
     case ".png":
       return "image/png";
-    case ".gif":
-      return "image/gif";
-    case ".webp":
-      return "image/webp";
-    case ".bmp":
-      return "image/bmp";
-    case ".svg":
-      return "image/svg+xml";
     default:
-      throw new Error(`Unsupported local image type for ${filePath}`);
+      throw new Error(
+        `Unsupported local image type for ${filePath}; normalize images to JPEG or PNG before provider submission`,
+      );
   }
+}
+
+function isSupportedImageMediaType(mediaType: string): boolean {
+  return mediaType === "image/jpeg" || mediaType === "image/jpg" || mediaType === "image/png";
 }

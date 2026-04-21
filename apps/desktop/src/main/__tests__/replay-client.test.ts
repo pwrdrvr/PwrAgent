@@ -270,6 +270,10 @@ describe("ReplayClient", () => {
       threadId: "thread-1",
       runId: "turn-1"
     });
+    expect(client.getLastStartTurnParams()).toEqual({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Need approval coverage." }]
+    });
   });
 
   it("reuses stable read responses when the desktop shell asks again", async () => {

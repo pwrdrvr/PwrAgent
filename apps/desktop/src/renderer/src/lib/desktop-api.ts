@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import type { RendererErrorReport } from "../../../shared/renderer-error";
 import type {
+  ImageUploadFallbackRequest,
+  ImageUploadFallbackResponse,
+} from "../../../shared/image-normalization";
+import type {
   AgentEvent,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
@@ -85,6 +89,9 @@ export type DesktopApi = {
   resetDirectoryLaunchpad?: (
     request: ResetDirectoryLaunchpadRequest
   ) => Promise<ResetDirectoryLaunchpadResponse>;
+  normalizeImageForUpload?: (
+    request: ImageUploadFallbackRequest
+  ) => Promise<ImageUploadFallbackResponse>;
   reportRendererError?: (report: RendererErrorReport) => Promise<void>;
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
   onWindowFocus?: (callback: () => void) => () => void;

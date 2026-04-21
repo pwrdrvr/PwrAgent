@@ -78,4 +78,32 @@ describe("buildAiSdkMessages", () => {
       }),
     ).rejects.toThrow("Unsupported local image type");
   });
+
+  it("rejects image data URLs that are not JPEG or PNG", async () => {
+    await expect(
+      buildAiSdkMessages({
+        input: [{ type: "image", url: "data:image/webp;base64,AQID" }],
+      }),
+    ).rejects.toThrow("normalized to image/jpeg or image/png");
+
+    await expect(
+      buildAiSdkMessages({
+        input: [{ type: "image", url: "data:image/heic;base64,AQID" }],
+      }),
+    ).rejects.toThrow("normalized to image/jpeg or image/png");
+  });
+
+  it("rejects local images that are not JPEG or PNG", async () => {
+    await expect(
+      buildAiSdkMessages({
+        input: [{ type: "localImage", path: "/tmp/image.webp" }],
+      }),
+    ).rejects.toThrow("normalize images to JPEG or PNG");
+
+    await expect(
+      buildAiSdkMessages({
+        input: [{ type: "localImage", path: "/tmp/image.heic" }],
+      }),
+    ).rejects.toThrow("normalize images to JPEG or PNG");
+  });
 });

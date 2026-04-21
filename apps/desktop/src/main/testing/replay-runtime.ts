@@ -23,6 +23,20 @@ type ReplayDriver = {
     stepId?: string;
     override?: ReplayStepOverride;
   }): Promise<void>;
+  getLastStartTurn(params?: {
+    backend?: AppServerBackendKind;
+    executionMode?: ThreadExecutionMode;
+  }):
+    | {
+        threadId: string;
+        input: AppServerTurnInputItem[];
+        model?: string;
+        collaborationMode?: AppServerCollaborationModeRequest;
+        serviceTier?: string;
+        reasoningEffort?: string;
+        fastMode?: boolean;
+      }
+    | undefined;
   getPendingRequest(params?: {
     backend?: AppServerBackendKind;
     executionMode?: ThreadExecutionMode;
@@ -41,6 +55,17 @@ type ReplayRuntimeClient = {
   }): Promise<void>;
   close(): Promise<void>;
   getPendingRequest?(): AppServerPendingRequestNotification | undefined;
+  getLastStartTurnParams?():
+    | {
+        threadId: string;
+        input: AppServerTurnInputItem[];
+        model?: string;
+        collaborationMode?: AppServerCollaborationModeRequest;
+        serviceTier?: string;
+        reasoningEffort?: string;
+        fastMode?: boolean;
+      }
+    | undefined;
   getInitializeResult(): Promise<{
     serverInfo?: {
       name?: string;
@@ -130,6 +155,13 @@ export function createReplayClientsFromEnv():
       });
       return client.getPendingRequest?.();
     },
+    getLastStartTurn: (params) => {
+      const client = getReplayClient(clients, {
+        backend: params?.backend,
+        executionMode: params?.executionMode,
+      });
+      return client.getLastStartTurnParams?.();
+    },
     respondToPendingRequest: async (params) => {
       const client = getReplayClient(clients, {
         backend: params.backend,
@@ -208,6 +240,7 @@ function createUnavailableReplayClient(
     },
     close: async () => undefined,
     getPendingRequest: () => undefined,
+    getLastStartTurnParams: () => undefined,
     getInitializeResult: async () => {
       throw new Error(message);
     },

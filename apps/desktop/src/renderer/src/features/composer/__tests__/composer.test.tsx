@@ -4,6 +4,23 @@ import type { BackendSummary, StartTurnRequest } from "@pwragnt/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Composer } from "../Composer";
 
+vi.mock("../../../lib/image-normalization", () => ({
+  normalizeImageFile: vi.fn(async (file: File) => ({
+    dataUrl: `data:${file.type || "image/png"};base64,AQID`,
+    height: 24,
+    mimeType: file.type || "image/png",
+    original: {
+      height: 24,
+      mimeType: file.type || "image/png",
+      name: file.name,
+      size: file.size,
+      width: 32,
+    },
+    size: 3,
+    width: 32,
+  })),
+}));
+
 afterEach(() => {
   cleanup();
 });
