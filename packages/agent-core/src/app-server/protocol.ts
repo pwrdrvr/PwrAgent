@@ -66,6 +66,7 @@ export type ThreadReplay = {
   messages: Array<{
     role: AppServerRole;
     text: string;
+    parts?: AppServerTurnInputItem[];
   }>;
   items: ThreadReplayItem[];
   lastUserMessage?: string;
@@ -90,6 +91,7 @@ export type ThreadReplayItem = {
   status?: AppServerItemStatus;
   role?: AppServerRole;
   text?: string;
+  parts?: AppServerTurnInputItem[];
   review?: string;
   command?: string;
   commandAction?: AppServerCommandAction;

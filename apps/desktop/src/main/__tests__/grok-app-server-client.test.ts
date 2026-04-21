@@ -242,6 +242,65 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
+  it("preserves Grok user image parts in thread replay", async () => {
+    const provider = new FakeProvider();
+    const server = new CodexAppServer({
+      provider,
+      threadIdGenerator: () => "thread-1",
+      runIdGenerator: () => "turn-1",
+    });
+    const client = new GrokAppServerClient({ server });
+
+    await client.startThread({ model: "grok-4.20-reasoning" });
+    await client.startTurn({
+      threadId: "thread-1",
+      input: [
+        { type: "text", text: "What's in this picture?" },
+        { type: "image", url: "data:image/jpeg;base64,AQID" },
+      ],
+    });
+    provider.runs[0]?.deferred.resolve({
+      assistantText: "It is a photo.",
+      providerResponseId: "resp_1",
+    });
+    await flushAsync();
+
+    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+      entries: [
+        {
+          type: "message",
+          role: "user",
+          text: "What's in this picture?",
+          parts: [
+            { type: "text", text: "What's in this picture?" },
+            { type: "image", url: "data:image/jpeg;base64,AQID" },
+          ],
+        },
+        {
+          type: "message",
+          role: "assistant",
+          text: "It is a photo.",
+        },
+      ],
+      messages: [
+        {
+          role: "user",
+          text: "What's in this picture?",
+          parts: [
+            { type: "text", text: "What's in this picture?" },
+            { type: "image", url: "data:image/jpeg;base64,AQID" },
+          ],
+        },
+        {
+          role: "assistant",
+          text: "It is a photo.",
+        },
+      ],
+    });
+
+    await client.close();
+  });
+
   it("hydrates Grok tool replay items as transcript activity", async () => {
     const server = {
       request: async (method: string): Promise<unknown> => {

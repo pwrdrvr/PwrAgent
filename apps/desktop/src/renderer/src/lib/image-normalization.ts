@@ -17,6 +17,7 @@ export type ImageFallbackResponse = {
 };
 
 export type NormalizedImage = {
+  conversionPath: "renderer" | "heic-fallback";
   dataUrl: string;
   height: number;
   mimeType: NormalizedImageMimeType;
@@ -127,12 +128,14 @@ export async function normalizeImageFile(
       ...options.dependencies,
     },
     allowFallback: true,
+    conversionPath: "renderer",
   });
 }
 
 async function normalizeBlob(params: {
   allowFallback: boolean;
   blob: Blob;
+  conversionPath: NormalizedImage["conversionPath"];
   dependencies: ImageNormalizationDependencies;
   fallback?: (request: ImageFallbackRequest) => Promise<ImageFallbackResponse>;
   fileName: string;
@@ -157,6 +160,7 @@ async function normalizeBlob(params: {
         ...params,
         allowFallback: false,
         blob: fallbackBlob,
+        conversionPath: "heic-fallback",
         originalMimeType: response.mimeType,
         originalSize: response.size,
       });
@@ -197,6 +201,7 @@ async function normalizeBlob(params: {
     );
 
     return {
+      conversionPath: params.conversionPath,
       dataUrl: await params.dependencies.readBlobAsDataUrl(outputBlob),
       height: dimensions.height,
       mimeType,

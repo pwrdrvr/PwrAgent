@@ -510,6 +510,25 @@ export function Composer(props: ComposerProps) {
           const normalized = await normalizeImageFile(file, {
             fallback: props.desktopApi?.normalizeImageForUpload,
           });
+          void props.desktopApi?.recordImageUploadNormalization?.({
+            fileName: file.name || formatPastedImageName(type, index),
+            original: {
+              height: normalized.original.height,
+              mimeType: normalized.original.mimeType,
+              size: normalized.original.size,
+              width: normalized.original.width,
+            },
+            normalized: {
+              height: normalized.height,
+              mimeType: normalized.mimeType,
+              size: normalized.size,
+              width: normalized.width,
+            },
+            path: normalized.conversionPath,
+            resized:
+              normalized.original.width !== normalized.width ||
+              normalized.original.height !== normalized.height,
+          });
           return {
             id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
             name: file.name || formatPastedImageName(type, index),

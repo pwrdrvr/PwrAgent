@@ -4,14 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { ipcMain, nativeImage } from "electron";
+import { getMainLogger } from "../log";
 import type {
   ImageUploadFallbackRequest,
   ImageUploadFallbackResponse,
+  ImageUploadNormalizationLogRequest,
 } from "../../shared/image-normalization";
-import { IMAGE_UPLOAD_FALLBACK_CHANNEL } from "../../shared/ipc";
+import {
+  IMAGE_UPLOAD_FALLBACK_CHANNEL,
+  IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
+} from "../../shared/ipc";
 
 const execFile = promisify(execFileCallback);
 const SIPS_PATH = "/usr/bin/sips";
+const imageUploadLog = getMainLogger("pwragnt:image-upload");
 
 type ImageFallbackDependencies = {
   createImageFromBuffer: (buffer: Buffer) => Electron.NativeImage;
@@ -32,15 +38,23 @@ const defaultDependencies: ImageFallbackDependencies = {
 
 export function registerImageNormalizationIpcHandlers(): void {
   ipcMain.removeHandler(IMAGE_UPLOAD_FALLBACK_CHANNEL);
+  ipcMain.removeHandler(IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL);
   ipcMain.handle(
     IMAGE_UPLOAD_FALLBACK_CHANNEL,
     async (_event, request: ImageUploadFallbackRequest) =>
       await convertImageUploadFallback(request),
   );
+  ipcMain.handle(
+    IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
+    (_event, request: ImageUploadNormalizationLogRequest) => {
+      imageUploadLog.info("normalized pasted image", request);
+    },
+  );
 }
 
 export function disposeImageNormalizationIpcHandlers(): void {
   ipcMain.removeHandler(IMAGE_UPLOAD_FALLBACK_CHANNEL);
+  ipcMain.removeHandler(IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL);
 }
 
 export async function convertImageUploadFallback(
@@ -54,6 +68,13 @@ export async function convertImageUploadFallback(
   const inputBuffer = Buffer.from(request.data);
   const electronResult = tryConvertWithElectron(inputBuffer, dependencies);
   if (electronResult) {
+    imageUploadLog.info("converted HEIC/HEIF image with Electron nativeImage", {
+      fileName: request.fileName,
+      inputBytes: inputBuffer.byteLength,
+      mimeType: request.mimeType,
+      outputBytes: electronResult.size,
+      outputMimeType: electronResult.mimeType,
+    });
     return electronResult;
   }
 
@@ -61,11 +82,19 @@ export async function convertImageUploadFallback(
     throw new Error("HEIC/HEIF conversion is only available on macOS.");
   }
 
-  return await convertWithSips({
+  const sipsResult = await convertWithSips({
     inputBuffer,
     fileName: request.fileName,
     execFile: dependencies.execFile,
   });
+  imageUploadLog.info("converted HEIC/HEIF image with sips", {
+    fileName: request.fileName,
+    inputBytes: inputBuffer.byteLength,
+    mimeType: request.mimeType,
+    outputBytes: sipsResult.size,
+    outputMimeType: sipsResult.mimeType,
+  });
+  return sipsResult;
 }
 
 function tryConvertWithElectron(

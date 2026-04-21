@@ -6,6 +6,7 @@ import { Composer } from "../Composer";
 
 vi.mock("../../../lib/image-normalization", () => ({
   normalizeImageFile: vi.fn(async (file: File) => ({
+    conversionPath: "renderer",
     dataUrl: `data:${file.type || "image/png"};base64,AQID`,
     height: 24,
     mimeType: file.type || "image/png",
@@ -471,6 +472,7 @@ describe("Composer", () => {
       runId: "turn-1",
     }));
     const addOptimisticUserMessage = vi.fn(() => "optimistic-1");
+    const recordImageUploadNormalization = vi.fn(async () => undefined);
     const imageFile = new File([new Uint8Array([1, 2, 3])], "screenshot.jpeg", {
       type: "image/jpeg",
     });
@@ -480,6 +482,7 @@ describe("Composer", () => {
         addOptimisticUserMessage={addOptimisticUserMessage}
         desktopApi={{
           onAgentEvent: () => () => undefined,
+          recordImageUploadNormalization,
           startTurn,
         }}
         disabled={false}
@@ -537,6 +540,23 @@ describe("Composer", () => {
         },
       ]
     );
+    expect(recordImageUploadNormalization).toHaveBeenCalledWith({
+      fileName: "screenshot.jpeg",
+      original: {
+        height: 24,
+        mimeType: "image/jpeg",
+        size: 3,
+        width: 32,
+      },
+      normalized: {
+        height: 24,
+        mimeType: "image/jpeg",
+        size: 3,
+        width: 32,
+      },
+      path: "renderer",
+      resized: false,
+    });
   });
 
   it("allows pasted image-only replies", async () => {

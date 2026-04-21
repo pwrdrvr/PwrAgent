@@ -17,7 +17,10 @@ describe("GrokRolloutStore", () => {
         model: "grok-4.20-non-reasoning",
       });
       state.setThreadName("thread-1", "Bug bash");
-      state.appendInput("thread-1", [{ type: "text", text: "Ship Unit 3" }]);
+      state.appendInput("thread-1", [
+        { type: "text", text: "Ship Unit 3" },
+        { type: "image", url: "data:image/png;base64,AQID" },
+      ]);
       state.appendAssistant("thread-1", "Done.");
       state.upsertItem("thread-1", {
         id: "tool-7",
@@ -45,7 +48,14 @@ describe("GrokRolloutStore", () => {
           model: "grok-4.20-non-reasoning",
         }),
         messages: [
-          { role: "user", text: "Ship Unit 3" },
+          {
+            role: "user",
+            text: "Ship Unit 3",
+            parts: [
+              { type: "text", text: "Ship Unit 3" },
+              { type: "image", url: "data:image/png;base64,AQID" },
+            ],
+          },
           { role: "assistant", text: "Done." },
         ],
         items: [
@@ -55,6 +65,10 @@ describe("GrokRolloutStore", () => {
             status: "completed",
             role: "user",
             text: "Ship Unit 3",
+            parts: [
+              { type: "text", text: "Ship Unit 3" },
+              { type: "image", url: "data:image/png;base64,AQID" },
+            ],
           },
           {
             id: expect.any(String),

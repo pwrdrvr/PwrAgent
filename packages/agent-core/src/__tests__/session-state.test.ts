@@ -152,6 +152,42 @@ describe("AppServerSessionState", () => {
     expect(replay.thread.updatedAt).toBeGreaterThanOrEqual(created.updatedAt ?? 0);
   });
 
+  it("preserves image input parts in replay messages", () => {
+    const state = new AppServerSessionState();
+
+    state.createThread({ threadId: "thread-1" });
+    state.appendInput("thread-1", [
+      { type: "text", text: "What is this?" },
+      { type: "image", url: "data:image/jpeg;base64,AQID" },
+    ]);
+
+    expect(state.readThread("thread-1")).toEqual(
+      expect.objectContaining({
+        messages: [
+          {
+            role: "user",
+            text: "What is this?",
+            parts: [
+              { type: "text", text: "What is this?" },
+              { type: "image", url: "data:image/jpeg;base64,AQID" },
+            ],
+          },
+        ],
+        items: [
+          expect.objectContaining({
+            type: "userMessage",
+            role: "user",
+            text: "What is this?",
+            parts: [
+              { type: "text", text: "What is this?" },
+              { type: "image", url: "data:image/jpeg;base64,AQID" },
+            ],
+          }),
+        ],
+      }),
+    );
+  });
+
   it("hydrates persisted threads from the rollout store on startup", async () => {
     const temp = await createTemporaryTestDirectory();
 

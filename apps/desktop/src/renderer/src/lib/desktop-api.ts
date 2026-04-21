@@ -3,6 +3,7 @@ import type { RendererErrorReport } from "../../../shared/renderer-error";
 import type {
   ImageUploadFallbackRequest,
   ImageUploadFallbackResponse,
+  ImageUploadNormalizationLogRequest,
 } from "../../../shared/image-normalization";
 import type {
   AgentEvent,
@@ -92,6 +93,9 @@ export type DesktopApi = {
   normalizeImageForUpload?: (
     request: ImageUploadFallbackRequest
   ) => Promise<ImageUploadFallbackResponse>;
+  recordImageUploadNormalization?: (
+    request: ImageUploadNormalizationLogRequest
+  ) => Promise<void>;
   reportRendererError?: (report: RendererErrorReport) => Promise<void>;
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
   onWindowFocus?: (callback: () => void) => () => void;

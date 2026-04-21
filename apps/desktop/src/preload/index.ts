@@ -40,6 +40,7 @@ import type { RendererErrorReport } from "../shared/renderer-error";
 import type {
   ImageUploadFallbackRequest,
   ImageUploadFallbackResponse,
+  ImageUploadNormalizationLogRequest,
 } from "../shared/image-normalization";
 import {
   AGENT_EVENT_CHANNEL,
@@ -57,6 +58,7 @@ import {
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
+  IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
@@ -151,6 +153,11 @@ const desktopApi = Object.freeze({
     request: ImageUploadFallbackRequest,
   ): Promise<ImageUploadFallbackResponse> =>
     await ipcRenderer.invoke(IMAGE_UPLOAD_FALLBACK_CHANNEL, request),
+  recordImageUploadNormalization: async (
+    request: ImageUploadNormalizationLogRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL, request);
+  },
   onWindowFocus: (callback: () => void): (() => void) => {
     const listener = () => callback();
     ipcRenderer.on(WINDOW_FOCUS_SYNC_CHANNEL, listener);

@@ -106,6 +106,7 @@ describe("image normalization", () => {
         { dependencies },
       ),
     ).resolves.toEqual({
+      conversionPath: "renderer",
       dataUrl: "data:image/jpeg;base64,AQID",
       height: 1024,
       mimeType: "image/jpeg",
@@ -151,6 +152,7 @@ describe("image normalization", () => {
     });
     expect(decode).toHaveBeenCalledTimes(2);
     expect(normalized).toMatchObject({
+      conversionPath: "heic-fallback",
       dataUrl: "data:image/png;base64,AQID",
       height: 1024,
       mimeType: "image/png",
