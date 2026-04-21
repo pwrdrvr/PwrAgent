@@ -604,7 +604,7 @@ describe("GrokAppServerClient", () => {
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
       configPath,
-      "XAI_API_KEY=config-key\nGROK_MODEL=grok-4.20-fast\nXAI_BASE_URL=https://api.example.test/v1\n",
+      "XAI_API_KEY=config-key\nGROK_MODEL=grok-4.20-non-reasoning\nXAI_BASE_URL=https://api.example.test/v1\n",
       "utf8",
     );
 
@@ -649,7 +649,7 @@ describe("GrokAppServerClient", () => {
       configPath,
       [
         'xai_api_key = "config-key"',
-        'grok_model = "grok-4.20-fast"',
+        'grok_model = "grok-4.20-non-reasoning"',
         'xai_base_url = "https://api.example.test/v1"',
         "",
       ].join("\n"),
@@ -692,7 +692,7 @@ describe("GrokAppServerClient", () => {
         threadIdGenerator: () => "thread-1",
       });
       await firstClient.startThread({
-        model: "grok-4.20-fast",
+        model: "grok-4.20-non-reasoning",
       });
       await firstClient.close();
 
@@ -707,7 +707,7 @@ describe("GrokAppServerClient", () => {
           title: "Untitled thread",
           titleSource: "fallback",
           summary: undefined,
-          model: "grok-4.20-fast",
+          model: "grok-4.20-non-reasoning",
           serviceTier: undefined,
           reasoningEffort: undefined,
           fastMode: undefined,

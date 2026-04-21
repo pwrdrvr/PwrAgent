@@ -101,8 +101,8 @@ describe("Composer", () => {
                 supportsReasoning: false,
               },
               {
-                id: "grok-4.20-fast",
-                label: "Grok 4.20 Fast",
+                id: "grok-4.20-non-reasoning",
+                label: "Grok 4.20 Non-Reasoning",
                 supportsReasoning: false,
               },
             ],

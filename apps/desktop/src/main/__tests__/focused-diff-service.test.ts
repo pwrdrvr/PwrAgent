@@ -66,7 +66,7 @@ function makeAiSdkXaiResponse(text: string, cachedTokens?: number): Record<strin
     id: "resp_123",
     object: "response",
     created_at: 0,
-    model: "grok-4.20-fast",
+    model: "grok-4.20-non-reasoning",
     status: "completed",
     output: [
       {
@@ -283,7 +283,7 @@ describe("FocusedDiffService", () => {
     expect(client.generateObject).not.toHaveBeenCalled();
   });
 
-  it("reads xAI credentials and model from runtime config.toml", async () => {
+  it("reads xAI credentials from runtime config.toml and uses the focused-diff model", async () => {
     const temp = await createTemporaryTestDirectory();
     const originalHome = process.env.HOME;
     const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
@@ -332,7 +332,7 @@ describe("FocusedDiffService", () => {
         stringifyFlatToml({
           xai_api_key: "config-key",
           xai_base_url: "https://api.example.test/v1",
-          grok_model: "grok-4.20-fast"
+          grok_model: "grok-4.20-non-reasoning"
         })
       );
 
@@ -354,7 +354,7 @@ describe("FocusedDiffService", () => {
             authorization: "Bearer config-key",
             "x-grok-conv-id": "focused-diff-v1"
           }),
-          body: expect.stringContaining('"model":"grok-4.20-fast"')
+          body: expect.stringContaining('"model":"grok-4-1-fast-reasoning"')
         })
       );
       expect(fetchSpy).toHaveBeenCalledWith(

@@ -143,8 +143,31 @@ const GROK_FALLBACK_MODELS: BackendModelOption[] = [
     supportsReasoning: false,
   },
   {
-    id: "grok-4.20-fast",
-    label: "Grok 4.20 Fast",
+    id: "grok-4.20-non-reasoning",
+    label: "Grok 4.20 Non-Reasoning",
+    supportsReasoning: false,
+  },
+  {
+    id: "grok-4-1-fast-reasoning",
+    label: "Grok 4.1 Fast Reasoning",
+    supportsReasoning: false,
+    supportsFast: true,
+  },
+  {
+    id: "grok-4-1-fast-non-reasoning",
+    label: "Grok 4.1 Fast Non-Reasoning",
+    supportsReasoning: false,
+    supportsFast: true,
+  },
+  {
+    id: "grok-4-fast-reasoning",
+    label: "Grok 4 Fast Reasoning",
+    supportsReasoning: false,
+    supportsFast: true,
+  },
+  {
+    id: "grok-4-fast-non-reasoning",
+    label: "Grok 4 Fast Non-Reasoning",
     supportsReasoning: false,
     supportsFast: true,
   },

@@ -147,7 +147,7 @@ test("Grok new-thread selector hides reasoning for Grok 4.20 models", async () =
     await assertTangerineFocusRing(providerSelect);
     await assertTangerineFocusRing(modelSelect);
 
-    await modelSelect.selectOption("grok-4.20-fast");
+    await modelSelect.selectOption("grok-4.20-non-reasoning");
     await expect(settings.getByLabel("Reasoning")).toHaveCount(0);
 
     await modelSelect.selectOption("grok-4.20-reasoning");

@@ -18,7 +18,7 @@ import {
 } from "../../shared/diff-focus";
 
 const FOCUSED_DIFF_PROMPT_VERSION = "focused-diff-v1";
-const FOCUSED_DIFF_MODEL = "grok-4.20-fast";
+const FOCUSED_DIFF_MODEL = "grok-4-1-fast-reasoning";
 const FOCUSED_DIFF_TIMEOUT_MS = 5_000;
 const MIN_HIDE_CONFIDENCE = 0.8;
 const FOCUSED_DIFF_TEST_RESPONSE_ENV = "PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE";
@@ -222,7 +222,7 @@ export class FocusedDiffService {
   }
 
   private getModel(): string {
-    return this.configuredModel ?? this.getRuntimeConfig().model ?? FOCUSED_DIFF_MODEL;
+    return this.configuredModel ?? FOCUSED_DIFF_MODEL;
   }
 
   private async requestFocusedDiffDecision(

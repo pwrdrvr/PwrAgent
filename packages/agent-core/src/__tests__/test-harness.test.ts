@@ -121,7 +121,7 @@ describe("test harness helpers", () => {
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
       configPath,
-      "XAI_API_KEY=config-key\nGROK_MODEL=grok-4.20-fast\nXAI_BASE_URL=https://api.example.test/v1\n",
+      "XAI_API_KEY=config-key\nGROK_MODEL=grok-4.20-non-reasoning\nXAI_BASE_URL=https://api.example.test/v1\n",
     );
 
     const result = loadGrokAppServerConfig({ homeDir: temp.path });
@@ -132,7 +132,7 @@ describe("test harness helpers", () => {
       entries: ["XAI_API_KEY", "GROK_MODEL", "XAI_BASE_URL"],
     });
     expect(process.env.XAI_API_KEY).toBe("config-key");
-    expect(process.env.GROK_MODEL).toBe("grok-4.20-fast");
+    expect(process.env.GROK_MODEL).toBe("grok-4.20-non-reasoning");
     expect(process.env.XAI_BASE_URL).toBe("https://api.example.test/v1");
 
     await temp.cleanup();
@@ -152,7 +152,7 @@ describe("test harness helpers", () => {
       stringifyFlatToml({
         xai_api_key: "toml-key",
         xai_base_url: "https://api.example.test/v1",
-        grok_model: "grok-4.20-fast",
+        grok_model: "grok-4.20-non-reasoning",
       }),
     );
 
@@ -166,7 +166,7 @@ describe("test harness helpers", () => {
     expect(runtimeConfig).toEqual({
       apiKey: "toml-key",
       baseUrl: "https://api.example.test/v1",
-      model: "grok-4.20-fast",
+      model: "grok-4.20-non-reasoning",
       configPath,
       stateRoot: defaultGrokAppServerStateDir({
         homeDir: temp.path,
@@ -186,7 +186,7 @@ describe("test harness helpers", () => {
       stringifyFlatToml({
         xai_api_key: "toml-key",
         xai_base_url: "https://api.example.test/v1",
-        grok_model: "grok-4.20-fast",
+        grok_model: "grok-4.20-non-reasoning",
         state_root: "/tmp/from-toml",
       }),
     );
@@ -216,13 +216,13 @@ describe("test harness helpers", () => {
     process.env.XAI_API_KEY = "existing-key";
     const [configPath] = defaultGrokAppServerConfigPaths({ homeDir: temp.path });
     await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, "XAI_API_KEY=config-key\nGROK_MODEL=grok-4.20-fast\n");
+    await fs.writeFile(configPath, "XAI_API_KEY=config-key\nGROK_MODEL=grok-4.20-non-reasoning\n");
 
     const result = loadGrokAppServerConfig({ homeDir: temp.path, override: false });
 
     expect(result.loaded).toBe(true);
     expect(process.env.XAI_API_KEY).toBe("existing-key");
-    expect(process.env.GROK_MODEL).toBe("grok-4.20-fast");
+    expect(process.env.GROK_MODEL).toBe("grok-4.20-non-reasoning");
 
     await temp.cleanup();
   });
@@ -262,7 +262,7 @@ describe("test harness helpers", () => {
       [
         'xai_api_key = "comment-key" # default key',
         'xai_base_url = "https://api.example.test/v1" # sandbox',
-        'grok_model = "grok-4.20-fast" # default model',
+        'grok_model = "grok-4.20-non-reasoning" # default model',
         "",
       ].join("\n"),
     );
@@ -274,7 +274,7 @@ describe("test harness helpers", () => {
 
     expect(runtimeConfig.apiKey).toBe("comment-key");
     expect(runtimeConfig.baseUrl).toBe("https://api.example.test/v1");
-    expect(runtimeConfig.model).toBe("grok-4.20-fast");
+    expect(runtimeConfig.model).toBe("grok-4.20-non-reasoning");
 
     await temp.cleanup();
   });

@@ -73,7 +73,7 @@ describe("Codex app-server contract", () => {
     });
     const resumed = await server.request("thread/resume", {
       threadId: "thread-1",
-      model: "grok-4.20-fast",
+      model: "grok-4.20-non-reasoning",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       persistExtendedHistory: false,
@@ -99,7 +99,7 @@ describe("Codex app-server contract", () => {
       threadName: "OpenClaw parity",
       firstUserMessage: undefined,
       cwd: "/repo/workspace",
-      model: "grok-4.20-fast",
+      model: "grok-4.20-non-reasoning",
       modelProvider: "xai",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
@@ -116,7 +116,7 @@ describe("Codex app-server contract", () => {
           titleSource: "explicit",
           summary: undefined,
           projectKey: "/repo/workspace",
-          model: "grok-4.20-fast",
+          model: "grok-4.20-non-reasoning",
           createdAt: expect.any(Number),
           updatedAt: expect.any(Number),
         },

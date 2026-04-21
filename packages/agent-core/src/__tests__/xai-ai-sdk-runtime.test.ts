@@ -48,7 +48,7 @@ describe("buildXaiProviderOptions", () => {
 describe("selectGrokModelMode", () => {
   it("uses Responses API for Grok 4.x models", () => {
     expect(selectGrokModelMode("grok-4.20-reasoning")).toBe("responses");
-    expect(selectGrokModelMode("grok-4.20-fast")).toBe("responses");
+    expect(selectGrokModelMode("grok-4.20-non-reasoning")).toBe("responses");
     expect(selectGrokModelMode("grok-4-1-fast-reasoning")).toBe("responses");
   });
 

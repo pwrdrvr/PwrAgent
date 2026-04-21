@@ -18,7 +18,7 @@ describe("AppServerSessionState", () => {
     state.appendInput("thread-1", [{ type: "text", text: "first prompt" }]);
     state.setThreadName("thread-1", "First thread");
 
-    state.createThread({ threadId: "thread-2", cwd: "/repo/two", model: "grok-4.20-fast" });
+    state.createThread({ threadId: "thread-2", cwd: "/repo/two", model: "grok-4.20-non-reasoning" });
     state.appendAssistant("thread-2", "latest reply");
     state.setThreadName("thread-2", "Second thread");
 
@@ -29,7 +29,7 @@ describe("AppServerSessionState", () => {
         titleSource: "explicit",
         summary: "latest reply",
         projectKey: "/repo/two",
-        model: "grok-4.20-fast",
+        model: "grok-4.20-non-reasoning",
         createdAt: expect.any(Number),
         updatedAt: expect.any(Number),
       },
@@ -162,7 +162,7 @@ describe("AppServerSessionState", () => {
       initialState.createThread({
         threadId: "thread-1",
         cwd: "/repo/workspace",
-        model: "grok-4.20-fast",
+        model: "grok-4.20-non-reasoning",
       });
       initialState.appendInput("thread-1", [{ type: "text", text: "Ship it" }]);
       initialState.appendAssistant("thread-1", "Done.");
@@ -179,7 +179,7 @@ describe("AppServerSessionState", () => {
           titleSource: "fallback",
           summary: "Done.",
           projectKey: "/repo/workspace",
-          model: "grok-4.20-fast",
+          model: "grok-4.20-non-reasoning",
           createdAt: expect.any(Number),
           updatedAt: expect.any(Number),
         },
@@ -189,7 +189,7 @@ describe("AppServerSessionState", () => {
         thread: expect.objectContaining({
           threadId: "thread-1",
           cwd: "/repo/workspace",
-          model: "grok-4.20-fast",
+          model: "grok-4.20-non-reasoning",
         }),
         messages: [
           { role: "user", text: "Ship it" },

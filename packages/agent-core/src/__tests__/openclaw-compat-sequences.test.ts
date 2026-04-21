@@ -518,7 +518,7 @@ describe("OpenClaw compatibility sequences", () => {
       payloads: [
         {
           threadId: "thread-1",
-          model: "grok-4.20-fast",
+          model: "grok-4.20-non-reasoning",
           approvalPolicy: "never",
           sandbox: "danger-full-access",
           persistExtendedHistory: false,
@@ -535,7 +535,7 @@ describe("OpenClaw compatibility sequences", () => {
           collaboration_mode: {
             mode: "default",
             settings: {
-              model: "grok-4.20-fast",
+              model: "grok-4.20-non-reasoning",
               developer_instructions: null,
             },
           },
@@ -558,7 +558,7 @@ describe("OpenClaw compatibility sequences", () => {
     expect(resumed).toEqual(
       expect.objectContaining({
         threadId: "thread-1",
-        model: "grok-4.20-fast",
+        model: "grok-4.20-non-reasoning",
         approvalPolicy: "never",
         sandbox: "danger-full-access",
       }),

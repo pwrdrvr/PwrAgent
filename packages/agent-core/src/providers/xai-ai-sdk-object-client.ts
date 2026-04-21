@@ -1,5 +1,6 @@
 import { createXai } from "@ai-sdk/xai";
 import { generateObject, jsonSchema } from "ai";
+import { DEFAULT_GROK_MODEL } from "./xai-model-selection.js";
 
 export type XaiAiSdkObjectClientOptions = {
   apiKey: string;
@@ -51,7 +52,7 @@ export class XaiAiSdkObjectClient {
       fetch: createPromptCacheFetch(this.fetchImpl, params.promptCacheKey),
     });
     const result = await generateObject({
-      model: provider.responses(params.model?.trim() || this.defaultModel || "grok-4.20-fast"),
+      model: provider.responses(params.model?.trim() || this.defaultModel || DEFAULT_GROK_MODEL),
       system: params.system,
       prompt: params.prompt,
       schema: jsonSchema(params.schema as Parameters<typeof jsonSchema>[0]),
