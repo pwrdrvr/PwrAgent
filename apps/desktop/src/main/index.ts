@@ -5,6 +5,10 @@ import {
   disposeImageNormalizationIpcHandlers,
   registerImageNormalizationIpcHandlers,
 } from "./ipc/image-normalization";
+import {
+  disposePreloadLogIpcHandlers,
+  registerPreloadLogIpcHandlers,
+} from "./ipc/preload-log";
 import { registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
 import { initializeMainLogger } from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
@@ -47,6 +51,7 @@ export function bootstrapApp(): void {
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();
     registerImageNormalizationIpcHandlers();
+    registerPreloadLogIpcHandlers();
     registerRendererErrorIpcHandlers();
     createMainWindow({
       startupCpuProfiler,
@@ -70,6 +75,7 @@ export function bootstrapApp(): void {
   app.on("before-quit", () => {
     disposeAgentIpcHandlers();
     disposeImageNormalizationIpcHandlers();
+    disposePreloadLogIpcHandlers();
     void disposeAppServerIpcHandlers();
   });
 }

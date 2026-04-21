@@ -24,4 +24,5 @@ export const RENDERER_ERROR_REPORT_CHANNEL = "renderer:error-report";
 export const IMAGE_UPLOAD_FALLBACK_CHANNEL = "image-upload:fallback";
 export const IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL =
   "image-upload:normalization-log";
+export const PRELOAD_LOG_CHANNEL = "preload:log";
 export const WINDOW_FOCUS_SYNC_CHANNEL = "window:focus-sync";

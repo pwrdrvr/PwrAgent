@@ -26,8 +26,10 @@ import type {
 } from "@pwragnt/shared";
 import type { JsonRpcObserver } from "../codex-app-server/json-rpc";
 import { summarizeToolActivityItems } from "../app-server/thread-activity";
+import { getMainLogger } from "../log";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
+const grokClientLog = getMainLogger("pwragnt:grok-client");
 
 type InitializeResult = {
   serverInfo?: {
@@ -1034,11 +1036,11 @@ export class GrokAppServerClient {
         envelope: params.envelope,
       });
     } catch (error) {
-      console.error(
-        `[pwragnt:grok-client] observer failed for ${params.direction} ${
-          params.envelope.method ?? params.envelope.id ?? "message"
-        }: ${error instanceof Error ? error.message : String(error)}`
-      );
+      grokClientLog.error("observer failed", {
+        direction: params.direction,
+        message: params.envelope.method ?? params.envelope.id ?? "message",
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }

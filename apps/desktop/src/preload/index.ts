@@ -63,11 +63,24 @@ import {
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  PRELOAD_LOG_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
 } from "../shared/ipc";
 
-console.info("[pwragnt:preload] start", {
+function recordPreloadLog(
+  level: "info" | "warn",
+  message: string,
+  details?: unknown,
+): void {
+  ipcRenderer.send(PRELOAD_LOG_CHANNEL, {
+    details,
+    level,
+    message,
+  });
+}
+
+recordPreloadLog("info", "start", {
   contextIsolated: process.contextIsolated,
   platform: process.platform,
   electron: process.versions.electron
@@ -183,9 +196,9 @@ const desktopApi = Object.freeze({
 
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld("pwragnt", desktopApi);
-  console.info("[pwragnt:preload] exposed context bridge", {
+  recordPreloadLog("info", "exposed context bridge", {
     keys: Object.keys(desktopApi)
   });
 } else {
-  console.warn("[pwragnt:preload] context isolation disabled; bridge not exposed");
+  recordPreloadLog("warn", "context isolation disabled; bridge not exposed");
 }

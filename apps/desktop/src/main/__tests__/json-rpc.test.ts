@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { JsonRpcConnection, type JsonRpcTransport } from "../codex-app-server/json-rpc";
 
+const jsonRpcLogError = vi.hoisted(() => vi.fn());
+
+vi.mock("../log", () => ({
+  getMainLogger: vi.fn(() => ({
+    error: jsonRpcLogError,
+  })),
+}));
+
 class MockTransport implements JsonRpcTransport {
   readonly sentMessages: string[] = [];
   private messageHandler: (message: string) => void = () => undefined;
@@ -33,12 +41,12 @@ class MockTransport implements JsonRpcTransport {
 
 describe("JsonRpcConnection", () => {
   afterEach(() => {
+    jsonRpcLogError.mockClear();
     vi.restoreAllMocks();
   });
 
   it("continues outbound traffic when the observer throws", async () => {
     const transport = new MockTransport();
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const connection = new JsonRpcConnection(transport, 1_000, {
       onMessage: async () => {
         throw new Error("disk full");
@@ -64,14 +72,13 @@ describe("JsonRpcConnection", () => {
     );
 
     await expect(requestPromise).resolves.toEqual({ ok: true });
-    expect(errorSpy).toHaveBeenCalled();
+    expect(jsonRpcLogError).toHaveBeenCalled();
 
     await connection.close();
   });
 
   it("still delivers inbound notifications when the observer throws", async () => {
     const transport = new MockTransport();
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const connection = new JsonRpcConnection(transport, 1_000, {
       onMessage: async () => {
         throw new Error("capture write failed");
@@ -106,7 +113,7 @@ describe("JsonRpcConnection", () => {
         }
       }
     ]);
-    expect(errorSpy).toHaveBeenCalled();
+    expect(jsonRpcLogError).toHaveBeenCalled();
 
     await connection.close();
   });
