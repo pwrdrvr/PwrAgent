@@ -55,7 +55,7 @@ describe("GrokProvider", () => {
     );
   });
 
-  it("falls back to Chat API for non-Responses Grok model families", async () => {
+  it("routes configured Grok models through Responses API only", async () => {
     const streamTextImpl = vi.fn(() => ({
       text: Promise.resolve("Shipped."),
       response: Promise.resolve({ id: "resp_next" }),
@@ -70,7 +70,7 @@ describe("GrokProvider", () => {
     const activeTurn = provider.startTurn({
       thread: {
         threadId: "thread-123",
-        model: "grok-code-fast-1",
+        model: "grok-4.20-non-reasoning",
         reasoningEffort: "high",
       },
       history: [
@@ -88,13 +88,15 @@ describe("GrokProvider", () => {
     expect(streamTextImpl).toHaveBeenCalledWith(
       expect.objectContaining({
         model: expect.objectContaining({
-          modelId: "grok-code-fast-1",
-          provider: "xai.chat",
+          modelId: "grok-4.20-non-reasoning",
+          provider: "xai.responses",
         }),
-        providerOptions: undefined,
+        providerOptions: {
+          xai: {
+            previousResponseId: "resp_prev",
+          },
+        },
         messages: [
-          { role: "user", content: "Old question" },
-          { role: "assistant", content: "Old answer" },
           {
             role: "user",
             content: [{ type: "text", text: "Ship it" }],

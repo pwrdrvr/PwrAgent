@@ -4,7 +4,6 @@ import { buildAiSdkMessages } from "./ai-sdk-message-builder.js";
 import { createAiSdkTools } from "./ai-sdk-tool-adapter.js";
 import { normalizeAiSdkSources, normalizeProviderMetadata } from "./ai-sdk-sources.js";
 import { buildXaiProviderOptions, XaiAiSdkRuntime, type XaiAiSdkRuntimeOptions } from "./xai-ai-sdk-runtime.js";
-import { selectGrokModelMode } from "./xai-model-selection.js";
 
 export type GrokProviderOptions = XaiAiSdkRuntimeOptions & {
   maxToolRounds?: number;
@@ -76,14 +75,12 @@ async function runAiSdkTurn(params: {
   emit: (event: Parameters<ProviderTurnEventListener>[0]) => Promise<void>;
   hasListeners: () => boolean;
 }): Promise<ProviderTurnResult> {
-  const modelMode = selectGrokModelMode(params.params.thread.model);
-  const shouldReplayHistory = modelMode === "chat" || !params.params.previousResponseId;
   const messages = await buildAiSdkMessages({
-    history: shouldReplayHistory ? params.params.history : undefined,
+    history: params.params.previousResponseId ? undefined : params.params.history,
     input: params.params.input,
   });
   const result = params.runtime.streamText({
-    model: params.runtime.model({ model: params.params.thread.model, mode: modelMode }),
+    model: params.runtime.model({ model: params.params.thread.model }),
     messages,
     tools: createAiSdkTools({
       runtime: params.runtime,
@@ -99,7 +96,6 @@ async function runAiSdkTurn(params: {
       model: params.params.thread.model,
       reasoningEffort: params.params.thread.reasoningEffort,
       previousResponseId: params.params.previousResponseId,
-      mode: modelMode,
     }),
   }) as {
     text: PromiseLike<string>;
