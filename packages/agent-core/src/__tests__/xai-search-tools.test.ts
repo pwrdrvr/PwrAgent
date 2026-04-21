@@ -216,6 +216,52 @@ describe("xAI search tool wrappers", () => {
     });
   });
 
+  it("uses the configured fast non-reasoning model for nested web and X search", async () => {
+    const generateTextImpl = vi.fn(async (_params: Record<string, unknown>) => ({
+      text: "Search result.",
+      sources: [],
+    }));
+    const provider = new GrokProvider({
+      apiKey: "test-key",
+      searchModel: "grok-4-1-fast-non-reasoning",
+      streamTextImpl: createStreamTextWithParallelToolCalls([
+        {
+          id: "call_web",
+          name: "search_web",
+          input: { query: "Matt Van Horn" },
+        },
+        {
+          id: "call_x",
+          name: "search_x",
+          input: { query: "from:mattvanhorn", fromDate: "2025-04-20" },
+        },
+      ]),
+      generateTextImpl,
+    });
+
+    const activeTurn = provider.startTurn({
+      thread: { threadId: "thread-123", model: "grok-4.20-reasoning" },
+      input: [{ type: "text", text: "Search web and X." }],
+    });
+
+    await expect(activeTurn.result).resolves.toMatchObject({
+      assistantText: "Main answer.",
+    });
+
+    expect(generateTextImpl).toHaveBeenCalledTimes(2);
+    const modelIds = generateTextImpl.mock.calls.map(
+      ([params]) => (params.model as { modelId?: string }).modelId,
+    );
+    expect(modelIds).toEqual([
+      "grok-4-1-fast-non-reasoning",
+      "grok-4-1-fast-non-reasoning",
+    ]);
+    expect(generateTextImpl.mock.calls.map(([params]) => Object.keys(params.tools ?? {}))).toEqual([
+      ["web_search"],
+      ["x_search"],
+    ]);
+  });
+
   it("returns a failed tool result for mutually exclusive X handle filters", async () => {
     const generateTextImpl = vi.fn(async (_params: Record<string, unknown>) => ({
       text: "unused",
