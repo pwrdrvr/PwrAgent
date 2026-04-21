@@ -116,12 +116,6 @@ export class TurnRunner {
         });
         return;
       case "item_command_output_delta":
-        this.state.appendItemTextDelta(
-          execution.threadId,
-          event.itemId,
-          event.delta,
-          "commandExecution",
-        );
         await this.emit({
           method: "item/commandExecution/outputDelta",
           params: {
