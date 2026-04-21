@@ -214,6 +214,53 @@ describe("xAI search tool wrappers", () => {
       allowedDomains: ["ai-sdk.dev"],
       enableImageUnderstanding: true,
     });
+    expect((generateTextImpl.mock.calls[0]?.[0].model as { modelId?: string }).modelId).toBe(
+      "grok-4-1-fast-non-reasoning",
+    );
+  });
+
+  it("uses a 90 second default timeout for nested search tools", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new GrokProvider({
+        apiKey: "test-key",
+        streamTextImpl: createStreamTextWithToolCall({
+          id: "call_web",
+          name: "search_web",
+          input: { query: "slow query" },
+        }),
+        generateTextImpl: vi.fn(async () => {
+          await new Promise(() => undefined);
+          return { text: "unused", sources: [] };
+        }),
+      });
+
+      const activeTurn = provider.startTurn({
+        thread: { threadId: "thread-123", model: "grok-4.20-reasoning" },
+        input: [{ type: "text", text: "Search web." }],
+      });
+      const events = collectSubscribedEvents(activeTurn.subscribe!);
+
+      await vi.advanceTimersByTimeAsync(89_999);
+      expect(events).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(activeTurn.result).resolves.toMatchObject({
+        assistantText: "Main answer.",
+      });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "item_completed",
+          item: expect.objectContaining({
+            success: false,
+            text: "search_web timed out after 90 seconds",
+            toolName: "search_web",
+          }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses the configured fast non-reasoning model for nested web and X search", async () => {

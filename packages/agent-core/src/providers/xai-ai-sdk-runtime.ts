@@ -15,7 +15,7 @@ export type XaiAiSdkRuntimeOptions = {
   generateTextImpl?: (params: Record<string, unknown>) => Promise<unknown>;
 };
 
-export const DEFAULT_XAI_SEARCH_TOOL_TIMEOUT_MS = 45_000;
+export const DEFAULT_XAI_SEARCH_TOOL_TIMEOUT_MS = 90_000;
 
 export class XaiAiSdkRuntime {
   readonly provider: XaiProvider;
