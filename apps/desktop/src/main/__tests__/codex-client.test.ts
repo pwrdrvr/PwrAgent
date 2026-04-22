@@ -1899,8 +1899,8 @@ describe("CodexAppServerClient", () => {
         mode: "plan",
         settings: {
           model: "gpt-5.4",
-          reasoningEffort: "high",
-          developerInstructions: null
+          reasoning_effort: "high",
+          developer_instructions: null
         }
       }
     });
@@ -1926,6 +1926,32 @@ describe("CodexAppServerClient", () => {
     expect(result).toEqual({
       threadId: "thread-2",
       turnId: "pending:thread-2"
+    });
+
+    await client.close();
+  });
+
+  it("normalizes legacy runId turn/start responses", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.turnStartResult = {
+      threadId: "thread-2",
+      runId: "turn-legacy"
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const result = await client.startTurn({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Reply with the legacy id" }],
+      model: "gpt-5.4"
+    });
+
+    expect(result).toEqual({
+      threadId: "thread-2",
+      turnId: "turn-legacy"
     });
 
     await client.close();
