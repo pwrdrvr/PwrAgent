@@ -325,6 +325,7 @@ export type AppServerNotification =
         turnId?: string;
         itemId: string;
         delta: string;
+        phase?: AppServerTranscriptPhase;
         stream?: "stdout" | "stderr";
         bytes?: number;
       };

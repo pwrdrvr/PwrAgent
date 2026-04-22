@@ -284,6 +284,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.pendingAssistantMessage?.text).toBe("First commentary.");
+    expect(result.current.pendingAssistantMessage?.phase).toBe("commentary");
 
     act(() => {
       agentEventHandler?.({
@@ -306,6 +307,7 @@ describe("useThreadSessionState", () => {
       )
     ).toEqual(["assistant:First commentary."]);
     expect(result.current.pendingAssistantMessage?.text).toBe("Second commentary.");
+    expect(result.current.pendingAssistantMessage?.phase).toBe("commentary");
 
     act(() => {
       agentEventHandler?.({
@@ -334,6 +336,11 @@ describe("useThreadSessionState", () => {
       "assistant:Second commentary.",
       "assistant:Final answer.",
     ]);
+    expect(
+      result.current.entries
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.phase)
+    ).toEqual(["commentary", "commentary", "final"]);
     expect(result.current.pendingAssistantMessage).toBeUndefined();
   });
 

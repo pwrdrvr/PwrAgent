@@ -563,6 +563,10 @@ export function useThreadSessionState(params: {
         ) {
           const { itemId, delta } = event.notification.params;
           const isSamePendingMessage = current.pendingAssistantMessage?.id === itemId;
+          const phase =
+            event.notification.params.phase ??
+            (isSamePendingMessage ? current.pendingAssistantMessage?.phase : undefined) ??
+            "commentary";
           const pendingText = current.pendingAssistantMessage?.text ?? "";
           const flushedResponse = isSamePendingMessage
             ? current.response
@@ -584,6 +588,7 @@ export function useThreadSessionState(params: {
               type: "message",
               id: itemId,
               role: "assistant",
+              phase,
               text:
                 isSamePendingMessage
                   ? `${pendingText}${delta}`
@@ -651,6 +656,7 @@ export function useThreadSessionState(params: {
               type: "message",
               id: `${event.notification.params.turnId}:assistant`,
               role: "assistant",
+              phase: "final",
               text: completedText,
               createdAt: Date.now(),
             });

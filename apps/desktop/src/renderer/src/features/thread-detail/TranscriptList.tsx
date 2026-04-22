@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerPendingRequestNotification,
   AppServerThreadActivityEntry,
@@ -12,10 +12,12 @@ import type {
 import { ThinkingScanner } from "./ThinkingScanner";
 import { PendingQuestionnaire } from "./PendingQuestionnaire";
 import { TranscriptActivity } from "./TranscriptActivity";
+import { TranscriptCommentaryGroup } from "./TranscriptCommentaryGroup";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
 import type { PendingQuestionnaireState } from "./questionnaire";
+import { buildTranscriptRenderItems } from "./transcript-render-items";
 
 type TranscriptListProps = {
   entries: AppServerThreadEntry[];
@@ -165,6 +167,9 @@ export function TranscriptList(props: TranscriptListProps) {
   );
   const shouldScrollToBottomRef = useRef(true);
   const [hasContentBelow, setHasContentBelow] = useState(false);
+  const [expandedCommentaryGroupIds, setExpandedCommentaryGroupIds] = useState(
+    () => new Set<string>()
+  );
   const canLoadOlder = Boolean(
     props.pagination?.supportsPagination && props.pagination.hasPreviousPage
   );
@@ -176,6 +181,48 @@ export function TranscriptList(props: TranscriptListProps) {
       props.pendingUserInput ||
       props.pendingStatusText
   );
+  const transcriptEntries = useMemo(() => {
+    const entries = [...props.entries];
+    if (props.pendingPlanEntry) {
+      entries.push(props.pendingPlanEntry);
+    }
+    if (props.pendingActivityEntry) {
+      entries.push(props.pendingActivityEntry);
+    }
+    if (props.pendingAssistantMessage) {
+      entries.push(props.pendingAssistantMessage);
+    }
+    return entries;
+  }, [
+    props.entries,
+    props.pendingActivityEntry,
+    props.pendingAssistantMessage,
+    props.pendingPlanEntry,
+  ]);
+  const transcriptRenderItems = useMemo(
+    () =>
+      buildTranscriptRenderItems({
+        entries: transcriptEntries,
+        activeMessageId: props.pendingAssistantMessage?.id,
+      }),
+    [props.pendingAssistantMessage?.id, transcriptEntries]
+  );
+
+  useEffect(() => {
+    setExpandedCommentaryGroupIds(new Set());
+  }, [props.threadId]);
+
+  const toggleCommentaryGroup = useCallback((groupId: string) => {
+    setExpandedCommentaryGroupIds((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  }, []);
 
   const captureSnapshot = useCallback((): ScrollSnapshot | undefined => {
     const container = scrollContainerRef.current;
@@ -389,8 +436,24 @@ export function TranscriptList(props: TranscriptListProps) {
         role="list"
         onScroll={syncScrollState}
       >
-        {props.entries.map((entry) =>
-          entry.type === "activity" ? (
+        {transcriptRenderItems.map((item) => {
+          if (item.type === "commentaryGroup") {
+            return (
+              <TranscriptCommentaryGroup
+                key={item.id}
+                expanded={expandedCommentaryGroupIds.has(item.id)}
+                hiddenMessages={item.hiddenMessages}
+                skills={skills}
+                onOpenImage={props.onOpenImage}
+                onToggle={() => {
+                  toggleCommentaryGroup(item.id);
+                }}
+              />
+            );
+          }
+
+          const entry = item.entry;
+          return entry.type === "activity" ? (
             <TranscriptActivity key={entry.id} entry={entry} />
           ) : entry.type === "plan" ? (
             <TranscriptPlan key={entry.id} entry={entry} />
@@ -401,25 +464,8 @@ export function TranscriptList(props: TranscriptListProps) {
               skills={skills}
               onOpenImage={props.onOpenImage}
             />
-          )
-        )}
-        {props.pendingPlanEntry ? (
-          <TranscriptPlan key={props.pendingPlanEntry.id} entry={props.pendingPlanEntry} />
-        ) : null}
-        {props.pendingActivityEntry ? (
-          <TranscriptActivity
-            key={props.pendingActivityEntry.id}
-            entry={props.pendingActivityEntry}
-          />
-        ) : null}
-        {props.pendingAssistantMessage ? (
-          <TranscriptMessage
-            key={props.pendingAssistantMessage.id}
-            message={props.pendingAssistantMessage}
-            skills={skills}
-            onOpenImage={props.onOpenImage}
-          />
-        ) : null}
+          );
+        })}
         {props.pendingStatusText ? (
           <div className="transcript-list__pending" role="status">
             <ThinkingScanner />

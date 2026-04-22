@@ -238,6 +238,45 @@
       }
     },
     {
+      "id": "assistant-message-4",
+      "kind": "notification",
+      "notification": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "thread-live-agent-messages",
+          "turnId": "turn-telegram-brainstorm-1",
+          "itemId": "agent-message-4",
+          "delta": "From the repo scan, Telegram should probably sit above existing desktop threads instead of becoming another model backend."
+        }
+      }
+    },
+    {
+      "id": "assistant-message-5",
+      "kind": "notification",
+      "notification": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "thread-live-agent-messages",
+          "turnId": "turn-telegram-brainstorm-1",
+          "itemId": "agent-message-5",
+          "delta": "The v1 shape should probably focus on remote control and approvals before trying to mirror every chat message."
+        }
+      }
+    },
+    {
+      "id": "assistant-message-6",
+      "kind": "notification",
+      "notification": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "thread-live-agent-messages",
+          "turnId": "turn-telegram-brainstorm-1",
+          "itemId": "agent-message-6",
+          "delta": "I’m ready to turn that into requirements after one framing decision."
+        }
+      }
+    },
+    {
       "id": "turn-completed-1",
       "kind": "notification",
       "notification": {

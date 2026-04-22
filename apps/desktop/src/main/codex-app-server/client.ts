@@ -448,6 +448,18 @@ function normalizeConversationRole(
   return undefined;
 }
 
+function normalizeAgentMessagePhase(
+  value: string | undefined
+): "commentary" | "final" | undefined {
+  if (value === "commentary") {
+    return "commentary";
+  }
+  if (value === "final_answer") {
+    return "final";
+  }
+  return undefined;
+}
+
 function collectLegacyMessageText(record: Record<string, unknown>): string {
   return (
     dedupeJoinedText([
@@ -1166,6 +1178,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
         if (!content.text && !content.parts?.length) {
           continue;
         }
+        const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
         entries.push({
           type: "message",
           id:
@@ -1175,9 +1188,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
           text: content.text,
           ...(content.parts ? { parts: content.parts } : {}),
           createdAt,
-          ...(pickString(item, ["phase"]) === "commentary"
-            ? { phase: "commentary" as const }
-            : {})
+          ...(phase ? { phase } : {})
         });
         continue;
       }

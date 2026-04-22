@@ -521,6 +521,7 @@ class MockTransport implements JsonRpcTransport {
                     {
                       type: "agentMessage",
                       id: "item-6",
+                      phase: "final_answer",
                       text: "The desktop shell is live and listing Codex threads."
                     }
                   ]
@@ -1229,7 +1230,8 @@ describe("CodexAppServerClient", () => {
           id: "item-6",
           role: "assistant",
           text: "The desktop shell is live and listing Codex threads.",
-          createdAt: 1_763_500_100_000
+          createdAt: 1_763_500_100_000,
+          phase: "final"
         }
       ],
       messages: [
