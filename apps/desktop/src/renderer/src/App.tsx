@@ -24,7 +24,6 @@ export function App() {
     <div className="app-shell">
       <Sidebar
         backends={backendSummaries.backends}
-        archivedThreads={navigation.archivedThreads}
         browseMode={navigation.browseMode}
         createThreadError={navigation.createThreadError}
         creatingThread={navigation.creatingThread}
@@ -32,7 +31,6 @@ export function App() {
         error={navigation.error}
         inboxThreads={navigation.inboxThreads}
         archiveThreadError={navigation.archiveThreadError}
-        restoreThreadError={navigation.restoreThreadError}
         renameThreadError={navigation.renameThreadError}
         launchpadError={navigation.launchpadError}
         loading={navigation.loading}
@@ -44,7 +42,6 @@ export function App() {
         onOpenLaunchpad={navigation.openDirectoryLaunchpad}
         onSelectThread={navigation.selectThread}
         onArchiveThread={navigation.archiveThread}
-        onRestoreThread={navigation.restoreThread}
         onRenameThread={navigation.renameThread}
       />
 

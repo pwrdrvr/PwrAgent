@@ -30,7 +30,6 @@ export class OverlayStore {
   constructor(private readonly filePath: string) {}
 
   async reconcileNavigationSnapshot(params: {
-    archivedThreads?: AppServerThreadSummary[];
     backend: AppServerBackendScope;
     fetchedAt: number;
     gitStatusByDirectoryKey?: Record<string, NavigationDirectoryGitStatus | undefined>;
@@ -61,19 +60,14 @@ export class OverlayStore {
         }
       }
 
-      const allThreads = [
-        ...params.threads,
-        ...(params.archivedThreads ?? []),
-      ];
       const overlayByThreadKey = Object.fromEntries(
-        allThreads.map((thread) => {
+        params.threads.map((thread) => {
           const threadKey = buildThreadIdentityKey(thread.source, thread.id);
           return [threadKey, data.threads[threadKey]];
         }),
       );
 
       const snapshot = buildNavigationSnapshot({
-        archivedThreads: params.archivedThreads,
         backend: params.backend,
         fetchedAt: params.fetchedAt,
         firstSnapshot,
@@ -87,7 +81,6 @@ export class OverlayStore {
       });
 
       const nextHash = buildNavigationSnapshotHash({
-        archivedThreads: snapshot.archivedThreads,
         backend: params.backend,
         directories: snapshot.directories,
         launchpadDefaults: snapshot.launchpadDefaults,

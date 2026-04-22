@@ -84,7 +84,6 @@ export type NavigationSnapshot = {
   fetchedAt: number;
   unchanged: boolean;
   threads: NavigationThreadSummary[];
-  archivedThreads?: NavigationThreadSummary[];
   inboxThreadKeys: string[];
   directories: NavigationDirectorySummary[];
   launchpadDefaults: NavigationLaunchpadDefaults;

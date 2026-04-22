@@ -13,7 +13,7 @@ import type {
 import { buildThreadIdentityKey } from "@pwragnt/shared";
 import type { DesktopApi } from "./desktop-api";
 
-export type BrowseMode = "inbox" | "recents" | "directories" | "archived";
+export type BrowseMode = "inbox" | "recents" | "directories";
 
 const ROOT_NEW_THREAD_LAUNCHPAD_KEY = "unlinked:new-thread";
 
@@ -106,25 +106,10 @@ function reconcileNavigationSnapshot(
       thread,
     ])
   );
-  const previousArchivedByThreadKey = new Map(
-    (previous.archivedThreads ?? []).map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
-      thread,
-    ])
-  );
-
   return {
     ...next,
     threads: next.threads.map((thread) => {
       const previousThread = previousByThreadKey.get(
-        buildThreadIdentityKey(thread.source, thread.id)
-      );
-      return previousThread && threadSummariesEqual(previousThread, thread)
-        ? previousThread
-        : thread;
-    }),
-    archivedThreads: (next.archivedThreads ?? []).map((thread) => {
-      const previousThread = previousArchivedByThreadKey.get(
         buildThreadIdentityKey(thread.source, thread.id)
       );
       return previousThread && threadSummariesEqual(previousThread, thread)
@@ -193,32 +178,6 @@ function markThreadSeenInSnapshot(
     })),
     inboxThreadKeys: snapshot.inboxThreadKeys.filter((candidate) => candidate !== threadKey),
     threads,
-    archivedThreads: snapshot.archivedThreads ?? [],
-  };
-}
-
-function removeArchivedThreadFromSnapshot(
-  snapshot: NavigationSnapshot | undefined,
-  params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }
-): NavigationSnapshot | undefined {
-  if (!snapshot) {
-    return snapshot;
-  }
-
-  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-  const archivedThreads = (snapshot.archivedThreads ?? []).filter(
-    (thread) => buildThreadIdentityKey(thread.source, thread.id) !== threadKey
-  );
-  if (archivedThreads.length === (snapshot.archivedThreads ?? []).length) {
-    return snapshot;
-  }
-
-  return {
-    ...snapshot,
-    archivedThreads,
   };
 }
 
@@ -511,10 +470,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   directories: NavigationDirectorySummary[];
   error?: string;
   inboxThreads: NavigationThreadSummary[];
-  archivedThreads: NavigationThreadSummary[];
   launchpadError?: string;
   archiveThreadError?: string;
-  restoreThreadError?: string;
   renameThreadError?: string;
   loading: boolean;
   refreshing: boolean;
@@ -557,14 +514,12 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
   archiveThread: (thread: NavigationThreadSummary) => Promise<void>;
-  restoreThread: (thread: NavigationThreadSummary) => Promise<void>;
   renameThread: (thread: NavigationThreadSummary, name: string) => Promise<void>;
   snapshot?: NavigationSnapshot;
   threads: NavigationThreadSummary[];
 } {
   const markThreadSeen = desktopApi?.markThreadSeen;
   const archiveThreadRequest = desktopApi?.archiveThread;
-  const restoreThreadRequest = desktopApi?.restoreThread;
   const renameThreadRequest = desktopApi?.renameThread;
   const setThreadExecutionMode = desktopApi?.setThreadExecutionMode;
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
@@ -581,7 +536,6 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const [createThreadError, setCreateThreadError] = useState<string>();
   const [launchpadError, setLaunchpadError] = useState<string>();
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
-  const [restoreThreadError, setRestoreThreadError] = useState<string>();
   const [renameThreadError, setRenameThreadError] = useState<string>();
   const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
     useState<ThreadExecutionMode>();
@@ -865,16 +819,6 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       }
 
       if (method === "thread/unarchived") {
-        const { threadId } = event.notification.params as {
-          threadId: string;
-        };
-        setState((current) => ({
-          ...current,
-          response: removeArchivedThreadFromSnapshot(current.response, {
-            backend: event.backend,
-            threadId,
-          }),
-        }));
         scheduleRefresh();
         return;
       }
@@ -912,7 +856,6 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   }, [optimisticThread, state.response?.threads]);
 
   const directories = state.response?.directories ?? [];
-  const archivedThreads = state.response?.archivedThreads ?? [];
 
   const inboxThreads = useMemo(() => {
     const unreadThreads = threads.filter(
@@ -1282,7 +1225,6 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         : undefined;
 
       setArchiveThreadError(undefined);
-      setRestoreThreadError(undefined);
       setCreateThreadError(undefined);
       setLaunchpadError(undefined);
       setSetThreadExecutionModeError(undefined);
@@ -1324,44 +1266,6 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     [archiveThreadRequest, optimisticThread, refresh, state.response]
   );
 
-  const restoreThread = useCallback(
-    async (thread: NavigationThreadSummary): Promise<void> => {
-      if (!restoreThreadRequest) {
-        setRestoreThreadError("Desktop bridge is missing restoreThread().");
-        return;
-      }
-
-      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-
-      setRestoreThreadError(undefined);
-      setArchiveThreadError(undefined);
-      setCreateThreadError(undefined);
-      setLaunchpadError(undefined);
-      setSetThreadExecutionModeError(undefined);
-      setSetThreadModelSettingsError(undefined);
-      setState((current) => ({
-        ...current,
-        response: removeArchivedThreadFromSnapshot(current.response, {
-          backend: thread.source,
-          threadId: thread.id,
-        }),
-      }));
-
-      try {
-        await restoreThreadRequest({
-          backend: thread.source,
-          threadId: thread.id,
-        });
-        await refresh(threadKey);
-        setSelectedItemKey(threadKey);
-      } catch (error) {
-        setRestoreThreadError(error instanceof Error ? error.message : String(error));
-        await refresh();
-      }
-    },
-    [refresh, restoreThreadRequest]
-  );
-
   const renameThread = useCallback(
     async (thread: NavigationThreadSummary, name: string): Promise<void> => {
       const nextName = name.trim();
@@ -1379,7 +1283,6 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
 
       setRenameThreadError(undefined);
       setArchiveThreadError(undefined);
-      setRestoreThreadError(undefined);
       setCreateThreadError(undefined);
       setLaunchpadError(undefined);
       setSetThreadExecutionModeError(undefined);
@@ -1551,9 +1454,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     inboxThreads,
     launchpadError,
     archiveThreadError,
-    archivedThreads,
     renameThreadError,
-    restoreThreadError,
     loading: state.loading,
     refreshing: state.refreshing,
     refresh: async () => await refresh(),
@@ -1574,7 +1475,6 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     setBrowseMode,
     selectThread,
     archiveThread,
-    restoreThread,
     renameThread,
     snapshot: state.response,
     threads,

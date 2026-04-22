@@ -71,7 +71,6 @@ const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
   backend: (params as { backend: "all" | "codex" | "grok" }).backend,
   fetchedAt: 1234,
   unchanged: false,
-  archivedThreads: (params as { archivedThreads?: unknown[] }).archivedThreads ?? [],
   threads: (params as { threads: unknown[] }).threads,
   inboxThreadKeys: ["grok:thread-1"],
   directories: [
@@ -165,15 +164,7 @@ describe("app server ipc", () => {
     );
 
     expect(listThreads).toHaveBeenCalledWith({ backend: undefined, filter: undefined });
-    expect(listThreads).toHaveBeenCalledWith({
-      archived: true,
-      backend: undefined,
-      filter: undefined,
-    });
     expect(reconcileNavigationSnapshot).toHaveBeenCalledWith({
-      archivedThreads: [
-        expect.objectContaining({ source: "codex", id: "thread-archived" }),
-      ],
       backend: "all",
       fetchedAt: expect.any(Number),
       threads: [
@@ -188,9 +179,6 @@ describe("app server ipc", () => {
       threads: [
         expect.objectContaining({ source: "codex", id: "thread-1" }),
         expect.objectContaining({ source: "grok", id: "thread-1" }),
-      ],
-      archivedThreads: [
-        expect.objectContaining({ source: "codex", id: "thread-archived" }),
       ],
       inboxThreadKeys: ["grok:thread-1"],
       directories: [
@@ -344,7 +332,6 @@ describe("app server ipc", () => {
         backend: "all",
         fetchedAt: 1234,
         unchanged: false,
-        archivedThreads: [],
         threads: [
           {
             id: "thread-1",
@@ -376,7 +363,6 @@ describe("app server ipc", () => {
         backend: "all",
         fetchedAt: 5678,
         unchanged: true,
-        archivedThreads: [],
         threads: [
           {
             id: "thread-1",
@@ -415,7 +401,6 @@ describe("app server ipc", () => {
       backend: "all",
       fetchedAt: 5678,
       unchanged: true,
-      archivedThreads: [],
       threads: [
         expect.objectContaining({ source: "codex", id: "thread-1" }),
       ],

@@ -218,13 +218,7 @@ class DesktopAppServerService {
       backend: backend === "all" ? undefined : backend,
       filter: request.filter,
     });
-    const archivedThreads = await getDesktopBackendRegistry().listThreads({
-      archived: true,
-      backend: backend === "all" ? undefined : backend,
-      filter: request.filter,
-    });
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
-      archivedThreads,
       backend,
       fetchedAt: Date.now(),
       threads,
@@ -243,7 +237,6 @@ class DesktopAppServerService {
 
     logDebug("getNavigationSnapshot", {
       backend,
-      archivedCount: snapshot.archivedThreads?.length ?? 0,
       count: snapshot.threads.length,
       inboxCount: snapshot.inboxThreadKeys.length,
       unchanged: snapshot.unchanged && directoriesUnchanged,

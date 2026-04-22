@@ -13,7 +13,7 @@ deepened: 2026-04-22
 
 Bring PwrAgnt's thread archive behavior closer to Codex's archive/restore model while making archive non-destructive to local filesystem state. The current branch can hide active threads and remove linked worktrees, but it does not move Grok rollout files into an archived collection, does not expose unarchive/restore, and currently couples archive to local cleanup that can delete worktrees and branches.
 
-This follow-up plan keeps the existing archive UI direction, but raises the persistence and safety bar: archived Grok threads should leave the active thread store the way Codex moves rollouts out of active `sessions`, restore should be a first-class backend and UI operation, and archive must not delete or mutate local directories, dirty state, worktrees, or branches.
+This follow-up plan raises the persistence and safety bar: archived Grok threads should leave the active thread store the way Codex moves rollouts out of active `sessions`, restore should be a first-class backend operation, and archive must not delete or mutate local directories, dirty state, worktrees, or branches. A visible archived-thread restore surface is deferred so the primary sidebar stays focused on active threads.
 
 ## Problem Frame
 
@@ -26,7 +26,7 @@ PwrAgnt currently archives Grok by writing `archived = true` in `thread.toml` wh
 - R1. Match Codex's thread archive storage shape where practical: active thread listings should not scan archived Grok rollout files, and restore should be able to move archived history back into the active collection.
 - R2. Preserve Codex app-server integration as protocol-first: Codex archive/unarchive should call supported app-server methods rather than reading or mutating Codex rollout files directly.
 - R3. Add Grok `thread/unarchive` parity so archived Grok threads can be restored through the app-server protocol.
-- R4. Expose a desktop restore path for archived threads instead of making archive one-way from the UI.
+- R4. Preserve desktop restore plumbing for archived threads without exposing an Archived sidebar lens yet; a smaller recent-archived restore surface can be added later.
 - R5. Archive must not delete or mutate local directories, registered worktrees, non-git directories, local branches, dirty tracked changes, staged changes, untracked files, ignored local files, or rollout-adjacent working files.
 - R6. PwrAgnt must not infer local branch deletion conditions from Codex archive. Codex app-server archive does not delete branches, even when a branch is pushed, merged, PR-backed, or clean.
 - R7. Capture and expose archive/restore results honestly: thread history moved/restored, local state left untouched, and no implied worktree or branch restoration.
@@ -35,7 +35,7 @@ PwrAgnt currently archives Grok by writing `archived = true` in `thread.toml` wh
 
 ## Scope Boundaries
 
-- In scope: Grok archive storage migration, Grok unarchive, desktop unarchive IPC/preload/client support, archived thread navigation surface, removing archive-time local cleanup, and local-state preservation metadata where useful.
+- In scope: Grok archive storage migration, Grok unarchive, desktop unarchive IPC/preload/client support, removing archive-time local cleanup, and local-state preservation metadata where useful.
 - In scope: Characterization of Codex archive/unarchive and ghost snapshot behavior from `/Users/huntharo/github/codex`.
 - In scope: Tests that prove archive does not call local worktree or branch cleanup and does not mutate non-git directories.
 - Out of scope: Mutating Codex's own rollout files directly from PwrAgnt.
@@ -227,11 +227,11 @@ flowchart TB
 
 **Approach:**
 - Add restore/unarchive request and response contracts that mirror archive, including backend and thread id.
-- Add archived-thread representation to the navigation contract so archived rows can be fetched and rendered without mixing them into active `threads`. Active Recents/Inbox snapshots must remain active-only by default.
-- Add backend capability flags for restore/unarchive so the UI only renders restore actions when the selected backend supports them.
+- Keep active Recents/Inbox snapshots active-only by default; do not add a visible Archived sidebar lens in this pass.
+- Add backend capability flags for restore/unarchive so future restore actions can be capability-gated.
 - For Codex, call `thread/unarchive` through the app-server protocol and do not mutate Codex files directly.
 - For Grok, implement `thread/unarchive` in agent-core and route desktop restore through the Grok client.
-- Expose archived threads through a restrained navigation surface. The UI should make it possible to find and restore archived threads without making archived threads look like normal active recents.
+- Defer the archived thread discovery and restore surface until a smaller recent-archived interaction is designed.
 - Restore thread history first. Worktree recreation, if supported later, should be an explicit additional action or clearly reported result, not silently implied by unarchive.
 
 **Patterns to follow:**
@@ -240,16 +240,12 @@ flowchart TB
 - Desktop style guide constraints in `apps/desktop/AGENTS.md`, `docs/UI-THEME.md`, and `docs/design/desktop-style-guide.md`.
 
 **Test scenarios:**
-- Happy path: archived Codex thread appears in the archived surface when the Codex backend supports archived listing and restore.
-- Happy path: active Recents and Inbox do not include archived rows after archived-list plumbing is added.
-- Happy path: clicking Restore Thread calls desktop restore IPC and the thread reappears in active Recents after refresh.
+- Happy path: active Recents and Inbox do not include archived rows.
 - Happy path: Grok restore moves archived storage back to active storage and active `thread/list` returns it.
-- Edge case: restore action is hidden or disabled when a backend lacks `thread/unarchive`.
-- Error path: restore failure leaves the archived row visible and displays a concise error without removing local state optimistically.
-- Integration: restoring a selected archived thread updates navigation and transcript state without creating duplicate rows.
+- Edge case: no Archived sidebar lens or Restore Thread menu item is rendered yet.
 
 **Verification:**
-- A user can archive and later restore a Grok or Codex thread through supported app surfaces, with capability-gated UI.
+- A user can archive a Grok or Codex thread without local cleanup, and backend restore plumbing remains available for a future restore surface.
 
 - [x] **Unit 4: Remove archive-time local cleanup**
 
@@ -348,9 +344,8 @@ flowchart TB
 
 **Test scenarios:**
 - Happy path: archive removes the active row and shows no cleanup warning because no cleanup was attempted.
-- Happy path: restore from archived surface moves the row back to active navigation.
 - Error path: archive backend failure leaves the row active and displays the archive error.
-- Error path: restore backend failure leaves the row archived and displays the restore error.
+- Edge case: no visible Archived sidebar lens or Restore Thread menu item is rendered in this pass.
 
 **Verification:**
 - Users can distinguish archive/restore failures without seeing misleading local cleanup status.

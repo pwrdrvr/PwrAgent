@@ -64,7 +64,6 @@ export function materializeNavigationThreads(params: {
 }
 
 export function buildNavigationSnapshot(params: {
-  archivedThreads?: AppServerThreadSummary[];
   backend: AppServerBackendScope;
   fetchedAt: number;
   firstSnapshot: boolean;
@@ -84,27 +83,12 @@ export function buildNavigationSnapshot(params: {
     previousKnownThreadKeys: params.previousKnownThreadKeys,
     threads: params.threads,
   });
-  const archivedThreads = materializeNavigationThreads({
-    firstSnapshot: false,
-    now: params.now,
-    overlayByThreadKey: params.overlayByThreadKey,
-    previousKnownThreadKeys: params.previousKnownThreadKeys,
-    threads: params.archivedThreads ?? [],
-  }).map((thread) => ({
-    ...thread,
-    inbox: {
-      ...thread.inbox,
-      inInbox: false,
-      reason: undefined,
-    },
-  }));
 
   return {
     backend: params.backend,
     fetchedAt: params.fetchedAt,
     unchanged: params.unchanged,
     threads,
-    archivedThreads,
     inboxThreadKeys: rankInboxThreadKeys(threads),
     directories: buildDirectorySummaries({
       threads,
@@ -119,7 +103,6 @@ export function buildNavigationSnapshot(params: {
 }
 
 export function buildNavigationSnapshotHash(params: {
-  archivedThreads?: NavigationThreadSummary[];
   backend: AppServerBackendScope;
   directories?: NavigationSnapshot["directories"];
   launchpadDefaults?: NavigationLaunchpadDefaults;
@@ -151,25 +134,6 @@ export function buildNavigationSnapshotHash(params: {
         reason: thread.inbox.reason ?? null,
         lastSeenUpdatedAt: thread.inbox.lastSeenUpdatedAt ?? null,
       },
-    })),
-    archivedThreads: (params.archivedThreads ?? []).map((thread) => ({
-      source: thread.source,
-      id: thread.id,
-      title: thread.title,
-      titleSource: thread.titleSource,
-      summary: thread.summary ?? null,
-      projectKey: thread.projectKey ?? null,
-      updatedAt: thread.updatedAt ?? null,
-      gitBranch: thread.gitBranch ?? null,
-      model: thread.model ?? null,
-      reasoningEffort: thread.reasoningEffort ?? null,
-      serviceTier: thread.serviceTier ?? null,
-      fastMode: thread.fastMode ?? null,
-      linkedDirectories: thread.linkedDirectories.map((directory) => ({
-        id: directory.id,
-        kind: directory.kind,
-        path: directory.path,
-      })),
     })),
     directories: (params.directories ?? []).map((directory) => ({
       key: directory.key,
