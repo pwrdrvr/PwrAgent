@@ -28,6 +28,19 @@ test("preserves live assistant commentary messages, tool usage, and final answer
 
     const transcript = app.window.getByRole("region", { name: "Transcript" });
     await expect(transcript).toContainText("Ready to brainstorm Telegram support.");
+    const hydratedWorkToggle = transcript.getByRole("button", {
+      name: /Worked for 1m 10s/
+    });
+    await expect(hydratedWorkToggle).toBeVisible();
+    await expect(hydratedWorkToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(transcript.getByText("I checked the existing Telegram notes")).toBeHidden();
+    await expect(transcript).toContainText("Hydrated final answer stays visible.");
+    await hydratedWorkToggle.click();
+    await expect(hydratedWorkToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(transcript.getByText("I checked the existing Telegram notes")).toBeVisible();
+    await expect(transcript.getByText("Edited 1 file")).toBeVisible();
+    await hydratedWorkToggle.click();
+    await expect(hydratedWorkToggle).toHaveAttribute("aria-expanded", "false");
 
     await app.window
       .getByLabel("Reply")
@@ -78,30 +91,31 @@ test("preserves live assistant commentary messages, tool usage, and final answer
 
     await expect(app.window.getByRole("button", { name: "Stop" })).toHaveCount(0);
     await expect(app.window.getByText("Thinking")).toHaveCount(0);
-    const previousMessagesToggle = transcript.getByRole("button", {
-      name: "6 previous messages"
+    const workedForToggle = transcript.getByRole("button", {
+      name: /Worked for 8m/
     });
-    await expect(previousMessagesToggle).toBeVisible();
-    await expect(previousMessagesToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(workedForToggle).toBeVisible();
+    await expect(workedForToggle).toHaveAttribute("aria-expanded", "false");
     await expect(transcript.getByText("Using ce:brainstorm for this.")).toBeHidden();
     await expect(transcript.getByText("The broad search was too noisy")).toBeHidden();
     await expect(transcript.getByText("The existing product direction is thread-first")).toBeHidden();
+    await expect(transcript.getByRole("button", { name: /Used 2 tools/i })).toBeHidden();
     await expect(transcript).toContainText(
       "From the repo scan: Telegram support is probably not another model provider."
     );
     await expect(transcript).toContainText(
       "Remote control: Telegram lets you start, steer, approve, and monitor agent threads from mobile."
     );
-    await expect(transcript.getByRole("button", { name: /Used 2 tools/i })).toBeVisible();
 
-    await previousMessagesToggle.click();
-    await expect(previousMessagesToggle).toHaveAttribute("aria-expanded", "true");
+    await workedForToggle.click();
+    await expect(workedForToggle).toHaveAttribute("aria-expanded", "true");
     await expect(transcript.getByText("Using ce:brainstorm for this.")).toBeVisible();
     await expect(transcript.getByText("The broad search was too noisy")).toBeVisible();
     await expect(transcript.getByText("The existing product direction is thread-first")).toBeVisible();
     await expect(transcript.getByText("From the repo scan, Telegram should probably")).toBeVisible();
     await expect(transcript.getByText("The v1 shape should probably focus")).toBeVisible();
     await expect(transcript.getByText("I’m ready to turn that into requirements")).toBeVisible();
+    await expect(transcript.getByRole("button", { name: /Used 2 tools/i })).toBeVisible();
   } finally {
     await app.close();
   }

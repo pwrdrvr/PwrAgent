@@ -12,14 +12,16 @@ import type {
 import { ThinkingScanner } from "./ThinkingScanner";
 import { PendingQuestionnaire } from "./PendingQuestionnaire";
 import { TranscriptActivity } from "./TranscriptActivity";
-import { TranscriptCommentaryGroup } from "./TranscriptCommentaryGroup";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
+import { TranscriptWorkPhaseGroup } from "./TranscriptWorkPhaseGroup";
 import type { PendingQuestionnaireState } from "./questionnaire";
 import { buildTranscriptRenderItems } from "./transcript-render-items";
 
 type TranscriptListProps = {
+  activeTurnId?: string;
+  activeTurnStartedAt?: number;
   entries: AppServerThreadEntry[];
   error?: string;
   loading: boolean;
@@ -170,6 +172,7 @@ export function TranscriptList(props: TranscriptListProps) {
   const [expandedCommentaryGroupIds, setExpandedCommentaryGroupIds] = useState(
     () => new Set<string>()
   );
+  const [renderNow, setRenderNow] = useState(() => Date.now());
   const canLoadOlder = Boolean(
     props.pagination?.supportsPagination && props.pagination.hasPreviousPage
   );
@@ -203,14 +206,36 @@ export function TranscriptList(props: TranscriptListProps) {
     () =>
       buildTranscriptRenderItems({
         entries: transcriptEntries,
+        activeTurnId: props.activeTurnId,
+        activeTurnStartedAt: props.activeTurnStartedAt,
         activeMessageId: props.pendingAssistantMessage?.id,
+        now: renderNow,
       }),
-    [props.pendingAssistantMessage?.id, transcriptEntries]
+    [
+      props.activeTurnId,
+      props.activeTurnStartedAt,
+      props.pendingAssistantMessage?.id,
+      renderNow,
+      transcriptEntries,
+    ]
   );
 
   useEffect(() => {
     setExpandedCommentaryGroupIds(new Set());
   }, [props.threadId]);
+
+  useEffect(() => {
+    if (!props.activeTurnId) {
+      return undefined;
+    }
+
+    const interval = window.setInterval(() => {
+      setRenderNow(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [props.activeTurnId]);
 
   const toggleCommentaryGroup = useCallback((groupId: string) => {
     setExpandedCommentaryGroupIds((current) => {
@@ -437,12 +462,14 @@ export function TranscriptList(props: TranscriptListProps) {
         onScroll={syncScrollState}
       >
         {transcriptRenderItems.map((item) => {
-          if (item.type === "commentaryGroup") {
+          if (item.type === "workPhaseGroup") {
             return (
-              <TranscriptCommentaryGroup
+              <TranscriptWorkPhaseGroup
                 key={item.id}
+                collapsible={item.collapsible}
+                entries={item.entries}
                 expanded={expandedCommentaryGroupIds.has(item.id)}
-                hiddenMessages={item.hiddenMessages}
+                label={item.label}
                 skills={skills}
                 onOpenImage={props.onOpenImage}
                 onToggle={() => {

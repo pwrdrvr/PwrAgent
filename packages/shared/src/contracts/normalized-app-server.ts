@@ -87,9 +87,25 @@ export type AppServerThreadMessagePart =
 
 export type AppServerTranscriptPhase = "commentary" | "final";
 
+export type AppServerThreadTurnStatus =
+  | "in_progress"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+export type AppServerThreadTurnMetadata = {
+  id: string;
+  status?: AppServerThreadTurnStatus;
+  startedAt?: number;
+  completedAt?: number;
+  durationMs?: number;
+};
+
 export type AppServerThreadMessageEntry = AppServerThreadMessage & {
   type: "message";
   phase?: AppServerTranscriptPhase;
+  turn?: AppServerThreadTurnMetadata;
 };
 
 export type AppServerThreadActivityStatus =
@@ -138,6 +154,7 @@ export type AppServerThreadActivityEntry = {
   createdAt?: number;
   status?: AppServerThreadActivityStatus;
   details: AppServerThreadActivityDetail[];
+  turn?: AppServerThreadTurnMetadata;
 };
 
 export type AppServerThreadPlanStepStatus =
@@ -157,6 +174,7 @@ export type AppServerThreadPlanEntry = {
   explanation?: string;
   markdown?: string;
   steps: AppServerThreadPlanStep[];
+  turn?: AppServerThreadTurnMetadata;
 };
 
 export type AppServerThreadEntry =
@@ -315,6 +333,9 @@ export type AppServerNotification =
         turn: {
           id: string;
           status?: string;
+          startedAt?: number | null;
+          completedAt?: number | null;
+          durationMs?: number | null;
         };
       };
     }
@@ -338,6 +359,9 @@ export type AppServerNotification =
         turn: {
           id: string;
           status: "completed";
+          startedAt?: number | null;
+          completedAt?: number | null;
+          durationMs?: number | null;
           output: Array<{
             type: "text";
             text: string;
@@ -353,6 +377,9 @@ export type AppServerNotification =
         turn: {
           id: string;
           status: "failed";
+          startedAt?: number | null;
+          completedAt?: number | null;
+          durationMs?: number | null;
           error: {
             message: string;
           };
@@ -367,6 +394,9 @@ export type AppServerNotification =
         turn: {
           id: string;
           status: "cancelled";
+          startedAt?: number | null;
+          completedAt?: number | null;
+          durationMs?: number | null;
         };
       };
     }

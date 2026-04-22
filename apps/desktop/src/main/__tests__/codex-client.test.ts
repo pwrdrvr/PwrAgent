@@ -1158,6 +1158,10 @@ describe("CodexAppServerClient", () => {
     const replay = await client.readThread({
       threadId: "thread-2"
     });
+    const turn = {
+      id: "turn-1",
+      startedAt: 1_763_500_100_000
+    };
 
     expect(replay).toEqual({
       entries: [
@@ -1172,7 +1176,8 @@ describe("CodexAppServerClient", () => {
               type: "text",
               text: "Show me the current desktop thread shell"
             }
-          ]
+          ],
+          turn
         },
         {
           type: "message",
@@ -1180,7 +1185,8 @@ describe("CodexAppServerClient", () => {
           role: "assistant",
           text: "I’m tracing the transcript scroll container.",
           createdAt: 1_763_500_100_000,
-          phase: "commentary"
+          phase: "commentary",
+          turn
         },
         {
           type: "activity",
@@ -1188,6 +1194,7 @@ describe("CodexAppServerClient", () => {
           summary: "Explored 1 file, Ran 1 command, Edited 1 file",
           createdAt: 1_763_500_100_000,
           status: "completed",
+          turn,
           details: [
             {
               id: "item-3-1",
@@ -1231,7 +1238,8 @@ describe("CodexAppServerClient", () => {
           role: "assistant",
           text: "The desktop shell is live and listing Codex threads.",
           createdAt: 1_763_500_100_000,
-          phase: "final"
+          phase: "final",
+          turn
         }
       ],
       messages: [
@@ -1314,6 +1322,10 @@ describe("CodexAppServerClient", () => {
     const replay = await client.readThread({
       threadId: "thread-images"
     });
+    const turn = {
+      id: "turn-images",
+      startedAt: 1_763_500_150_000
+    };
 
     expect(replay.entries).toEqual([
       {
@@ -1331,7 +1343,8 @@ describe("CodexAppServerClient", () => {
             type: "image",
             url: "data:image/png;base64,aGVsbG8="
           }
-        ]
+        ],
+        turn
       },
       {
         type: "message",
@@ -1345,7 +1358,8 @@ describe("CodexAppServerClient", () => {
             url: "https://example.com/thread-image.png",
             alt: "Thread image"
           }
-        ]
+        ],
+        turn
       }
     ]);
     expect(replay.messages).toEqual([
@@ -1422,6 +1436,10 @@ describe("CodexAppServerClient", () => {
     const replay = await client.readThread({
       threadId: "thread-plan-item"
     });
+    const turn = {
+      id: "turn-1",
+      startedAt: 1_763_500_200_000
+    };
 
     expect(replay.entries).toEqual([
       {
@@ -1430,13 +1448,14 @@ describe("CodexAppServerClient", () => {
         role: "user",
         text: "Plan the desktop transcript work.",
         createdAt: 1_763_500_200_000,
-        parts: [
-          {
-            type: "text",
-            text: "Plan the desktop transcript work."
-          }
-        ]
-      },
+          parts: [
+            {
+              type: "text",
+              text: "Plan the desktop transcript work."
+            }
+          ],
+          turn
+        },
       {
         type: "plan",
         id: "plan-1",
@@ -1446,7 +1465,8 @@ describe("CodexAppServerClient", () => {
         steps: [
           { step: "Normalize replay", status: "completed" },
           { step: "Render live plan progress", status: "in_progress" }
-        ]
+        ],
+        turn
       }
     ]);
 
@@ -1578,6 +1598,10 @@ describe("CodexAppServerClient", () => {
     const replay = await client.readThread({
       threadId: "thread-plan-call"
     });
+    const turn = {
+      id: "turn-1",
+      startedAt: 1_763_500_300_000
+    };
 
     expect(replay.entries).toEqual([
       {
@@ -1586,13 +1610,14 @@ describe("CodexAppServerClient", () => {
         role: "user",
         text: "Build the task list rendering.",
         createdAt: 1_763_500_300_000,
-        parts: [
-          {
-            type: "text",
-            text: "Build the task list rendering."
-          }
-        ]
-      },
+          parts: [
+            {
+              type: "text",
+              text: "Build the task list rendering."
+            }
+          ],
+          turn
+        },
       {
         type: "plan",
         id: "item-2",
@@ -1602,7 +1627,8 @@ describe("CodexAppServerClient", () => {
           { step: "Normalize replay", status: "pending" },
           { step: "Render plan cards", status: "pending" },
           { step: "Verify with tests", status: "pending" }
-        ]
+        ],
+        turn
       }
     ]);
 
@@ -1653,6 +1679,10 @@ describe("CodexAppServerClient", () => {
     const replay = await client.readThread({
       threadId: "thread-wrapped-plan-call"
     });
+    const turn = {
+      id: "turn-1",
+      startedAt: 1_763_500_350_000
+    };
 
     expect(replay.entries).toEqual([
       {
@@ -1661,13 +1691,14 @@ describe("CodexAppServerClient", () => {
         role: "user",
         text: "Trace the image preview bug.",
         createdAt: 1_763_500_350_000,
-        parts: [
-          {
-            type: "text",
-            text: "Trace the image preview bug."
-          }
-        ]
-      },
+          parts: [
+            {
+              type: "text",
+              text: "Trace the image preview bug."
+            }
+          ],
+          turn
+        },
       {
         type: "plan",
         id: "item-2",
@@ -1677,7 +1708,8 @@ describe("CodexAppServerClient", () => {
           { step: "Read the replay normalizer", status: "completed" },
           { step: "Inspect the renderer", status: "in_progress" },
           { step: "Summarize the findings", status: "pending" }
-        ]
+        ],
+        turn
       }
     ]);
 

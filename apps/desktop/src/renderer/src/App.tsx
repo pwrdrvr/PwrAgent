@@ -48,6 +48,7 @@ export function App() {
       <main className="app-main">
         <ThreadView
           activeTurnId={session.activeTurnId}
+          activeTurnStartedAt={session.activeTurnStartedAt}
           addOptimisticUserMessage={session.addOptimisticUserMessage}
           backendError={backendSummaries.error}
           backends={backendSummaries.backends}

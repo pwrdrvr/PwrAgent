@@ -15,6 +15,8 @@ import type {
   AppServerThreadPlanEntry,
   AppServerThreadPlanStep,
   AppServerThreadPlanStepStatus,
+  AppServerThreadTurnMetadata,
+  AppServerThreadTurnStatus,
   AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadReplayPagination,
@@ -658,6 +660,46 @@ function normalizeActivityStatus(
   return undefined;
 }
 
+function normalizeTurnStatus(value: string | undefined): AppServerThreadTurnStatus | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (
+    normalized === "in_progress" ||
+    normalized === "completed" ||
+    normalized === "failed" ||
+    normalized === "cancelled" ||
+    normalized === "interrupted"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function extractTurnMetadata(
+  turn: Record<string, unknown>
+): AppServerThreadTurnMetadata | undefined {
+  const id = pickString(turn, ["id", "turnId", "turn_id", "runId", "run_id"]);
+  if (!id) {
+    return undefined;
+  }
+
+  const startedAt = normalizeEpochTimestamp(
+    pickNumber(turn, ["startedAt", "started_at", "createdAt", "timestamp", "time"])
+  );
+  const completedAt = normalizeEpochTimestamp(
+    pickNumber(turn, ["completedAt", "completed_at"])
+  );
+  const durationMs = pickNumber(turn, ["durationMs", "duration_ms"]);
+  const status = normalizeTurnStatus(pickString(turn, ["status"]));
+
+  return {
+    id,
+    ...(status ? { status } : {}),
+    ...(startedAt ? { startedAt } : {}),
+    ...(completedAt ? { completedAt } : {}),
+    ...(typeof durationMs === "number" ? { durationMs } : {}),
+  };
+}
+
 function normalizePlanStepStatus(
   value: string | undefined
 ): AppServerThreadPlanStepStatus | undefined {
@@ -783,7 +825,8 @@ function parseStructuredValue(value: unknown): unknown {
 
 function extractNestedPlanEntryFromItem(
   item: Record<string, unknown>,
-  createdAt?: number
+  createdAt?: number,
+  turn?: AppServerThreadTurnMetadata
 ): AppServerThreadPlanEntry | undefined {
   for (const key of ["payload", "item", "responseItem", "response_item"]) {
     const nestedItem = asRecord(item[key]);
@@ -798,7 +841,8 @@ function extractNestedPlanEntryFromItem(
           pickString(item, ["id", "itemId", "item_id"]) ??
           pickString(nestedItem, ["id", "itemId", "item_id", "call_id"])
       },
-      createdAt
+      createdAt,
+      turn
     );
     if (nestedPlanEntry) {
       return nestedPlanEntry;
@@ -810,13 +854,14 @@ function extractNestedPlanEntryFromItem(
 
 function extractPlanEntryFromItem(
   item: Record<string, unknown>,
-  createdAt?: number
+  createdAt?: number,
+  turn?: AppServerThreadTurnMetadata
 ): AppServerThreadPlanEntry | undefined {
   const itemType = pickString(item, ["type"]);
   const normalizedItemType = itemType?.trim().toLowerCase();
   const itemId =
     pickString(item, ["id", "itemId", "item_id", "call_id"]) ?? `plan-${createdAt ?? 0}`;
-  const nestedPlanEntry = extractNestedPlanEntryFromItem(item, createdAt);
+  const nestedPlanEntry = extractNestedPlanEntryFromItem(item, createdAt, turn);
   if (nestedPlanEntry) {
     return nestedPlanEntry;
   }
@@ -837,6 +882,7 @@ function extractPlanEntryFromItem(
       type: "plan",
       id: itemId,
       createdAt,
+      ...(turn ? { turn } : {}),
       ...(explanation ? { explanation } : {}),
       ...(normalizedPayload?.markdown ? { markdown: normalizedPayload.markdown } : {}),
       steps,
@@ -875,6 +921,7 @@ function extractPlanEntryFromItem(
     type: "plan",
     id: itemId,
     createdAt,
+    ...(turn ? { turn } : {}),
     ...(normalizedPayload.explanation
       ? { explanation: normalizedPayload.explanation }
       : {}),
@@ -969,9 +1016,27 @@ function formatActivitySummary(parts: string[]): string {
   return parts.join(", ");
 }
 
+function normalizeItemType(value: string | undefined): string | undefined {
+  return value?.replace(/[-_\s]/g, "").toLowerCase();
+}
+
+function isActivityItemType(itemType: string | undefined): boolean {
+  const normalized = normalizeItemType(itemType);
+  return (
+    normalized === "commandexecution" ||
+    normalized === "filechange" ||
+    normalized === "mcptoolcall" ||
+    normalized === "dynamictoolcall" ||
+    normalized === "websearch" ||
+    normalized === "imageview" ||
+    normalized === "imagegeneration"
+  );
+}
+
 function summarizeActivityItems(
   items: Record<string, unknown>[],
-  createdAt?: number
+  createdAt?: number,
+  turn?: AppServerThreadTurnMetadata
 ): AppServerThreadActivityEntry | undefined {
   if (items.length === 0) {
     return undefined;
@@ -981,6 +1046,7 @@ function summarizeActivityItems(
   let inspectedFiles = 0;
   let commandsRun = 0;
   let changedFiles = 0;
+  let toolCalls = 0;
   let status: AppServerThreadActivityStatus | undefined;
 
   for (const item of items) {
@@ -994,7 +1060,8 @@ function summarizeActivityItems(
     }
 
     const itemType = pickString(item, ["type"]);
-    if (itemType === "commandExecution") {
+    const normalizedItemType = normalizeItemType(itemType);
+    if (normalizedItemType === "commandexecution") {
       const command = pickString(item, ["command"]);
       const actions = Array.isArray(item.commandActions)
         ? item.commandActions
@@ -1061,7 +1128,7 @@ function summarizeActivityItems(
       continue;
     }
 
-    if (itemType === "fileChange") {
+    if (normalizedItemType === "filechange") {
       const changes = Array.isArray(item.changes)
         ? item.changes
             .map((entry) => asRecord(entry))
@@ -1097,6 +1164,27 @@ function summarizeActivityItems(
             : {})
         });
       }
+      continue;
+    }
+
+    if (
+      normalizedItemType === "mcptoolcall" ||
+      normalizedItemType === "dynamictoolcall" ||
+      normalizedItemType === "websearch" ||
+      normalizedItemType === "imageview" ||
+      normalizedItemType === "imagegeneration"
+    ) {
+      toolCalls += 1;
+      const toolName =
+        pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
+        (normalizedItemType === "websearch" ? "web search" : undefined);
+      const query = pickString(item, ["query"]);
+      pushActivityDetail(details, {
+        id: itemId,
+        kind: normalizedItemType === "websearch" ? "read" : "command",
+        label: [toolName ?? "Used tool", query ? `: ${query}` : ""].join(""),
+        status: itemStatus
+      });
     }
   }
 
@@ -1112,6 +1200,9 @@ function summarizeActivityItems(
   if (changedFiles > 0) {
     summaryParts.push(`Edited ${changedFiles} file${changedFiles === 1 ? "" : "s"}`);
   }
+  if (toolCalls > 0) {
+    summaryParts.push(`Used ${toolCalls} tool${toolCalls === 1 ? "" : "s"}`);
+  }
 
   if (summaryParts.length === 0 && details.length === 0) {
     return undefined;
@@ -1126,7 +1217,8 @@ function summarizeActivityItems(
         : `Recorded ${details.length} activity item${details.length === 1 ? "" : "s"}`,
     createdAt,
     status,
-    details
+    details,
+    ...(turn ? { turn } : {})
   };
 }
 
@@ -1151,6 +1243,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
   const entries: AppServerThreadEntry[] = [];
 
   for (const turn of turns) {
+    const turnMetadata = extractTurnMetadata(turn);
     const createdAt = normalizeEpochTimestamp(
       pickNumber(turn, ["startedAt", "createdAt", "timestamp", "time"])
     );
@@ -1162,7 +1255,11 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
     const pendingActivityItems: Record<string, unknown>[] = [];
 
     const flushActivityItems = (): void => {
-      const activity = summarizeActivityItems(pendingActivityItems, createdAt);
+      const activity = summarizeActivityItems(
+        pendingActivityItems,
+        createdAt,
+        turnMetadata
+      );
       pendingActivityItems.length = 0;
       if (activity) {
         entries.push(activity);
@@ -1188,19 +1285,20 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
           text: content.text,
           ...(content.parts ? { parts: content.parts } : {}),
           createdAt,
+          ...(turnMetadata ? { turn: turnMetadata } : {}),
           ...(phase ? { phase } : {})
         });
         continue;
       }
 
-      const planEntry = extractPlanEntryFromItem(item, createdAt);
+      const planEntry = extractPlanEntryFromItem(item, createdAt, turnMetadata);
       if (planEntry) {
         flushActivityItems();
         entries.push(planEntry);
         continue;
       }
 
-      if (itemType === "commandExecution" || itemType === "fileChange") {
+      if (isActivityItemType(itemType)) {
         pendingActivityItems.push(item);
       }
     }

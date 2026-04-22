@@ -320,6 +320,7 @@ describe("useThreadSessionState", () => {
             turn: {
               id: "turn-1",
               status: "completed",
+              durationMs: 524_447,
               output: [{ type: "text", text: "Final answer." }],
             },
           },
@@ -341,6 +342,15 @@ describe("useThreadSessionState", () => {
         .filter((entry) => entry.type === "message")
         .map((entry) => entry.phase)
     ).toEqual(["commentary", "commentary", "final"]);
+    expect(
+      result.current.entries
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.turn)
+    ).toEqual([
+      { id: "turn-1", status: "completed", durationMs: 524_447 },
+      { id: "turn-1", status: "completed", durationMs: 524_447 },
+      { id: "turn-1", status: "completed", durationMs: 524_447 },
+    ]);
     expect(result.current.pendingAssistantMessage).toBeUndefined();
   });
 

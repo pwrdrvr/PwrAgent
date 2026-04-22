@@ -52,12 +52,65 @@
         "entries": [
           {
             "type": "message",
+            "id": "hydrated-commentary-1",
+            "role": "assistant",
+            "phase": "commentary",
+            "text": "I checked the existing Telegram notes before this replay.",
+            "turn": {
+              "id": "turn-hydrated-work-1",
+              "status": "completed",
+              "durationMs": 70000
+            }
+          },
+          {
+            "type": "activity",
+            "id": "hydrated-activity-1",
+            "summary": "Edited 1 file",
+            "details": [
+              {
+                "id": "hydrated-activity-1-detail-1",
+                "kind": "write",
+                "label": "Updated docs/plans/telegram.md",
+                "path": "docs/plans/telegram.md",
+                "status": "completed"
+              }
+            ],
+            "turn": {
+              "id": "turn-hydrated-work-1",
+              "status": "completed",
+              "durationMs": 70000
+            }
+          },
+          {
+            "type": "message",
+            "id": "hydrated-final-1",
+            "role": "assistant",
+            "phase": "final",
+            "text": "Hydrated final answer stays visible.",
+            "turn": {
+              "id": "turn-hydrated-work-1",
+              "status": "completed",
+              "durationMs": 70000
+            }
+          },
+          {
+            "type": "message",
             "id": "message-1",
             "role": "assistant",
             "text": "Ready to brainstorm Telegram support."
           }
         ],
         "messages": [
+          {
+            "id": "hydrated-commentary-1",
+            "role": "assistant",
+            "text": "I checked the existing Telegram notes before this replay."
+          },
+          {
+            "id": "hydrated-final-1",
+            "role": "assistant",
+            "text": "Hydrated final answer stays visible."
+          },
           {
             "id": "message-1",
             "role": "assistant",
@@ -287,6 +340,7 @@
           "turn": {
             "id": "turn-telegram-brainstorm-1",
             "status": "completed",
+            "durationMs": 524447,
             "output": [
               {
                 "type": "text",
