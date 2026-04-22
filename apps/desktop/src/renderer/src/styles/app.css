@@ -424,7 +424,7 @@ textarea {
 }
 
 .thread-row-shell:hover .thread-row__archive-button,
-.thread-row-shell:focus-within .thread-row__archive-button {
+.thread-row__archive-button:focus-visible {
   opacity: 1;
   pointer-events: auto;
 }
