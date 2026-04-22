@@ -57,6 +57,9 @@ export type ThreadSummary = {
   summary?: string;
   projectKey?: string;
   model?: string;
+  serviceTier?: string;
+  reasoningEffort?: string;
+  fastMode?: boolean;
   createdAt?: number;
   updatedAt?: number;
 };
@@ -271,6 +274,12 @@ export type AppServerNotification =
     }
   | {
       method: "thread/archived";
+      params: {
+        threadId: string;
+      };
+    }
+  | {
+      method: "thread/unarchived";
       params: {
         threadId: string;
       };

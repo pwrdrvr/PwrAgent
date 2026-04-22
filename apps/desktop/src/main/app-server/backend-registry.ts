@@ -29,6 +29,8 @@ import type {
   ResetDirectoryLaunchpadResponse,
   RenameThreadRequest,
   RenameThreadResponse,
+  RestoreThreadRequest,
+  RestoreThreadResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -66,8 +68,9 @@ type InitializeResult = {
 type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
-  listThreads(params?: { filter?: string }): Promise<AppServerThreadSummary[]>;
+  listThreads(params?: { archived?: boolean; filter?: string }): Promise<AppServerThreadSummary[]>;
   archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
+  restoreThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   renameThread?(params: { threadId: string; name: string }): Promise<{ threadId: string }>;
   listSkills(params?: {
     cwd?: string;
@@ -222,6 +225,7 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
       assumeCodexAppServerSurface,
     resumeThread: supported.has("thread/resume") || assumeCodexAppServerSurface,
     archiveThread: supported.has("thread/archive") || assumeCodexAppServerSurface,
+    restoreThread: supported.has("thread/unarchive") || assumeCodexAppServerSurface,
     renameThread: supported.has("thread/name/set") || assumeCodexAppServerSurface,
     readThread: supported.has("thread/read") || assumeCodexAppServerSurface,
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
@@ -532,20 +536,33 @@ export class DesktopBackendRegistry {
   }
 
   async listThreads(params: {
+    archived?: boolean;
     backend?: AppServerBackendKind;
     filter?: string;
   } = {}): Promise<AppServerThreadSummary[]> {
     if (params.backend === "codex") {
-      return await this.listCodexThreads(params.filter);
+      return await this.listCodexThreads({
+        archived: params.archived,
+        filter: params.filter,
+      });
     }
 
     if (params.backend === "grok") {
-      return await this.grokClient.listThreads({ filter: params.filter });
+      return await this.grokClient.listThreads({
+        archived: params.archived,
+        filter: params.filter,
+      });
     }
 
     const threadLists = await Promise.all([
-      this.listCodexThreads(params.filter),
-      this.grokClient.listThreads({ filter: params.filter }).catch(() => []),
+      this.listCodexThreads({
+        archived: params.archived,
+        filter: params.filter,
+      }),
+      this.grokClient.listThreads({
+        archived: params.archived,
+        filter: params.filter,
+      }).catch(() => []),
     ]);
 
     return threadLists
@@ -571,9 +588,6 @@ export class DesktopBackendRegistry {
     request: ArchiveThreadRequest,
   ): Promise<ArchiveThreadResponse> {
     const backend = request.backend ?? "codex";
-    const thread = (await this.listThreads({ backend })).find(
-      (candidate) => candidate.id === request.threadId,
-    );
     const result =
       backend === "codex"
         ? await this.withCodexThreadClient(request.threadId, async (client) =>
@@ -581,15 +595,29 @@ export class DesktopBackendRegistry {
           )
         : await this.archiveWithClient(this.grokClient, request.threadId);
 
-    const cleanup = thread
-      ? await this.gitDirectoryService.cleanupThreadWorktrees(thread)
-      : [];
-
     return {
       backend,
       threadId: result.threadId,
       archivedAt: Date.now(),
-      cleanup,
+      cleanup: [],
+    };
+  }
+
+  async restoreThread(
+    request: RestoreThreadRequest,
+  ): Promise<RestoreThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const result =
+      backend === "codex"
+        ? await this.withCodexThreadClient(request.threadId, async (client) =>
+            await this.restoreWithClient(client, request.threadId),
+          )
+        : await this.restoreWithClient(this.grokClient, request.threadId);
+
+    return {
+      backend,
+      threadId: result.threadId,
+      restoredAt: Date.now(),
     };
   }
 
@@ -1074,8 +1102,11 @@ export class DesktopBackendRegistry {
       : this.codexDefaultClient;
   }
 
-  private async listCodexThreads(filter?: string): Promise<AppServerThreadSummary[]> {
-    const defaultThreads = await this.codexDefaultClient.listThreads({ filter }).catch(() => []);
+  private async listCodexThreads(params: {
+    archived?: boolean;
+    filter?: string;
+  } = {}): Promise<AppServerThreadSummary[]> {
+    const defaultThreads = await this.codexDefaultClient.listThreads(params).catch(() => []);
     const allThreads = defaultThreads.map((thread) => ({
       ...thread,
       executionMode: "default" as const,
@@ -1245,6 +1276,17 @@ export class DesktopBackendRegistry {
     }
 
     return await client.archiveThread({ threadId });
+  }
+
+  private async restoreWithClient(
+    client: BackendClient,
+    threadId: string,
+  ): Promise<{ threadId: string }> {
+    if (!client.restoreThread) {
+      throw new Error("Selected backend does not support thread restore");
+    }
+
+    return await client.restoreThread({ threadId });
   }
 
   private async renameWithClient(

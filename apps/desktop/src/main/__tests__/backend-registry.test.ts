@@ -104,6 +104,9 @@ class MockBackendClient {
   lastArchiveThreadParams?: {
     threadId: string;
   };
+  lastRestoreThreadParams?: {
+    threadId: string;
+  };
   lastRenameThreadParams?: {
     threadId: string;
     name: string;
@@ -152,7 +155,10 @@ class MockBackendClient {
     return this.options.initializeResult ?? {};
   }
 
-  async listThreads(params?: { filter?: string }): Promise<AppServerThreadSummary[]> {
+  async listThreads(params?: {
+    archived?: boolean;
+    filter?: string;
+  }): Promise<AppServerThreadSummary[]> {
     this.listThreadsCallCount += 1;
     this.lastListThreadsParams = params;
     return this.options.threads ?? [];
@@ -160,6 +166,11 @@ class MockBackendClient {
 
   async archiveThread(params: { threadId: string }): Promise<{ threadId: string }> {
     this.lastArchiveThreadParams = params;
+    return { threadId: params.threadId };
+  }
+
+  async restoreThread(params: { threadId: string }): Promise<{ threadId: string }> {
+    this.lastRestoreThreadParams = params;
     return { threadId: params.threadId };
   }
 
@@ -693,7 +704,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("archives a thread and cleans up its linked worktrees", async () => {
+  it("archives a thread without cleaning up linked worktrees", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
       title: "Archive me",
@@ -745,23 +756,57 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(codexClient.lastArchiveThreadParams).toEqual({ threadId: "thread-1" });
-    expect(cleanupThreadWorktrees).toHaveBeenCalledWith({
-      ...thread,
-      executionMode: "default",
-    });
+    expect(cleanupThreadWorktrees).not.toHaveBeenCalled();
     expect(response).toEqual({
       backend: "codex",
       threadId: "thread-1",
       archivedAt: expect.any(Number),
-      cleanup: [
-        {
-          worktreePath: "/repo/.worktrees/archive-me",
-          branch: "codex/archive-me",
-          removedWorktree: true,
-          deletedBranch: true,
-        },
-      ],
+      cleanup: [],
     });
+
+    await registry.close();
+  });
+
+  it("restores threads through the selected backend client", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/unarchive"] },
+    });
+    const grokClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/unarchive"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/unarchive"] },
+      }),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.restoreThread({
+        backend: "codex",
+        threadId: "thread-1",
+      })
+    ).resolves.toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      restoredAt: expect.any(Number),
+    });
+
+    await expect(
+      registry.restoreThread({
+        backend: "grok",
+        threadId: "thread-2",
+      })
+    ).resolves.toEqual({
+      backend: "grok",
+      threadId: "thread-2",
+      restoredAt: expect.any(Number),
+    });
+
+    expect(codexClient.lastRestoreThreadParams).toEqual({ threadId: "thread-1" });
+    expect(grokClient.lastRestoreThreadParams).toEqual({ threadId: "thread-2" });
 
     await registry.close();
   });

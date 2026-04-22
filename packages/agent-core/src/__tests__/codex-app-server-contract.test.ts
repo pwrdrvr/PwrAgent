@@ -28,6 +28,7 @@ describe("Codex app-server contract", () => {
         "thread/new",
         "thread/resume",
         "thread/archive",
+        "thread/unarchive",
         "thread/name/set",
         "thread/read",
         "thread/compact/start",
@@ -71,6 +72,14 @@ describe("Codex app-server contract", () => {
     await expect(server.request("thread/list", {})).resolves.toEqual({
       threads: [],
     });
+    await expect(server.request("thread/list", { archived: true })).resolves.toEqual({
+      threads: [
+        expect.objectContaining({
+          threadId: "thread-1",
+          projectKey: "/repo/workspace",
+        }),
+      ],
+    });
     await expect(
       server.request("thread/read", { threadId: "thread-1" })
     ).resolves.toMatchObject({
@@ -80,8 +89,27 @@ describe("Codex app-server contract", () => {
         cwd: "/repo/workspace",
       },
     });
+    await expect(server.request("thread/unarchive", { threadId: "thread-1" }))
+      .resolves.toMatchObject({
+        threadId: "thread-1",
+        archived: undefined,
+      });
+    await expect(server.request("thread/list", {})).resolves.toEqual({
+      threads: [
+        expect.objectContaining({
+          threadId: "thread-1",
+          projectKey: "/repo/workspace",
+        }),
+      ],
+    });
     expect(notifications).toContainEqual({
       method: "thread/archived",
+      params: {
+        threadId: "thread-1",
+      },
+    });
+    expect(notifications).toContainEqual({
+      method: "thread/unarchived",
       params: {
         threadId: "thread-1",
       },

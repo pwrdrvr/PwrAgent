@@ -38,6 +38,11 @@ class MockTransport implements JsonRpcTransport {
       id: "thread-2"
     }
   };
+  static threadUnarchiveResult: unknown = {
+    thread: {
+      id: "thread-2"
+    }
+  };
   static threadNameSetResult: unknown = {
     thread: {
       id: "thread-2"
@@ -556,6 +561,17 @@ class MockTransport implements JsonRpcTransport {
           jsonrpc: "2.0",
           id: payload.id,
           result: MockTransport.threadArchiveResult
+        })
+      );
+      return;
+    }
+
+    if (payload.method === "thread/unarchive") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.threadUnarchiveResult
         })
       );
       return;
@@ -1705,6 +1721,33 @@ describe("CodexAppServerClient", () => {
 
     expect(archiveRequest).toMatchObject({
       method: "thread/archive",
+      params: {
+        threadId: "thread-2",
+      },
+    });
+
+    await client.close();
+  });
+
+  it("restores threads through the Codex app server", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await expect(client.restoreThread({ threadId: "thread-2" })).resolves.toEqual({
+      threadId: "thread-2",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const restoreRequest = transport?.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((message) => message.method === "thread/unarchive");
+
+    expect(restoreRequest).toMatchObject({
+      method: "thread/unarchive",
       params: {
         threadId: "thread-2",
       },

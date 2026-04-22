@@ -5,27 +5,45 @@ import type {
   GetNavigationSnapshotRequest,
   MarkThreadSeenRequest,
   RenameThreadRequest,
+  RestoreThreadRequest,
 } from "@pwragnt/shared";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
-const listThreads = vi.fn(async (_request?: { backend?: "codex" | "grok"; filter?: string }) => [
-  {
-    id: "thread-1",
-    title: "Thread one",
-    titleSource: "explicit" as const,
-    source: "codex" as const,
-    linkedDirectories: [],
-    updatedAt: 2000,
-  },
-  {
-    id: "thread-1",
-    title: "Thread one (Grok)",
-    titleSource: "explicit" as const,
-    source: "grok" as const,
-    linkedDirectories: [],
-    updatedAt: 1000,
-  },
-]);
+const listThreads = vi.fn(async (request?: {
+  archived?: boolean;
+  backend?: "codex" | "grok";
+  filter?: string;
+}) =>
+  request?.archived
+    ? [
+        {
+          id: "thread-archived",
+          title: "Archived thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          updatedAt: 500,
+        },
+      ]
+    : [
+        {
+          id: "thread-1",
+          title: "Thread one",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          updatedAt: 2000,
+        },
+        {
+          id: "thread-1",
+          title: "Thread one (Grok)",
+          titleSource: "explicit" as const,
+          source: "grok" as const,
+          linkedDirectories: [],
+          updatedAt: 1000,
+        },
+      ]
+);
 const readThread = vi.fn(async ({ threadId }: { threadId: string }) => ({
   messages: [{ id: `${threadId}-message`, role: "assistant" as const, text: "Loaded" }],
   pagination: {
@@ -39,6 +57,11 @@ const archiveThread = vi.fn(async (request: ArchiveThreadRequest) => ({
   archivedAt: 3000,
   cleanup: [],
 }));
+const restoreThread = vi.fn(async (request: RestoreThreadRequest) => ({
+  backend: request.backend ?? "codex",
+  threadId: request.threadId,
+  restoredAt: 3000,
+}));
 const renameThread = vi.fn(async (request: RenameThreadRequest) => ({
   backend: request.backend ?? "codex",
   threadId: request.threadId,
@@ -48,6 +71,7 @@ const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
   backend: (params as { backend: "all" | "codex" | "grok" }).backend,
   fetchedAt: 1234,
   unchanged: false,
+  archivedThreads: (params as { archivedThreads?: unknown[] }).archivedThreads ?? [],
   threads: (params as { threads: unknown[] }).threads,
   inboxThreadKeys: ["grok:thread-1"],
   directories: [
@@ -108,6 +132,7 @@ vi.mock("../app-server/backend-registry", () => ({
   disposeDesktopBackendRegistry: vi.fn(async () => undefined),
   getDesktopBackendRegistry: () => ({
     archiveThread,
+    restoreThread,
     renameThread,
     listThreads,
     readThread,
@@ -119,6 +144,7 @@ describe("app server ipc", () => {
   beforeEach(() => {
     handlers.clear();
     archiveThread.mockClear();
+    restoreThread.mockClear();
     renameThread.mockClear();
     listThreads.mockClear();
     readThread.mockClear();
@@ -139,7 +165,15 @@ describe("app server ipc", () => {
     );
 
     expect(listThreads).toHaveBeenCalledWith({ backend: undefined, filter: undefined });
+    expect(listThreads).toHaveBeenCalledWith({
+      archived: true,
+      backend: undefined,
+      filter: undefined,
+    });
     expect(reconcileNavigationSnapshot).toHaveBeenCalledWith({
+      archivedThreads: [
+        expect.objectContaining({ source: "codex", id: "thread-archived" }),
+      ],
       backend: "all",
       fetchedAt: expect.any(Number),
       threads: [
@@ -154,6 +188,9 @@ describe("app server ipc", () => {
       threads: [
         expect.objectContaining({ source: "codex", id: "thread-1" }),
         expect.objectContaining({ source: "grok", id: "thread-1" }),
+      ],
+      archivedThreads: [
+        expect.objectContaining({ source: "codex", id: "thread-archived" }),
       ],
       inboxThreadKeys: ["grok:thread-1"],
       directories: [
@@ -226,6 +263,28 @@ describe("app server ipc", () => {
     });
   });
 
+  it("restores threads through the app-server IPC handler", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { APP_SERVER_RESTORE_THREAD_CHANNEL } = await import("../../shared/ipc");
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(APP_SERVER_RESTORE_THREAD_CHANNEL)?.({}, {
+      backend: "grok",
+      threadId: "thread-1",
+    } satisfies RestoreThreadRequest);
+
+    expect(restoreThread).toHaveBeenCalledWith({
+      backend: "grok",
+      threadId: "thread-1",
+    });
+    expect(response).toEqual({
+      backend: "grok",
+      threadId: "thread-1",
+      restoredAt: 3000,
+    });
+  });
+
   it("renames threads through the app-server IPC handler", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_RENAME_THREAD_CHANNEL } = await import("../../shared/ipc");
@@ -285,6 +344,7 @@ describe("app server ipc", () => {
         backend: "all",
         fetchedAt: 1234,
         unchanged: false,
+        archivedThreads: [],
         threads: [
           {
             id: "thread-1",
@@ -316,6 +376,7 @@ describe("app server ipc", () => {
         backend: "all",
         fetchedAt: 5678,
         unchanged: true,
+        archivedThreads: [],
         threads: [
           {
             id: "thread-1",
@@ -354,6 +415,7 @@ describe("app server ipc", () => {
       backend: "all",
       fetchedAt: 5678,
       unchanged: true,
+      archivedThreads: [],
       threads: [
         expect.objectContaining({ source: "codex", id: "thread-1" }),
       ],

@@ -31,6 +31,8 @@ import type {
   ResetDirectoryLaunchpadResponse,
   RenameThreadRequest,
   RenameThreadResponse,
+  RestoreThreadRequest,
+  RestoreThreadResponse,
   StartThreadRequest,
   StartThreadResponse,
   StartTurnRequest,
@@ -58,6 +60,7 @@ import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
+  APP_SERVER_RESTORE_THREAD_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   BACKEND_LIST_CHANNEL,
@@ -117,6 +120,10 @@ const desktopApi = Object.freeze({
     request: ArchiveThreadRequest,
   ): Promise<ArchiveThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_ARCHIVE_THREAD_CHANNEL, request),
+  restoreThread: async (
+    request: RestoreThreadRequest,
+  ): Promise<RestoreThreadResponse> =>
+    await ipcRenderer.invoke(APP_SERVER_RESTORE_THREAD_CHANNEL, request),
   renameThread: async (
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> =>

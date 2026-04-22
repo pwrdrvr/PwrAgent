@@ -12,6 +12,7 @@ import { InboxList } from "./InboxList";
 import { RecentsList } from "./RecentsList";
 
 type SidebarProps = {
+  archivedThreads?: NavigationThreadSummary[];
   backends: BackendSummary[];
   browseMode: BrowseMode;
   createThreadError?: string;
@@ -25,6 +26,7 @@ type SidebarProps = {
   };
   launchpadError?: string;
   archiveThreadError?: string;
+  restoreThreadError?: string;
   renameThreadError?: string;
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
@@ -37,6 +39,7 @@ type SidebarProps = {
   ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
+  onRestoreThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRenameThread?: (thread: NavigationThreadSummary, name: string) => Promise<void>;
 };
 
@@ -62,7 +65,9 @@ export function Sidebar(props: SidebarProps) {
     [props.backends]
   );
   const onArchiveThread = props.onArchiveThread ?? (async () => undefined);
+  const onRestoreThread = props.onRestoreThread ?? (async () => undefined);
   const onRenameThread = props.onRenameThread ?? (async () => undefined);
+  const archivedThreads = props.archivedThreads ?? [];
 
   const canRenameThread = (thread: NavigationThreadSummary): boolean =>
     props.backends.some(
@@ -78,6 +83,20 @@ export function Sidebar(props: SidebarProps) {
         backend.kind === thread.source &&
         backend.available &&
         backend.capabilities.archiveThread === true
+    );
+
+  const canRestoreThread = (thread: NavigationThreadSummary): boolean =>
+    props.backends.some(
+      (backend) =>
+        backend.kind === thread.source &&
+        backend.available &&
+        backend.capabilities.restoreThread === true
+    );
+
+  const isArchivedThread = (thread: NavigationThreadSummary): boolean =>
+    archivedThreads.some(
+      (candidate) =>
+        candidate.source === thread.source && candidate.id === thread.id
     );
 
   useEffect(() => {
@@ -120,6 +139,11 @@ export function Sidebar(props: SidebarProps) {
     void onArchiveThread(thread);
   };
 
+  const restoreFromContextMenu = (thread: NavigationThreadSummary): void => {
+    setContextMenu(undefined);
+    void onRestoreThread(thread);
+  };
+
   const submitRename = (): void => {
     if (!renameThread) {
       return;
@@ -142,6 +166,12 @@ export function Sidebar(props: SidebarProps) {
     : false;
   const contextMenuCanArchive = contextMenu
     ? canArchiveThread(contextMenu.thread)
+    : false;
+  const contextMenuCanRestore = contextMenu
+    ? isArchivedThread(contextMenu.thread) && canRestoreThread(contextMenu.thread)
+    : false;
+  const contextMenuCanArchiveActive = contextMenu
+    ? !isArchivedThread(contextMenu.thread) && contextMenuCanArchive
     : false;
 
   return (
@@ -171,13 +201,15 @@ export function Sidebar(props: SidebarProps) {
         <p className="sidebar-error sidebar-error--masthead">{props.launchpadError}</p>
       ) : props.archiveThreadError ? (
         <p className="sidebar-error sidebar-error--masthead">{props.archiveThreadError}</p>
+      ) : props.restoreThreadError ? (
+        <p className="sidebar-error sidebar-error--masthead">{props.restoreThreadError}</p>
       ) : props.renameThreadError ? (
         <p className="sidebar-error sidebar-error--masthead">{props.renameThreadError}</p>
       ) : null}
 
       <section className="sidebar__section sidebar__section--fill" aria-label="Thread browser">
         <div className="lens-switch" role="tablist" aria-label="Thread lenses">
-          {(["inbox", "recents", "directories"] as const).map((mode) => (
+          {(["inbox", "recents", "directories", "archived"] as const).map((mode) => (
             <button
               key={mode}
               aria-pressed={props.browseMode === mode}
@@ -215,6 +247,18 @@ export function Sidebar(props: SidebarProps) {
               onOpenLaunchpad={props.onOpenLaunchpad}
               onSelectThread={props.onSelectThread}
             />
+          ) : props.browseMode === "archived" ? (
+            archivedThreads.length === 0 ? (
+              <p className="sidebar-empty">No archived threads.</p>
+            ) : (
+              <RecentsList
+                selectedThreadKey={props.selectedItemKey}
+                thinkingThreadKeys={props.thinkingThreadKeys}
+                threads={archivedThreads}
+                onOpenThreadContextMenu={openThreadContextMenu}
+                onSelectThread={props.onSelectThread}
+              />
+            )
           ) : (
             props.threads.length === 0 ? (
               <p className="sidebar-empty">No threads yet.</p>
@@ -231,7 +275,7 @@ export function Sidebar(props: SidebarProps) {
         </div>
       </section>
 
-      {contextMenu && (contextMenuCanRename || contextMenuCanArchive) ? (
+      {contextMenu && (contextMenuCanRename || contextMenuCanArchiveActive || contextMenuCanRestore) ? (
         <div
           className="thread-context-menu"
           role="menu"
@@ -250,13 +294,22 @@ export function Sidebar(props: SidebarProps) {
               Rename Thread
             </button>
           ) : null}
-          {contextMenuCanArchive ? (
+          {contextMenuCanArchiveActive ? (
             <button
               role="menuitem"
               type="button"
               onClick={() => archiveFromContextMenu(contextMenu.thread)}
             >
               Archive Thread
+            </button>
+          ) : null}
+          {contextMenuCanRestore ? (
+            <button
+              role="menuitem"
+              type="button"
+              onClick={() => restoreFromContextMenu(contextMenu.thread)}
+            >
+              Restore Thread
             </button>
           ) : null}
         </div>

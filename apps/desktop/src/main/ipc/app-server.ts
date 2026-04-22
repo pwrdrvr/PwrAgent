@@ -22,6 +22,8 @@ import type {
   ResetDirectoryLaunchpadResponse,
   RenameThreadRequest,
   RenameThreadResponse,
+  RestoreThreadRequest,
+  RestoreThreadResponse,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragnt/shared";
@@ -34,6 +36,7 @@ import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
+  APP_SERVER_RESTORE_THREAD_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
@@ -90,6 +93,7 @@ class DesktopAppServerService {
     const backend = request.backend;
     const threads = await getDesktopBackendRegistry().listThreads({
       backend,
+      archived: request.archived,
       filter: request.filter,
     });
 
@@ -172,6 +176,23 @@ class DesktopAppServerService {
     return response;
   }
 
+  async restoreThread(
+    request: RestoreThreadRequest,
+  ): Promise<RestoreThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const response = await getDesktopBackendRegistry().restoreThread({
+      ...request,
+      backend,
+    });
+
+    logDebug("restoreThread", {
+      backend,
+      threadId: request.threadId,
+    });
+
+    return response;
+  }
+
   async renameThread(
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> {
@@ -197,7 +218,13 @@ class DesktopAppServerService {
       backend: backend === "all" ? undefined : backend,
       filter: request.filter,
     });
+    const archivedThreads = await getDesktopBackendRegistry().listThreads({
+      archived: true,
+      backend: backend === "all" ? undefined : backend,
+      filter: request.filter,
+    });
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
+      archivedThreads,
       backend,
       fetchedAt: Date.now(),
       threads,
@@ -216,6 +243,7 @@ class DesktopAppServerService {
 
     logDebug("getNavigationSnapshot", {
       backend,
+      archivedCount: snapshot.archivedThreads?.length ?? 0,
       count: snapshot.threads.length,
       inboxCount: snapshot.inboxThreadKeys.length,
       unchanged: snapshot.unchanged && directoriesUnchanged,
@@ -344,6 +372,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.archiveThread(request);
     },
   );
+  ipcMain.removeHandler(APP_SERVER_RESTORE_THREAD_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_RESTORE_THREAD_CHANNEL,
+    async (
+      _event,
+      request: RestoreThreadRequest,
+    ): Promise<RestoreThreadResponse> => {
+      return await appServerService.restoreThread(request);
+    },
+  );
   ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
   ipcMain.handle(
     APP_SERVER_RENAME_THREAD_CHANNEL,
@@ -421,6 +459,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_THREAD_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_RESTORE_THREAD_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);

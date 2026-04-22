@@ -597,6 +597,43 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
+  it("restores archived Grok threads through the app-server contract", async () => {
+    const server = new CodexAppServer({
+      provider: new FakeProvider(),
+      threadIdGenerator: () => "thread-1",
+      runIdGenerator: () => "turn-1",
+    });
+    const client = new GrokAppServerClient({ server });
+    const notifications: string[] = [];
+    const unsubscribe = client.onNotification((notification) => {
+      notifications.push(notification.method);
+    });
+
+    await client.startThread({ cwd: "/repo/workspace" });
+    await client.archiveThread({ threadId: "thread-1" });
+    await expect(client.listThreads()).resolves.toEqual([]);
+    await expect(client.listThreads({ archived: true })).resolves.toMatchObject([
+      {
+        id: "thread-1",
+        source: "grok",
+      },
+    ]);
+
+    await expect(client.restoreThread({ threadId: "thread-1" })).resolves.toEqual({
+      threadId: "thread-1",
+    });
+    await expect(client.listThreads()).resolves.toMatchObject([
+      {
+        id: "thread-1",
+        source: "grok",
+      },
+    ]);
+    expect(notifications).toContain("thread/unarchived");
+
+    unsubscribe();
+    await client.close();
+  });
+
   it("renames Grok threads through the app-server contract", async () => {
     const server = new CodexAppServer({
       provider: new FakeProvider(),

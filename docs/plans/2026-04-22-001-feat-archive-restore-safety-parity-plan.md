@@ -1,7 +1,7 @@
 ---
 title: "feat: Archive restore and local-state safety parity"
 type: feat
-status: active
+status: completed
 date: 2026-04-22
 origin: user-directive
 deepened: 2026-04-22
@@ -47,7 +47,7 @@ PwrAgnt currently archives Grok by writing `archived = true` in `thread.toml` wh
 
 ### Relevant Code and Patterns
 
-- `apps/desktop/src/main/app-server/backend-registry.ts` owns cross-backend archive orchestration and currently calls `cleanupThreadWorktrees` after the backend archive succeeds.
+- `apps/desktop/src/main/app-server/backend-registry.ts` owns cross-backend archive orchestration. Before this plan was implemented, it called `cleanupThreadWorktrees` after backend archive succeeded; the completed implementation removes that archive-time cleanup call.
 - `apps/desktop/src/main/app-server/git-directory-service.ts` owns worktree cleanup. It currently uses `git worktree remove --force` and `git branch -D` after only primary-worktree and protected-branch checks.
 - `packages/shared/src/contracts/app-server.ts` defines `ArchiveThreadRequest`, `ArchiveThreadResponse`, and `ArchiveThreadCleanupResult`.
 - `apps/desktop/src/main/codex-app-server/client.ts` already lists active and archived Codex threads separately, merges archived metadata into active rows, and calls `thread/archive`.
@@ -126,7 +126,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Characterize Codex archive, unarchive, and ghost snapshots**
+- [x] **Unit 1: Characterize Codex archive, unarchive, and ghost snapshots**
 
 **Goal:** Turn the Codex source findings into durable tests/notes that guide implementation and prevent incorrect assumptions about compression, worktree deletion, branch deletion, or ghost commits.
 
@@ -158,7 +158,7 @@ flowchart TB
 **Verification:**
 - A reviewer can trace every parity claim in this plan to a Codex source path or a PwrAgnt test.
 
-- [ ] **Unit 2: Move Grok archived threads out of active rollout storage**
+- [x] **Unit 2: Move Grok archived threads out of active rollout storage**
 
 **Goal:** Make Grok archive storage match Codex's active-vs-archived separation so older or unaware active scans do not keep showing archived threads from the active `threads` directory.
 
@@ -198,7 +198,7 @@ flowchart TB
 **Verification:**
 - Archived Grok threads are no longer discovered by active storage scans, but remain recoverable through archived storage.
 
-- [ ] **Unit 3: Add thread restore protocol and desktop UI support**
+- [x] **Unit 3: Add thread restore protocol and desktop UI support**
 
 **Goal:** Make archive reversible for both Codex and Grok through app-server protocol and desktop UI.
 
@@ -251,7 +251,7 @@ flowchart TB
 **Verification:**
 - A user can archive and later restore a Grok or Codex thread through supported app surfaces, with capability-gated UI.
 
-- [ ] **Unit 4: Remove archive-time local cleanup**
+- [x] **Unit 4: Remove archive-time local cleanup**
 
 **Goal:** Make archive a thread-history operation only by removing local worktree and branch deletion from the archive path.
 
@@ -287,7 +287,7 @@ flowchart TB
 **Verification:**
 - No archive path invokes `git worktree remove`, `git branch -d`, `git branch -D`, or `cleanupThreadWorktrees`.
 
-- [ ] **Unit 5: Preserve Grok rollout state without archive-time backups**
+- [x] **Unit 5: Preserve Grok rollout state without archive-time backups**
 
 **Goal:** Mirror Codex's dirty-state behavior for Grok: archive moves thread history out of active storage and preserves any recorded history metadata, but does not snapshot or delete local working files.
 
@@ -320,7 +320,7 @@ flowchart TB
 **Verification:**
 - Restore UI and logs can distinguish "thread restored" from any local filesystem action. Archive/restore does not claim local files were backed up, deleted, or recreated.
 
-- [ ] **Unit 6: Surface archive and restore outcomes in the renderer**
+- [x] **Unit 6: Surface archive and restore outcomes in the renderer**
 
 **Goal:** Make archive/restore outcomes understandable without cluttering the thread list or implying local cleanup.
 

@@ -82,29 +82,11 @@ export class AppServerSessionState {
     return thread;
   }
 
-  listThreads(): ThreadSummary[] {
+  listThreads(params: { archived?: boolean } = {}): ThreadSummary[] {
+    const includeArchived = params.archived === true;
     return [...this.threads.values()]
-      .filter((thread) => !thread.archived)
-      .map((thread) => {
-        const title = getThreadTitle(thread);
-        const summary = this.summarizeThread(thread.threadId, [
-          title.title,
-          title.titleSource === "derived" ? thread.firstUserMessage?.trim() : undefined,
-        ]);
-        return {
-          threadId: thread.threadId,
-          title: title.title,
-          titleSource: title.titleSource,
-          summary,
-          projectKey: thread.cwd,
-          model: thread.model,
-          serviceTier: thread.serviceTier,
-          reasoningEffort: thread.reasoningEffort,
-          fastMode: thread.fastMode,
-          createdAt: thread.createdAt,
-          updatedAt: thread.updatedAt,
-        };
-      })
+      .filter((thread) => Boolean(thread.archived) === includeArchived)
+      .map((thread) => this.summarizeThreadState(thread))
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
   }
 
@@ -118,7 +100,39 @@ export class AppServerSessionState {
   }
 
   archiveThread(threadId: string): ThreadState | undefined {
-    return this.updateThread(threadId, { archived: true });
+    const thread = this.threads.get(threadId);
+    if (!thread) {
+      return undefined;
+    }
+    const next: ThreadState = {
+      ...thread,
+      archived: true,
+      updatedAt: this.nextTimestamp(),
+    };
+    this.store?.archiveThread({
+      thread: next,
+      previousResponseId: this.responseIds.get(threadId),
+    });
+    this.threads.set(threadId, next);
+    return next;
+  }
+
+  unarchiveThread(threadId: string): ThreadState | undefined {
+    const thread = this.threads.get(threadId);
+    if (!thread) {
+      return undefined;
+    }
+    const next: ThreadState = {
+      ...thread,
+      archived: undefined,
+      updatedAt: this.nextTimestamp(),
+    };
+    this.store?.unarchiveThread({
+      thread: next,
+      previousResponseId: this.responseIds.get(threadId),
+    });
+    this.threads.set(threadId, next);
+    return next;
   }
 
   updateThread(
@@ -381,6 +395,27 @@ export class AppServerSessionState {
       }
     }
     return undefined;
+  }
+
+  private summarizeThreadState(thread: ThreadState): ThreadSummary {
+    const title = getThreadTitle(thread);
+    const summary = this.summarizeThread(thread.threadId, [
+      title.title,
+      title.titleSource === "derived" ? thread.firstUserMessage?.trim() : undefined,
+    ]);
+    return {
+      threadId: thread.threadId,
+      title: title.title,
+      titleSource: title.titleSource,
+      summary,
+      projectKey: thread.cwd,
+      model: thread.model,
+      serviceTier: thread.serviceTier,
+      reasoningEffort: thread.reasoningEffort,
+      fastMode: thread.fastMode,
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+    };
   }
 
   private touchThread(threadId: string): void {

@@ -15,6 +15,7 @@ const backends: BackendSummary[] = [
       createThread: true,
       resumeThread: true,
       archiveThread: true,
+      restoreThread: true,
       renameThread: true,
       readThread: true,
       startTurn: true,
@@ -49,6 +50,7 @@ const backends: BackendSummary[] = [
       createThread: false,
       resumeThread: false,
       archiveThread: false,
+      restoreThread: false,
       renameThread: false,
       readThread: false,
       startTurn: false,
@@ -159,6 +161,7 @@ describe("Sidebar", () => {
       "inbox",
       "recents",
       "directories",
+      "archived",
     ]);
     expect(screen.getByRole("button", { name: "directories" })).toHaveAttribute(
       "aria-pressed",
@@ -504,6 +507,48 @@ describe("Sidebar", () => {
 
     expect(screen.queryByRole("dialog", { name: "Archive Thread" })).not.toBeInTheDocument();
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
+  });
+
+  it("restores archived threads from the archived lens", () => {
+    const onRestoreThread = vi.fn(async () => undefined);
+    const archivedThread = {
+      ...sharedThread,
+      id: "thread-archived",
+      title: "Archived cleanup",
+      inbox: {
+        inInbox: false as const,
+      },
+    };
+
+    render(
+      <Sidebar
+        archivedThreads={[archivedThread]}
+        backends={backends}
+        browseMode="archived"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-archived"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onRestoreThread={onRestoreThread}
+      />
+    );
+
+    const threadButton = screen.getByText("Archived cleanup").closest("button");
+    expect(threadButton).not.toBeNull();
+    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+
+    expect(screen.queryByRole("menuitem", { name: "Archive Thread" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Restore Thread" }));
+
+    expect(onRestoreThread).toHaveBeenCalledWith(archivedThread);
   });
 
   it("renders directory rows without the raw chevron glyph affordance", () => {

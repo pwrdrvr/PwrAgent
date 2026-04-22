@@ -180,6 +180,7 @@ export type AppServerThreadReplay = {
 
 export type AppServerListThreadsRequest = {
   backend?: AppServerBackendKind;
+  archived?: boolean;
   filter?: string;
 };
 
@@ -208,6 +209,17 @@ export type ArchiveThreadResponse = {
   threadId: ThreadIdentifier;
   archivedAt: number;
   cleanup: ArchiveThreadCleanupResult[];
+};
+
+export type RestoreThreadRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type RestoreThreadResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  restoredAt: number;
 };
 
 export type RenameThreadRequest = {
@@ -429,6 +441,12 @@ export type AppServerNotification =
     }
   | {
       method: "thread/archived";
+      params: {
+        threadId: string;
+      };
+    }
+  | {
+      method: "thread/unarchived";
       params: {
         threadId: string;
       };

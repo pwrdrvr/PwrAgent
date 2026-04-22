@@ -694,10 +694,16 @@ export class GrokAppServerClient {
     return this.initializeResult ?? {};
   }
 
-  async listThreads(_params?: { filter?: string }): Promise<AppServerThreadSummary[]> {
+  async listThreads(params?: {
+    archived?: boolean;
+    filter?: string;
+  }): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
-    const result = await this.request("thread/list", {});
+    const result = await this.request("thread/list", {
+      archived: params?.archived === true,
+      filter: params?.filter,
+    });
     return await Promise.all(
       extractThreadSummaryList(result).map(async (thread) => {
         const normalized = normalizeThreadSummary(thread);
@@ -843,6 +849,17 @@ export class GrokAppServerClient {
     await this.ensureInitialized();
 
     const result = await this.request("thread/archive", {
+      threadId: params.threadId,
+    });
+    return {
+      threadId: extractThreadId(result) ?? params.threadId,
+    };
+  }
+
+  async restoreThread(params: { threadId: string }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await this.request("thread/unarchive", {
       threadId: params.threadId,
     });
     return {
