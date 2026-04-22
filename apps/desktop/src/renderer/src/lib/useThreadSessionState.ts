@@ -194,6 +194,21 @@ function appendMessageEntries(
   };
 }
 
+function appendPendingAssistantMessage(
+  response: AppServerReadThreadResponse | undefined,
+  params: {
+    backend: NavigationThreadSummary["source"];
+    threadId: NavigationThreadSummary["id"];
+  },
+  pendingAssistantMessage: AppServerThreadMessageEntry | undefined
+): AppServerReadThreadResponse | undefined {
+  if (!pendingAssistantMessage) {
+    return response;
+  }
+
+  return appendMessageEntries(response, params, [pendingAssistantMessage]);
+}
+
 function retainSessionCache(
   sessions: ThreadSessionState,
   selectedThreadKey?: string
@@ -547,6 +562,19 @@ export function useThreadSessionState(params: {
           typeof event.notification.params.delta === "string"
         ) {
           const { itemId, delta } = event.notification.params;
+          const isSamePendingMessage = current.pendingAssistantMessage?.id === itemId;
+          const pendingText = current.pendingAssistantMessage?.text ?? "";
+          const flushedResponse = isSamePendingMessage
+            ? current.response
+            : appendPendingAssistantMessage(
+                current.response,
+                {
+                  backend: event.backend,
+                  threadId: notificationThreadId,
+                },
+                current.pendingAssistantMessage
+              );
+
           return {
             ...current,
             expectOwnUpdate: true,
@@ -557,10 +585,11 @@ export function useThreadSessionState(params: {
               id: itemId,
               role: "assistant",
               text:
-                current.pendingAssistantMessage?.id === itemId
-                  ? `${current.pendingAssistantMessage.text}${delta}`
+                isSamePendingMessage
+                  ? `${pendingText}${delta}`
                   : delta,
             },
+            response: flushedResponse,
           };
         }
 
@@ -607,14 +636,20 @@ export function useThreadSessionState(params: {
           const completedText =
             readCompletedTurnText(event.notification.params) ??
             current.pendingAssistantMessage?.text;
-          const nextEntries = [...current.optimisticEntries];
+          const nextEntries = [
+            ...current.optimisticEntries,
+            ...(current.pendingAssistantMessage
+              ? [current.pendingAssistantMessage]
+              : []),
+          ];
 
-          if (completedText) {
+          if (
+            completedText &&
+            current.pendingAssistantMessage?.text !== completedText
+          ) {
             nextEntries.push({
               type: "message",
-              id:
-                current.pendingAssistantMessage?.id ??
-                `${event.notification.params.turnId}:assistant`,
+              id: `${event.notification.params.turnId}:assistant`,
               role: "assistant",
               text: completedText,
               createdAt: Date.now(),
