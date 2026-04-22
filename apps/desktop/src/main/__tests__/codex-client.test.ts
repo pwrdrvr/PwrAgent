@@ -521,6 +521,7 @@ class MockTransport implements JsonRpcTransport {
                     {
                       type: "agentMessage",
                       id: "item-6",
+                      phase: "final_answer",
                       text: "The desktop shell is live and listing Codex threads."
                     }
                   ]
@@ -1157,6 +1158,10 @@ describe("CodexAppServerClient", () => {
     const replay = await client.readThread({
       threadId: "thread-2"
     });
+    const turn = {
+      id: "turn-1",
+      startedAt: 1_763_500_100_000
+    };
 
     expect(replay).toEqual({
       entries: [
@@ -1171,7 +1176,8 @@ describe("CodexAppServerClient", () => {
               type: "text",
               text: "Show me the current desktop thread shell"
             }
-          ]
+          ],
+          turn
         },
         {
           type: "message",
@@ -1179,7 +1185,8 @@ describe("CodexAppServerClient", () => {
           role: "assistant",
           text: "I’m tracing the transcript scroll container.",
           createdAt: 1_763_500_100_000,
-          phase: "commentary"
+          phase: "commentary",
+          turn
         },
         {
           type: "activity",
@@ -1187,6 +1194,7 @@ describe("CodexAppServerClient", () => {
           summary: "Explored 1 file, Ran 1 command, Edited 1 file",
           createdAt: 1_763_500_100_000,
           status: "completed",
+          turn,
           details: [
             {
               id: "item-3-1",
@@ -1229,7 +1237,9 @@ describe("CodexAppServerClient", () => {
           id: "item-6",
           role: "assistant",
           text: "The desktop shell is live and listing Codex threads.",
-          createdAt: 1_763_500_100_000
+          createdAt: 1_763_500_100_000,
+          phase: "final",
+          turn
         }
       ],
       messages: [
@@ -1270,6 +1280,37 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("forwards pagination params when reading older Codex transcript pages", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.readThread({
+      threadId: "thread-2",
+      before: "cursor-before-1",
+      limit: 25
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    const readRequest = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((message) => message.method === "thread/read");
+
+    expect(readRequest?.params).toMatchObject({
+      threadId: "thread-2",
+      includeTurns: true,
+      before: "cursor-before-1",
+      limit: 25
+    });
+
+    await client.close();
+  });
+
   it("preserves image parts from Codex thread/read messages", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
@@ -1281,6 +1322,10 @@ describe("CodexAppServerClient", () => {
     const replay = await client.readThread({
       threadId: "thread-images"
     });
+    const turn = {
+      id: "turn-images",
+      startedAt: 1_763_500_150_000
+    };
 
     expect(replay.entries).toEqual([
       {
@@ -1298,7 +1343,8 @@ describe("CodexAppServerClient", () => {
             type: "image",
             url: "data:image/png;base64,aGVsbG8="
           }
-        ]
+        ],
+        turn
       },
       {
         type: "message",
@@ -1312,7 +1358,8 @@ describe("CodexAppServerClient", () => {
             url: "https://example.com/thread-image.png",
             alt: "Thread image"
           }
-        ]
+        ],
+        turn
       }
     ]);
     expect(replay.messages).toEqual([
@@ -1372,7 +1419,7 @@ describe("CodexAppServerClient", () => {
                 markdown: "## Final plan\n\nShip the transcript renderer in small steps.",
                 steps: [
                   { step: "Normalize replay", status: "completed" },
-                  { step: "Render live plan progress", status: "in_progress" }
+                  { step: "Render live plan progress", status: "inProgress" }
                 ]
               }
             ]
@@ -1389,6 +1436,10 @@ describe("CodexAppServerClient", () => {
     const replay = await client.readThread({
       threadId: "thread-plan-item"
     });
+    const turn = {
+      id: "turn-1",
+      startedAt: 1_763_500_200_000
+    };
 
     expect(replay.entries).toEqual([
       {
@@ -1397,13 +1448,14 @@ describe("CodexAppServerClient", () => {
         role: "user",
         text: "Plan the desktop transcript work.",
         createdAt: 1_763_500_200_000,
-        parts: [
-          {
-            type: "text",
-            text: "Plan the desktop transcript work."
-          }
-        ]
-      },
+          parts: [
+            {
+              type: "text",
+              text: "Plan the desktop transcript work."
+            }
+          ],
+          turn
+        },
       {
         type: "plan",
         id: "plan-1",
@@ -1413,6 +1465,85 @@ describe("CodexAppServerClient", () => {
         steps: [
           { step: "Normalize replay", status: "completed" },
           { step: "Render live plan progress", status: "in_progress" }
+        ],
+        turn
+      }
+    ]);
+
+    await client.close();
+  });
+
+  it("normalizes generated in-progress activity statuses from thread/read", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-in-progress-tools", {
+      thread: {
+        turns: [
+          {
+            id: "turn-tools",
+            status: "inProgress",
+            startedAt: 1_763_500_210,
+            items: [
+              {
+                type: "dynamicToolCall",
+                id: "tool-1",
+                tool: "search_web",
+                arguments: {},
+                status: "inProgress",
+                contentItems: null,
+                success: null,
+                durationMs: null
+              },
+              {
+                type: "mcpToolCall",
+                id: "tool-2",
+                server: "github",
+                tool: "search_issues",
+                arguments: {},
+                status: "inProgress",
+                result: null,
+                error: null,
+                durationMs: null
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-in-progress-tools"
+    });
+
+    expect(replay.entries).toEqual([
+      {
+        type: "activity",
+        id: "activity-tool-1",
+        summary: "Used 2 tools",
+        createdAt: 1_763_500_210_000,
+        status: "in_progress",
+        turn: {
+          id: "turn-tools",
+          status: "in_progress",
+          startedAt: 1_763_500_210_000
+        },
+        details: [
+          {
+            id: "tool-1",
+            kind: "command",
+            label: "search_web",
+            status: "in_progress"
+          },
+          {
+            id: "tool-2",
+            kind: "command",
+            label: "search_issues",
+            status: "in_progress"
+          }
         ]
       }
     ]);
@@ -1478,7 +1609,6 @@ describe("CodexAppServerClient", () => {
         method: "item/tool/requestUserInput",
         params: expect.objectContaining({
           threadId: "thread-2",
-          runId: "turn-7",
           turnId: "turn-7",
           itemId: "call-1",
           requestId: "rpc-input-1",
@@ -1501,6 +1631,62 @@ describe("CodexAppServerClient", () => {
         }
       }
     });
+
+    await client.close();
+  });
+
+  it("normalizes generated turn notifications before forwarding", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    client.onNotification((notification) => {
+      notifications.push(
+        notification as { method: string; params: Record<string, unknown> }
+      );
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: {
+        threadId: "thread-2",
+        turn: {
+          id: "turn-from-generated",
+          status: "completed",
+          items: [],
+          error: null,
+          startedAt: 1_763_500_300,
+          completedAt: 1_763_500_360,
+          durationMs: 60_000
+        }
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(notifications).toEqual([
+      {
+        method: "turn/completed",
+        params: expect.objectContaining({
+          threadId: "thread-2",
+          turnId: "turn-from-generated",
+          turn: expect.objectContaining({
+            id: "turn-from-generated",
+            status: "completed"
+          })
+        })
+      }
+    ]);
 
     await client.close();
   });
@@ -1546,6 +1732,10 @@ describe("CodexAppServerClient", () => {
     const replay = await client.readThread({
       threadId: "thread-plan-call"
     });
+    const turn = {
+      id: "turn-1",
+      startedAt: 1_763_500_300_000
+    };
 
     expect(replay.entries).toEqual([
       {
@@ -1554,13 +1744,14 @@ describe("CodexAppServerClient", () => {
         role: "user",
         text: "Build the task list rendering.",
         createdAt: 1_763_500_300_000,
-        parts: [
-          {
-            type: "text",
-            text: "Build the task list rendering."
-          }
-        ]
-      },
+          parts: [
+            {
+              type: "text",
+              text: "Build the task list rendering."
+            }
+          ],
+          turn
+        },
       {
         type: "plan",
         id: "item-2",
@@ -1570,7 +1761,8 @@ describe("CodexAppServerClient", () => {
           { step: "Normalize replay", status: "pending" },
           { step: "Render plan cards", status: "pending" },
           { step: "Verify with tests", status: "pending" }
-        ]
+        ],
+        turn
       }
     ]);
 
@@ -1621,6 +1813,10 @@ describe("CodexAppServerClient", () => {
     const replay = await client.readThread({
       threadId: "thread-wrapped-plan-call"
     });
+    const turn = {
+      id: "turn-1",
+      startedAt: 1_763_500_350_000
+    };
 
     expect(replay.entries).toEqual([
       {
@@ -1629,13 +1825,14 @@ describe("CodexAppServerClient", () => {
         role: "user",
         text: "Trace the image preview bug.",
         createdAt: 1_763_500_350_000,
-        parts: [
-          {
-            type: "text",
-            text: "Trace the image preview bug."
-          }
-        ]
-      },
+          parts: [
+            {
+              type: "text",
+              text: "Trace the image preview bug."
+            }
+          ],
+          turn
+        },
       {
         type: "plan",
         id: "item-2",
@@ -1645,7 +1842,8 @@ describe("CodexAppServerClient", () => {
           { step: "Read the replay normalizer", status: "completed" },
           { step: "Inspect the renderer", status: "in_progress" },
           { step: "Summarize the findings", status: "pending" }
-        ]
+        ],
+        turn
       }
     ]);
 
@@ -1834,7 +2032,7 @@ describe("CodexAppServerClient", () => {
 
     expect(result).toEqual({
       threadId: "thread-2",
-      runId: "turn-1"
+      turnId: "turn-1"
     });
 
     const transport = MockTransport.instances.at(-1);
@@ -1884,7 +2082,7 @@ describe("CodexAppServerClient", () => {
 
     expect(result).toEqual({
       threadId: "thread-2",
-      runId: "turn-1"
+      turnId: "turn-1"
     });
 
     const transport = MockTransport.instances.at(-1);
@@ -1900,8 +2098,8 @@ describe("CodexAppServerClient", () => {
         mode: "plan",
         settings: {
           model: "gpt-5.4",
-          reasoningEffort: "high",
-          developerInstructions: null
+          reasoning_effort: "high",
+          developer_instructions: null
         }
       }
     });
@@ -1909,7 +2107,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("falls back to the requested thread and a pending run id when turn/start omits ids", async () => {
+  it("falls back to the requested thread and a pending turn id when turn/start omits ids", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.turnStartResult = {};
 
@@ -1926,7 +2124,33 @@ describe("CodexAppServerClient", () => {
 
     expect(result).toEqual({
       threadId: "thread-2",
-      runId: "pending:thread-2"
+      turnId: "pending:thread-2"
+    });
+
+    await client.close();
+  });
+
+  it("normalizes legacy runId turn/start responses", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.turnStartResult = {
+      threadId: "thread-2",
+      runId: "turn-legacy"
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const result = await client.startTurn({
+      threadId: "thread-2",
+      input: [{ type: "text", text: "Reply with the legacy id" }],
+      model: "gpt-5.4"
+    });
+
+    expect(result).toEqual({
+      threadId: "thread-2",
+      turnId: "turn-legacy"
     });
 
     await client.close();
@@ -1942,12 +2166,12 @@ describe("CodexAppServerClient", () => {
 
     const result = await client.interruptTurn({
       threadId: "thread-2",
-      runId: "turn-1"
+      turnId: "turn-1"
     });
 
     expect(result).toEqual({
       threadId: "thread-2",
-      runId: "turn-1"
+      turnId: "turn-1"
     });
 
     const transport = MockTransport.instances.at(-1);
@@ -1982,11 +2206,11 @@ describe("CodexAppServerClient", () => {
     await expect(
       client.interruptTurn({
         threadId: "thread-2",
-        runId: "turn-1"
+        turnId: "turn-1"
       })
     ).resolves.toEqual({
       threadId: "thread-2",
-      runId: "turn-1"
+      turnId: "turn-1"
     });
 
     await client.close();
@@ -2034,7 +2258,7 @@ describe("CodexAppServerClient", () => {
         method: "turn/requestApproval",
         params: expect.objectContaining({
           threadId: "thread-2",
-          runId: "turn-7",
+          turnId: "turn-7",
           requestId: "rpc-approval-1",
           reason: "command requires approval: npm view dive",
           command: "npm view dive"

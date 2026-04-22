@@ -1126,6 +1126,55 @@ textarea {
   background: var(--bg-panel);
 }
 
+.transcript-work-phase-group {
+  display: contents;
+}
+
+.transcript-work-phase-group__toggle,
+.transcript-work-phase-group__label {
+  display: inline-flex;
+  width: fit-content;
+  max-width: min(100%, 760px);
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+}
+
+.transcript-work-phase-group__toggle {
+  cursor: pointer;
+}
+
+.transcript-work-phase-group__label {
+  cursor: default;
+}
+
+.transcript-work-phase-group__toggle:hover {
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+  background: var(--bg-panel);
+}
+
+.transcript-work-phase-group__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.transcript-work-phase-group__chevron {
+  color: var(--text-muted);
+}
+
+.transcript-work-phase-group__content:not([hidden]) {
+  display: contents;
+}
+
 .transcript-message__header {
   display: flex;
   align-items: baseline;

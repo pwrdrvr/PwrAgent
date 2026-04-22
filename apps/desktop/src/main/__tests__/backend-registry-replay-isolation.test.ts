@@ -57,11 +57,11 @@ vi.mock("../codex-app-server/client", () => ({
     }
 
     async startTurn() {
-      return { threadId: "noop-thread", runId: "noop-turn" };
+      return { threadId: "noop-thread", turnId: "noop-turn" };
     }
 
     async interruptTurn() {
-      return { threadId: "noop-thread", runId: "noop-turn" };
+      return { threadId: "noop-thread", turnId: "noop-turn" };
     }
   }
 }));
@@ -112,11 +112,11 @@ vi.mock("../grok-app-server/client", () => ({
     }
 
     async startTurn() {
-      return { threadId: "noop-thread", runId: "noop-turn" };
+      return { threadId: "noop-thread", turnId: "noop-turn" };
     }
 
     async interruptTurn() {
-      return { threadId: "noop-thread", runId: "noop-turn" };
+      return { threadId: "noop-thread", turnId: "noop-turn" };
     }
   }
 }));

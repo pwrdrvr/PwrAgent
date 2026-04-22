@@ -49,7 +49,7 @@ describe("replay-runtime", () => {
           method: "turn/start",
           result: {
             threadId: "thread-full-access",
-            runId: "turn-1"
+            turnId: "turn-1"
           }
         },
         {
@@ -59,7 +59,7 @@ describe("replay-runtime", () => {
             method: "turn/requestApproval",
             params: {
               threadId: "thread-full-access",
-              runId: "turn-1",
+              turnId: "turn-1",
               requestId: "approval-1"
             }
           }

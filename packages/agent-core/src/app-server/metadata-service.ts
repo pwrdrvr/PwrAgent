@@ -5,7 +5,7 @@ import type {
   ModelSummary,
   RateLimitSummary,
   SkillSummary,
-} from "./protocol.js";
+} from "./internal-contract.js";
 
 const DEFAULT_MODELS: ModelSummary[] = [
   {

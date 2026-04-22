@@ -93,7 +93,7 @@ async function createThreadRowStatusFixture(): Promise<{
             method: "turn/start",
             result: {
               threadId: "thread-initiated",
-              runId: "turn-initiated-1",
+              turnId: "turn-initiated-1",
             },
           },
           {
@@ -144,7 +144,7 @@ async function createThreadRowStatusFixture(): Promise<{
               method: "turn/completed",
               params: {
                 threadId: "thread-initiated",
-                runId: "turn-initiated-1",
+                turnId: "turn-initiated-1",
                 turn: {
                   id: "turn-initiated-1",
                   status: "completed",

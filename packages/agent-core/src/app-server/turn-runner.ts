@@ -1,4 +1,4 @@
-import type { AppServerNotification, ThreadReplayItem } from "./protocol.js";
+import type { AppServerNotification, ThreadReplayItem } from "./internal-contract.js";
 import { AppServerSessionState } from "./session-state.js";
 import { PendingInputCoordinator } from "./pending-input.js";
 import type {
@@ -15,7 +15,7 @@ type TurnRunnerOptions = {
 
 type ActiveExecution = {
   threadId: string;
-  runId: string;
+  turnId: string;
   pendingInput: PendingInputCoordinator;
   unsubscribe?: () => void;
 };
@@ -39,7 +39,7 @@ export class TurnRunner {
 
   attach(params: {
     threadId: string;
-    runId: string;
+    turnId: string;
     handle: ProviderActiveTurn;
   } & TurnRunnerCallbacks): void {
     const pendingInput = new PendingInputCoordinator({
@@ -49,7 +49,7 @@ export class TurnRunner {
           method: "serverRequest/resolved",
           params: {
             threadId: params.threadId,
-            runId: params.runId,
+            turnId: params.turnId,
             requestId,
           },
         });
@@ -57,22 +57,22 @@ export class TurnRunner {
     });
     const execution: ActiveExecution = {
       threadId: params.threadId,
-      runId: params.runId,
+      turnId: params.turnId,
       pendingInput,
     };
     execution.unsubscribe = params.handle.subscribe?.((event) => this.onProviderEvent(execution, event));
-    this.executions.set(params.runId, execution);
+    this.executions.set(params.turnId, execution);
     void this.completeTurn(params, execution);
   }
 
-  async cancel(runId: string): Promise<void> {
-    const execution = this.executions.get(runId);
+  async cancel(turnId: string): Promise<void> {
+    const execution = this.executions.get(turnId);
     if (!execution) {
       return;
     }
     await execution.pendingInput.cancelPending();
     execution.unsubscribe?.();
-    this.executions.delete(runId);
+    this.executions.delete(turnId);
   }
 
   private async onProviderEvent(
@@ -101,7 +101,7 @@ export class TurnRunner {
           method: event.type === "item_started" ? "item/started" : "item/completed",
           params: {
             threadId: execution.threadId,
-            runId: execution.runId,
+            turnId: execution.turnId,
             item,
           },
         });
@@ -111,7 +111,7 @@ export class TurnRunner {
           method: "item/commandExecution/outputDelta",
           params: {
             threadId: execution.threadId,
-            runId: execution.runId,
+            turnId: execution.turnId,
             itemId: event.itemId,
             delta: event.delta,
             stream: event.stream,
@@ -130,7 +130,7 @@ export class TurnRunner {
           method: "item/plan/delta",
           params: {
             threadId: execution.threadId,
-            runId: execution.runId,
+            turnId: execution.turnId,
             item: {
               id: event.itemId,
               type: "plan",
@@ -144,7 +144,7 @@ export class TurnRunner {
           method: "turn/plan/updated",
           params: {
             threadId: execution.threadId,
-            runId: execution.runId,
+            turnId: execution.turnId,
             plan: {
               explanation: event.explanation,
               steps: event.steps,
@@ -158,7 +158,7 @@ export class TurnRunner {
           method: event.method,
           params: {
             threadId: execution.threadId,
-            runId: execution.runId,
+            turnId: execution.turnId,
             requestId: event.requestId,
             ...(event.params ?? {}),
           },
@@ -171,14 +171,14 @@ export class TurnRunner {
   private async completeTurn(
     params: {
       threadId: string;
-      runId: string;
+      turnId: string;
       handle: ProviderActiveTurn;
     } & TurnRunnerCallbacks,
     execution: ActiveExecution,
   ): Promise<void> {
     try {
       const result = await params.handle.result;
-      const run = this.state.getRun(params.runId);
+      const run = this.state.getRun(params.turnId);
       if (!run || run.status !== "active") {
         return;
       }
@@ -186,40 +186,40 @@ export class TurnRunner {
       if (params.onSuccess) {
         await params.onSuccess(result);
       } else {
-        await this.completeDefaultTurn(params.threadId, params.runId, result);
+        await this.completeDefaultTurn(params.threadId, params.turnId, result);
       }
     } catch (error) {
-      const run = this.state.getRun(params.runId);
+      const run = this.state.getRun(params.turnId);
       if (!run || run.status !== "active") {
         return;
       }
       if (params.onError) {
         await params.onError(error);
       } else {
-        await this.failDefaultTurn(params.threadId, params.runId, error);
+        await this.failDefaultTurn(params.threadId, params.turnId, error);
       }
     } finally {
       execution.unsubscribe?.();
-      this.executions.delete(params.runId);
+      this.executions.delete(params.turnId);
     }
   }
 
   private async completeDefaultTurn(
     threadId: string,
-    runId: string,
+    turnId: string,
     result: ProviderTurnResult,
   ): Promise<void> {
     const assistantText = result.assistantText?.trim() ?? "";
     if (!assistantText) {
       await this.failDefaultTurn(
         threadId,
-        runId,
+        turnId,
         new Error("Provider completed the turn without assistant text."),
       );
       return;
     }
 
-    this.state.completeRun(runId);
+    this.state.completeRun(turnId);
     this.state.appendAssistant(threadId, assistantText, {
       sources: result.sources,
       data: result.providerMetadata ? { providerMetadata: result.providerMetadata } : undefined,
@@ -229,9 +229,9 @@ export class TurnRunner {
       method: "turn/completed",
       params: {
         threadId,
-        runId,
+        turnId,
         turn: {
-          id: runId,
+          id: turnId,
           status: "completed",
           output: [
             {
@@ -246,17 +246,17 @@ export class TurnRunner {
 
   private async failDefaultTurn(
     threadId: string,
-    runId: string,
+    turnId: string,
     error: unknown,
   ): Promise<void> {
-    this.state.failRun(runId);
+    this.state.failRun(turnId);
     await this.emit({
       method: "turn/failed",
       params: {
         threadId,
-        runId,
+        turnId,
         turn: {
-          id: runId,
+          id: turnId,
           status: "failed",
           error: {
             message: error instanceof Error ? error.message : String(error),

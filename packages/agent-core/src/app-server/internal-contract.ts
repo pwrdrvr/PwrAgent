@@ -1,26 +1,24 @@
+import type {
+  AppServerCommandAction,
+  AppServerImageInputItem,
+  AppServerLocalImageInputItem,
+  AppServerSource,
+  AppServerTextInputItem,
+  AppServerTurnInputItem,
+} from "@pwragnt/shared";
+
+export type {
+  AppServerCommandAction,
+  AppServerImageInputItem,
+  AppServerLocalImageInputItem,
+  AppServerSource,
+  AppServerTextInputItem,
+  AppServerTurnInputItem,
+};
+
 export const APP_SERVER_PROTOCOL_VERSION = "1.0" as const;
 
 export type AppServerRole = "user" | "assistant";
-
-export type AppServerTextInputItem = {
-  type: "text";
-  text: string;
-};
-
-export type AppServerImageInputItem = {
-  type: "image";
-  url: string;
-};
-
-export type AppServerLocalImageInputItem = {
-  type: "localImage";
-  path: string;
-};
-
-export type AppServerTurnInputItem =
-  | AppServerTextInputItem
-  | AppServerImageInputItem
-  | AppServerLocalImageInputItem;
 
 export type AppServerTurnInput = {
   threadId: string;
@@ -83,12 +81,6 @@ export type AppServerItemStatus =
   | "failed"
   | "cancelled";
 
-export type AppServerCommandAction =
-  | "read"
-  | "listFiles"
-  | "search"
-  | "unknown";
-
 export type ThreadReplayItem = {
   id: string;
   type: string;
@@ -104,14 +96,6 @@ export type ThreadReplayItem = {
   arguments?: Record<string, unknown>;
   data?: Record<string, unknown>;
   sources?: AppServerSource[];
-};
-
-export type AppServerSource = {
-  id?: string;
-  sourceType?: string;
-  url?: string;
-  title?: string;
-  providerMetadata?: Record<string, unknown>;
 };
 
 export type ModelSummary = {
@@ -186,7 +170,7 @@ export type AppServerInitializeResult = {
 
 export type AppServerTurnResult = {
   threadId: string;
-  runId: string;
+  turnId: string;
 };
 
 export type AppServerNotification =
@@ -194,7 +178,7 @@ export type AppServerNotification =
       method: "turn/started";
       params: {
         threadId: string;
-        runId?: string;
+        turnId?: string;
         turn: {
           id: string;
           status?: string;
@@ -205,7 +189,7 @@ export type AppServerNotification =
       method: "turn/completed";
       params: {
         threadId: string;
-        runId: string;
+        turnId: string;
         turn: {
           id: string;
           status: "completed";
@@ -220,7 +204,7 @@ export type AppServerNotification =
       method: "turn/failed";
       params: {
         threadId: string;
-        runId: string;
+        turnId: string;
         turn: {
           id: string;
           status: "failed";
@@ -234,7 +218,7 @@ export type AppServerNotification =
       method: "turn/cancelled";
       params: {
         threadId: string;
-        runId: string;
+        turnId: string;
         turn: {
           id: string;
           status: "cancelled";
@@ -245,7 +229,7 @@ export type AppServerNotification =
       method: "item/started" | "item/completed";
       params: {
         threadId: string;
-        runId?: string;
+        turnId?: string;
         item: {
           id: string;
           type: string;
@@ -254,18 +238,18 @@ export type AppServerNotification =
           command?: string;
           commandAction?: AppServerCommandAction;
           toolName?: string;
-            success?: boolean;
-            arguments?: Record<string, unknown>;
-            data?: Record<string, unknown>;
-            sources?: AppServerSource[];
-          };
+          success?: boolean;
+          arguments?: Record<string, unknown>;
+          data?: Record<string, unknown>;
+          sources?: AppServerSource[];
         };
-      }
+      };
+    }
   | {
       method: "item/commandExecution/outputDelta";
       params: {
         threadId: string;
-        runId?: string;
+        turnId?: string;
         itemId: string;
         delta: string;
         stream?: "stdout" | "stderr";
@@ -288,7 +272,7 @@ export type AppServerNotification =
       method: "item/plan/delta";
       params: {
         threadId: string;
-        runId?: string;
+        turnId?: string;
         item: {
           id: string;
           type: "plan";
@@ -300,7 +284,7 @@ export type AppServerNotification =
       method: "turn/plan/updated";
       params: {
         threadId: string;
-        runId: string;
+        turnId: string;
         plan: {
           explanation?: string;
           steps: Array<{
@@ -315,7 +299,6 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId?: string;
-        runId?: string;
         diff: string;
       };
     }
@@ -323,7 +306,7 @@ export type AppServerNotification =
       method: "serverRequest/resolved";
       params: {
         threadId: string;
-        runId?: string;
+        turnId?: string;
         requestId: string;
       };
     }

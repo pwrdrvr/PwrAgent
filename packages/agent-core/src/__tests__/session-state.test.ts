@@ -108,7 +108,7 @@ describe("AppServerSessionState", () => {
     const state = new AppServerSessionState();
 
     const created = state.createThread({ threadId: "thread-1", cwd: "/repo/workspace" });
-    state.createRun({ runId: "turn-1", threadId: "thread-1", handle: createActiveTurn() });
+    state.createRun({ turnId: "turn-1", threadId: "thread-1", handle: createActiveTurn() });
     state.appendInput("thread-1", [{ type: "text", text: "Ship it" }]);
     state.appendAssistant("thread-1", "Done.");
 

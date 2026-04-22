@@ -106,12 +106,12 @@ type BackendClient = {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ threadId: string; runId: string }>;
+  }): Promise<{ threadId: string; turnId: string }>;
   listModels?(): Promise<BackendModelOption[]>;
   interruptTurn(params: {
     threadId: string;
-    runId: string;
-  }): Promise<{ threadId: string; runId: string }>;
+    turnId: string;
+  }): Promise<{ threadId: string; turnId: string }>;
   setThreadPermissions?(params: {
     threadId: string;
     cwd?: string;
@@ -735,7 +735,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; runId: string }> {
+  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: params.backend,
       threadId: params.threadId,
@@ -780,15 +780,15 @@ export class DesktopBackendRegistry {
     return {
       backend: params.backend,
       threadId: result.threadId,
-      runId: result.runId,
+      turnId: result.turnId,
     };
   }
 
   async interruptTurn(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    runId: string;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; runId: string }> {
+    turnId: string;
+  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     const result =
       params.backend === "codex"
         ? await this.withCodexThreadClient(params.threadId, async (client) =>
@@ -799,7 +799,7 @@ export class DesktopBackendRegistry {
     return {
       backend: params.backend,
       threadId: result.threadId,
-      runId: result.runId,
+      turnId: result.turnId,
     };
   }
 
@@ -868,7 +868,7 @@ export class DesktopBackendRegistry {
     return {
       backend: params.backend,
       threadId: params.threadId,
-      runId: params.runId,
+      turnId: params.turnId,
       requestId: params.requestId,
     };
   }
@@ -1001,7 +1001,7 @@ export class DesktopBackendRegistry {
       (launchpad.prompt.trim()
         ? [{ type: "text", text: launchpad.prompt } as const]
         : []);
-    let runId: string | undefined;
+    let turnId: string | undefined;
     if (input.length > 0) {
       const turnResponse = await this.startTurn({
         backend: launchpad.backend,
@@ -1013,7 +1013,7 @@ export class DesktopBackendRegistry {
         fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
         collaborationMode: request.collaborationMode,
       });
-      runId = turnResponse.runId;
+      turnId = turnResponse.turnId;
     }
 
     await this.overlayStore.resetDirectoryLaunchpad({
@@ -1023,7 +1023,7 @@ export class DesktopBackendRegistry {
     return {
       backend: startThreadResponse.backend,
       threadId: startThreadResponse.threadId,
-      runId,
+      turnId,
       executionMode: startThreadResponse.executionMode,
       workMode: workspace.workMode,
     };

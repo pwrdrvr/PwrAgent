@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AppServerNotification, AppServerTurnInputItem, ThreadState } from "../app-server/protocol.js";
+import type { AppServerNotification, AppServerTurnInputItem, ThreadState } from "../app-server/internal-contract.js";
 import { CodexAppServer } from "../app-server/codex-app-server.js";
 import { AppServerSessionState } from "../app-server/session-state.js";
 import type {
@@ -102,7 +102,7 @@ export function createTestHarness(options?: {
       let index = 0;
       return () => `thread-${++index}`;
     })(),
-    runIdGenerator: (() => {
+    turnIdGenerator: (() => {
       let index = 0;
       return () => `turn-${++index}`;
     })(),

@@ -15,7 +15,7 @@ export type {
   ThreadReplay,
   ThreadSummary,
   ThreadState,
-} from "./app-server/protocol.js";
+} from "./app-server/internal-contract.js";
 export { GrokProvider } from "./providers/grok-provider.js";
 export type { GrokProviderOptions } from "./providers/grok-provider.js";
 export {

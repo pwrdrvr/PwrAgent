@@ -89,7 +89,7 @@
       "method": "turn/start",
       "result": {
         "threadId": "thread-request-user-input",
-        "runId": "turn-input-2"
+        "turnId": "turn-input-2"
       }
     },
     {
@@ -128,7 +128,6 @@
         "params": {
           "threadId": "thread-request-user-input",
           "turnId": "turn-input-2",
-          "runId": "turn-input-2",
           "itemId": "request-user-input-call",
           "requestId": "user-input-request-1",
           "questions": [

@@ -21,7 +21,7 @@ describe("Codex turn lifecycle", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(started).toEqual({ threadId: "thread-1", runId: "turn-1" });
+    expect(started).toEqual({ threadId: "thread-1", turnId: "turn-1" });
     expect(provider.runs[0]?.input).toEqual([
       { type: "text", text: "Describe this image" },
       { type: "localImage", path: "/tmp/screenshot.png" },
@@ -31,10 +31,10 @@ describe("Codex turn lifecycle", () => {
         method: "turn/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
-            status: "in_progress",
+            status: "inProgress",
           },
         },
       },
@@ -42,7 +42,7 @@ describe("Codex turn lifecycle", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "completed",
@@ -92,7 +92,7 @@ describe("Codex turn lifecycle", () => {
       input: [{ type: "text", text: "Continue with more detail" }],
     });
 
-    expect(steered).toEqual({ threadId: "thread-1", runId: "turn-1" });
+    expect(steered).toEqual({ threadId: "thread-1", turnId: "turn-1" });
     expect(provider.runs[0]?.steerCalls).toEqual([
       {
         thread: expect.objectContaining({
@@ -105,7 +105,7 @@ describe("Codex turn lifecycle", () => {
           serviceTier: undefined,
           reasoningEffort: undefined,
         }),
-        runId: "turn-1",
+        turnId: "turn-1",
         input: [{ type: "text", text: "Continue with more detail" }],
       },
     ]);
@@ -142,17 +142,17 @@ describe("Codex turn lifecycle", () => {
       turnId: "turn-1",
     });
 
-    expect(interrupted).toEqual({ threadId: "thread-1", runId: "turn-1" });
+    expect(interrupted).toEqual({ threadId: "thread-1", turnId: "turn-1" });
     expect(provider.runs[0]?.interrupted).toBe(true);
     expect(notifications).toEqual([
       {
         method: "turn/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
-            status: "in_progress",
+            status: "inProgress",
           },
         },
       },
@@ -160,7 +160,7 @@ describe("Codex turn lifecycle", () => {
         method: "turn/cancelled",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "cancelled",
@@ -187,10 +187,10 @@ describe("Codex turn lifecycle", () => {
         method: "turn/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
-            status: "in_progress",
+            status: "inProgress",
           },
         },
       },
@@ -198,7 +198,7 @@ describe("Codex turn lifecycle", () => {
         method: "turn/failed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "failed",
@@ -231,10 +231,10 @@ describe("Codex turn lifecycle", () => {
         method: "turn/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
-            status: "in_progress",
+            status: "inProgress",
           },
         },
       },
@@ -242,7 +242,7 @@ describe("Codex turn lifecycle", () => {
         method: "turn/failed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "failed",

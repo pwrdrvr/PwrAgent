@@ -65,10 +65,10 @@ describe("Codex turn progress", () => {
         method: "turn/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
-            status: "in_progress",
+            status: "inProgress",
           },
         },
       },
@@ -76,7 +76,7 @@ describe("Codex turn progress", () => {
         method: "item/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           item: {
             id: "plan-item-1",
             type: "plan",
@@ -88,7 +88,7 @@ describe("Codex turn progress", () => {
         method: "turn/plan/updated",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           plan: {
             explanation: "Break the work down first.",
             steps: [
@@ -102,7 +102,7 @@ describe("Codex turn progress", () => {
         method: "item/plan/delta",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           item: {
             id: "plan-item-1",
             type: "plan",
@@ -114,7 +114,7 @@ describe("Codex turn progress", () => {
         method: "item/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           item: {
             id: "plan-item-1",
             type: "plan",
@@ -127,7 +127,7 @@ describe("Codex turn progress", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "completed",
@@ -168,7 +168,7 @@ describe("Codex turn progress", () => {
       method: "item/commandExecution/outputDelta",
       params: {
         threadId: "thread-1",
-        runId: "turn-1",
+        turnId: "turn-1",
         itemId: "command-1",
         delta: "hello\n",
         stream: "stdout",

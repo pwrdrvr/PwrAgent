@@ -18,7 +18,6 @@ function buildRequest(
     method: "item/tool/requestUserInput",
     params: {
       threadId: "thread-1",
-      runId: "turn-1",
       turnId: "turn-1",
       itemId: "input-1",
       requestId: "input-request-1",

@@ -1,5 +1,5 @@
 import { jsonSchema, tool, type ToolSet } from "ai";
-import type { ThreadState } from "../app-server/protocol.js";
+import type { ThreadState } from "../app-server/internal-contract.js";
 import type {
   ToolExecutionContext,
   ToolExecutor,

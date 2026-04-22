@@ -111,11 +111,11 @@ type ReplayRuntimeClient = {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ threadId: string; runId: string }>;
+  }): Promise<{ threadId: string; turnId: string }>;
   interruptTurn(params: {
     threadId: string;
-    runId: string;
-  }): Promise<{ threadId: string; runId: string }>;
+    turnId: string;
+  }): Promise<{ threadId: string; turnId: string }>;
   respondToPendingRequest?(requestId: string): Promise<void>;
 };
 

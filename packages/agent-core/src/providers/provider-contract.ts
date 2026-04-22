@@ -3,7 +3,7 @@ import type {
   AppServerTurnInputItem,
   AppServerRole,
   ThreadState,
-} from "../app-server/protocol.js";
+} from "../app-server/internal-contract.js";
 import type { ToolExecutor } from "../tools/tool-contract.js";
 
 export type ProviderSource = {
@@ -27,7 +27,7 @@ export type ProviderTurnParams = {
 
 export type ProviderSteerParams = {
   thread: ThreadState;
-  runId: string;
+  turnId: string;
   input: AppServerTurnInputItem[];
 };
 

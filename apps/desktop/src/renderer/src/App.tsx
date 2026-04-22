@@ -47,7 +47,8 @@ export function App() {
 
       <main className="app-main">
         <ThreadView
-          activeRunId={session.activeRunId}
+          activeTurnId={session.activeTurnId}
+          activeTurnStartedAt={session.activeTurnStartedAt}
           addOptimisticUserMessage={session.addOptimisticUserMessage}
           backendError={backendSummaries.error}
           backends={backendSummaries.backends}
@@ -82,7 +83,7 @@ export function App() {
           transcriptError={session.error}
           transcriptPagination={session.response?.replay.pagination}
           updatingExecutionMode={navigation.updatingThreadExecutionMode}
-          onActiveRunIdChange={session.setActiveRunId}
+          onActiveTurnIdChange={session.setActiveTurnId}
           onEnsureSkillsLoaded={skills.ensureLoaded}
           onLoadOlder={session.loadOlder}
           onMaterializeLaunchpad={navigation.materializeDirectoryLaunchpad}

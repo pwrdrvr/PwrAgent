@@ -99,7 +99,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -240,7 +240,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -324,7 +324,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-images",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -417,7 +417,7 @@ describe("ThreadView", () => {
         startTurn: async () => ({
           backend: "codex" as const,
           threadId: "thread-images",
-          runId: "turn-1",
+          turnId: "turn-1",
         }),
       },
       loading: false,
@@ -537,7 +537,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -597,7 +597,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -670,7 +670,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -766,7 +766,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -795,7 +795,7 @@ describe("ThreadView", () => {
           method: "turn/plan/updated",
           params: {
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
             plan: {
               explanation: livePlan.explanation,
               steps: livePlan.steps
@@ -809,7 +809,7 @@ describe("ThreadView", () => {
           method: "turn/plan/updated",
           params: {
             threadId: "thread-other",
-            runId: "turn-2",
+            turnId: "turn-2",
             plan: {
               explanation: "Ignore this other thread.",
               steps: [{ step: "Ignore", status: "completed" }]
@@ -867,7 +867,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -954,7 +954,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -983,7 +983,7 @@ describe("ThreadView", () => {
           method: "item/plan/delta",
           params: {
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
             item: {
               id: "plan-item-1",
               type: "plan"
@@ -998,7 +998,7 @@ describe("ThreadView", () => {
           method: "item/plan/delta",
           params: {
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
             item: {
               id: "plan-item-1",
               type: "plan"
@@ -1021,7 +1021,7 @@ describe("ThreadView", () => {
           method: "item/completed",
           params: {
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
             item: {
               id: "plan-item-1",
               type: "plan",
@@ -1079,7 +1079,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -1171,7 +1171,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "grok",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -1200,7 +1200,7 @@ describe("ThreadView", () => {
           method: "item/started",
           params: {
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
             item: {
               id: "call-search-web",
               type: "dynamicToolCall",
@@ -1225,7 +1225,7 @@ describe("ThreadView", () => {
           method: "item/completed",
           params: {
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
             item: {
               id: "call-search-web",
               type: "dynamicToolCall",
@@ -1327,7 +1327,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -1425,7 +1425,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -1529,7 +1529,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
           submitServerRequest,
         }}
@@ -1603,7 +1603,7 @@ describe("ThreadView", () => {
             startTurn: async () => ({
               backend: "codex",
               threadId: "thread-2",
-              runId: "turn-1",
+              turnId: "turn-1",
             }),
             submitServerRequest,
           }}
@@ -1647,7 +1647,7 @@ describe("ThreadView", () => {
       expect(submitServerRequest).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-2",
-        runId: undefined,
+        turnId: undefined,
         requestId: "req-1",
         response: { decision: "accept" },
       });
@@ -1670,7 +1670,6 @@ describe("ThreadView", () => {
     let currentPendingUserInput: PendingQuestionnaireState | undefined = {
       method: "item/tool/requestUserInput",
       threadId: "thread-2",
-      runId: "turn-1",
       turnId: "turn-1",
       itemId: "input-1",
       requestId: "input-request-1",
@@ -1756,7 +1755,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
           submitServerRequest,
         }}
@@ -1831,7 +1830,7 @@ describe("ThreadView", () => {
             startTurn: async () => ({
               backend: "codex",
               threadId: "thread-2",
-              runId: "turn-1",
+              turnId: "turn-1",
             }),
             submitServerRequest,
           }}
@@ -1878,7 +1877,7 @@ describe("ThreadView", () => {
       expect(submitServerRequest).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-2",
-        runId: "turn-1",
+        turnId: "turn-1",
         requestId: "input-request-1",
         response: {
           answers: {
@@ -1949,7 +1948,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}
@@ -2021,7 +2020,7 @@ describe("ThreadView", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-2",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         loading={false}

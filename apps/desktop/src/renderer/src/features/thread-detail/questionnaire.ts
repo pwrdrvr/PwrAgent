@@ -34,7 +34,6 @@ export type PendingQuestionnaireState = {
   method: "item/tool/requestUserInput";
   requestId: string;
   threadId: string;
-  runId?: string;
   turnId?: string;
   itemId?: string;
   questions: PendingQuestionnaireQuestion[];
@@ -94,7 +93,6 @@ export function createQuestionnaireState(
     method: request.method,
     requestId: request.params.requestId,
     threadId: request.params.threadId,
-    ...(request.params.runId ? { runId: request.params.runId } : {}),
     ...(request.params.turnId ? { turnId: request.params.turnId } : {}),
     ...(request.params.itemId ? { itemId: request.params.itemId } : {}),
     questions,

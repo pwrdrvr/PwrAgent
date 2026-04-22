@@ -4,7 +4,7 @@ import type {
   ThreadExecutionMode,
   AppServerTurnInputItem,
   ThreadIdentifier,
-} from "./app-server";
+} from "./normalized-app-server";
 import type {
   DirectorySummaryKind,
   LaunchpadWorkMode,
@@ -43,19 +43,19 @@ export type StartTurnRequest = {
 export type StartTurnResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-  runId: string;
+  turnId: string;
 };
 
 export type InterruptTurnRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-  runId: string;
+  turnId: string;
 };
 
 export type InterruptTurnResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-  runId: string;
+  turnId: string;
 };
 
 export type SetThreadExecutionModeRequest = {
@@ -84,7 +84,7 @@ export type SetThreadModelSettingsResponse = SetThreadModelSettingsRequest;
 export type SubmitServerRequestRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-  runId?: string;
+  turnId?: string;
   requestId: string;
   response: Record<string, unknown>;
 };
@@ -92,7 +92,7 @@ export type SubmitServerRequestRequest = {
 export type SubmitServerRequestResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-  runId?: string;
+  turnId?: string;
   requestId: string;
 };
 
@@ -153,7 +153,7 @@ export type MaterializeDirectoryLaunchpadRequest = {
 export type MaterializeDirectoryLaunchpadResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-  runId?: string;
+  turnId?: string;
   executionMode: ThreadExecutionMode;
   workMode: LaunchpadWorkMode;
 };

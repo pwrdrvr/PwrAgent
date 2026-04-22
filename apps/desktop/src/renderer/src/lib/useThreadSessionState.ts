@@ -6,6 +6,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
+  AppServerThreadTurnMetadata,
   AppServerThreadImagePart,
   NavigationThreadSummary,
 } from "@pwragnt/shared";
@@ -30,7 +31,8 @@ export type ThreadViewportState = {
 };
 
 type ThreadSessionEntry = {
-  activeRunId?: string;
+  activeTurnId?: string;
+  activeTurnStartedAt?: number;
   completionHydrationRetries: number;
   error?: string;
   expectOwnUpdate: boolean;
@@ -128,13 +130,123 @@ function hasHydratedTranscriptContent(session: ThreadSessionEntry): boolean {
 
 function hasThinkingState(session: ThreadSessionEntry): boolean {
   return Boolean(
-    session.activeRunId ||
+    session.activeTurnId ||
       session.pendingStatusText ||
       session.pendingAssistantMessage ||
       session.pendingRequest ||
       session.pendingUserInput ||
       (session.expectOwnUpdate && session.optimisticEntries.length > 0)
   );
+}
+
+function normalizeNotificationTimestamp(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return value < 1_000_000_000_000 ? value * 1_000 : value;
+}
+
+function normalizeNotificationDuration(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function buildTurnMetadata(params: {
+  fallbackId?: string;
+  fallbackStartedAt?: number;
+  fallbackStatus?: AppServerThreadTurnMetadata["status"];
+  turn?: {
+    id?: unknown;
+    status?: unknown;
+    startedAt?: unknown;
+    completedAt?: unknown;
+    durationMs?: unknown;
+  };
+}): AppServerThreadTurnMetadata | undefined {
+  const id =
+    typeof params.turn?.id === "string" && params.turn.id.trim()
+      ? params.turn.id
+      : params.fallbackId;
+  if (!id) {
+    return undefined;
+  }
+
+  const status =
+    params.turn?.status === "in_progress" ||
+    params.turn?.status === "inProgress" ||
+    params.turn?.status === "completed" ||
+    params.turn?.status === "failed" ||
+    params.turn?.status === "cancelled" ||
+    params.turn?.status === "interrupted"
+      ? params.turn.status === "inProgress"
+        ? "in_progress"
+        : params.turn.status
+      : params.fallbackStatus;
+  const startedAt =
+    normalizeNotificationTimestamp(params.turn?.startedAt) ?? params.fallbackStartedAt;
+  const completedAt = normalizeNotificationTimestamp(params.turn?.completedAt);
+  const durationMs = normalizeNotificationDuration(params.turn?.durationMs);
+
+  return {
+    id,
+    ...(status ? { status } : {}),
+    ...(startedAt ? { startedAt } : {}),
+    ...(completedAt ? { completedAt } : {}),
+    ...(typeof durationMs === "number" ? { durationMs } : {}),
+  };
+}
+
+function withTurnMetadata<T extends AppServerThreadMessageEntry>(
+  entry: T,
+  turn: AppServerThreadTurnMetadata | undefined
+): T {
+  if (!turn) {
+    return entry;
+  }
+
+  return {
+    ...entry,
+    turn,
+  };
+}
+
+function withTurnMetadataAndPhase(
+  entry: AppServerThreadMessageEntry,
+  turn: AppServerThreadTurnMetadata | undefined,
+  phase: AppServerThreadMessageEntry["phase"] | undefined
+): AppServerThreadMessageEntry {
+  const nextEntry = withTurnMetadata(entry, turn);
+  if (!phase || nextEntry.phase || nextEntry.role !== "assistant") {
+    return nextEntry;
+  }
+
+  return {
+    ...nextEntry,
+    phase,
+  };
+}
+
+function withCompletedResponseTurnMetadata(
+  response: AppServerReadThreadResponse | undefined,
+  turn: AppServerThreadTurnMetadata | undefined,
+  unphasedAssistantPhase?: AppServerThreadMessageEntry["phase"]
+): AppServerReadThreadResponse | undefined {
+  if (!response || !turn) {
+    return response;
+  }
+
+  return {
+    ...response,
+    replay: {
+      ...response.replay,
+      entries: response.replay.entries.map((entry) =>
+        entry.turn?.id === turn.id
+          ? entry.type === "message"
+            ? withTurnMetadataAndPhase(entry, turn, unphasedAssistantPhase)
+            : { ...entry, turn }
+          : entry
+      ),
+    },
+  };
 }
 
 function messageMatchesOptimisticEntry(
@@ -192,6 +304,21 @@ function appendMessageEntries(
       lastAssistantMessage,
     },
   };
+}
+
+function appendPendingAssistantMessage(
+  response: AppServerReadThreadResponse | undefined,
+  params: {
+    backend: NavigationThreadSummary["source"];
+    threadId: NavigationThreadSummary["id"];
+  },
+  pendingAssistantMessage: AppServerThreadMessageEntry | undefined
+): AppServerReadThreadResponse | undefined {
+  if (!pendingAssistantMessage) {
+    return response;
+  }
+
+  return appendMessageEntries(response, params, [pendingAssistantMessage]);
 }
 
 function retainSessionCache(
@@ -279,7 +406,8 @@ export function useThreadSessionState(params: {
   desktopApi?: DesktopApi;
   thread?: NavigationThreadSummary;
 }): {
-  activeRunId?: string;
+  activeTurnId?: string;
+  activeTurnStartedAt?: number;
   addOptimisticUserMessage: (
     text: string,
     imageParts?: AppServerThreadImagePart[]
@@ -297,7 +425,7 @@ export function useThreadSessionState(params: {
   pendingStatusText?: string;
   removeOptimisticMessage: (id: string) => void;
   response?: AppServerReadThreadResponse;
-  setActiveRunId: (runId?: string) => void;
+  setActiveTurnId: (turnId?: string) => void;
   updatePendingUserInput: (
     requestId: string,
     updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
@@ -450,7 +578,7 @@ export function useThreadSessionState(params: {
       return;
     }
 
-    if (session.loading || session.activeRunId) {
+    if (session.loading || session.activeTurnId) {
       return;
     }
 
@@ -547,6 +675,27 @@ export function useThreadSessionState(params: {
           typeof event.notification.params.delta === "string"
         ) {
           const { itemId, delta } = event.notification.params;
+          const isSamePendingMessage = current.pendingAssistantMessage?.id === itemId;
+          const turn = buildTurnMetadata({
+            fallbackId: event.notification.params.turnId ?? current.activeTurnId,
+            fallbackStartedAt: current.activeTurnStartedAt,
+            fallbackStatus: "in_progress",
+          });
+          const phase =
+            event.notification.params.phase ??
+            (isSamePendingMessage ? current.pendingAssistantMessage?.phase : undefined);
+          const pendingText = current.pendingAssistantMessage?.text ?? "";
+          const flushedResponse = isSamePendingMessage
+            ? current.response
+            : appendPendingAssistantMessage(
+                current.response,
+                {
+                  backend: event.backend,
+                  threadId: notificationThreadId,
+                },
+                current.pendingAssistantMessage
+              );
+
           return {
             ...current,
             expectOwnUpdate: true,
@@ -556,11 +705,14 @@ export function useThreadSessionState(params: {
               type: "message",
               id: itemId,
               role: "assistant",
+              phase,
+              ...(turn ? { turn } : {}),
               text:
-                current.pendingAssistantMessage?.id === itemId
-                  ? `${current.pendingAssistantMessage.text}${delta}`
+                isSamePendingMessage
+                  ? `${pendingText}${delta}`
                   : delta,
             },
+            response: flushedResponse,
           };
         }
 
@@ -568,16 +720,25 @@ export function useThreadSessionState(params: {
           const startedTurnRecord =
             typeof event.notification.params.turn === "object" &&
             event.notification.params.turn !== null
-              ? (event.notification.params.turn as { id?: unknown })
+              ? (event.notification.params.turn as {
+                  id?: unknown;
+                  status?: unknown;
+                  startedAt?: unknown;
+                  completedAt?: unknown;
+                  durationMs?: unknown;
+                })
               : undefined;
-          const runId =
+          const turnId =
             typeof startedTurnRecord?.id === "string"
               ? startedTurnRecord.id
-              : event.notification.params.runId;
+              : event.notification.params.turnId;
+          const startedAt =
+            normalizeNotificationTimestamp(startedTurnRecord?.startedAt) ?? Date.now();
 
           return {
             ...current,
-            activeRunId: runId,
+            activeTurnId: turnId,
+            activeTurnStartedAt: startedAt,
             expectOwnUpdate: true,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
@@ -604,32 +765,74 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "turn/completed") {
+          const completedTurn = buildTurnMetadata({
+            fallbackId: event.notification.params.turnId ?? current.activeTurnId,
+            fallbackStartedAt: current.activeTurnStartedAt,
+            fallbackStatus: "completed",
+            turn: event.notification.params.turn,
+          });
+          const completedTurnText = readCompletedTurnText(event.notification.params);
           const completedText =
-            readCompletedTurnText(event.notification.params) ??
-            current.pendingAssistantMessage?.text;
-          const nextEntries = [...current.optimisticEntries];
+            completedTurnText ?? current.pendingAssistantMessage?.text;
+          const shouldAppendFinalMessage = Boolean(
+            completedText &&
+              current.pendingAssistantMessage?.text !== completedText
+          );
+          const unphasedAssistantCompletionPhase =
+            shouldAppendFinalMessage ? "commentary" : undefined;
+          const shouldHydrateUnknownPhaseAssistant =
+            !completedTurnText &&
+            Boolean(
+              current.pendingAssistantMessage &&
+                current.pendingAssistantMessage.phase === undefined
+            );
+          const nextEntries = [
+            ...current.optimisticEntries.map((entry) =>
+              entry.turn?.id === completedTurn?.id
+                ? withTurnMetadata(entry, completedTurn)
+                : entry
+            ),
+            ...(current.pendingAssistantMessage
+              ? [
+                  withTurnMetadataAndPhase(
+                    current.pendingAssistantMessage,
+                    completedTurn,
+                    unphasedAssistantCompletionPhase
+                  ),
+                ]
+              : []),
+          ];
 
-          if (completedText) {
+          if (shouldAppendFinalMessage && completedText) {
             nextEntries.push({
               type: "message",
-              id:
-                current.pendingAssistantMessage?.id ??
-                `${event.notification.params.runId}:assistant`,
+              id: `${event.notification.params.turnId}:assistant`,
               role: "assistant",
+              phase: "final",
+              ...(completedTurn ? { turn: completedTurn } : {}),
               text: completedText,
               createdAt: Date.now(),
             });
           }
 
+          const responseWithCompletedTurn = withCompletedResponseTurnMetadata(
+            current.response,
+            completedTurn,
+            unphasedAssistantCompletionPhase
+          );
           const nextResponse =
             nextEntries.length > 0
-              ? appendMessageEntries(current.response, {
-                  backend: event.backend,
-                  threadId: notificationThreadId,
-                }, nextEntries)
-              : current.response;
+              ? appendMessageEntries(
+                  responseWithCompletedTurn,
+                  {
+                    backend: event.backend,
+                    threadId: notificationThreadId,
+                  },
+                  nextEntries
+                )
+              : responseWithCompletedTurn ?? current.response;
           const shouldInvalidateHydration =
-            !completedText &&
+            (!completedText || shouldHydrateUnknownPhaseAssistant) &&
             !hasHydratedTranscriptContent({
               ...current,
               optimisticEntries: [],
@@ -641,16 +844,21 @@ export function useThreadSessionState(params: {
 
           return {
             ...current,
-            activeRunId: undefined,
+            activeTurnId: undefined,
+            activeTurnStartedAt: undefined,
             completionHydrationRetries: 0,
             error: undefined,
             expectOwnUpdate: true,
-            hydratedUpdatedAt: !completedText || shouldInvalidateHydration
-              ? undefined
-              : current.hydratedUpdatedAt,
+            hydratedUpdatedAt:
+              !completedText ||
+              shouldInvalidateHydration ||
+              shouldHydrateUnknownPhaseAssistant
+                ? undefined
+                : current.hydratedUpdatedAt,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
-            needsHydrationAfterCompletion: !completedText,
+            needsHydrationAfterCompletion:
+              !completedText || shouldHydrateUnknownPhaseAssistant,
             optimisticEntries: [],
             pendingAssistantMessage: undefined,
             pendingRequest: undefined,
@@ -669,7 +877,8 @@ export function useThreadSessionState(params: {
 
           return {
             ...current,
-            activeRunId: undefined,
+            activeTurnId: undefined,
+            activeTurnStartedAt: undefined,
             completionHydrationRetries: 0,
             error: errorMessage,
             expectOwnUpdate: false,
@@ -685,7 +894,8 @@ export function useThreadSessionState(params: {
         if (event.notification.method === "turn/cancelled") {
           return {
             ...current,
-            activeRunId: undefined,
+            activeTurnId: undefined,
+            activeTurnStartedAt: undefined,
             completionHydrationRetries: 0,
             error: undefined,
             expectOwnUpdate: false,
@@ -707,13 +917,14 @@ export function useThreadSessionState(params: {
               : undefined;
 
           if (statusType === "idle") {
-            if (current.activeRunId || current.pendingStatusText) {
+            if (current.activeTurnId || current.pendingStatusText) {
               return current;
             }
 
             return {
               ...current,
-              activeRunId: undefined,
+              activeTurnId: undefined,
+              activeTurnStartedAt: undefined,
               lastTouchedAt: nextLastTouchedAt,
               pendingAssistantMessage: undefined,
               pendingStatusText: undefined,
@@ -867,17 +1078,18 @@ export function useThreadSessionState(params: {
     [threadKey, updateSession]
   );
 
-  const setActiveRunId = useCallback(
-    (runId?: string): void => {
+  const setActiveTurnId = useCallback(
+    (turnId?: string): void => {
       if (!threadKey) {
         return;
       }
 
       updateSession(threadKey, (current) => ({
         ...current,
-        activeRunId: runId,
-        expectOwnUpdate: Boolean(runId) || current.expectOwnUpdate,
-        interacted: Boolean(runId) || current.interacted,
+        activeTurnId: turnId,
+        activeTurnStartedAt: turnId ? Date.now() : undefined,
+        expectOwnUpdate: Boolean(turnId) || current.expectOwnUpdate,
+        interacted: Boolean(turnId) || current.interacted,
         lastTouchedAt: Date.now(),
       }));
     },
@@ -999,10 +1211,11 @@ export function useThreadSessionState(params: {
   );
   const pendingStatusText =
     selectedSession?.pendingStatusText ??
-    (selectedSession?.activeRunId ? "Thinking" : undefined);
+    (selectedSession?.activeTurnId ? "Thinking" : undefined);
 
   return {
-    activeRunId: selectedSession?.activeRunId,
+    activeTurnId: selectedSession?.activeTurnId,
+    activeTurnStartedAt: selectedSession?.activeTurnStartedAt,
     addOptimisticUserMessage,
     clearPendingRequest,
     entries,
@@ -1017,7 +1230,7 @@ export function useThreadSessionState(params: {
     pendingStatusText,
     removeOptimisticMessage,
     response: selectedSession?.response,
-    setActiveRunId,
+    setActiveTurnId,
     updatePendingUserInput,
     setPendingStatusText,
     thinkingThreadKeys,

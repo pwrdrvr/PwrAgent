@@ -70,9 +70,9 @@ function summarizeAgentEvent(event: AgentEvent): Record<string, unknown> | undef
     "threadId" in params && typeof params.threadId === "string"
       ? params.threadId
       : undefined;
-  const runId =
-    "runId" in params && typeof params.runId === "string"
-      ? params.runId
+  const turnId =
+    "turnId" in params && typeof params.turnId === "string"
+      ? params.turnId
       : undefined;
 
   if (
@@ -87,7 +87,7 @@ function summarizeAgentEvent(event: AgentEvent): Record<string, unknown> | undef
       backend: event.backend,
       method: event.notification.method,
       threadId: threadId ?? null,
-      runId: runId ?? null,
+      turnId: turnId ?? null,
       itemType: typeof item?.type === "string" ? item.type : null,
       toolName: typeof item?.toolName === "string" ? item.toolName : null,
       status: typeof item?.status === "string" ? item.status : null,
@@ -110,7 +110,7 @@ function summarizeAgentEvent(event: AgentEvent): Record<string, unknown> | undef
     backend: event.backend,
     method: event.notification.method,
     threadId: threadId ?? null,
-    runId: runId ?? null,
+    turnId: turnId ?? null,
   };
 
   if (event.notification.method === "turn/completed") {
@@ -207,7 +207,7 @@ export function registerAgentIpcHandlers(): void {
         logDebug("startTurnResult", {
           backend: response.backend,
           threadId: response.threadId,
-          runId: response.runId,
+          turnId: response.turnId,
         });
         return response;
       } catch (error) {
@@ -231,7 +231,7 @@ export function registerAgentIpcHandlers(): void {
       logDebug("interruptTurn", {
         backend: request.backend,
         threadId: request.threadId,
-        runId: request.runId,
+        turnId: request.turnId,
       });
 
       try {
@@ -240,7 +240,7 @@ export function registerAgentIpcHandlers(): void {
         appServerLog.error("interruptTurn failed", {
           backend: request.backend,
           threadId: request.threadId,
-          runId: request.runId,
+          turnId: request.turnId,
           error: error instanceof Error ? error.message : String(error),
         });
         throw error;

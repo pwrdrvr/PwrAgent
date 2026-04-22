@@ -132,6 +132,8 @@ desktop replay scenarios do not exercise Codex sidebar directory identity.
   transcript plan UI
 - `live-plan-updates/`: live `turn/plan/updated` rendering for in-flight task
   plan UI
+- `live-agent-messages/`: live assistant commentary stream items, tool usage,
+  and final answer preservation during one active turn
 - `long-thread-scroll-stability/`: very tall transcript opens at bottom without
   drift and restores a saved viewport on reselect
 - `thread-scroll-restore/`: cached thread reselection preserves transcript

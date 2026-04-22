@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AppServerProtocolError } from "../app-server/protocol.js";
+import { AppServerProtocolError } from "../app-server/internal-contract.js";
 import { createTestHarness, FakeProvider } from "../testing/test-harness.js";
 
 type RequestTransport = {
@@ -134,16 +134,16 @@ describe("OpenClaw compatibility sequences", () => {
       payloads: [{ threadId: "thread-1", includeTurns: true }],
     });
 
-    expect(startedTurn).toEqual({ threadId: "thread-1", runId: "turn-1" });
+    expect(startedTurn).toEqual({ threadId: "thread-1", turnId: "turn-1" });
     expect(notifications).toEqual([
       {
         method: "turn/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
-            status: "in_progress",
+            status: "inProgress",
           },
         },
       },
@@ -151,7 +151,7 @@ describe("OpenClaw compatibility sequences", () => {
         method: "item/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           item: {
             id: "tool-1",
             type: "dynamicToolCall",
@@ -166,7 +166,7 @@ describe("OpenClaw compatibility sequences", () => {
         method: "item/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           item: {
             id: "tool-1",
             type: "dynamicToolCall",
@@ -183,7 +183,7 @@ describe("OpenClaw compatibility sequences", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "completed",
@@ -319,7 +319,7 @@ describe("OpenClaw compatibility sequences", () => {
         model: "grok-4.20-reasoning",
       }),
     );
-    expect(startedTurn).toEqual({ threadId: "thread-1", runId: "turn-1" });
+    expect(startedTurn).toEqual({ threadId: "thread-1", turnId: "turn-1" });
     expect(provider.runs[0]?.input).toEqual([
       { type: "text", text: "Ship the Grok app server." },
     ]);
@@ -358,10 +358,10 @@ describe("OpenClaw compatibility sequences", () => {
         method: "turn/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
-            status: "in_progress",
+            status: "inProgress",
           },
         },
       },
@@ -369,7 +369,7 @@ describe("OpenClaw compatibility sequences", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "completed",
@@ -428,11 +428,11 @@ describe("OpenClaw compatibility sequences", () => {
 
     expect(reviewResult).toEqual({
       reviewThreadId: "thread-1",
-      runId: "turn-2",
+      turnId: "turn-2",
     });
     expect(compactionResult).toEqual({
       threadId: "thread-1",
-      runId: "turn-3",
+      turnId: "turn-3",
       itemId: "turn-3-item",
     });
     expect(provider.runs[1]?.previousResponseId).toBe("resp_turn_1");
@@ -442,7 +442,7 @@ describe("OpenClaw compatibility sequences", () => {
         method: "item/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-2",
+          turnId: "turn-2",
           item: {
             id: "turn-2-item",
             type: "exitedReviewMode",
@@ -454,7 +454,7 @@ describe("OpenClaw compatibility sequences", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-2",
+          turnId: "turn-2",
           turn: {
             id: "turn-2",
             status: "completed",
@@ -466,7 +466,7 @@ describe("OpenClaw compatibility sequences", () => {
         method: "item/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-3",
+          turnId: "turn-3",
           item: {
             id: "turn-3-item",
             type: "contextCompaction",
@@ -477,7 +477,7 @@ describe("OpenClaw compatibility sequences", () => {
         method: "item/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-3",
+          turnId: "turn-3",
           item: {
             id: "turn-3-item",
             type: "contextCompaction",
@@ -565,7 +565,7 @@ describe("OpenClaw compatibility sequences", () => {
     );
     expect(snakeCaseTurn).toEqual({
       threadId: "thread-1",
-      runId: "turn-1",
+      turnId: "turn-1",
     });
     expect(provider.runs[0]?.input).toEqual([
       { type: "text", text: "Use snake_case collaboration mode." },

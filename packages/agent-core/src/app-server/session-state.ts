@@ -6,7 +6,7 @@ import type {
   ThreadState,
   ThreadSummary,
   ThreadTitleSource,
-} from "./protocol.js";
+} from "./internal-contract.js";
 import type {
   AppServerSessionStore,
   HydratedSessionState,
@@ -16,7 +16,7 @@ import { shortenDerivedThreadTitle } from "@pwragnt/shared";
 import type { ProviderActiveTurn } from "../providers/provider-contract.js";
 
 type ActiveRunRecord = {
-  runId: string;
+  turnId: string;
   threadId: string;
   status: "active" | "completed" | "failed" | "cancelled";
   handle: ProviderActiveTurn;
@@ -328,27 +328,27 @@ export class AppServerSessionState {
   }
 
   createRun(params: {
-    runId: string;
+    turnId: string;
     threadId: string;
     handle: ProviderActiveTurn;
   }): ActiveRunRecord {
     const run: ActiveRunRecord = {
-      runId: params.runId,
+      turnId: params.turnId,
       threadId: params.threadId,
       status: "active",
       handle: params.handle,
     };
-    this.runs.set(run.runId, run);
+    this.runs.set(run.turnId, run);
     this.touchThread(params.threadId);
     return run;
   }
 
-  getRun(runId: string): ActiveRunRecord | undefined {
-    return this.runs.get(runId);
+  getRun(turnId: string): ActiveRunRecord | undefined {
+    return this.runs.get(turnId);
   }
 
-  completeRun(runId: string): ActiveRunRecord | undefined {
-    const run = this.runs.get(runId);
+  completeRun(turnId: string): ActiveRunRecord | undefined {
+    const run = this.runs.get(turnId);
     if (!run) {
       return undefined;
     }
@@ -357,8 +357,8 @@ export class AppServerSessionState {
     return run;
   }
 
-  failRun(runId: string): ActiveRunRecord | undefined {
-    const run = this.runs.get(runId);
+  failRun(turnId: string): ActiveRunRecord | undefined {
+    const run = this.runs.get(turnId);
     if (!run) {
       return undefined;
     }
@@ -367,8 +367,8 @@ export class AppServerSessionState {
     return run;
   }
 
-  cancelRun(runId: string): ActiveRunRecord | undefined {
-    const run = this.runs.get(runId);
+  cancelRun(turnId: string): ActiveRunRecord | undefined {
+    const run = this.runs.get(turnId);
     if (!run) {
       return undefined;
     }

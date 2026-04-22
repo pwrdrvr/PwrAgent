@@ -225,7 +225,7 @@ describe("Codex app-server contract", () => {
       includeTurns: true,
     });
 
-    expect(turn).toEqual({ threadId: "thread-1", runId: "turn-1" });
+    expect(turn).toEqual({ threadId: "thread-1", turnId: "turn-1" });
     expect(replay).toEqual({
       threadId: "thread-1",
       thread: {

@@ -1,4 +1,4 @@
-import type { AppServerNotification, ThreadState } from "./protocol.js";
+import type { AppServerNotification, ThreadState } from "./internal-contract.js";
 import { AppServerSessionState } from "./session-state.js";
 import { TurnRunner } from "./turn-runner.js";
 import type { AppServerProvider } from "../providers/provider-contract.js";
@@ -29,10 +29,10 @@ export class ReviewRunner {
 
   async start(params: {
     thread: ThreadState;
-    runId: string;
+    turnId: string;
     itemId: string;
     target: unknown;
-  }): Promise<{ reviewThreadId: string; runId: string }> {
+  }): Promise<{ reviewThreadId: string; turnId: string }> {
     const handle = await this.provider.startTurn({
       thread: params.thread,
       input: [
@@ -48,16 +48,16 @@ export class ReviewRunner {
       tools: this.tools,
     });
     this.state.createRun({
-      runId: params.runId,
+      turnId: params.turnId,
       threadId: params.thread.threadId,
       handle,
     });
     this.turnRunner.attach({
       threadId: params.thread.threadId,
-      runId: params.runId,
+      turnId: params.turnId,
       handle,
       onSuccess: async (result) => {
-        this.state.completeRun(params.runId);
+        this.state.completeRun(params.turnId);
         this.state.upsertItem(params.thread.threadId, {
           id: params.itemId,
           type: "exitedReviewMode",
@@ -73,7 +73,7 @@ export class ReviewRunner {
           method: "item/completed",
           params: {
             threadId: params.thread.threadId,
-            runId: params.runId,
+            turnId: params.turnId,
             item: {
               id: params.itemId,
               type: "exitedReviewMode",
@@ -85,9 +85,9 @@ export class ReviewRunner {
           method: "turn/completed",
           params: {
             threadId: params.thread.threadId,
-            runId: params.runId,
+            turnId: params.turnId,
             turn: {
-              id: params.runId,
+              id: params.turnId,
               status: "completed",
               output: [
                 {
@@ -102,7 +102,7 @@ export class ReviewRunner {
     });
     return {
       reviewThreadId: params.thread.threadId,
-      runId: params.runId,
+      turnId: params.turnId,
     };
   }
 }

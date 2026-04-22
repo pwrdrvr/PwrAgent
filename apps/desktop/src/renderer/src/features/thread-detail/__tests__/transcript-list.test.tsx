@@ -370,6 +370,106 @@ describe("TranscriptList", () => {
     );
   });
 
+  it("collapses completed assistant commentary before the final answer", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "commentary-1",
+            role: "assistant",
+            phase: "commentary",
+            text: "First commentary.",
+          },
+          {
+            type: "message",
+            id: "commentary-2",
+            role: "assistant",
+            phase: "commentary",
+            text: "Second commentary.",
+          },
+          {
+            type: "message",
+            id: "commentary-3",
+            role: "assistant",
+            phase: "commentary",
+            text: "Third commentary.",
+          },
+          {
+            type: "message",
+            id: "final-1",
+            role: "assistant",
+            phase: "final",
+            text: "Final answer.",
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const toggle = screen.getByRole("button", { name: "3 previous messages" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Final answer.")).toBeVisible();
+    expect(screen.getByText("First commentary.")).not.toBeVisible();
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("First commentary.")).toBeVisible();
+    expect(screen.getByText("Second commentary.")).toBeVisible();
+    expect(screen.getByText("Third commentary.")).toBeVisible();
+  });
+
+  it("keeps all active commentary messages visible", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "commentary-1",
+            role: "assistant",
+            phase: "commentary",
+            text: "First commentary.",
+          },
+          {
+            type: "message",
+            id: "commentary-2",
+            role: "assistant",
+            phase: "commentary",
+            text: "Second commentary.",
+          },
+          {
+            type: "message",
+            id: "commentary-3",
+            role: "assistant",
+            phase: "commentary",
+            text: "Third commentary.",
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "commentary-4",
+          role: "assistant",
+          phase: "commentary",
+          text: "Fourth commentary.",
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.queryByRole("button", { name: /previous message/ })).not.toBeInTheDocument();
+    expect(screen.getByText("First commentary.")).toBeVisible();
+    expect(screen.getByText("Second commentary.")).toBeVisible();
+    expect(screen.getByText("Third commentary.")).toBeVisible();
+    expect(screen.getByText("Fourth commentary.")).toBeVisible();
+  });
+
   it("renders a live activity entry before the turn is persisted", () => {
     render(
       <TranscriptList

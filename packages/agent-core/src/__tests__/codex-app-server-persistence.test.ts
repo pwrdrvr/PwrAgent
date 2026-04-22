@@ -16,7 +16,7 @@ describe("CodexAppServer persistence", () => {
           store: new GrokRolloutStore(temp.path),
         }),
         threadIdGenerator: () => "thread-1",
-        runIdGenerator: () => "turn-1",
+        turnIdGenerator: () => "turn-1",
       });
 
       await firstServer.request("thread/start", {
@@ -47,7 +47,7 @@ describe("CodexAppServer persistence", () => {
           store: new GrokRolloutStore(temp.path),
         }),
         threadIdGenerator: () => "thread-2",
-        runIdGenerator: () => "turn-2",
+        turnIdGenerator: () => "turn-2",
       });
 
       await expect(secondServer.request("thread/list", {})).resolves.toEqual({

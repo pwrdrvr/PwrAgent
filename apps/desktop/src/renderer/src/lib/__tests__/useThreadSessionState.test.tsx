@@ -102,7 +102,7 @@ describe("useThreadSessionState", () => {
           method: "turn/completed",
           params: {
             threadId: "thread-1",
-            runId: "run-1",
+            turnId: "turn-1",
             turn: {
               output: [{ type: "text", text: "Transcript ordering is fixed." }],
             },
@@ -196,7 +196,7 @@ describe("useThreadSessionState", () => {
           method: "turn/completed",
           params: {
             threadId: "thread-empty",
-            runId: "run-2",
+            turnId: "turn-2",
             turn: {
               output: [{ type: "text", text: "The new thread is ordered." }],
             },
@@ -213,6 +213,272 @@ describe("useThreadSessionState", () => {
       ).toEqual([
         "user:Start a new ordered thread.",
         "assistant:The new thread is ordered.",
+      ]);
+    });
+  });
+
+  it("preserves multiple streamed assistant messages before the final answer", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-1",
+            delta: "First commentary.",
+            phase: "commentary",
+          },
+        },
+      });
+    });
+
+    expect(result.current.pendingAssistantMessage?.text).toBe("First commentary.");
+    expect(result.current.pendingAssistantMessage?.phase).toBe("commentary");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-2",
+            delta: "Second commentary.",
+            phase: "commentary",
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.map((entry) =>
+        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+      )
+    ).toEqual(["assistant:First commentary."]);
+    expect(result.current.pendingAssistantMessage?.text).toBe("Second commentary.");
+    expect(result.current.pendingAssistantMessage?.phase).toBe("commentary");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              durationMs: 524_447,
+              output: [{ type: "text", text: "Final answer." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.map((entry) =>
+        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+      )
+    ).toEqual([
+      "assistant:First commentary.",
+      "assistant:Second commentary.",
+      "assistant:Final answer.",
+    ]);
+    expect(
+      result.current.entries
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.phase)
+    ).toEqual(["commentary", "commentary", "final"]);
+    expect(
+      result.current.entries
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.turn)
+    ).toEqual([
+      { id: "turn-1", status: "completed", durationMs: 524_447 },
+      { id: "turn-1", status: "completed", durationMs: 524_447 },
+      { id: "turn-1", status: "completed", durationMs: 524_447 },
+    ]);
+    expect(result.current.pendingAssistantMessage).toBeUndefined();
+  });
+
+  it("hydrates unphased streamed assistant text after completion", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    let readCount = 0;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: "codex" | "grok";
+        threadId: string;
+      }) => {
+        readCount += 1;
+        return {
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries:
+              readCount > 1
+                ? [
+                    {
+                      type: "message" as const,
+                      id: "hydrated-final",
+                      role: "assistant" as const,
+                      phase: "final" as const,
+                      text: "Hydrated final answer.",
+                      turn: {
+                        id: "turn-1",
+                        status: "completed" as const,
+                      },
+                    },
+                  ]
+                : [],
+            messages:
+              readCount > 1
+                ? [
+                    {
+                      id: "hydrated-final",
+                      role: "assistant" as const,
+                      text: "Hydrated final answer.",
+                    },
+                  ]
+                : [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        };
+      }
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-1",
+            delta: "Hydrated final answer.",
+          },
+        },
+      });
+    });
+
+    expect(result.current.pendingAssistantMessage?.phase).toBeUndefined();
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(result.current.entries).toEqual([
+        expect.objectContaining({
+          id: "hydrated-final",
+          phase: "final",
+          text: "Hydrated final answer.",
+        }),
       ]);
     });
   });
@@ -276,7 +542,7 @@ describe("useThreadSessionState", () => {
           params: {
             threadId: "thread-1",
             turn: {
-              id: "run-1",
+              id: "turn-1",
               status: "inProgress",
             },
           },
@@ -293,9 +559,9 @@ describe("useThreadSessionState", () => {
           method: "turn/completed",
           params: {
             threadId: "thread-1",
-            runId: "run-1",
+            turnId: "turn-1",
             turn: {
-              id: "run-1",
+              id: "turn-1",
               status: "completed",
               output: [{ type: "text", text: "Finished background work." }],
             },
@@ -378,8 +644,8 @@ describe("useThreadSessionState", () => {
     });
 
     act(() => {
-      result.current.setActiveRunId("run-1");
-      result.current.setActiveRunId(undefined);
+      result.current.setActiveTurnId("turn-1");
+      result.current.setActiveTurnId(undefined);
     });
 
     rerender({ thread: thread2 });
@@ -499,8 +765,8 @@ describe("useThreadSessionState", () => {
     expect(result.current.entries).toHaveLength(0);
 
     act(() => {
-      result.current.setActiveRunId("run-1");
-      result.current.setActiveRunId(undefined);
+      result.current.setActiveTurnId("turn-1");
+      result.current.setActiveTurnId(undefined);
     });
 
     rerender({ currentThread: updatedThread });
@@ -618,9 +884,9 @@ describe("useThreadSessionState", () => {
             method: "turn/completed",
             params: {
               threadId: "thread-1",
-              runId: "run-1",
+              turnId: "turn-1",
               turn: {
-                id: "run-1",
+                id: "turn-1",
                 status: "completed",
                 output: [],
               },
@@ -725,7 +991,7 @@ describe("useThreadSessionState", () => {
     });
 
     act(() => {
-      result.current.setActiveRunId("turn-1");
+      result.current.setActiveTurnId("turn-1");
       result.current.setPendingStatusText("Thinking");
     });
 
@@ -772,10 +1038,10 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.pendingStatusText).toBe("Thinking");
-    expect(result.current.activeRunId).toBe("turn-1");
+    expect(result.current.activeTurnId).toBe("turn-1");
   });
 
-  it("derives the transcript thinking status from an active run when status text is cleared", async () => {
+  it("derives the transcript thinking status from an active turn when status text is cleared", async () => {
     const desktopApi: DesktopApi = {
       readThread: async ({ backend, threadId }) => ({
         backend: backend ?? "codex",
@@ -805,11 +1071,11 @@ describe("useThreadSessionState", () => {
 
     act(() => {
       result.current.setPendingStatusText("Thinking");
-      result.current.setActiveRunId("turn-1");
+      result.current.setActiveTurnId("turn-1");
       result.current.setPendingStatusText(undefined);
     });
 
-    expect(result.current.activeRunId).toBe("turn-1");
+    expect(result.current.activeTurnId).toBe("turn-1");
     expect(result.current.pendingStatusText).toBe("Thinking");
     expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
   });
@@ -852,7 +1118,7 @@ describe("useThreadSessionState", () => {
     });
 
     act(() => {
-      result.current.setActiveRunId("turn-1");
+      result.current.setActiveTurnId("turn-1");
       result.current.setPendingStatusText("Thinking");
     });
 
@@ -874,7 +1140,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.pendingStatusText).toBe("Thinking");
-    expect(result.current.activeRunId).toBe("turn-1");
+    expect(result.current.activeTurnId).toBe("turn-1");
 
     act(() => {
       for (const listener of agentEventListeners) {
@@ -884,7 +1150,7 @@ describe("useThreadSessionState", () => {
             method: "turn/completed",
             params: {
               threadId: "thread-1",
-              runId: "turn-1",
+              turnId: "turn-1",
               turn: {
                 id: "turn-1",
                 status: "completed",
@@ -897,7 +1163,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.pendingStatusText).toBeUndefined();
-    expect(result.current.activeRunId).toBeUndefined();
+    expect(result.current.activeTurnId).toBeUndefined();
   });
 
   it("surfaces failed turn errors in the transcript state", async () => {
@@ -945,7 +1211,7 @@ describe("useThreadSessionState", () => {
             method: "turn/started",
             params: {
               threadId: "thread-1",
-              runId: "turn-1",
+              turnId: "turn-1",
               turn: {
                 id: "turn-1",
                 status: "in_progress",
@@ -957,7 +1223,7 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.pendingStatusText).toBe("Thinking");
-    expect(result.current.activeRunId).toBe("turn-1");
+    expect(result.current.activeTurnId).toBe("turn-1");
 
     act(() => {
       for (const listener of agentEventListeners) {
@@ -967,7 +1233,7 @@ describe("useThreadSessionState", () => {
             method: "turn/failed",
             params: {
               threadId: "thread-1",
-              runId: "turn-1",
+              turnId: "turn-1",
               turn: {
                 id: "turn-1",
                 status: "failed",
@@ -981,7 +1247,7 @@ describe("useThreadSessionState", () => {
       }
     });
 
-    expect(result.current.activeRunId).toBeUndefined();
+    expect(result.current.activeTurnId).toBeUndefined();
     expect(result.current.pendingStatusText).toBeUndefined();
     expect(result.current.error).toBe("Provider completed the turn without assistant text.");
   });
@@ -1160,7 +1426,6 @@ describe("useThreadSessionState", () => {
             params: {
               threadId: "thread-1",
               turnId: "turn-1",
-              runId: "turn-1",
               itemId: "input-1",
               requestId: "input-request-1",
               questions: [
@@ -1352,9 +1617,9 @@ describe("useThreadSessionState", () => {
             method: "turn/completed",
             params: {
               threadId: "thread-1",
-              runId: "run-1",
+              turnId: "turn-1",
               turn: {
-                id: "run-1",
+                id: "turn-1",
                 status: "completed",
                 output: [],
               },

@@ -26,7 +26,7 @@ describe("GrokAppServerClient", () => {
     const server = new CodexAppServer({
       provider,
       threadIdGenerator: () => "thread-1",
-      runIdGenerator: () => "turn-1",
+      turnIdGenerator: () => "turn-1",
     });
 
     const client = new GrokAppServerClient({
@@ -89,7 +89,7 @@ describe("GrokAppServerClient", () => {
       threadId: "thread-1",
       input: [{ type: "text", text: "Ship Unit 3" }],
     });
-    expect(startedTurn).toEqual({ threadId: "thread-1", runId: "turn-1" });
+    expect(startedTurn).toEqual({ threadId: "thread-1", turnId: "turn-1" });
 
     provider.runs[0]?.deferred.resolve({
       assistantText: "Done.",
@@ -169,7 +169,7 @@ describe("GrokAppServerClient", () => {
     const server = new CodexAppServer({
       provider,
       threadIdGenerator: () => "thread-1",
-      runIdGenerator: () => "turn-1",
+      turnIdGenerator: () => "turn-1",
     });
     const client = new GrokAppServerClient({ server });
     const notifications: string[] = [];
@@ -209,7 +209,7 @@ describe("GrokAppServerClient", () => {
     });
     await flushAsync();
 
-    expect(startedTurn).toEqual({ threadId: "thread-1", runId: "turn-1" });
+    expect(startedTurn).toEqual({ threadId: "thread-1", turnId: "turn-1" });
     expect(notifications).toEqual([
       "turn/started",
       "item/started",
@@ -247,7 +247,7 @@ describe("GrokAppServerClient", () => {
     const server = new CodexAppServer({
       provider,
       threadIdGenerator: () => "thread-1",
-      runIdGenerator: () => "turn-1",
+      turnIdGenerator: () => "turn-1",
     });
     const client = new GrokAppServerClient({ server });
 
@@ -479,7 +479,7 @@ describe("GrokAppServerClient", () => {
     const server = new CodexAppServer({
       provider,
       threadIdGenerator: () => "thread-1",
-      runIdGenerator: () => "turn-1",
+      turnIdGenerator: () => "turn-1",
     });
     const client = new GrokAppServerClient({ server });
 
@@ -570,7 +570,7 @@ describe("GrokAppServerClient", () => {
     const server = new CodexAppServer({
       provider: new FakeProvider(),
       threadIdGenerator: () => "thread-1",
-      runIdGenerator: () => "turn-1",
+      turnIdGenerator: () => "turn-1",
     });
     const client = new GrokAppServerClient({ server });
     const notifications: string[] = [];
@@ -601,7 +601,7 @@ describe("GrokAppServerClient", () => {
     const server = new CodexAppServer({
       provider: new FakeProvider(),
       threadIdGenerator: () => "thread-1",
-      runIdGenerator: () => "turn-1",
+      turnIdGenerator: () => "turn-1",
     });
     const client = new GrokAppServerClient({ server });
     const notifications: string[] = [];
@@ -638,7 +638,7 @@ describe("GrokAppServerClient", () => {
     const server = new CodexAppServer({
       provider: new FakeProvider(),
       threadIdGenerator: () => "thread-1",
-      runIdGenerator: () => "turn-1",
+      turnIdGenerator: () => "turn-1",
     });
     const client = new GrokAppServerClient({ server });
     const notifications: string[] = [];
@@ -674,7 +674,7 @@ describe("GrokAppServerClient", () => {
     const server = new CodexAppServer({
       provider,
       threadIdGenerator: () => "thread-1",
-      runIdGenerator: (() => {
+      turnIdGenerator: (() => {
         let index = 0;
         return () => `turn-${++index}`;
       })(),
@@ -970,7 +970,7 @@ describe("GrokAppServerClient", () => {
           method: "turn/completed",
           params: {
             threadId: "thread-1",
-            runId: "turn-1",
+            turnId: "turn-1",
             turn: {
               id: "turn-1",
               status: "completed",
@@ -982,7 +982,7 @@ describe("GrokAppServerClient", () => {
 
       await requestHandler?.("turn/requestApproval", {
         threadId: "thread-1",
-        runId: "turn-1",
+        turnId: "turn-1",
         requestId: "approval-1"
       });
 

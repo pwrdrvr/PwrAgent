@@ -64,7 +64,7 @@ type GrokClientOptions = {
   ) => Promise<LinkedDirectorySummary[]>;
   server?: GrokServerLike;
   threadIdGenerator?: () => string;
-  runIdGenerator?: () => string;
+  turnIdGenerator?: () => string;
 };
 
 type RawThreadSummary = {
@@ -530,14 +530,14 @@ function extractThreadId(value: unknown): string | undefined {
       : undefined;
 }
 
-function extractRunId(value: unknown): string | undefined {
+function extractTurnId(value: unknown): string | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
 
   const record = value as Record<string, unknown>;
-  return typeof record.runId === "string"
-    ? record.runId
+  return typeof record.turnId === "string"
+    ? record.turnId
     : typeof record.id === "string"
       ? record.id
       : undefined;
@@ -787,7 +787,7 @@ export class GrokAppServerClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ threadId: string; runId: string }> {
+  }): Promise<{ threadId: string; turnId: string }> {
     await this.ensureInitialized();
 
     await this.request("thread/resume", {
@@ -800,31 +800,31 @@ export class GrokAppServerClient {
 
     const result = await this.request("turn/start", params);
     const threadId = extractThreadId(result);
-    const runId = extractRunId(result);
-    if (!threadId || !runId) {
-      throw new Error("grok app server turn/start did not return threadId and runId");
+    const turnId = extractTurnId(result);
+    if (!threadId || !turnId) {
+      throw new Error("grok app server turn/start did not return threadId and turnId");
     }
 
-    return { threadId, runId };
+    return { threadId, turnId };
   }
 
   async interruptTurn(params: {
     threadId: string;
-    runId: string;
-  }): Promise<{ threadId: string; runId: string }> {
+    turnId: string;
+  }): Promise<{ threadId: string; turnId: string }> {
     await this.ensureInitialized();
 
     const result = await this.request("turn/interrupt", {
       threadId: params.threadId,
-      turnId: params.runId,
+      turnId: params.turnId,
     });
     const threadId = extractThreadId(result);
-    const runId = extractRunId(result);
-    if (!threadId || !runId) {
-      throw new Error("grok app server turn/interrupt did not return threadId and runId");
+    const turnId = extractTurnId(result);
+    if (!threadId || !turnId) {
+      throw new Error("grok app server turn/interrupt did not return threadId and turnId");
     }
 
-    return { threadId, runId };
+    return { threadId, turnId };
   }
 
   async setThreadPermissions(params: {
@@ -925,7 +925,7 @@ export class GrokAppServerClient {
       provider,
       sessionState,
       threadIdGenerator: this.options.threadIdGenerator,
-      runIdGenerator: this.options.runIdGenerator,
+      turnIdGenerator: this.options.turnIdGenerator,
     });
     this.subscribeToServerNotifications(this.server);
     return this.server;

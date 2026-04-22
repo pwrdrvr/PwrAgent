@@ -30,12 +30,12 @@ const registry = {
   startTurn: vi.fn(async (request: StartTurnRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
-    runId: "turn-1",
+    turnId: "turn-1",
   })),
   interruptTurn: vi.fn(async (request: InterruptTurnRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
-    runId: request.runId,
+    turnId: request.turnId,
   })),
   materializeDirectoryLaunchpad: vi.fn(
     async (request: MaterializeDirectoryLaunchpadRequest) => ({
@@ -43,7 +43,7 @@ const registry = {
       threadId: `materialized:${request.directoryKey}`,
       executionMode: "default" as const,
       workMode: "local" as const,
-      runId: "turn-2",
+      turnId: "turn-2",
     }),
   ),
 };
@@ -119,18 +119,18 @@ describe("agent ipc", () => {
     ).toEqual({
       backend: "grok",
       threadId: "thread-1",
-      runId: "turn-1",
+      turnId: "turn-1",
     });
     expect(
       await handlers.get(AGENT_INTERRUPT_TURN_CHANNEL)?.({}, {
         backend: "grok",
         threadId: "thread-1",
-        runId: "turn-1",
+        turnId: "turn-1",
       }),
     ).toEqual({
       backend: "grok",
       threadId: "thread-1",
-      runId: "turn-1",
+      turnId: "turn-1",
     });
     expect(
       await handlers.get(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL)?.({}, {
@@ -141,7 +141,7 @@ describe("agent ipc", () => {
       threadId: "materialized:directory:/repo/app",
       executionMode: "default",
       workMode: "local",
-      runId: "turn-2",
+      turnId: "turn-2",
     });
 
     await registryListener?.({
@@ -150,7 +150,7 @@ describe("agent ipc", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "completed",
@@ -166,7 +166,7 @@ describe("agent ipc", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "completed",

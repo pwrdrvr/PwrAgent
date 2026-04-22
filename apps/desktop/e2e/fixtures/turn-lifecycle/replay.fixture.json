@@ -89,7 +89,7 @@
       "method": "turn/start",
       "result": {
         "threadId": "thread-turn-lifecycle",
-        "runId": "turn-turn-lifecycle-2"
+        "turnId": "turn-turn-lifecycle-2"
       }
     },
     {
@@ -228,7 +228,7 @@
         "method": "turn/completed",
         "params": {
           "threadId": "thread-turn-lifecycle",
-          "runId": "turn-turn-lifecycle-2",
+          "turnId": "turn-turn-lifecycle-2",
           "turn": {
             "id": "turn-turn-lifecycle-2",
             "status": "completed",

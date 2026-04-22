@@ -5,7 +5,7 @@ import type {
   AppServerTurnInputItem,
   ThreadReplayItem,
   ThreadState,
-} from "../app-server/protocol.js";
+} from "../app-server/internal-contract.js";
 import { parseFlatToml, stringifyFlatToml } from "../config/simple-toml.js";
 
 export type StoredMessage = {

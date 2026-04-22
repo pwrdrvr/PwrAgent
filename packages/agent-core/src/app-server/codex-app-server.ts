@@ -8,7 +8,7 @@ import {
   type AppServerTurnResult,
   type ThreadReplay,
   type ThreadState,
-} from "./protocol.js";
+} from "./internal-contract.js";
 import { AppServerSessionState } from "./session-state.js";
 import { AppServerMetadataService } from "./metadata-service.js";
 import { TurnRunner } from "./turn-runner.js";
@@ -30,7 +30,7 @@ type RequestHandler = (
 type ServerOptions = {
   provider: AppServerProvider;
   threadIdGenerator?: () => string;
-  runIdGenerator?: () => string;
+  turnIdGenerator?: () => string;
   sessionState?: AppServerSessionState;
 };
 
@@ -73,14 +73,14 @@ export class CodexAppServer {
   private readonly reviewRunner: ReviewRunner;
   private readonly toolExecutor: LocalToolExecutor;
   private readonly createThreadId: () => string;
-  private readonly createRunId: () => string;
+  private readonly createTurnId: () => string;
 
   constructor(options: ServerOptions) {
     this.provider = options.provider;
     this.state = options.sessionState ?? new AppServerSessionState();
     this.toolExecutor = new LocalToolExecutor(createDefaultToolRegistry());
     this.createThreadId = options.threadIdGenerator ?? (() => createId("thread"));
-    this.createRunId = options.runIdGenerator ?? (() => createId("turn"));
+    this.createTurnId = options.turnIdGenerator ?? (() => createId("turn"));
     this.turnRunner = new TurnRunner({
       state: this.state,
       emit: async (notification) => {
@@ -294,7 +294,7 @@ export class CodexAppServer {
 
   private async startCompaction(
     params: Record<string, unknown>,
-  ): Promise<{ threadId: string; runId: string; itemId: string }> {
+  ): Promise<{ threadId: string; turnId: string; itemId: string }> {
     const threadId = asRequiredString(
       params.threadId,
       "thread/compact/start requires threadId",
@@ -303,28 +303,28 @@ export class CodexAppServer {
     if (!thread) {
       throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
     }
-    const runId = this.createRunId();
-    const itemId = `${runId}-item`;
+    const turnId = this.createTurnId();
+    const itemId = `${turnId}-item`;
     return await this.compactionRunner.start({
       thread,
-      runId,
+      turnId,
       itemId,
     });
   }
 
   private async startReview(
     params: Record<string, unknown>,
-  ): Promise<{ reviewThreadId: string; runId: string }> {
+  ): Promise<{ reviewThreadId: string; turnId: string }> {
     const threadId = asRequiredString(params.threadId, "review/start requires threadId");
     const thread = this.state.getThread(threadId);
     if (!thread) {
       throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
     }
-    const runId = this.createRunId();
-    const itemId = `${runId}-item`;
+    const turnId = this.createTurnId();
+    const itemId = `${turnId}-item`;
     return await this.reviewRunner.start({
       thread,
-      runId,
+      turnId,
       itemId,
       target: params.target,
     });
@@ -349,7 +349,7 @@ export class CodexAppServer {
           }) ?? thread
         : thread;
     const normalizedInput = normalizeTurnInput(params.input);
-    const runId = this.createRunId();
+    const turnId = this.createTurnId();
     const handle = await this.provider.startTurn({
       thread: effectiveThread,
       input: normalizedInput,
@@ -358,34 +358,34 @@ export class CodexAppServer {
       tools: this.toolExecutor,
     });
     this.state.appendInput(threadId, normalizedInput);
-    this.state.createRun({ runId, threadId, handle });
+    this.state.createRun({ turnId, threadId, handle });
     await this.emit({
       method: "turn/started",
       params: {
         threadId,
-        runId,
+        turnId,
         turn: {
-          id: runId,
-          status: "in_progress",
+          id: turnId,
+          status: "inProgress",
         },
       },
     });
-    this.turnRunner.attach({ threadId, runId, handle });
-    return { threadId, runId };
+    this.turnRunner.attach({ threadId, turnId, handle });
+    return { threadId, turnId };
   }
 
   private async steerTurn(params: Record<string, unknown>): Promise<AppServerTurnResult> {
     const threadId = asRequiredString(params.threadId, "turn/steer requires threadId");
-    const runId = asRequiredString(
+    const turnId = asRequiredString(
       params.expectedTurnId ?? params.turnId,
       "turn/steer requires expectedTurnId",
     );
-    const run = this.state.getRun(runId);
+    const run = this.state.getRun(turnId);
     if (!run || run.threadId !== threadId || run.status !== "active") {
-      throw new AppServerProtocolError(`Cannot steer inactive turn: ${runId}`);
+      throw new AppServerProtocolError(`Cannot steer inactive turn: ${turnId}`);
     }
     if (!run.handle.steer) {
-      throw new AppServerProtocolError(`Turn does not support steering: ${runId}`);
+      throw new AppServerProtocolError(`Turn does not support steering: ${turnId}`);
     }
     const thread = this.state.getThread(threadId);
     if (!thread) {
@@ -393,35 +393,35 @@ export class CodexAppServer {
     }
     const input = normalizeTurnInput(params.input);
     this.state.appendInput(threadId, input);
-    await run.handle.steer({ thread, runId, input });
-    return { threadId, runId };
+    await run.handle.steer({ thread, turnId, input });
+    return { threadId, turnId };
   }
 
   private async interruptTurn(params: Record<string, unknown>): Promise<AppServerTurnResult> {
     const threadId = asRequiredString(params.threadId, "turn/interrupt requires threadId");
-    const runId = asRequiredString(
+    const turnId = asRequiredString(
       params.turnId ?? params.expectedTurnId,
       "turn/interrupt requires turnId",
     );
-    const run = this.state.getRun(runId);
+    const run = this.state.getRun(turnId);
     if (!run || run.threadId !== threadId || run.status !== "active") {
-      throw new AppServerProtocolError(`Cannot interrupt inactive turn: ${runId}`);
+      throw new AppServerProtocolError(`Cannot interrupt inactive turn: ${turnId}`);
     }
     await run.handle.interrupt?.();
-    await this.turnRunner.cancel(runId);
-    this.state.cancelRun(runId);
+    await this.turnRunner.cancel(turnId);
+    this.state.cancelRun(turnId);
     await this.emit({
       method: "turn/cancelled",
       params: {
         threadId,
-        runId,
+        turnId,
         turn: {
-          id: runId,
+          id: turnId,
           status: "cancelled",
         },
       },
     });
-    return { threadId, runId };
+    return { threadId, turnId };
   }
 
   private async emit(notification: AppServerNotification): Promise<void> {

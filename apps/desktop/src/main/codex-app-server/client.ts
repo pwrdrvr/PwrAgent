@@ -15,6 +15,8 @@ import type {
   AppServerThreadPlanEntry,
   AppServerThreadPlanStep,
   AppServerThreadPlanStepStatus,
+  AppServerThreadTurnMetadata,
+  AppServerThreadTurnStatus,
   AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadReplayPagination,
@@ -26,6 +28,28 @@ import type {
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
 import { getMainLogger } from "../log";
+import type {
+  ClientRequest as CodexClientRequest,
+  CollaborationMode as CodexCollaborationMode,
+  InitializeParams as CodexInitializeParams,
+  ReasoningEffort as CodexReasoningEffort,
+  ServerNotification as CodexServerNotification,
+  ServerRequest as CodexServerRequest,
+  ServiceTier as CodexServiceTier,
+} from "@pwragnt/shared/codex-app-server-protocol";
+import type {
+  AskForApproval as CodexAskForApproval,
+  ModelListParams as CodexModelListParams,
+  SandboxMode as CodexSandboxMode,
+  SkillsListParams as CodexSkillsListParams,
+  ThreadListParams as CodexThreadListParams,
+  ThreadReadParams as CodexThreadReadParams,
+  ThreadResumeParams as CodexThreadResumeParams,
+  ThreadStartParams as CodexThreadStartParams,
+  TurnInterruptParams as CodexTurnInterruptParams,
+  TurnStartParams as CodexTurnStartParams,
+  UserInput as CodexUserInput,
+} from "@pwragnt/shared/codex-app-server-protocol/v2";
 import {
   JsonRpcConnection,
   type JsonRpcId,
@@ -37,7 +61,6 @@ import {
 } from "./thread-directory-enricher";
 import { StdioJsonRpcTransport } from "./stdio-transport";
 
-const DEFAULT_PROTOCOL_VERSION = "1.0";
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.4";
 
@@ -76,6 +99,10 @@ type SkillCatalogEntry = {
   skills: AppServerSkillSummary[];
 };
 
+type CodexClientRequestMethod = CodexClientRequest["method"];
+type CodexServerNotificationMethod = CodexServerNotification["method"];
+type CodexServerRequestMethod = CodexServerRequest["method"];
+
 const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "turn/started",
   "turn/completed",
@@ -99,6 +126,34 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "item/commandExecution/outputDelta",
   "mcpServer/startupStatus/updated",
 ]);
+const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<CodexServerNotificationMethod>([
+  "turn/started",
+  "turn/completed",
+  "item/agentMessage/delta",
+  "item/started",
+  "item/completed",
+  "item/plan/delta",
+  "turn/plan/updated",
+  "turn/diff/updated",
+  "serverRequest/resolved",
+  "thread/compacted",
+  "thread/status/changed",
+  "thread/tokenUsage/updated",
+  "account/rateLimits/updated",
+  "item/commandExecution/outputDelta",
+  "mcpServer/startupStatus/updated",
+]);
+const GENERATED_CODEX_SERVER_REQUEST_METHODS = new Set<CodexServerRequestMethod>([
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/tool/requestUserInput",
+  "mcpServer/elicitation/request",
+  "item/permissions/requestApproval",
+  "item/tool/call",
+  "account/chatgptAuthTokens/refresh",
+  "applyPatchApproval",
+  "execCommandApproval",
+]);
 const codexClientLog = getMainLogger("pwragnt:codex-client");
 
 function isApprovalLikeMethod(method: string): boolean {
@@ -107,6 +162,22 @@ function isApprovalLikeMethod(method: string): boolean {
 
 function isHandledServerRequestMethod(method: string): boolean {
   return isApprovalLikeMethod(method) || method === "item/tool/requestUserInput";
+}
+
+function isKnownCodexNotificationMethod(
+  method: string
+): method is CodexServerNotificationMethod {
+  return GENERATED_CODEX_NOTIFICATION_METHODS.has(
+    method as CodexServerNotificationMethod
+  );
+}
+
+function isKnownCodexServerRequestMethod(
+  method: string
+): method is CodexServerRequestMethod {
+  return GENERATED_CODEX_SERVER_REQUEST_METHODS.has(
+    method as CodexServerRequestMethod
+  );
 }
 
 function isRequestLikeMethod(method: string): boolean {
@@ -211,7 +282,7 @@ function pickBoolean(
 
 function extractRequestMetadata(value: unknown): {
   threadId?: string;
-  runId?: string;
+  turnId?: string;
   requestId?: string;
 } {
   const record = asRecord(value);
@@ -220,13 +291,13 @@ function extractRequestMetadata(value: unknown): {
   }
 
   const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
-  const turnRecord = asRecord(record.turn) ?? asRecord(record.run);
+  const turnRecord = asRecord(record.turn);
 
   return {
     threadId:
       pickString(record, ["threadId", "thread_id", "conversationId", "conversation_id"]) ??
       pickString(threadRecord ?? {}, ["id", "threadId", "thread_id", "conversationId"]),
-    runId:
+    turnId:
       pickString(record, ["turnId", "turn_id", "runId", "run_id"]) ??
       pickString(turnRecord ?? {}, ["id", "turnId", "turn_id", "runId", "run_id"]),
     requestId:
@@ -248,10 +319,28 @@ function normalizePendingRequestNotification(
     params: {
       ...record,
       ...(metadata.threadId ? { threadId: metadata.threadId } : {}),
-      ...(metadata.runId ? { runId: metadata.runId } : {}),
+      ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
       requestId: metadata.requestId ?? String(rpcId ?? `${method}-request`),
     } as AppServerPendingRequestNotification["params"],
   };
+}
+
+function normalizeServerNotification(
+  method: string,
+  params: unknown,
+): AppServerNotification {
+  const record = asRecord(params) ?? {};
+  const metadata = extractRequestMetadata(params);
+
+  return {
+    method: method as AppServerNotification["method"],
+    params: {
+      ...record,
+      ...(metadata.threadId ? { threadId: metadata.threadId } : {}),
+      ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
+      ...(metadata.requestId ? { requestId: metadata.requestId } : {}),
+    } as AppServerNotification["params"],
+  } as AppServerNotification;
 }
 
 function normalizeEpochTimestamp(value: number | undefined): number | undefined {
@@ -375,6 +464,18 @@ function normalizeConversationRole(
     normalized === "assistantmessage"
   ) {
     return "assistant";
+  }
+  return undefined;
+}
+
+function normalizeAgentMessagePhase(
+  value: string | undefined
+): "commentary" | "final" | undefined {
+  if (value === "commentary") {
+    return "commentary";
+  }
+  if (value === "final_answer") {
+    return "final";
   }
   return undefined;
 }
@@ -566,6 +667,9 @@ function normalizeActivityStatus(
   value: string | undefined
 ): AppServerThreadActivityStatus | undefined {
   const normalized = value?.trim().toLowerCase();
+  if (normalized === "inprogress") {
+    return "in_progress";
+  }
   if (
     normalized === "in_progress" ||
     normalized === "completed" ||
@@ -577,10 +681,56 @@ function normalizeActivityStatus(
   return undefined;
 }
 
+function normalizeTurnStatus(value: string | undefined): AppServerThreadTurnStatus | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "inprogress") {
+    return "in_progress";
+  }
+  if (
+    normalized === "in_progress" ||
+    normalized === "completed" ||
+    normalized === "failed" ||
+    normalized === "cancelled" ||
+    normalized === "interrupted"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function extractTurnMetadata(
+  turn: Record<string, unknown>
+): AppServerThreadTurnMetadata | undefined {
+  const id = pickString(turn, ["id", "turnId", "turn_id", "runId", "run_id"]);
+  if (!id) {
+    return undefined;
+  }
+
+  const startedAt = normalizeEpochTimestamp(
+    pickNumber(turn, ["startedAt", "started_at", "createdAt", "timestamp", "time"])
+  );
+  const completedAt = normalizeEpochTimestamp(
+    pickNumber(turn, ["completedAt", "completed_at"])
+  );
+  const durationMs = pickNumber(turn, ["durationMs", "duration_ms"]);
+  const status = normalizeTurnStatus(pickString(turn, ["status"]));
+
+  return {
+    id,
+    ...(status ? { status } : {}),
+    ...(startedAt ? { startedAt } : {}),
+    ...(completedAt ? { completedAt } : {}),
+    ...(typeof durationMs === "number" ? { durationMs } : {}),
+  };
+}
+
 function normalizePlanStepStatus(
   value: string | undefined
 ): AppServerThreadPlanStepStatus | undefined {
   const normalized = value?.trim().toLowerCase();
+  if (normalized === "inprogress") {
+    return "in_progress";
+  }
   if (
     normalized === "pending" ||
     normalized === "in_progress" ||
@@ -702,7 +852,8 @@ function parseStructuredValue(value: unknown): unknown {
 
 function extractNestedPlanEntryFromItem(
   item: Record<string, unknown>,
-  createdAt?: number
+  createdAt?: number,
+  turn?: AppServerThreadTurnMetadata
 ): AppServerThreadPlanEntry | undefined {
   for (const key of ["payload", "item", "responseItem", "response_item"]) {
     const nestedItem = asRecord(item[key]);
@@ -717,7 +868,8 @@ function extractNestedPlanEntryFromItem(
           pickString(item, ["id", "itemId", "item_id"]) ??
           pickString(nestedItem, ["id", "itemId", "item_id", "call_id"])
       },
-      createdAt
+      createdAt,
+      turn
     );
     if (nestedPlanEntry) {
       return nestedPlanEntry;
@@ -729,13 +881,14 @@ function extractNestedPlanEntryFromItem(
 
 function extractPlanEntryFromItem(
   item: Record<string, unknown>,
-  createdAt?: number
+  createdAt?: number,
+  turn?: AppServerThreadTurnMetadata
 ): AppServerThreadPlanEntry | undefined {
   const itemType = pickString(item, ["type"]);
   const normalizedItemType = itemType?.trim().toLowerCase();
   const itemId =
     pickString(item, ["id", "itemId", "item_id", "call_id"]) ?? `plan-${createdAt ?? 0}`;
-  const nestedPlanEntry = extractNestedPlanEntryFromItem(item, createdAt);
+  const nestedPlanEntry = extractNestedPlanEntryFromItem(item, createdAt, turn);
   if (nestedPlanEntry) {
     return nestedPlanEntry;
   }
@@ -756,6 +909,7 @@ function extractPlanEntryFromItem(
       type: "plan",
       id: itemId,
       createdAt,
+      ...(turn ? { turn } : {}),
       ...(explanation ? { explanation } : {}),
       ...(normalizedPayload?.markdown ? { markdown: normalizedPayload.markdown } : {}),
       steps,
@@ -794,6 +948,7 @@ function extractPlanEntryFromItem(
     type: "plan",
     id: itemId,
     createdAt,
+    ...(turn ? { turn } : {}),
     ...(normalizedPayload.explanation
       ? { explanation: normalizedPayload.explanation }
       : {}),
@@ -888,9 +1043,27 @@ function formatActivitySummary(parts: string[]): string {
   return parts.join(", ");
 }
 
+function normalizeItemType(value: string | undefined): string | undefined {
+  return value?.replace(/[-_\s]/g, "").toLowerCase();
+}
+
+function isActivityItemType(itemType: string | undefined): boolean {
+  const normalized = normalizeItemType(itemType);
+  return (
+    normalized === "commandexecution" ||
+    normalized === "filechange" ||
+    normalized === "mcptoolcall" ||
+    normalized === "dynamictoolcall" ||
+    normalized === "websearch" ||
+    normalized === "imageview" ||
+    normalized === "imagegeneration"
+  );
+}
+
 function summarizeActivityItems(
   items: Record<string, unknown>[],
-  createdAt?: number
+  createdAt?: number,
+  turn?: AppServerThreadTurnMetadata
 ): AppServerThreadActivityEntry | undefined {
   if (items.length === 0) {
     return undefined;
@@ -900,6 +1073,7 @@ function summarizeActivityItems(
   let inspectedFiles = 0;
   let commandsRun = 0;
   let changedFiles = 0;
+  let toolCalls = 0;
   let status: AppServerThreadActivityStatus | undefined;
 
   for (const item of items) {
@@ -913,7 +1087,8 @@ function summarizeActivityItems(
     }
 
     const itemType = pickString(item, ["type"]);
-    if (itemType === "commandExecution") {
+    const normalizedItemType = normalizeItemType(itemType);
+    if (normalizedItemType === "commandexecution") {
       const command = pickString(item, ["command"]);
       const actions = Array.isArray(item.commandActions)
         ? item.commandActions
@@ -980,7 +1155,7 @@ function summarizeActivityItems(
       continue;
     }
 
-    if (itemType === "fileChange") {
+    if (normalizedItemType === "filechange") {
       const changes = Array.isArray(item.changes)
         ? item.changes
             .map((entry) => asRecord(entry))
@@ -1016,6 +1191,27 @@ function summarizeActivityItems(
             : {})
         });
       }
+      continue;
+    }
+
+    if (
+      normalizedItemType === "mcptoolcall" ||
+      normalizedItemType === "dynamictoolcall" ||
+      normalizedItemType === "websearch" ||
+      normalizedItemType === "imageview" ||
+      normalizedItemType === "imagegeneration"
+    ) {
+      toolCalls += 1;
+      const toolName =
+        pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
+        (normalizedItemType === "websearch" ? "web search" : undefined);
+      const query = pickString(item, ["query"]);
+      pushActivityDetail(details, {
+        id: itemId,
+        kind: normalizedItemType === "websearch" ? "read" : "command",
+        label: [toolName ?? "Used tool", query ? `: ${query}` : ""].join(""),
+        status: itemStatus
+      });
     }
   }
 
@@ -1031,6 +1227,9 @@ function summarizeActivityItems(
   if (changedFiles > 0) {
     summaryParts.push(`Edited ${changedFiles} file${changedFiles === 1 ? "" : "s"}`);
   }
+  if (toolCalls > 0) {
+    summaryParts.push(`Used ${toolCalls} tool${toolCalls === 1 ? "" : "s"}`);
+  }
 
   if (summaryParts.length === 0 && details.length === 0) {
     return undefined;
@@ -1045,7 +1244,8 @@ function summarizeActivityItems(
         : `Recorded ${details.length} activity item${details.length === 1 ? "" : "s"}`,
     createdAt,
     status,
-    details
+    details,
+    ...(turn ? { turn } : {})
   };
 }
 
@@ -1070,6 +1270,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
   const entries: AppServerThreadEntry[] = [];
 
   for (const turn of turns) {
+    const turnMetadata = extractTurnMetadata(turn);
     const createdAt = normalizeEpochTimestamp(
       pickNumber(turn, ["startedAt", "createdAt", "timestamp", "time"])
     );
@@ -1081,7 +1282,11 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
     const pendingActivityItems: Record<string, unknown>[] = [];
 
     const flushActivityItems = (): void => {
-      const activity = summarizeActivityItems(pendingActivityItems, createdAt);
+      const activity = summarizeActivityItems(
+        pendingActivityItems,
+        createdAt,
+        turnMetadata
+      );
       pendingActivityItems.length = 0;
       if (activity) {
         entries.push(activity);
@@ -1097,6 +1302,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
         if (!content.text && !content.parts?.length) {
           continue;
         }
+        const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
         entries.push({
           type: "message",
           id:
@@ -1106,21 +1312,20 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
           text: content.text,
           ...(content.parts ? { parts: content.parts } : {}),
           createdAt,
-          ...(pickString(item, ["phase"]) === "commentary"
-            ? { phase: "commentary" as const }
-            : {})
+          ...(turnMetadata ? { turn: turnMetadata } : {}),
+          ...(phase ? { phase } : {})
         });
         continue;
       }
 
-      const planEntry = extractPlanEntryFromItem(item, createdAt);
+      const planEntry = extractPlanEntryFromItem(item, createdAt, turnMetadata);
       if (planEntry) {
         flushActivityItems();
         entries.push(planEntry);
         continue;
       }
 
-      if (itemType === "commandExecution" || itemType === "fileChange") {
+      if (isActivityItemType(itemType)) {
         pendingActivityItems.push(item);
       }
     }
@@ -1282,13 +1487,13 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
   });
 }
 
-function extractRunIdFromValue(value: unknown): string | undefined {
+function extractTurnIdFromValue(value: unknown): string | undefined {
   const record = asRecord(value);
   if (!record) {
     return undefined;
   }
 
-  const turnRecord = asRecord(record.turn) ?? asRecord(record.run);
+  const turnRecord = asRecord(record.turn);
   return (
     pickString(record, ["turnId", "turn_id", "runId", "run_id"]) ??
     pickString(turnRecord ?? {}, ["id", "turnId", "turn_id", "runId", "run_id"])
@@ -1458,27 +1663,19 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
 function buildThreadDiscoveryPayloads(
   filter?: string,
   archived?: boolean
-): unknown[] {
+): CodexThreadListParams[] {
   const searchTerm = filter?.trim() || undefined;
-  const baseParams = {
+  const baseParams: CodexThreadListParams = {
     archived,
     limit: 50,
     sortKey: "updated_at",
     sourceKinds: ["cli", "vscode"],
-  } as const;
+  };
 
   return [
     {
       ...baseParams,
       searchTerm,
-    },
-    {
-      ...baseParams,
-      query: searchTerm,
-    },
-    {
-      ...baseParams,
-      filter: searchTerm,
     },
     {
       ...baseParams,
@@ -1631,6 +1828,99 @@ function hydrateMissingLinkedDirectoriesFromSiblingRepos(
   });
 }
 
+function normalizeCodexApprovalPolicy(
+  value?: string
+): CodexAskForApproval | undefined {
+  const normalized = value?.trim();
+  if (
+    normalized === "untrusted" ||
+    normalized === "on-failure" ||
+    normalized === "on-request" ||
+    normalized === "never"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeCodexSandboxMode(
+  value?: string
+): CodexSandboxMode | undefined {
+  const normalized = value?.trim();
+  if (
+    normalized === "read-only" ||
+    normalized === "workspace-write" ||
+    normalized === "danger-full-access"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeCodexServiceTier(
+  value?: string
+): CodexServiceTier | undefined {
+  const normalized = value?.trim();
+  if (normalized === "fast" || normalized === "flex") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeCodexReasoningEffort(
+  value?: string
+): CodexReasoningEffort | undefined {
+  const normalized = value?.trim();
+  if (
+    normalized === "none" ||
+    normalized === "minimal" ||
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high" ||
+    normalized === "xhigh"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function buildThreadStartPayload(params: {
+  cwd?: string;
+  model?: string;
+  approvalPolicy?: string;
+  sandbox?: string;
+  serviceTier?: string;
+}): CodexThreadStartParams {
+  const base: CodexThreadStartParams = {
+    experimentalRawEvents: false,
+    persistExtendedHistory: false,
+  };
+
+  if (params.cwd?.trim()) {
+    base.cwd = params.cwd.trim();
+  }
+  if (params.model?.trim()) {
+    base.model = params.model.trim();
+  }
+
+  const approvalPolicy = normalizeCodexApprovalPolicy(params.approvalPolicy);
+  if (approvalPolicy) {
+    base.approvalPolicy = approvalPolicy;
+  }
+
+  const sandbox = normalizeCodexSandboxMode(params.sandbox);
+  if (sandbox) {
+    base.sandbox = sandbox;
+  }
+
+  const serviceTier = normalizeCodexServiceTier(params.serviceTier);
+  if (serviceTier) {
+    base.serviceTier = serviceTier;
+  }
+
+  return base;
+}
+
 function buildThreadResumePayloads(params: {
   threadId: string;
   cwd?: string;
@@ -1640,8 +1930,8 @@ function buildThreadResumePayloads(params: {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
-}): Array<Record<string, unknown>> {
-  const base: Record<string, unknown> = {
+}): CodexThreadResumeParams[] {
+  const base: CodexThreadResumeParams = {
     threadId: params.threadId,
     persistExtendedHistory: false
   };
@@ -1652,20 +1942,26 @@ function buildThreadResumePayloads(params: {
   if (params.model?.trim()) {
     base.model = params.model.trim();
   }
-  if (params.approvalPolicy?.trim()) {
-    base.approvalPolicy = params.approvalPolicy.trim();
+
+  const approvalPolicy = normalizeCodexApprovalPolicy(params.approvalPolicy);
+  if (approvalPolicy) {
+    base.approvalPolicy = approvalPolicy;
   }
-  if (params.sandbox?.trim()) {
-    base.sandbox = params.sandbox.trim();
+
+  const sandbox = normalizeCodexSandboxMode(params.sandbox);
+  if (sandbox) {
+    base.sandbox = sandbox;
   }
-  if (params.serviceTier?.trim()) {
-    base.serviceTier = params.serviceTier.trim();
+
+  const serviceTier = normalizeCodexServiceTier(params.serviceTier);
+  if (serviceTier) {
+    base.serviceTier = serviceTier;
   }
-  if (params.reasoningEffort?.trim()) {
-    base.reasoningEffort = params.reasoningEffort.trim();
-  }
+
   if (typeof params.fastMode === "boolean") {
-    base.fastMode = params.fastMode;
+    base.config = {
+      fast_mode: params.fastMode,
+    };
   }
 
   return [base];
@@ -1691,7 +1987,7 @@ function buildCollaborationModePayload(params: {
   collaborationMode?: AppServerCollaborationModeRequest;
   fallbackModel?: string;
   fallbackReasoningEffort?: string;
-}): Record<string, unknown> | undefined {
+}): CodexCollaborationMode | undefined {
   if (!params.collaborationMode) {
     return undefined;
   }
@@ -1702,7 +1998,9 @@ function buildCollaborationModePayload(params: {
     params.fallbackModel?.trim() ||
     DEFAULT_CODEX_COLLABORATION_MODEL;
   const reasoningEffort =
-    settings.reasoningEffort?.trim() || params.fallbackReasoningEffort?.trim();
+    normalizeCodexReasoningEffort(settings.reasoningEffort) ??
+    normalizeCodexReasoningEffort(params.fallbackReasoningEffort) ??
+    null;
   const developerInstructions = Object.hasOwn(settings, "developerInstructions")
     ? settings.developerInstructions
     : params.collaborationMode.mode === "plan"
@@ -1713,35 +2011,52 @@ function buildCollaborationModePayload(params: {
     mode: params.collaborationMode.mode,
     settings: {
       model,
-      ...(reasoningEffort ? { reasoningEffort } : {}),
-      ...(developerInstructions !== undefined
-        ? { developerInstructions }
-        : {}),
+      reasoning_effort: reasoningEffort,
+      developer_instructions: developerInstructions ?? null,
     },
   };
+}
+
+function toCodexUserInput(input: AppServerTurnInputItem): CodexUserInput {
+  if (input.type === "text") {
+    return {
+      type: "text",
+      text: input.text,
+      text_elements: [],
+    };
+  }
+
+  return input;
 }
 
 function buildTurnStartPayload(params: {
   threadId: string;
   input: AppServerTurnInputItem[];
   model?: string;
+  reasoningEffort?: string;
   collaborationMode?: AppServerCollaborationModeRequest;
   collaborationFallbackModel?: string;
   collaborationFallbackReasoningEffort?: string;
-}): Record<string, unknown> {
-  const base: Record<string, unknown> = {
+}): CodexTurnStartParams {
+  const base: CodexTurnStartParams = {
     threadId: params.threadId,
-    input: params.input,
+    input: params.input.map(toCodexUserInput),
   };
 
   if (params.model?.trim()) {
     base.model = params.model.trim();
   }
 
+  const reasoningEffort = normalizeCodexReasoningEffort(params.reasoningEffort);
+  if (reasoningEffort) {
+    base.effort = reasoningEffort;
+  }
+
   const collaborationMode = buildCollaborationModePayload({
     collaborationMode: params.collaborationMode,
     fallbackModel: params.collaborationFallbackModel ?? params.model,
-    fallbackReasoningEffort: params.collaborationFallbackReasoningEffort,
+    fallbackReasoningEffort:
+      params.collaborationFallbackReasoningEffort ?? params.reasoningEffort,
   });
   if (collaborationMode) {
     base.collaborationMode = collaborationMode;
@@ -1750,9 +2065,35 @@ function buildTurnStartPayload(params: {
   return base;
 }
 
+type CodexThreadReadPayload = CodexThreadReadParams & {
+  before?: string;
+  limit?: number;
+};
+
+function buildThreadReadPayload(params: {
+  threadId: string;
+  before?: string;
+  limit?: number;
+}): CodexThreadReadPayload {
+  const payload: CodexThreadReadPayload = {
+    threadId: params.threadId,
+    includeTurns: true,
+  };
+
+  if (params.before) {
+    payload.before = params.before;
+  }
+
+  if (params.limit !== undefined) {
+    payload.limit = params.limit;
+  }
+
+  return payload;
+}
+
 async function requestWithFallbacks(params: {
   client: JsonRpcConnection;
-  methods: string[];
+  methods: Array<CodexClientRequestMethod | (string & {})>;
   payloads: unknown[];
   timeoutMs: number;
 }): Promise<unknown> {
@@ -1810,7 +2151,8 @@ export class CodexAppServerClient {
           })
         : createThreadDirectoryEnricher());
     this.connection.setNotificationHandler(async (method, params) => {
-      if (!KNOWN_NOTIFICATION_METHODS.has(method)) {
+      const isKnownCodexMethod = isKnownCodexNotificationMethod(method);
+      if (!isKnownCodexMethod) {
         logUnhandledCodexMessage({
           kind: "notification",
           method,
@@ -1819,14 +2161,33 @@ export class CodexAppServerClient {
       }
 
       for (const listener of this.notificationListeners) {
-        await listener({
-          method: method as AppServerNotification["method"],
-          params: (params ?? {}) as AppServerNotification["params"],
-        } as AppServerNotification);
+        const wireNotification = isKnownCodexMethod
+          ? ({
+              method,
+              params: params ?? {},
+            } as CodexServerNotification)
+          : undefined;
+        await listener(
+          normalizeServerNotification(
+            wireNotification?.method ?? method,
+            wireNotification?.params ?? params,
+          )
+        );
       }
     });
     this.connection.setRequestHandler(async (method, params, rpcId) => {
-      const request = normalizePendingRequestNotification(method, params, rpcId);
+      const wireRequest = isKnownCodexServerRequestMethod(method)
+        ? ({
+            method,
+            id: rpcId ?? `${method}-request`,
+            params: params ?? {},
+          } as CodexServerRequest)
+        : undefined;
+      const request = normalizePendingRequestNotification(
+        wireRequest?.method ?? method,
+        wireRequest?.params ?? params,
+        rpcId
+      );
 
       const listeners = [...this.requestListeners];
       if (listeners.length === 0) {
@@ -1894,7 +2255,7 @@ export class CodexAppServerClient {
 
     const requestParams = {
       client: this.connection,
-      methods: ["thread/list", "thread/loaded/list"] as string[],
+      methods: ["thread/list"] as CodexClientRequestMethod[],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     };
     if (params?.archived === true) {
@@ -1949,11 +2310,18 @@ export class CodexAppServerClient {
   }): Promise<SkillCatalogEntry[]> {
     await this.ensureInitialized();
 
-    const cwds = [...new Set([...(params?.cwds ?? []), params?.cwd].filter(Boolean))];
+    const cwds = [
+      ...new Set(
+        [...(params?.cwds ?? []), params?.cwd].filter(
+          (cwd): cwd is string => typeof cwd === "string" && cwd.trim().length > 0
+        )
+      ),
+    ];
+    const payload: CodexSkillsListParams = { cwds };
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["skills/list"],
-      payloads: [{ cwds }],
+      payloads: [payload],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     });
 
@@ -1963,10 +2331,11 @@ export class CodexAppServerClient {
   async listModels(): Promise<BackendModelOption[]> {
     await this.ensureInitialized();
 
+    const payload: CodexModelListParams = {};
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["model/list"],
-      payloads: [{}],
+      payloads: [payload],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     });
 
@@ -1982,17 +2351,11 @@ export class CodexAppServerClient {
 
     let result: unknown;
     try {
+      const payload = buildThreadReadPayload(params);
       result = await requestWithFallbacks({
         client: this.connection,
         methods: ["thread/read"],
-        payloads: [
-          {
-            threadId: params.threadId,
-            includeTurns: true,
-            before: params.before,
-            limit: params.limit
-          }
-        ],
+        payloads: [payload],
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
       });
     } catch (error) {
@@ -2026,8 +2389,8 @@ export class CodexAppServerClient {
 
     const result = await requestWithFallbacks({
       client: this.connection,
-      methods: ["thread/start", "thread/new"],
-      payloads: [params],
+      methods: ["thread/start"],
+      payloads: [buildThreadStartPayload(params)],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
@@ -2047,7 +2410,7 @@ export class CodexAppServerClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ threadId: string; runId: string }> {
+  }): Promise<{ threadId: string; turnId: string }> {
     await this.ensureInitialized();
 
     const resumeResult = await requestWithFallbacks({
@@ -2071,6 +2434,7 @@ export class CodexAppServerClient {
           threadId: params.threadId,
           input: params.input,
           model: params.model,
+          reasoningEffort: params.reasoningEffort,
           collaborationMode: params.collaborationMode,
           collaborationFallbackModel:
             params.model?.trim() || extractStringProperty(resumeResult, "model"),
@@ -2085,9 +2449,9 @@ export class CodexAppServerClient {
     });
 
     const threadId = extractThreadIdFromValue(result) ?? params.threadId;
-    const runId = extractRunIdFromValue(result) ?? `pending:${threadId}`;
+    const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
 
-    return { threadId, runId };
+    return { threadId, turnId };
   }
 
   async setThreadPermissions(params: {
@@ -2163,8 +2527,8 @@ export class CodexAppServerClient {
 
   async interruptTurn(params: {
     threadId: string;
-    runId: string;
-  }): Promise<{ threadId: string; runId: string }> {
+    turnId: string;
+  }): Promise<{ threadId: string; turnId: string }> {
     await this.ensureInitialized();
 
     await requestWithFallbacks({
@@ -2177,16 +2541,20 @@ export class CodexAppServerClient {
     }).catch(() => undefined);
 
     try {
+      const payload: CodexTurnInterruptParams = {
+        threadId: params.threadId,
+        turnId: params.turnId,
+      };
       const result = await requestWithFallbacks({
         client: this.connection,
         methods: ["turn/interrupt"],
-        payloads: [{ threadId: params.threadId, turnId: params.runId }],
+        payloads: [payload],
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       });
 
       return {
         threadId: extractThreadIdFromValue(result) ?? params.threadId,
-        runId: extractRunIdFromValue(result) ?? params.runId,
+        turnId: extractTurnIdFromValue(result) ?? params.turnId,
       };
     } catch (error) {
       if (!isRequestTimeoutError(error, "turn/interrupt")) {
@@ -2197,13 +2565,13 @@ export class CodexAppServerClient {
         "turn/interrupt timed out; waiting for later status updates",
         {
           threadId: params.threadId,
-          runId: params.runId,
+          turnId: params.turnId,
         }
       );
 
       return {
         threadId: params.threadId,
-        runId: params.runId,
+        turnId: params.turnId,
       };
     }
   }
@@ -2222,11 +2590,11 @@ export class CodexAppServerClient {
       await this.connection.connect();
 
       try {
-        const result = await this.connection.request("initialize", {
-          protocolVersion: DEFAULT_PROTOCOL_VERSION,
-          clientInfo: { name: "pwragnt-desktop", version: "0.1.0" },
-          capabilities: { experimentalApi: true }
-        });
+        const initializeParams: CodexInitializeParams = {
+          clientInfo: { name: "pwragnt-desktop", title: "PwrAgnt", version: "0.1.0" },
+          capabilities: { experimentalApi: false }
+        };
+        const result = await this.connection.request("initialize", initializeParams);
         this.initializeResult = (asRecord(result) ?? {}) as InitializeResult;
       } catch (error) {
         if (!isAlreadyInitializedError(error)) {

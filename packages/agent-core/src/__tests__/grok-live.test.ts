@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CodexAppServer } from "../app-server/codex-app-server.js";
 import { resolveGrokAppServerRuntimeConfig } from "../config/grok-app-server-config.js";
-import type { AppServerNotification } from "../app-server/protocol.js";
+import type { AppServerNotification } from "../app-server/internal-contract.js";
 import { GrokProvider } from "../providers/grok-provider.js";
 import { createTemporaryTestDirectory } from "../testing/test-harness.js";
 
@@ -69,7 +69,7 @@ function createLiveServer(): {
   const server = new CodexAppServer({
     provider,
     threadIdGenerator: () => "thread-live",
-    runIdGenerator: (() => {
+    turnIdGenerator: (() => {
       let index = 0;
       return () => `turn-live-${++index}`;
     })(),
@@ -105,13 +105,13 @@ describe("Grok live smoke", () => {
             text: `Reply with only these words: ${marker}`,
           },
         ],
-      })) as { threadId: string; runId: string };
+      })) as { threadId: string; turnId: string };
       const firstCompleted = await waitForNotification(
         notifications,
         (notification) =>
           notification.method === "turn/completed" &&
-          notification.params.runId === firstTurn.runId,
-        `turn/completed for ${firstTurn.runId}`,
+          notification.params.turnId === firstTurn.turnId,
+        `turn/completed for ${firstTurn.turnId}`,
       );
       const firstOutput = completedOutput(firstCompleted);
 
@@ -139,13 +139,13 @@ describe("Grok live smoke", () => {
             text: "Repeat the same words from your previous reply.",
           },
         ],
-      })) as { threadId: string; runId: string };
+      })) as { threadId: string; turnId: string };
       const secondCompleted = await waitForNotification(
         notifications,
         (notification) =>
           notification.method === "turn/completed" &&
-          notification.params.runId === secondTurn.runId,
-        `turn/completed for ${secondTurn.runId}`,
+          notification.params.turnId === secondTurn.turnId,
+        `turn/completed for ${secondTurn.turnId}`,
       );
       const secondOutput = completedOutput(secondCompleted);
 
@@ -180,24 +180,24 @@ describe("Grok live smoke", () => {
             text: `Remember this token for the thread summary: ${marker}`,
           },
         ],
-      })) as { threadId: string; runId: string };
+      })) as { threadId: string; turnId: string };
       await waitForNotification(
         notifications,
         (notification) =>
           notification.method === "turn/completed" &&
-          notification.params.runId === seedTurn.runId,
-        `turn/completed for ${seedTurn.runId}`,
+          notification.params.turnId === seedTurn.turnId,
+        `turn/completed for ${seedTurn.turnId}`,
       );
 
       const compaction = (await server.request("thread/compact/start", {
         threadId: "thread-live",
-      })) as { threadId: string; runId: string; itemId: string };
+      })) as { threadId: string; turnId: string; itemId: string };
 
       const started = await waitForNotification(
         notifications,
         (notification) =>
           notification.method === "item/started" &&
-          notification.params.runId === compaction.runId &&
+          notification.params.turnId === compaction.turnId &&
           notification.params.item.id === compaction.itemId &&
           notification.params.item.type === "contextCompaction",
         `item/started for ${compaction.itemId}`,
@@ -206,7 +206,7 @@ describe("Grok live smoke", () => {
         notifications,
         (notification) =>
           notification.method === "item/completed" &&
-          notification.params.runId === compaction.runId &&
+          notification.params.turnId === compaction.turnId &&
           notification.params.item.id === compaction.itemId,
         `item/completed for ${compaction.itemId}`,
       );
@@ -221,14 +221,14 @@ describe("Grok live smoke", () => {
 
       expect(compaction).toEqual({
         threadId: "thread-live",
-        runId: expect.stringMatching(/^turn-live-/),
+        turnId: expect.stringMatching(/^turn-live-/),
         itemId: expect.stringMatching(/^turn-live-\d+-item$/),
       });
       expect(started).toEqual({
         method: "item/started",
         params: {
           threadId: "thread-live",
-          runId: compaction.runId,
+          turnId: compaction.turnId,
           item: {
             id: compaction.itemId,
             type: "contextCompaction",
@@ -275,37 +275,37 @@ describe("Grok live smoke", () => {
                 "Use the repository tools to inspect this workspace and find the exact string value assigned to TOOL_TARGET in src/marker.ts. Reply with the value only.",
             },
           ],
-        })) as { threadId: string; runId: string };
+        })) as { threadId: string; turnId: string };
 
         const startedTool = await waitForNotification(
           notifications,
           (notification) =>
             notification.method === "item/started" &&
-            notification.params.runId === turn.runId &&
+            notification.params.turnId === turn.turnId &&
             notification.params.item.type === "dynamicToolCall" &&
             ["read_file", "search_code", "list_files"].includes(
               notification.params.item.toolName ?? "",
             ),
-          `tool item/started for ${turn.runId}`,
+          `tool item/started for ${turn.turnId}`,
         );
         const completedTool = await waitForNotification(
           notifications,
           (notification) =>
             notification.method === "item/completed" &&
-            notification.params.runId === turn.runId &&
+            notification.params.turnId === turn.turnId &&
             notification.params.item.type === "dynamicToolCall" &&
             notification.params.item.success === true &&
             ["read_file", "search_code", "list_files"].includes(
               notification.params.item.toolName ?? "",
             ),
-          `tool item/completed for ${turn.runId}`,
+          `tool item/completed for ${turn.turnId}`,
         );
         const completedTurn = await waitForNotification(
           notifications,
           (notification) =>
             notification.method === "turn/completed" &&
-            notification.params.runId === turn.runId,
-          `turn/completed for ${turn.runId}`,
+            notification.params.turnId === turn.turnId,
+          `turn/completed for ${turn.turnId}`,
         );
 
         expect(startedTool.method).toBe("item/started");

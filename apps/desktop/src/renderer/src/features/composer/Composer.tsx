@@ -23,7 +23,7 @@ import {
 import { SkillChip } from "./SkillChip";
 
 type ComposerProps = {
-  activeRunId?: string;
+  activeTurnId?: string;
   addOptimisticUserMessage?: (
     text: string,
     imageParts?: AppServerThreadImagePart[]
@@ -34,7 +34,7 @@ type ComposerProps = {
   disabled?: boolean;
   launchpad?: NavigationLaunchpadDraft;
   launchpadError?: string;
-  onActiveRunIdChange?: (runId?: string) => void;
+  onActiveTurnIdChange?: (turnId?: string) => void;
   onEnsureSkillsLoaded?: () => void | Promise<void>;
   pendingRequestActive?: boolean;
   pendingUserInputActive?: boolean;
@@ -131,11 +131,11 @@ function getReasoningEffortValue(
 
 export function Composer(props: ComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const activeRunIdRef = useRef<string | undefined>(undefined);
+  const activeTurnIdRef = useRef<string | undefined>(undefined);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
-  const [activeRunId, setActiveRunId] = useState<string | undefined>(undefined);
+  const [activeTurnId, setActiveTurnId] = useState<string | undefined>(undefined);
   const [sendError, setSendError] = useState<string>();
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>([]);
   const [planModeEnabled, setPlanModeEnabled] = useState(false);
@@ -152,9 +152,9 @@ export function Composer(props: ComposerProps) {
   );
 
   const selectionStart = inputRef.current?.selectionStart ?? draft.length;
-  const updateActiveRunId = (nextRunId?: string): void => {
-    activeRunIdRef.current = nextRunId;
-    setActiveRunId(nextRunId);
+  const updateActiveTurnId = (nextTurnId?: string): void => {
+    activeTurnIdRef.current = nextTurnId;
+    setActiveTurnId(nextTurnId);
   };
   const trigger = findSkillTrigger(draft, selectionStart);
   const filteredSkills = useMemo(() => {
@@ -205,7 +205,7 @@ export function Composer(props: ComposerProps) {
     setDraft(props.launchpad?.prompt ?? "");
     setSending(false);
     setInterrupting(false);
-    updateActiveRunId(undefined);
+    updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
   }, [isLaunchpad, props.launchpad?.directoryKey, props.launchpad?.updatedAt]);
 
@@ -221,19 +221,19 @@ export function Composer(props: ComposerProps) {
     setDraft("");
     setSending(false);
     setInterrupting(false);
-    updateActiveRunId(undefined);
+    updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
     setImageAttachments([]);
   }, [props.thread?.id, props.thread?.source]);
 
   useEffect(() => {
-    updateActiveRunId(props.activeRunId);
+    updateActiveTurnId(props.activeTurnId);
 
-    if (!props.activeRunId) {
+    if (!props.activeTurnId) {
       setSending(false);
       setInterrupting(false);
     }
-  }, [props.activeRunId]);
+  }, [props.activeTurnId]);
 
   useEffect(() => {
     if (!props.desktopApi?.onAgentEvent || !props.thread) {
@@ -269,8 +269,8 @@ export function Composer(props: ComposerProps) {
         event.notification.method === "turn/started" &&
         typeof startedTurnRecord?.id === "string"
       ) {
-        updateActiveRunId(startedTurnRecord.id);
-        props.onActiveRunIdChange?.(startedTurnRecord.id);
+        updateActiveTurnId(startedTurnRecord.id);
+        props.onActiveTurnIdChange?.(startedTurnRecord.id);
       }
 
       if (
@@ -288,8 +288,8 @@ export function Composer(props: ComposerProps) {
         props.onPendingStatusChange?.(undefined);
         setSending(false);
         setInterrupting(false);
-        updateActiveRunId(undefined);
-        props.onActiveRunIdChange?.(undefined);
+        updateActiveTurnId(undefined);
+        props.onActiveTurnIdChange?.(undefined);
         setActiveOptimisticMessageId(undefined);
         return;
       }
@@ -298,22 +298,22 @@ export function Composer(props: ComposerProps) {
         event.notification.method === "thread/status/changed" &&
         statusRecord?.type === "idle"
       ) {
-        if (activeRunIdRef.current) {
+        if (activeTurnIdRef.current) {
           return;
         }
 
         props.onPendingStatusChange?.(undefined);
         setSending(false);
         setInterrupting(false);
-        updateActiveRunId(undefined);
-        props.onActiveRunIdChange?.(undefined);
+        updateActiveTurnId(undefined);
+        props.onActiveTurnIdChange?.(undefined);
         setActiveOptimisticMessageId(undefined);
       }
     });
   }, [
     activeOptimisticMessageId,
     props.desktopApi,
-    props.onActiveRunIdChange,
+    props.onActiveTurnIdChange,
     props.onPendingStatusChange,
     props.removeOptimisticMessage,
     props.thread,
@@ -408,8 +408,8 @@ export function Composer(props: ComposerProps) {
           ? Boolean(currentSettings?.fastMode)
           : undefined,
       });
-      updateActiveRunId(response.runId);
-      props.onActiveRunIdChange?.(response.runId);
+      updateActiveTurnId(response.turnId);
+      props.onActiveTurnIdChange?.(response.turnId);
       setDraft("");
       setImageAttachments([]);
       if (collaborationMode) {
@@ -422,18 +422,18 @@ export function Composer(props: ComposerProps) {
       props.onPendingStatusChange?.(undefined);
       setSending(false);
       setInterrupting(false);
-      updateActiveRunId(undefined);
-      props.onActiveRunIdChange?.(undefined);
+      updateActiveTurnId(undefined);
+      props.onActiveTurnIdChange?.(undefined);
       setActiveOptimisticMessageId(undefined);
       setSendError(error instanceof Error ? error.message : String(error));
     }
   };
 
   const stopTurn = async (): Promise<void> => {
-    const runId = activeRunIdRef.current;
+    const turnId = activeTurnIdRef.current;
     if (
       !props.thread ||
-      !runId ||
+      !turnId ||
       !props.desktopApi?.interruptTurn ||
       interrupting
     ) {
@@ -448,7 +448,7 @@ export function Composer(props: ComposerProps) {
       await props.desktopApi.interruptTurn({
         backend: props.thread.source,
         threadId: props.thread.id,
-        runId,
+        turnId,
       });
     } catch (error) {
       setInterrupting(false);
@@ -1065,7 +1065,7 @@ export function Composer(props: ComposerProps) {
       ) : null}
 
       <div className="composer__actions">
-        {activeRunId ? (
+        {activeTurnId ? (
           <button
             className="button button--ghost"
             disabled={props.disabled || interrupting}

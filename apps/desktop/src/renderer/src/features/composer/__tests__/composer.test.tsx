@@ -154,7 +154,7 @@ describe("Composer", () => {
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
-      runId: "turn-1",
+      turnId: "turn-1",
     }));
 
     render(
@@ -251,7 +251,7 @@ describe("Composer", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-1",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         disabled={false}
@@ -376,7 +376,7 @@ describe("Composer", () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
-      runId: "turn-1",
+      turnId: "turn-1",
     }));
     render(
       <Composer
@@ -433,7 +433,7 @@ describe("Composer", () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
-      runId: "turn-1",
+      turnId: "turn-1",
     }));
 
     render(
@@ -472,7 +472,7 @@ describe("Composer", () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
-      runId: "turn-1",
+      turnId: "turn-1",
     }));
     const addOptimisticUserMessage = vi.fn(() => "optimistic-1");
     const recordImageUploadNormalization = vi.fn(async () => undefined);
@@ -566,7 +566,7 @@ describe("Composer", () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
-      runId: "turn-1",
+      turnId: "turn-1",
     }));
     const imageFile = new File([new Uint8Array([1, 2, 3])], "diagram.png");
 
@@ -627,7 +627,7 @@ describe("Composer", () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
-      runId: "turn-1",
+      turnId: "turn-1",
     }));
 
     render(
@@ -673,7 +673,7 @@ describe("Composer", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-1",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         disabled={false}
@@ -706,7 +706,7 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Reply")).toHaveValue("$ce:plan ");
   });
 
-  it("shows a stop button for an active run and interrupts it", async () => {
+  it("shows a stop button for an active turn and interrupts it", async () => {
     let agentEventHandler:
       | ((event: {
           backend: "codex";
@@ -714,7 +714,7 @@ describe("Composer", () => {
             method: "turn/cancelled";
             params: {
               threadId: string;
-              runId: string;
+              turnId: string;
               turn: {
                 id: string;
                 status: "cancelled";
@@ -726,7 +726,7 @@ describe("Composer", () => {
     const interruptTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
-      runId: "turn-1",
+      turnId: "turn-1",
     }));
 
     render(
@@ -740,7 +740,7 @@ describe("Composer", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-1",
-            runId: "turn-1",
+            turnId: "turn-1",
           }),
         }}
         disabled={false}
@@ -769,7 +769,7 @@ describe("Composer", () => {
       expect(interruptTurn).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-1",
-        runId: "turn-1",
+        turnId: "turn-1",
       });
     });
 
@@ -780,7 +780,7 @@ describe("Composer", () => {
           method: "turn/cancelled",
           params: {
             threadId: "thread-1",
-            runId: "turn-1",
+            turnId: "turn-1",
             turn: {
               id: "turn-1",
               status: "cancelled",
@@ -795,7 +795,7 @@ describe("Composer", () => {
     });
   });
 
-  it("updates the stop target when turn/started provides the real run id", async () => {
+  it("updates the stop target when turn/started provides the real turn id", async () => {
     let agentEventHandler:
       | ((event: {
           backend: "codex";
@@ -823,7 +823,7 @@ describe("Composer", () => {
                 method: "turn/completed";
                 params: {
                   threadId: string;
-                  runId: string;
+                  turnId: string;
                   turn: {
                     id: string;
                     status: "completed";
@@ -836,7 +836,7 @@ describe("Composer", () => {
     const interruptTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
-      runId: "turn-99",
+      turnId: "turn-99",
     }));
     render(
       <Composer
@@ -849,7 +849,7 @@ describe("Composer", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-1",
-            runId: "pending:thread-1",
+            turnId: "pending:thread-1",
           }),
         }}
         disabled={false}
@@ -894,7 +894,7 @@ describe("Composer", () => {
       expect(interruptTurn).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-1",
-        runId: "turn-99",
+        turnId: "turn-99",
       });
     });
 
@@ -905,7 +905,7 @@ describe("Composer", () => {
           method: "turn/completed",
           params: {
             threadId: "thread-1",
-            runId: "turn-99",
+            turnId: "turn-99",
             turn: {
               id: "turn-99",
               status: "completed",
@@ -959,11 +959,11 @@ describe("Composer", () => {
           startTurn: async () => ({
             backend: "codex",
             threadId: "thread-1",
-            runId: "pending:thread-1",
+            turnId: "pending:thread-1",
           }),
         }}
         disabled={false}
-        onActiveRunIdChange={() => undefined}
+        onActiveTurnIdChange={() => undefined}
         onPendingStatusChange={onPendingStatusChange}
         skills={[]}
         thread={{
@@ -1023,7 +1023,7 @@ describe("Composer", () => {
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
-      runId: "turn-1",
+      turnId: "turn-1",
     }));
     const onPendingStatusChange = vi.fn();
 

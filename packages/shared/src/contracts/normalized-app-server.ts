@@ -87,9 +87,25 @@ export type AppServerThreadMessagePart =
 
 export type AppServerTranscriptPhase = "commentary" | "final";
 
+export type AppServerThreadTurnStatus =
+  | "in_progress"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+export type AppServerThreadTurnMetadata = {
+  id: string;
+  status?: AppServerThreadTurnStatus;
+  startedAt?: number;
+  completedAt?: number;
+  durationMs?: number;
+};
+
 export type AppServerThreadMessageEntry = AppServerThreadMessage & {
   type: "message";
   phase?: AppServerTranscriptPhase;
+  turn?: AppServerThreadTurnMetadata;
 };
 
 export type AppServerThreadActivityStatus =
@@ -138,6 +154,7 @@ export type AppServerThreadActivityEntry = {
   createdAt?: number;
   status?: AppServerThreadActivityStatus;
   details: AppServerThreadActivityDetail[];
+  turn?: AppServerThreadTurnMetadata;
 };
 
 export type AppServerThreadPlanStepStatus =
@@ -157,6 +174,7 @@ export type AppServerThreadPlanEntry = {
   explanation?: string;
   markdown?: string;
   steps: AppServerThreadPlanStep[];
+  turn?: AppServerThreadTurnMetadata;
 };
 
 export type AppServerThreadEntry =
@@ -267,7 +285,7 @@ export type AppServerPendingRequestNotification = {
   method: string;
   params: {
     threadId: string;
-    runId?: string;
+    turnId?: string;
     requestId: string;
     prompt?: string;
     options?: string[];
@@ -311,10 +329,13 @@ export type AppServerNotification =
       method: "turn/started";
       params: {
         threadId: string;
-        runId?: string;
+        turnId?: string;
         turn: {
           id: string;
           status?: string;
+          startedAt?: number | null;
+          completedAt?: number | null;
+          durationMs?: number | null;
         };
       };
     }
@@ -323,9 +344,9 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId?: string;
-        runId?: string;
         itemId: string;
         delta: string;
+        phase?: AppServerTranscriptPhase;
         stream?: "stdout" | "stderr";
         bytes?: number;
       };
@@ -334,10 +355,13 @@ export type AppServerNotification =
       method: "turn/completed";
       params: {
         threadId: string;
-        runId: string;
+        turnId: string;
         turn: {
           id: string;
           status: "completed";
+          startedAt?: number | null;
+          completedAt?: number | null;
+          durationMs?: number | null;
           output: Array<{
             type: "text";
             text: string;
@@ -349,10 +373,13 @@ export type AppServerNotification =
       method: "turn/failed";
       params: {
         threadId: string;
-        runId: string;
+        turnId: string;
         turn: {
           id: string;
           status: "failed";
+          startedAt?: number | null;
+          completedAt?: number | null;
+          durationMs?: number | null;
           error: {
             message: string;
           };
@@ -363,10 +390,13 @@ export type AppServerNotification =
       method: "turn/cancelled";
       params: {
         threadId: string;
-        runId: string;
+        turnId: string;
         turn: {
           id: string;
           status: "cancelled";
+          startedAt?: number | null;
+          completedAt?: number | null;
+          durationMs?: number | null;
         };
       };
     }
@@ -374,7 +404,7 @@ export type AppServerNotification =
       method: "item/started" | "item/completed";
       params: {
         threadId: string;
-        runId?: string;
+        turnId?: string;
         item: {
           id: string;
           type: string;
@@ -394,7 +424,7 @@ export type AppServerNotification =
       method: "item/plan/delta";
       params: {
         threadId: string;
-        runId?: string;
+        turnId?: string;
         item: {
           id: string;
           type: "plan";
@@ -406,7 +436,7 @@ export type AppServerNotification =
       method: "turn/plan/updated";
       params: {
         threadId: string;
-        runId: string;
+        turnId: string;
         plan: {
           explanation?: string;
           steps: Array<{
@@ -421,7 +451,6 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId?: string;
-        runId?: string;
         diff: string;
       };
     }
@@ -455,7 +484,7 @@ export type AppServerNotification =
       method: "serverRequest/resolved";
       params: {
         threadId: string;
-        runId?: string;
+        turnId?: string;
         requestId: string;
       };
     }

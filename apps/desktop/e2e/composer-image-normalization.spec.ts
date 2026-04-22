@@ -70,7 +70,7 @@ async function createComposerImageFixture(): Promise<{
             method: "turn/start",
             result: {
               threadId: "thread-image-normalization",
-              runId: "turn-image-normalization",
+              turnId: "turn-image-normalization",
             },
           },
         ],

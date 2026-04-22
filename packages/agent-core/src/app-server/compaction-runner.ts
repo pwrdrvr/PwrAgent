@@ -1,4 +1,4 @@
-import type { AppServerNotification, ThreadState } from "./protocol.js";
+import type { AppServerNotification, ThreadState } from "./internal-contract.js";
 import { AppServerSessionState } from "./session-state.js";
 import { TurnRunner } from "./turn-runner.js";
 import type { AppServerProvider } from "../providers/provider-contract.js";
@@ -29,9 +29,9 @@ export class CompactionRunner {
 
   async start(params: {
     thread: ThreadState;
-    runId: string;
+    turnId: string;
     itemId: string;
-  }): Promise<{ threadId: string; runId: string; itemId: string }> {
+  }): Promise<{ threadId: string; turnId: string; itemId: string }> {
     const handle = await this.provider.startTurn({
       thread: params.thread,
       input: [
@@ -44,7 +44,7 @@ export class CompactionRunner {
       tools: this.tools,
     });
     this.state.createRun({
-      runId: params.runId,
+      turnId: params.turnId,
       threadId: params.thread.threadId,
       handle,
     });
@@ -57,7 +57,7 @@ export class CompactionRunner {
       method: "item/started",
       params: {
         threadId: params.thread.threadId,
-        runId: params.runId,
+        turnId: params.turnId,
         item: {
           id: params.itemId,
           type: "contextCompaction",
@@ -66,10 +66,10 @@ export class CompactionRunner {
     });
     this.turnRunner.attach({
       threadId: params.thread.threadId,
-      runId: params.runId,
+      turnId: params.turnId,
       handle,
       onSuccess: async (result) => {
-        this.state.completeRun(params.runId);
+        this.state.completeRun(params.turnId);
         this.state.upsertItem(params.thread.threadId, {
           id: params.itemId,
           type: "contextCompaction",
@@ -85,7 +85,7 @@ export class CompactionRunner {
           method: "item/completed",
           params: {
             threadId: params.thread.threadId,
-            runId: params.runId,
+            turnId: params.turnId,
             item: {
               id: params.itemId,
               type: "contextCompaction",
@@ -102,7 +102,7 @@ export class CompactionRunner {
         });
       },
       onError: async (error) => {
-        this.state.failRun(params.runId);
+        this.state.failRun(params.turnId);
         this.state.upsertItem(params.thread.threadId, {
           id: params.itemId,
           type: "contextCompaction",
@@ -112,9 +112,9 @@ export class CompactionRunner {
           method: "turn/failed",
           params: {
             threadId: params.thread.threadId,
-            runId: params.runId,
+            turnId: params.turnId,
             turn: {
-              id: params.runId,
+              id: params.turnId,
               status: "failed",
               error: {
                 message: error instanceof Error ? error.message : String(error),
@@ -126,7 +126,7 @@ export class CompactionRunner {
     });
     return {
       threadId: params.thread.threadId,
-      runId: params.runId,
+      turnId: params.turnId,
       itemId: params.itemId,
     };
   }

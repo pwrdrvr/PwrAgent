@@ -105,13 +105,13 @@ export function createProtocolLogObserver(
     const params = asRecord(envelope.params);
     const item = asRecord(params?.item);
     const threadId = pickString(params, "threadId");
-    const runId = pickString(params, "runId", "turnId");
+    const turnId = pickString(params, "turnId");
     const itemId = pickString(item, "id") ?? pickString(params, "itemId");
 
     for (const [key, buffer] of deltaBuffers) {
       if (
         (threadId && !key.includes(`thread:${threadId}`)) ||
-        (runId && !key.includes(`run:${runId}`)) ||
+        (turnId && !key.includes(`turn:${turnId}`)) ||
         (itemId && !key.includes(`item:${itemId}`))
       ) {
         continue;
@@ -173,7 +173,7 @@ export function createProtocolLogObserver(
         kind: classifyEnvelope(envelope),
         method,
         paramKeys: Object.keys(params ?? {}),
-        runId: pickString(params, "runId", "turnId"),
+        turnId: pickString(params, "turnId"),
         threadId: pickString(params, "threadId"),
       });
     },
@@ -262,7 +262,7 @@ function buildDeltaKey(params: {
     `direction:${params.direction}`,
     `method:${params.method}`,
     `thread:${pickString(params.params, "threadId") ?? "unknown"}`,
-    `run:${pickString(params.params, "runId", "turnId") ?? "unknown"}`,
+    `turn:${pickString(params.params, "turnId") ?? "unknown"}`,
     `item:${pickString(params.params, "itemId") ?? pickString(item, "id") ?? "unknown"}`,
     `stream:${pickString(params.params, "stream") ?? "text"}`,
   ].join(" ");
