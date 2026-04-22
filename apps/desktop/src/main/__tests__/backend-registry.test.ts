@@ -229,9 +229,9 @@ class MockBackendClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ threadId: string; runId: string }> {
+  }): Promise<{ threadId: string; turnId: string }> {
     this.lastStartTurnParams = params;
-    return { threadId: params.threadId, runId: "turn-1" };
+    return { threadId: params.threadId, turnId: "turn-1" };
   }
 
   async setThreadPermissions(params: {
@@ -251,8 +251,8 @@ class MockBackendClient {
     return { threadId: params.threadId };
   }
 
-  async interruptTurn(): Promise<{ threadId: string; runId: string }> {
-    return { threadId: "thread-1", runId: "turn-1" };
+  async interruptTurn(): Promise<{ threadId: string; turnId: string }> {
+    return { threadId: "thread-1", turnId: "turn-1" };
   }
 
   async emit(notification: AppServerNotification): Promise<void> {
@@ -541,7 +541,7 @@ describe("DesktopBackendRegistry", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        runId: "turn-1",
+        turnId: "turn-1",
         turn: {
           id: "turn-1",
           status: "completed",
@@ -557,7 +557,7 @@ describe("DesktopBackendRegistry", () => {
           method: "turn/completed",
           params: {
             threadId: "thread-1",
-            runId: "turn-1",
+            turnId: "turn-1",
             turn: {
               id: "turn-1",
               status: "completed",

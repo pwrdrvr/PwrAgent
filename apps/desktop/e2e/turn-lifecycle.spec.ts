@@ -7,12 +7,12 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const turnLifecycleSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
-async function createActiveRunThinkingFixture(): Promise<{
+async function createActiveTurnThinkingFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-active-run-thinking-"));
-  const fixturePath = path.join(rootDir, "active-run-thinking.fixture.json");
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-active-turn-thinking-"));
+  const fixturePath = path.join(rootDir, "active-turn-thinking.fixture.json");
 
   await writeFile(
     fixturePath,
@@ -20,8 +20,8 @@ async function createActiveRunThinkingFixture(): Promise<{
       {
         metadata: {
           backend: "codex",
-          scenario: "active-run-thinking",
-          threadId: "thread-active-run-thinking",
+          scenario: "active-turn-thinking",
+          threadId: "thread-active-turn-thinking",
         },
         steps: [
           {
@@ -42,10 +42,10 @@ async function createActiveRunThinkingFixture(): Promise<{
             method: "thread/list",
             result: [
               {
-                id: "thread-active-run-thinking",
-                title: "Active run thinking replay",
+                id: "thread-active-turn-thinking",
+                title: "Active turn thinking replay",
                 titleSource: "explicit",
-                summary: "Replay seeded active run thinking state",
+                summary: "Replay seeded active turn thinking state",
                 source: "codex",
                 executionMode: "default",
                 linkedDirectories: [],
@@ -98,10 +98,10 @@ async function createActiveRunThinkingFixture(): Promise<{
             notification: {
               method: "turn/started",
               params: {
-                threadId: "thread-active-run-thinking",
-                runId: "turn-active-run-thinking-1",
+                threadId: "thread-active-turn-thinking",
+                turnId: "turn-active-turn-thinking-1",
                 turn: {
-                  id: "turn-active-run-thinking-1",
+                  id: "turn-active-turn-thinking-1",
                   status: "inProgress",
                 },
               },
@@ -205,20 +205,20 @@ test("keeps transient turn UI through metadata and premature idle notifications"
   }
 });
 
-test("keeps the in-thread thinking indicator visible for active runs without pending text", async () => {
-  const fixture = await createActiveRunThinkingFixture();
+test("keeps the in-thread thinking indicator visible for active turns without pending text", async () => {
+  const fixture = await createActiveTurnThinkingFixture();
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
 
   try {
     await app.window
-      .getByRole("button", { name: /Active run thinking replay/i })
+      .getByRole("button", { name: /Active turn thinking replay/i })
       .first()
       .click();
 
     await expect(
       app.window.getByRole("heading", {
         level: 2,
-        name: "Active run thinking replay",
+        name: "Active turn thinking replay",
       })
     ).toBeVisible();
     await expect(
@@ -234,7 +234,7 @@ test("keeps the in-thread thinking indicator visible for active runs without pen
     await expect(transcript.getByRole("status")).toContainText("Thinking");
     await expect(
       app.window
-        .getByRole("button", { name: /Active run thinking replay/i })
+        .getByRole("button", { name: /Active turn thinking replay/i })
         .locator('[data-thread-status="thinking"]')
     ).toBeVisible();
   } finally {

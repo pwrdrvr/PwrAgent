@@ -76,7 +76,7 @@
       "method": "turn/start",
       "result": {
         "threadId": "thread-live-plan-updates",
-        "runId": "turn-live-plan-1"
+        "turnId": "turn-live-plan-1"
       }
     },
     {
@@ -114,7 +114,7 @@
         "method": "turn/plan/updated",
         "params": {
           "threadId": "thread-live-plan-updates",
-          "runId": "turn-live-plan-1",
+          "turnId": "turn-live-plan-1",
           "plan": {
             "explanation": "Check the shared contract and transcript renderer before summarizing the dependency.",
             "steps": [

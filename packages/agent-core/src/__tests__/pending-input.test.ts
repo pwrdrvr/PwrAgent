@@ -57,10 +57,10 @@ describe("Codex pending input", () => {
           method: "turn/started",
           params: {
             threadId: "thread-1",
-            runId: "turn-1",
+            turnId: "turn-1",
             turn: {
               id: "turn-1",
-              status: "in_progress",
+              status: "inProgress",
             },
           },
         },
@@ -68,7 +68,7 @@ describe("Codex pending input", () => {
           method: "serverRequest/resolved",
           params: {
             threadId: "thread-1",
-            runId: "turn-1",
+            turnId: "turn-1",
             requestId: "req-1",
           },
         },
@@ -76,7 +76,7 @@ describe("Codex pending input", () => {
           method: "turn/completed",
           params: {
             threadId: "thread-1",
-            runId: "turn-1",
+            turnId: "turn-1",
             turn: {
               id: "turn-1",
               status: "completed",
@@ -92,7 +92,7 @@ describe("Codex pending input", () => {
         method: "turn/requestApproval",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           requestId: "req-1",
           prompt: "Approve this action?",
           options: ["approve", "reject"],
@@ -143,13 +143,13 @@ describe("Codex pending input", () => {
       expect(provider.runs[0]?.eventResponses).toEqual([{ decision: "approve" }]);
     });
 
-    expect(steered).toEqual({ threadId: "thread-1", runId: "turn-1" });
+    expect(steered).toEqual({ threadId: "thread-1", turnId: "turn-1" });
     expect(provider.runs[0]?.steerCalls).toEqual([
       {
         thread: expect.objectContaining({
           threadId: "thread-1",
         }),
-        runId: "turn-1",
+        turnId: "turn-1",
         input: [{ type: "text", text: "Continue after approval" }],
       },
     ]);
@@ -188,7 +188,7 @@ describe("Codex pending input", () => {
     });
     await flushAsync();
 
-    expect(interrupted).toEqual({ threadId: "thread-1", runId: "turn-1" });
+    expect(interrupted).toEqual({ threadId: "thread-1", turnId: "turn-1" });
     expect(provider.runs[0]?.interrupted).toBe(true);
     expect(provider.runs[0]?.eventResponses).toEqual([{ decision: "cancel" }]);
     expect(notifications).toEqual([
@@ -196,10 +196,10 @@ describe("Codex pending input", () => {
         method: "turn/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
-            status: "in_progress",
+            status: "inProgress",
           },
         },
       },
@@ -207,7 +207,7 @@ describe("Codex pending input", () => {
         method: "serverRequest/resolved",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           requestId: "req-3",
         },
       },
@@ -215,7 +215,7 @@ describe("Codex pending input", () => {
         method: "turn/cancelled",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "cancelled",
@@ -278,10 +278,10 @@ describe("Codex pending input", () => {
         method: "turn/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
-            status: "in_progress",
+            status: "inProgress",
           },
         },
       },
@@ -289,7 +289,7 @@ describe("Codex pending input", () => {
         method: "serverRequest/resolved",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           requestId: "req-4",
         },
       },
@@ -297,7 +297,7 @@ describe("Codex pending input", () => {
         method: "serverRequest/resolved",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           requestId: "req-5",
         },
       },
@@ -305,7 +305,7 @@ describe("Codex pending input", () => {
         method: "turn/cancelled",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "cancelled",

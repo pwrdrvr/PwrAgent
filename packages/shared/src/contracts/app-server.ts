@@ -267,7 +267,7 @@ export type AppServerPendingRequestNotification = {
   method: string;
   params: {
     threadId: string;
-    runId?: string;
+    turnId?: string;
     requestId: string;
     prompt?: string;
     options?: string[];
@@ -311,7 +311,7 @@ export type AppServerNotification =
       method: "turn/started";
       params: {
         threadId: string;
-        runId?: string;
+        turnId?: string;
         turn: {
           id: string;
           status?: string;
@@ -323,7 +323,6 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId?: string;
-        runId?: string;
         itemId: string;
         delta: string;
         stream?: "stdout" | "stderr";
@@ -334,7 +333,7 @@ export type AppServerNotification =
       method: "turn/completed";
       params: {
         threadId: string;
-        runId: string;
+        turnId: string;
         turn: {
           id: string;
           status: "completed";
@@ -349,7 +348,7 @@ export type AppServerNotification =
       method: "turn/failed";
       params: {
         threadId: string;
-        runId: string;
+        turnId: string;
         turn: {
           id: string;
           status: "failed";
@@ -363,7 +362,7 @@ export type AppServerNotification =
       method: "turn/cancelled";
       params: {
         threadId: string;
-        runId: string;
+        turnId: string;
         turn: {
           id: string;
           status: "cancelled";
@@ -374,7 +373,7 @@ export type AppServerNotification =
       method: "item/started" | "item/completed";
       params: {
         threadId: string;
-        runId?: string;
+        turnId?: string;
         item: {
           id: string;
           type: string;
@@ -394,7 +393,7 @@ export type AppServerNotification =
       method: "item/plan/delta";
       params: {
         threadId: string;
-        runId?: string;
+        turnId?: string;
         item: {
           id: string;
           type: "plan";
@@ -406,7 +405,7 @@ export type AppServerNotification =
       method: "turn/plan/updated";
       params: {
         threadId: string;
-        runId: string;
+        turnId: string;
         plan: {
           explanation?: string;
           steps: Array<{
@@ -421,7 +420,6 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId?: string;
-        runId?: string;
         diff: string;
       };
     }
@@ -455,7 +453,7 @@ export type AppServerNotification =
       method: "serverRequest/resolved";
       params: {
         threadId: string;
-        runId?: string;
+        turnId?: string;
         requestId: string;
       };
     }

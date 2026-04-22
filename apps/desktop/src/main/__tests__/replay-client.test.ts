@@ -41,7 +41,7 @@ function buildFixture() {
           method: "turn/completed" as const,
           params: {
             threadId: "thread-1",
-            runId: "turn-1",
+            turnId: "turn-1",
             turn: {
               id: "turn-1",
               status: "completed" as const,
@@ -57,7 +57,7 @@ function buildFixture() {
           method: "turn/requestApproval",
           params: {
             threadId: "thread-1",
-            runId: "turn-1",
+            turnId: "turn-1",
             requestId: "approval-1"
           }
         }
@@ -92,7 +92,7 @@ function buildInterleavedFixture() {
           method: "turn/completed" as const,
           params: {
             threadId: "thread-1",
-            runId: "turn-1",
+            turnId: "turn-1",
             turn: {
               id: "turn-1",
               status: "completed" as const,
@@ -163,7 +163,7 @@ function buildConcurrentResponseFixture() {
         method: "turn/start" as const,
         result: {
           threadId: "thread-1",
-          runId: "turn-1"
+          turnId: "turn-1"
         }
       }
     ]
@@ -268,7 +268,7 @@ describe("ReplayClient", () => {
       })
     ).resolves.toEqual({
       threadId: "thread-1",
-      runId: "turn-1"
+      turnId: "turn-1"
     });
     expect(client.getLastStartTurnParams()).toEqual({
       threadId: "thread-1",

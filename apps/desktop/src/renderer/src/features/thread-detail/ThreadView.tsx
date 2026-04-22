@@ -101,9 +101,9 @@ function getPlanNotificationItemId(params: Record<string, unknown>): string | un
   return undefined;
 }
 
-function getPlanNotificationRunId(params: Record<string, unknown>): string | undefined {
-  return typeof params.runId === "string"
-    ? params.runId
+function getPlanNotificationTurnId(params: Record<string, unknown>): string | undefined {
+  return typeof params.turnId === "string"
+    ? params.turnId
     : typeof params.turnId === "string"
       ? params.turnId
       : undefined;
@@ -508,7 +508,7 @@ function activityContainsDiff(
 }
 
 type ThreadViewProps = {
-  activeRunId?: string;
+  activeTurnId?: string;
   addOptimisticUserMessage: (text: string) => string;
   backendError?: string;
   backends: BackendSummary[];
@@ -536,7 +536,7 @@ type ThreadViewProps = {
   transcriptError?: string;
   transcriptPagination?: AppServerThreadReplayPagination;
   updatingExecutionMode?: ThreadExecutionMode;
-  onActiveRunIdChange?: (runId?: string) => void;
+  onActiveTurnIdChange?: (turnId?: string) => void;
   onEnsureSkillsLoaded?: () => void | Promise<void>;
   onLoadOlder: () => Promise<void>;
   onMaterializeLaunchpad?: (
@@ -699,8 +699,8 @@ export function ThreadView(props: ThreadViewProps) {
             id: `live-diff-${
               typeof event.notification.params.turnId === "string"
                 ? event.notification.params.turnId
-                : typeof event.notification.params.runId === "string"
-                  ? event.notification.params.runId
+                : typeof event.notification.params.turnId === "string"
+                  ? event.notification.params.turnId
                   : selectedThread.id
             }`,
           })
@@ -713,13 +713,13 @@ export function ThreadView(props: ThreadViewProps) {
         const item = getNotificationItem(params);
         const details = item ? buildLiveToolDetails(item) : [];
         if (details.length > 0) {
-          const runId =
-            typeof params.runId === "string" ? params.runId : selectedThread.id;
+          const turnId =
+            typeof params.turnId === "string" ? params.turnId : selectedThread.id;
           setPendingToolActivityEntry((current) => {
             const mergedDetails = mergeActivityDetails(current?.details ?? [], details);
             return {
               type: "activity",
-              id: current?.id ?? `live-tools-${runId}`,
+              id: current?.id ?? `live-tools-${turnId}`,
               createdAt: current?.createdAt ?? Date.now(),
               summary: summarizeLiveToolActivity(mergedDetails),
               status: summarizeActivityStatus(mergedDetails),
@@ -738,10 +738,10 @@ export function ThreadView(props: ThreadViewProps) {
         }
 
         const itemId = getPlanNotificationItemId(params);
-        const runId = getPlanNotificationRunId(params) ?? itemId ?? selectedThread.id;
+        const turnId = getPlanNotificationTurnId(params) ?? itemId ?? selectedThread.id;
         setPendingPlanEntry((current) => ({
           type: "plan",
-          id: `live-plan-${runId}`,
+          id: `live-plan-${turnId}`,
           createdAt: current?.createdAt ?? Date.now(),
           ...(current?.explanation ? { explanation: current.explanation } : {}),
           markdown: `${current?.markdown ?? ""}${delta}`,
@@ -755,10 +755,10 @@ export function ThreadView(props: ThreadViewProps) {
         const markdown = readCompletedPlanMarkdown(params);
         if (markdown) {
           const itemId = getPlanNotificationItemId(params);
-          const runId = getPlanNotificationRunId(params) ?? itemId ?? selectedThread.id;
+          const turnId = getPlanNotificationTurnId(params) ?? itemId ?? selectedThread.id;
           setPendingPlanEntry((current) => ({
             type: "plan",
-            id: `live-plan-${runId}`,
+            id: `live-plan-${turnId}`,
             createdAt: current?.createdAt ?? Date.now(),
             ...(current?.explanation ? { explanation: current.explanation } : {}),
             markdown,
@@ -770,13 +770,13 @@ export function ThreadView(props: ThreadViewProps) {
         const item = getNotificationItem(params);
         const details = item ? buildLiveToolDetails(item) : [];
         if (details.length > 0) {
-          const runId =
-            typeof params.runId === "string" ? params.runId : selectedThread.id;
+          const turnId =
+            typeof params.turnId === "string" ? params.turnId : selectedThread.id;
           setPendingToolActivityEntry((current) => {
             const mergedDetails = mergeActivityDetails(current?.details ?? [], details);
             return {
               type: "activity",
-              id: current?.id ?? `live-tools-${runId}`,
+              id: current?.id ?? `live-tools-${turnId}`,
               createdAt: current?.createdAt ?? Date.now(),
               summary: summarizeLiveToolActivity(mergedDetails),
               status: summarizeActivityStatus(mergedDetails),
@@ -810,13 +810,13 @@ export function ThreadView(props: ThreadViewProps) {
           : undefined;
       const steps = normalizeLivePlanSteps(planRecord.steps);
 
-      const runId =
-        typeof event.notification.params.runId === "string"
-          ? event.notification.params.runId
+      const turnId =
+        typeof event.notification.params.turnId === "string"
+          ? event.notification.params.turnId
           : selectedThread.id;
       setPendingPlanEntry((current) => ({
         type: "plan",
-        id: `live-plan-${runId}`,
+        id: `live-plan-${turnId}`,
         createdAt: current?.createdAt ?? Date.now(),
         ...(explanation ? { explanation } : {}),
         ...(current?.markdown ? { markdown: current.markdown } : {}),
@@ -840,9 +840,9 @@ export function ThreadView(props: ThreadViewProps) {
       await props.desktopApi.submitServerRequest({
         backend: selectedThread.source,
         threadId: selectedThread.id,
-        runId:
-          typeof props.pendingRequest.params.runId === "string"
-            ? props.pendingRequest.params.runId
+        turnId:
+          typeof props.pendingRequest.params.turnId === "string"
+            ? props.pendingRequest.params.turnId
             : undefined,
         requestId: props.pendingRequest.params.requestId,
         response: buildPendingRequestResponse(props.pendingRequest, decision),
@@ -873,7 +873,7 @@ export function ThreadView(props: ThreadViewProps) {
       await props.desktopApi.submitServerRequest({
         backend: selectedThread.source,
         threadId: selectedThread.id,
-        runId: pendingUserInput.runId,
+        turnId: pendingUserInput.turnId,
         requestId: pendingUserInput.requestId,
         response: buildQuestionnaireResponse(pendingUserInput),
       });
@@ -1047,12 +1047,12 @@ export function ThreadView(props: ThreadViewProps) {
       ) : null}
 
       <Composer
-        activeRunId={props.activeRunId}
+        activeTurnId={props.activeTurnId}
         addOptimisticUserMessage={props.addOptimisticUserMessage}
         backends={props.backends}
         desktopApi={props.desktopApi}
         disabled={props.composerDisabled}
-        onActiveRunIdChange={props.onActiveRunIdChange}
+        onActiveTurnIdChange={props.onActiveTurnIdChange}
         onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
         onPendingStatusChange={props.onPendingStatusChange}
         onSetExecutionMode={props.onSetExecutionMode}

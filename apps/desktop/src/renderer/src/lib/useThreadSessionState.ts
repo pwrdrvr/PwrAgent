@@ -30,7 +30,7 @@ export type ThreadViewportState = {
 };
 
 type ThreadSessionEntry = {
-  activeRunId?: string;
+  activeTurnId?: string;
   completionHydrationRetries: number;
   error?: string;
   expectOwnUpdate: boolean;
@@ -128,7 +128,7 @@ function hasHydratedTranscriptContent(session: ThreadSessionEntry): boolean {
 
 function hasThinkingState(session: ThreadSessionEntry): boolean {
   return Boolean(
-    session.activeRunId ||
+    session.activeTurnId ||
       session.pendingStatusText ||
       session.pendingAssistantMessage ||
       session.pendingRequest ||
@@ -279,7 +279,7 @@ export function useThreadSessionState(params: {
   desktopApi?: DesktopApi;
   thread?: NavigationThreadSummary;
 }): {
-  activeRunId?: string;
+  activeTurnId?: string;
   addOptimisticUserMessage: (
     text: string,
     imageParts?: AppServerThreadImagePart[]
@@ -297,7 +297,7 @@ export function useThreadSessionState(params: {
   pendingStatusText?: string;
   removeOptimisticMessage: (id: string) => void;
   response?: AppServerReadThreadResponse;
-  setActiveRunId: (runId?: string) => void;
+  setActiveTurnId: (turnId?: string) => void;
   updatePendingUserInput: (
     requestId: string,
     updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
@@ -450,7 +450,7 @@ export function useThreadSessionState(params: {
       return;
     }
 
-    if (session.loading || session.activeRunId) {
+    if (session.loading || session.activeTurnId) {
       return;
     }
 
@@ -570,14 +570,14 @@ export function useThreadSessionState(params: {
             event.notification.params.turn !== null
               ? (event.notification.params.turn as { id?: unknown })
               : undefined;
-          const runId =
+          const turnId =
             typeof startedTurnRecord?.id === "string"
               ? startedTurnRecord.id
-              : event.notification.params.runId;
+              : event.notification.params.turnId;
 
           return {
             ...current,
-            activeRunId: runId,
+            activeTurnId: turnId,
             expectOwnUpdate: true,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
@@ -614,7 +614,7 @@ export function useThreadSessionState(params: {
               type: "message",
               id:
                 current.pendingAssistantMessage?.id ??
-                `${event.notification.params.runId}:assistant`,
+                `${event.notification.params.turnId}:assistant`,
               role: "assistant",
               text: completedText,
               createdAt: Date.now(),
@@ -641,7 +641,7 @@ export function useThreadSessionState(params: {
 
           return {
             ...current,
-            activeRunId: undefined,
+            activeTurnId: undefined,
             completionHydrationRetries: 0,
             error: undefined,
             expectOwnUpdate: true,
@@ -669,7 +669,7 @@ export function useThreadSessionState(params: {
 
           return {
             ...current,
-            activeRunId: undefined,
+            activeTurnId: undefined,
             completionHydrationRetries: 0,
             error: errorMessage,
             expectOwnUpdate: false,
@@ -685,7 +685,7 @@ export function useThreadSessionState(params: {
         if (event.notification.method === "turn/cancelled") {
           return {
             ...current,
-            activeRunId: undefined,
+            activeTurnId: undefined,
             completionHydrationRetries: 0,
             error: undefined,
             expectOwnUpdate: false,
@@ -707,13 +707,13 @@ export function useThreadSessionState(params: {
               : undefined;
 
           if (statusType === "idle") {
-            if (current.activeRunId || current.pendingStatusText) {
+            if (current.activeTurnId || current.pendingStatusText) {
               return current;
             }
 
             return {
               ...current,
-              activeRunId: undefined,
+              activeTurnId: undefined,
               lastTouchedAt: nextLastTouchedAt,
               pendingAssistantMessage: undefined,
               pendingStatusText: undefined,
@@ -867,17 +867,17 @@ export function useThreadSessionState(params: {
     [threadKey, updateSession]
   );
 
-  const setActiveRunId = useCallback(
-    (runId?: string): void => {
+  const setActiveTurnId = useCallback(
+    (turnId?: string): void => {
       if (!threadKey) {
         return;
       }
 
       updateSession(threadKey, (current) => ({
         ...current,
-        activeRunId: runId,
-        expectOwnUpdate: Boolean(runId) || current.expectOwnUpdate,
-        interacted: Boolean(runId) || current.interacted,
+        activeTurnId: turnId,
+        expectOwnUpdate: Boolean(turnId) || current.expectOwnUpdate,
+        interacted: Boolean(turnId) || current.interacted,
         lastTouchedAt: Date.now(),
       }));
     },
@@ -999,10 +999,10 @@ export function useThreadSessionState(params: {
   );
   const pendingStatusText =
     selectedSession?.pendingStatusText ??
-    (selectedSession?.activeRunId ? "Thinking" : undefined);
+    (selectedSession?.activeTurnId ? "Thinking" : undefined);
 
   return {
-    activeRunId: selectedSession?.activeRunId,
+    activeTurnId: selectedSession?.activeTurnId,
     addOptimisticUserMessage,
     clearPendingRequest,
     entries,
@@ -1017,7 +1017,7 @@ export function useThreadSessionState(params: {
     pendingStatusText,
     removeOptimisticMessage,
     response: selectedSession?.response,
-    setActiveRunId,
+    setActiveTurnId,
     updatePendingUserInput,
     setPendingStatusText,
     thinkingThreadKeys,

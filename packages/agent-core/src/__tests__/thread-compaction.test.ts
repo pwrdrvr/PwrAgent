@@ -32,7 +32,7 @@ describe("Codex thread compaction", () => {
 
     expect(started).toEqual({
       threadId: "thread-1",
-      runId: "turn-2",
+      turnId: "turn-2",
       itemId: "turn-2-item",
     });
     expect(provider.runs[1]?.previousResponseId).toBe("resp_turn_1");
@@ -55,7 +55,7 @@ describe("Codex thread compaction", () => {
         method: "item/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-2",
+          turnId: "turn-2",
           item: {
             id: "turn-2-item",
             type: "contextCompaction",
@@ -80,7 +80,7 @@ describe("Codex thread compaction", () => {
         method: "item/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-2",
+          turnId: "turn-2",
           item: {
             id: "turn-2-item",
             type: "contextCompaction",
@@ -91,7 +91,7 @@ describe("Codex thread compaction", () => {
         method: "item/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-2",
+          turnId: "turn-2",
           item: {
             id: "turn-2-item",
             type: "contextCompaction",
@@ -163,7 +163,7 @@ describe("Codex thread compaction", () => {
 
     expect(started).toEqual({
       threadId: "thread-1",
-      runId: "turn-1",
+      turnId: "turn-1",
       itemId: "turn-1-item",
     });
     expect(provider.runs[0]?.input).toEqual([
@@ -184,7 +184,7 @@ describe("Codex thread compaction", () => {
         method: "item/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           item: {
             id: "turn-1-item",
             type: "contextCompaction",
@@ -195,7 +195,7 @@ describe("Codex thread compaction", () => {
         method: "item/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           item: {
             id: "turn-1-item",
             type: "contextCompaction",
@@ -234,7 +234,7 @@ describe("Codex thread compaction", () => {
         method: "item/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           item: {
             id: "turn-1-item",
             type: "contextCompaction",
@@ -245,7 +245,7 @@ describe("Codex thread compaction", () => {
         method: "turn/failed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "failed",
@@ -310,7 +310,7 @@ describe("Codex thread compaction", () => {
         method: "item/started",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           item: {
             id: "turn-1-item",
             type: "contextCompaction",
@@ -321,7 +321,7 @@ describe("Codex thread compaction", () => {
         method: "serverRequest/resolved",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           requestId: "compact-req-1",
         },
       },
@@ -329,7 +329,7 @@ describe("Codex thread compaction", () => {
         method: "item/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           item: {
             id: "turn-1-item",
             type: "contextCompaction",

@@ -131,23 +131,23 @@ export class ReplayClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ threadId: string; runId: string }> {
+  }): Promise<{ threadId: string; turnId: string }> {
     await this.ensureInitialized();
     this.lastStartTurnParams = params;
     return this.controller.consumeResponse("turn/start").result as {
       threadId: string;
-      runId: string;
+      turnId: string;
     };
   }
 
   async interruptTurn(_params?: {
     threadId: string;
-    runId: string;
-  }): Promise<{ threadId: string; runId: string }> {
+    turnId: string;
+  }): Promise<{ threadId: string; turnId: string }> {
     await this.ensureInitialized();
     return this.controller.consumeResponse("turn/interrupt").result as {
       threadId: string;
-      runId: string;
+      turnId: string;
     };
   }
 

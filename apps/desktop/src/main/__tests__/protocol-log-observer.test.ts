@@ -28,7 +28,7 @@ describe("protocol log observer", () => {
         jsonrpc: "2.0",
         method: "turn/started",
         params: {
-          runId: "run-1",
+          turnId: "turn-1",
           threadId: "thread-1",
         },
       }),
@@ -41,8 +41,8 @@ describe("protocol log observer", () => {
       itemId: undefined,
       kind: "notification",
       method: "turn/started",
-      paramKeys: ["runId", "threadId"],
-      runId: "run-1",
+      paramKeys: ["turnId", "threadId"],
+      turnId: "turn-1",
       threadId: "thread-1",
     });
   });
@@ -65,7 +65,7 @@ describe("protocol log observer", () => {
           params: {
             delta,
             itemId: "item-1",
-            runId: "run-1",
+            turnId: "turn-1",
             threadId: "thread-1",
           },
         }),
@@ -93,7 +93,7 @@ describe("protocol log observer", () => {
             id: "item-1",
             type: "assistantMessage",
           },
-          runId: "run-1",
+          turnId: "turn-1",
           threadId: "thread-1",
         },
       }),

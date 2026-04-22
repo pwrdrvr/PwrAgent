@@ -40,8 +40,8 @@ function createPassiveClient() {
       },
     }),
     startThread: async () => ({ threadId: "noop-thread" }),
-    startTurn: async () => ({ threadId: "noop-thread", runId: "noop-turn" }),
-    interruptTurn: async () => ({ threadId: "noop-thread", runId: "noop-turn" }),
+    startTurn: async () => ({ threadId: "noop-thread", turnId: "noop-turn" }),
+    interruptTurn: async () => ({ threadId: "noop-thread", turnId: "noop-turn" }),
   };
 }
 
@@ -85,7 +85,7 @@ describe("DesktopBackendRegistry replay integration", () => {
             method: "turn/completed",
             params: {
               threadId: "thread-1",
-              runId: "turn-1",
+              turnId: "turn-1",
               turn: {
                 id: "turn-1",
                 status: "completed",
@@ -101,7 +101,7 @@ describe("DesktopBackendRegistry replay integration", () => {
             method: "turn/requestApproval",
             params: {
               threadId: "thread-1",
-              runId: "turn-1",
+              turnId: "turn-1",
               requestId: "approval-1"
             }
           }
@@ -145,7 +145,7 @@ describe("DesktopBackendRegistry replay integration", () => {
     await registry.submitServerRequest({
       backend: "codex",
       threadId: "thread-1",
-      runId: "turn-1",
+      turnId: "turn-1",
       requestId: "approval-1",
       response: {
         decision: "approve"
@@ -197,7 +197,6 @@ describe("DesktopBackendRegistry replay integration", () => {
             params: {
               threadId: "thread-1",
               turnId: "turn-1",
-              runId: "turn-1",
               itemId: "input-1",
               requestId: "input-request-1",
               questions: [
@@ -271,7 +270,7 @@ describe("DesktopBackendRegistry replay integration", () => {
     await registry.submitServerRequest({
       backend: "codex",
       threadId: "thread-1",
-      runId: "turn-1",
+      turnId: "turn-1",
       requestId: "input-request-1",
       response: {
         answers: {

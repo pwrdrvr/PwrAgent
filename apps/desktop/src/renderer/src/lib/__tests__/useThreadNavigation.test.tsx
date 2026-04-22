@@ -235,7 +235,7 @@ describe("useThreadNavigation", () => {
               method,
               params: {
                 threadId: "thread-1",
-                runId: "run-1",
+                turnId: "turn-1",
               },
             },
           });

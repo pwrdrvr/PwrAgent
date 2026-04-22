@@ -211,7 +211,7 @@ function pickBoolean(
 
 function extractRequestMetadata(value: unknown): {
   threadId?: string;
-  runId?: string;
+  turnId?: string;
   requestId?: string;
 } {
   const record = asRecord(value);
@@ -220,15 +220,15 @@ function extractRequestMetadata(value: unknown): {
   }
 
   const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
-  const turnRecord = asRecord(record.turn) ?? asRecord(record.run);
+  const turnRecord = asRecord(record.turn);
 
   return {
     threadId:
       pickString(record, ["threadId", "thread_id", "conversationId", "conversation_id"]) ??
       pickString(threadRecord ?? {}, ["id", "threadId", "thread_id", "conversationId"]),
-    runId:
-      pickString(record, ["turnId", "turn_id", "runId", "run_id"]) ??
-      pickString(turnRecord ?? {}, ["id", "turnId", "turn_id", "runId", "run_id"]),
+    turnId:
+      pickString(record, ["turnId", "turn_id"]) ??
+      pickString(turnRecord ?? {}, ["id", "turnId", "turn_id"]),
     requestId:
       pickString(record, ["requestId", "request_id", "serverRequestId"]) ??
       pickString(asRecord(record.serverRequest) ?? {}, ["id", "requestId", "request_id"]),
@@ -248,7 +248,7 @@ function normalizePendingRequestNotification(
     params: {
       ...record,
       ...(metadata.threadId ? { threadId: metadata.threadId } : {}),
-      ...(metadata.runId ? { runId: metadata.runId } : {}),
+      ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
       requestId: metadata.requestId ?? String(rpcId ?? `${method}-request`),
     } as AppServerPendingRequestNotification["params"],
   };
@@ -1282,16 +1282,16 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
   });
 }
 
-function extractRunIdFromValue(value: unknown): string | undefined {
+function extractTurnIdFromValue(value: unknown): string | undefined {
   const record = asRecord(value);
   if (!record) {
     return undefined;
   }
 
-  const turnRecord = asRecord(record.turn) ?? asRecord(record.run);
+  const turnRecord = asRecord(record.turn);
   return (
-    pickString(record, ["turnId", "turn_id", "runId", "run_id"]) ??
-    pickString(turnRecord ?? {}, ["id", "turnId", "turn_id", "runId", "run_id"])
+    pickString(record, ["turnId", "turn_id"]) ??
+    pickString(turnRecord ?? {}, ["id", "turnId", "turn_id"])
   );
 }
 
@@ -2047,7 +2047,7 @@ export class CodexAppServerClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ threadId: string; runId: string }> {
+  }): Promise<{ threadId: string; turnId: string }> {
     await this.ensureInitialized();
 
     const resumeResult = await requestWithFallbacks({
@@ -2085,9 +2085,9 @@ export class CodexAppServerClient {
     });
 
     const threadId = extractThreadIdFromValue(result) ?? params.threadId;
-    const runId = extractRunIdFromValue(result) ?? `pending:${threadId}`;
+    const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
 
-    return { threadId, runId };
+    return { threadId, turnId };
   }
 
   async setThreadPermissions(params: {
@@ -2163,8 +2163,8 @@ export class CodexAppServerClient {
 
   async interruptTurn(params: {
     threadId: string;
-    runId: string;
-  }): Promise<{ threadId: string; runId: string }> {
+    turnId: string;
+  }): Promise<{ threadId: string; turnId: string }> {
     await this.ensureInitialized();
 
     await requestWithFallbacks({
@@ -2180,13 +2180,13 @@ export class CodexAppServerClient {
       const result = await requestWithFallbacks({
         client: this.connection,
         methods: ["turn/interrupt"],
-        payloads: [{ threadId: params.threadId, turnId: params.runId }],
+        payloads: [{ threadId: params.threadId, turnId: params.turnId }],
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       });
 
       return {
         threadId: extractThreadIdFromValue(result) ?? params.threadId,
-        runId: extractRunIdFromValue(result) ?? params.runId,
+        turnId: extractTurnIdFromValue(result) ?? params.turnId,
       };
     } catch (error) {
       if (!isRequestTimeoutError(error, "turn/interrupt")) {
@@ -2197,13 +2197,13 @@ export class CodexAppServerClient {
         "turn/interrupt timed out; waiting for later status updates",
         {
           threadId: params.threadId,
-          runId: params.runId,
+          turnId: params.turnId,
         }
       );
 
       return {
         threadId: params.threadId,
-        runId: params.runId,
+        turnId: params.turnId,
       };
     }
   }

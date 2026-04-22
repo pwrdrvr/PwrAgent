@@ -1478,7 +1478,6 @@ describe("CodexAppServerClient", () => {
         method: "item/tool/requestUserInput",
         params: expect.objectContaining({
           threadId: "thread-2",
-          runId: "turn-7",
           turnId: "turn-7",
           itemId: "call-1",
           requestId: "rpc-input-1",
@@ -1834,7 +1833,7 @@ describe("CodexAppServerClient", () => {
 
     expect(result).toEqual({
       threadId: "thread-2",
-      runId: "turn-1"
+      turnId: "turn-1"
     });
 
     const transport = MockTransport.instances.at(-1);
@@ -1884,7 +1883,7 @@ describe("CodexAppServerClient", () => {
 
     expect(result).toEqual({
       threadId: "thread-2",
-      runId: "turn-1"
+      turnId: "turn-1"
     });
 
     const transport = MockTransport.instances.at(-1);
@@ -1909,7 +1908,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("falls back to the requested thread and a pending run id when turn/start omits ids", async () => {
+  it("falls back to the requested thread and a pending turn id when turn/start omits ids", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.turnStartResult = {};
 
@@ -1926,7 +1925,7 @@ describe("CodexAppServerClient", () => {
 
     expect(result).toEqual({
       threadId: "thread-2",
-      runId: "pending:thread-2"
+      turnId: "pending:thread-2"
     });
 
     await client.close();
@@ -1942,12 +1941,12 @@ describe("CodexAppServerClient", () => {
 
     const result = await client.interruptTurn({
       threadId: "thread-2",
-      runId: "turn-1"
+      turnId: "turn-1"
     });
 
     expect(result).toEqual({
       threadId: "thread-2",
-      runId: "turn-1"
+      turnId: "turn-1"
     });
 
     const transport = MockTransport.instances.at(-1);
@@ -1982,11 +1981,11 @@ describe("CodexAppServerClient", () => {
     await expect(
       client.interruptTurn({
         threadId: "thread-2",
-        runId: "turn-1"
+        turnId: "turn-1"
       })
     ).resolves.toEqual({
       threadId: "thread-2",
-      runId: "turn-1"
+      turnId: "turn-1"
     });
 
     await client.close();
@@ -2034,7 +2033,7 @@ describe("CodexAppServerClient", () => {
         method: "turn/requestApproval",
         params: expect.objectContaining({
           threadId: "thread-2",
-          runId: "turn-7",
+          turnId: "turn-7",
           requestId: "rpc-approval-1",
           reason: "command requires approval: npm view dive",
           command: "npm view dive"

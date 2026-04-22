@@ -41,12 +41,12 @@ describe("App", () => {
     >(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
-      runId: "turn-1"
+      turnId: "turn-1"
     }));
     const interruptTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
-      runId: "turn-1",
+      turnId: "turn-1",
     }));
     let readThreadCalls = 0;
     let resolveRefreshRead:
@@ -361,7 +361,7 @@ describe("App", () => {
       expect(interruptTurn).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-1",
-        runId: "turn-1",
+        turnId: "turn-1",
       });
     });
 
@@ -543,7 +543,7 @@ describe("App", () => {
       threadId: "thread-2",
       executionMode: "default" as const,
       workMode: "local" as const,
-      runId: "turn-1",
+      turnId: "turn-1",
     }));
     const startTurn = vi.fn(
       async ({
@@ -555,7 +555,7 @@ describe("App", () => {
       }) => ({
         backend,
         threadId,
-        runId: "turn-1"
+        turnId: "turn-1"
       })
     );
     const readThread = vi.fn(
@@ -1025,7 +1025,7 @@ describe("App", () => {
         startTurn: async () => ({
           backend: "grok",
           threadId: "thread-1",
-          runId: "turn-1"
+          turnId: "turn-1"
         }),
         versions: {
           electron: "41.2.1"
@@ -1057,7 +1057,7 @@ describe("App", () => {
       threadId: "thread-new",
       executionMode: "default" as const,
       workMode: "local" as const,
-      runId: "turn-1",
+      turnId: "turn-1",
     }));
     const agentEventListeners = new Set<
       (event: {
@@ -1104,7 +1104,7 @@ describe("App", () => {
       }) => ({
         backend,
         threadId,
-        runId: "turn-1"
+        turnId: "turn-1"
       })
     );
 
@@ -1324,7 +1324,7 @@ describe("App", () => {
             method: "turn/completed",
             params: {
               threadId: "thread-new",
-              runId: "turn-1",
+              turnId: "turn-1",
             },
           },
         });
@@ -1344,7 +1344,7 @@ describe("App", () => {
       threadId: "thread-new",
       executionMode: "default" as const,
       workMode: "local" as const,
-      runId: "turn-1"
+      turnId: "turn-1"
     }));
     const agentEventListeners = new Set<
       (event: {
@@ -1391,7 +1391,7 @@ describe("App", () => {
       }) => ({
         backend,
         threadId,
-        runId: "turn-1"
+        turnId: "turn-1"
       })
     );
 
@@ -1595,7 +1595,7 @@ describe("App", () => {
             method: "turn/completed",
             params: {
               threadId: "thread-new",
-              runId: "turn-1",
+              turnId: "turn-1",
             },
           },
         });

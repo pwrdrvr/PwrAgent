@@ -27,7 +27,7 @@ export type ProviderTurnParams = {
 
 export type ProviderSteerParams = {
   thread: ThreadState;
-  runId: string;
+  turnId: string;
   input: AppServerTurnInputItem[];
 };
 

@@ -118,7 +118,7 @@ async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
             method: "turn/start",
             result: {
               threadId: "thread-new",
-              runId: "turn-new-1",
+              turnId: "turn-new-1",
             },
           },
           {
@@ -196,7 +196,7 @@ async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
               method: "turn/completed",
               params: {
                 threadId: "thread-new",
-                runId: "turn-new-1",
+                turnId: "turn-new-1",
                 turn: {
                   id: "turn-new-1",
                   status: "completed",

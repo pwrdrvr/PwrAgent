@@ -102,7 +102,7 @@ export function createTestHarness(options?: {
       let index = 0;
       return () => `thread-${++index}`;
     })(),
-    runIdGenerator: (() => {
+    turnIdGenerator: (() => {
       let index = 0;
       return () => `turn-${++index}`;
     })(),

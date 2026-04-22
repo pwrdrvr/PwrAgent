@@ -89,7 +89,7 @@
       "method": "turn/start",
       "result": {
         "threadId": "thread-approval-pending",
-        "runId": "turn-approval-2"
+        "turnId": "turn-approval-2"
       }
     },
     {

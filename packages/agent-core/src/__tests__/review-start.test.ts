@@ -39,7 +39,7 @@ describe("Codex review start", () => {
 
     expect(started).toEqual({
       reviewThreadId: "thread-1",
-      runId: "turn-2",
+      turnId: "turn-2",
     });
     expect(provider.runs[1]?.previousResponseId).toBe("resp_turn_1");
     expect(provider.runs[1]?.input).toEqual([
@@ -79,7 +79,7 @@ describe("Codex review start", () => {
         method: "item/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-2",
+          turnId: "turn-2",
           item: {
             id: "turn-2-item",
             type: "exitedReviewMode",
@@ -91,7 +91,7 @@ describe("Codex review start", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-2",
+          turnId: "turn-2",
           turn: {
             id: "turn-2",
             status: "completed",
@@ -182,7 +182,7 @@ describe("Codex review start", () => {
         method: "serverRequest/resolved",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           requestId: "review-req-1",
         },
       },
@@ -190,7 +190,7 @@ describe("Codex review start", () => {
         method: "item/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           item: {
             id: "turn-1-item",
             type: "exitedReviewMode",
@@ -202,7 +202,7 @@ describe("Codex review start", () => {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "completed",
@@ -317,7 +317,7 @@ describe("Codex review start", () => {
         method: "turn/failed",
         params: {
           threadId: "thread-1",
-          runId: "turn-1",
+          turnId: "turn-1",
           turn: {
             id: "turn-1",
             status: "failed",
