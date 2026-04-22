@@ -7,6 +7,7 @@ import type {
 import { TranscriptActivity } from "./TranscriptActivity";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
+import { TranscriptReview } from "./TranscriptReview";
 
 type TranscriptWorkPhaseGroupProps = {
   collapsible: boolean;
@@ -66,6 +67,8 @@ function renderEntry(
     <TranscriptActivity key={entry.id} entry={entry} />
   ) : entry.type === "plan" ? (
     <TranscriptPlan key={entry.id} entry={entry} />
+  ) : entry.type === "review" ? (
+    <TranscriptReview key={entry.id} entry={entry} />
   ) : (
     <TranscriptMessage
       key={entry.id}

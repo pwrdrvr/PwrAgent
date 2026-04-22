@@ -37,6 +37,8 @@ import type {
   RestoreWorktreeResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
+  StartReviewRequest,
+  StartReviewResponse,
   StartThreadRequest,
   StartThreadResponse,
   StartTurnRequest,
@@ -59,6 +61,7 @@ import {
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
+  AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
@@ -150,6 +153,10 @@ const desktopApi = Object.freeze({
     request: StartThreadRequest
   ): Promise<StartThreadResponse> =>
     await ipcRenderer.invoke(AGENT_START_THREAD_CHANNEL, request),
+  startReview: async (
+    request: StartReviewRequest
+  ): Promise<StartReviewResponse> =>
+    await ipcRenderer.invoke(AGENT_START_REVIEW_CHANNEL, request),
   startTurn: async (
     request: StartTurnRequest
   ): Promise<StartTurnResponse> =>

@@ -5,6 +5,7 @@ import type {
   AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadSummary,
+  AppServerReviewTarget,
   AppServerTurnInputItem,
   ThreadOverlayState,
 } from "@pwragnt/shared";
@@ -100,6 +101,11 @@ class MockBackendClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+  };
+  lastStartReviewParams?: {
+    threadId: string;
+    target: AppServerReviewTarget;
+    delivery?: "inline" | "detached";
   };
   lastArchiveThreadParams?: {
     threadId: string;
@@ -245,6 +251,19 @@ class MockBackendClient {
   }): Promise<{ threadId: string; turnId: string }> {
     this.lastStartTurnParams = params;
     return { threadId: params.threadId, turnId: "turn-1" };
+  }
+
+  async startReview(params: {
+    threadId: string;
+    target: AppServerReviewTarget;
+    delivery?: "inline" | "detached";
+  }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    this.lastStartReviewParams = params;
+    return {
+      threadId: params.threadId,
+      reviewThreadId: params.threadId,
+      turnId: "turn-review-1",
+    };
   }
 
   async setThreadPermissions(params: {
@@ -548,6 +567,43 @@ describe("DesktopBackendRegistry", () => {
       serviceTier: undefined,
       reasoningEffort: "medium",
       fastMode: undefined,
+    });
+
+    await registry.close();
+  });
+
+  it("routes review start to the selected backend client", async () => {
+    const grokClient = new MockBackendClient({
+      initializeResult: { methods: ["review/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeError: new Error("codex unavailable"),
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeError: new Error("codex unavailable"),
+      }),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const response = await registry.startReview({
+      backend: "grok",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    expect(response).toEqual({
+      backend: "grok",
+      threadId: "thread-1",
+      reviewThreadId: "thread-1",
+      turnId: "turn-review-1",
+    });
+    expect(grokClient.lastStartReviewParams).toEqual({
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
     });
 
     await registry.close();

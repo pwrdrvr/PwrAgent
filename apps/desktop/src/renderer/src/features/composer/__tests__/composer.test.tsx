@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type {
   BackendSummary,
   NavigationLaunchpadDraft,
+  StartReviewRequest,
   StartTurnRequest,
 } from "@pwragnt/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -268,6 +269,52 @@ describe("Composer", () => {
         fastMode: undefined,
       });
     });
+  });
+
+  it("routes slash review to startReview instead of startTurn", async () => {
+    const startTurn = vi.fn();
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review main" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+    });
+    expect(startTurn).not.toHaveBeenCalled();
   });
 
   it("shows thread access in the composer and updates it from the select", async () => {

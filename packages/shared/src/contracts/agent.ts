@@ -2,6 +2,8 @@ import type {
   AppServerBackendKind,
   AppServerNotification,
   ThreadExecutionMode,
+  AppServerReviewDelivery,
+  AppServerReviewTarget,
   AppServerTurnInputItem,
   ThreadIdentifier,
 } from "./normalized-app-server";
@@ -43,6 +45,20 @@ export type StartTurnRequest = {
 export type StartTurnResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  turnId: string;
+};
+
+export type StartReviewRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  target: AppServerReviewTarget;
+  delivery?: AppServerReviewDelivery;
+};
+
+export type StartReviewResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  reviewThreadId: ThreadIdentifier;
   turnId: string;
 };
 
@@ -149,6 +165,7 @@ export type MaterializeDirectoryLaunchpadRequest = {
   directoryKey: string;
   input?: AppServerTurnInputItem[];
   collaborationMode?: AppServerCollaborationModeRequest;
+  reviewTarget?: AppServerReviewTarget;
 };
 
 export type MaterializeDirectoryLaunchpadResponse = {

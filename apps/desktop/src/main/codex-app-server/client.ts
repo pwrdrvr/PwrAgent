@@ -15,6 +15,7 @@ import type {
   AppServerThreadMessagePart,
   AppServerThreadMessageEntry,
   AppServerThreadPlanEntry,
+  AppServerThreadReviewEntry,
   AppServerThreadPlanStep,
   AppServerThreadPlanStepStatus,
   AppServerThreadTurnMetadata,
@@ -26,6 +27,8 @@ import type {
   AppServerThreadSummary,
   AppServerTurnInputItem,
   AppServerCollaborationModeRequest,
+  AppServerReviewDelivery,
+  AppServerReviewTarget,
   BackendModelOption,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
@@ -42,6 +45,7 @@ import type {
   AskForApproval as CodexAskForApproval,
   ModelListParams as CodexModelListParams,
   SandboxMode as CodexSandboxMode,
+  ReviewStartParams as CodexReviewStartParams,
   SkillsListParams as CodexSkillsListParams,
   ThreadListParams as CodexThreadListParams,
   ThreadReadParams as CodexThreadReadParams,
@@ -1007,6 +1011,55 @@ function extractPlanEntryFromItem(
   };
 }
 
+function extractReviewEntryFromItem(
+  item: Record<string, unknown>,
+  createdAt?: number,
+  turn?: AppServerThreadTurnMetadata,
+): AppServerThreadReviewEntry | undefined {
+  const normalizedItemType = normalizeItemType(pickString(item, ["type"]));
+  if (
+    normalizedItemType !== "enteredreviewmode" &&
+    normalizedItemType !== "exitedreviewmode"
+  ) {
+    return undefined;
+  }
+
+  const review = pickRawString(item, ["review", "text"]) ?? "";
+  const data = asRecord(item.data);
+  const reviewOutput = asRecord(data?.reviewOutput);
+  const findings = Array.isArray(reviewOutput?.findings)
+    ? reviewOutput.findings
+    : undefined;
+  return {
+    type: "review",
+    id:
+      pickString(item, ["id", "itemId", "item_id"]) ??
+      `review-${normalizedItemType}`,
+    review,
+    displayText:
+      normalizedItemType === "enteredreviewmode"
+        ? review || "Code review started"
+        : undefined,
+    ...(createdAt ? { createdAt } : {}),
+    ...(turn ? { turn } : {}),
+    ...(reviewOutput &&
+    findings &&
+    (reviewOutput.overall_correctness === "patch is correct" ||
+      reviewOutput.overall_correctness === "patch is incorrect") &&
+    typeof reviewOutput.overall_explanation === "string" &&
+    typeof reviewOutput.overall_confidence_score === "number"
+      ? {
+          output: {
+            findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
+            overall_correctness: reviewOutput.overall_correctness,
+            overall_explanation: reviewOutput.overall_explanation,
+            overall_confidence_score: reviewOutput.overall_confidence_score,
+          },
+        }
+      : {}),
+  };
+}
+
 function pushActivityDetail(
   details: AppServerThreadActivityDetail[],
   detail: AppServerThreadActivityDetail
@@ -1383,6 +1436,13 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
       if (planEntry) {
         flushActivityItems();
         entries.push(planEntry);
+        continue;
+      }
+
+      const reviewEntry = extractReviewEntryFromItem(item, createdAt, turnMetadata);
+      if (reviewEntry) {
+        flushActivityItems();
+        entries.push(reviewEntry);
         continue;
       }
 
@@ -2261,6 +2321,18 @@ function buildTurnStartPayload(params: {
   return base;
 }
 
+function buildReviewStartPayload(params: {
+  threadId: string;
+  target: AppServerReviewTarget;
+  delivery?: AppServerReviewDelivery;
+}): CodexReviewStartParams {
+  return {
+    threadId: params.threadId,
+    target: params.target,
+    delivery: params.delivery ?? "inline",
+  };
+}
+
 type CodexThreadReadPayload = CodexThreadReadParams & {
   before?: string;
   limit?: number;
@@ -2683,6 +2755,44 @@ export class CodexAppServerClient {
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
 
     return { threadId, turnId };
+  }
+
+  async startReview(params: {
+    threadId: string;
+    target: AppServerReviewTarget;
+    delivery?: AppServerReviewDelivery;
+  }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    await this.ensureInitialized();
+
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads({
+        threadId: params.threadId,
+      }),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    }).catch(() => undefined);
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["review/start"],
+      payloads: [buildReviewStartPayload(params)],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    const record = asRecord(result);
+    const reviewThreadId =
+      pickString(record ?? {}, ["reviewThreadId", "review_thread_id"]) ?? params.threadId;
+    const turnRecord = asRecord(record?.turn);
+    const turnId =
+      extractTurnIdFromValue(result) ??
+      pickString(turnRecord ?? {}, ["id", "turnId", "turn_id"]) ??
+      `pending:${reviewThreadId}`;
+
+    return {
+      threadId: params.threadId,
+      reviewThreadId,
+      turnId,
+    };
   }
 
   async setThreadPermissions(params: {

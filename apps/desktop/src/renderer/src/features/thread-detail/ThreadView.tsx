@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type {
   AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification,
+  AppServerReviewTarget,
   AppServerSource,
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
@@ -804,7 +805,8 @@ type ThreadViewProps = {
   onMaterializeLaunchpad?: (
     directoryKey: string,
     input?: AppServerTurnInputItem[],
-    collaborationMode?: AppServerCollaborationModeRequest
+    collaborationMode?: AppServerCollaborationModeRequest,
+    reviewTarget?: AppServerReviewTarget
   ) => Promise<void>;
   onPendingStatusChange?: (status?: string) => void;
   onUpdatePendingUserInput?: (

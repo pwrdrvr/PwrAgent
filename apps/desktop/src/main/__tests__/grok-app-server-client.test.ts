@@ -164,6 +164,66 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
+  it("starts review runs and normalizes review replay items", async () => {
+    const provider = new FakeProvider();
+    const server = new CodexAppServer({
+      provider,
+      threadIdGenerator: () => "thread-1",
+      turnIdGenerator: () => "turn-review-1",
+    });
+    const client = new GrokAppServerClient({ server });
+
+    await client.startThread({ cwd: "/repo/workspace" });
+    const startedReview = await client.startReview({
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    expect(startedReview).toEqual({
+      threadId: "thread-1",
+      reviewThreadId: "thread-1",
+      turnId: "turn-review-1",
+    });
+    expect(provider.runs[0]?.input[0]).toEqual({
+      type: "text",
+      text: expect.stringContaining("Review the code changes against the base branch 'main'"),
+    });
+
+    provider.runs[0]?.deferred.resolve({
+      assistantText: JSON.stringify({
+        findings: [],
+        overall_correctness: "patch is correct",
+        overall_explanation: "No issues found.",
+        overall_confidence_score: 0.7,
+      }),
+      providerResponseId: "resp_review",
+    });
+    await flushAsync();
+
+    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+      entries: [
+        {
+          type: "review",
+          displayText: "Review changes against main",
+        },
+        {
+          type: "review",
+          review: expect.stringContaining("No issues found."),
+          output: {
+            findings: [],
+            overall_correctness: "patch is correct",
+            overall_explanation: "No issues found.",
+            overall_confidence_score: 0.7,
+          },
+        },
+      ],
+      messages: [],
+    });
+
+    await client.close();
+  });
+
   it("fails a Grok turn that resolves without assistant text", async () => {
     const provider = new FakeProvider();
     const server = new CodexAppServer({

@@ -11,6 +11,7 @@ export type BackendCapabilities = {
   renameThread: boolean;
   readThread: boolean;
   startTurn: boolean;
+  startReview?: boolean;
   interruptTurn: boolean;
   steerTurn: boolean;
   transcriptPagination: boolean;

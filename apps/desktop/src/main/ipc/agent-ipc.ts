@@ -11,6 +11,8 @@ import type {
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
+  StartReviewRequest,
+  StartReviewResponse,
   StartThreadRequest,
   StartThreadResponse,
   StartTurnRequest,
@@ -26,6 +28,7 @@ import {
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
+  AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   BACKEND_LIST_CHANNEL,
@@ -221,6 +224,40 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_START_REVIEW_CHANNEL);
+  ipcMain.handle(
+    AGENT_START_REVIEW_CHANNEL,
+    async (
+      _event,
+      request: StartReviewRequest
+    ): Promise<StartReviewResponse> => {
+      logDebug("startReview", {
+        backend: request.backend,
+        threadId: request.threadId,
+        targetType: request.target.type,
+        delivery: request.delivery ?? "inline",
+      });
+
+      try {
+        const response = await registry.startReview(request);
+        logDebug("startReviewResult", {
+          backend: response.backend,
+          threadId: response.threadId,
+          reviewThreadId: response.reviewThreadId,
+          turnId: response.turnId,
+        });
+        return response;
+      } catch (error) {
+        appServerLog.error("startReview failed", {
+          backend: request.backend,
+          threadId: request.threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+  );
+
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.handle(
     AGENT_INTERRUPT_TURN_CHANNEL,
@@ -298,6 +335,7 @@ export function disposeAgentIpcHandlers(): void {
   unsubscribeRegistryEvents = undefined;
   ipcMain.removeHandler(BACKEND_LIST_CHANNEL);
   ipcMain.removeHandler(AGENT_START_THREAD_CHANNEL);
+  ipcMain.removeHandler(AGENT_START_REVIEW_CHANNEL);
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);

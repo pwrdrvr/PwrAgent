@@ -1,6 +1,7 @@
 import { type ClipboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerCollaborationModeRequest,
+  AppServerReviewTarget,
   AppServerSkillSummary,
   AppServerThreadImagePart,
   AppServerTurnInputItem,
@@ -21,6 +22,7 @@ import {
   insertSkillLabel,
   listMentionedSkills,
 } from "../../lib/skill-mentions";
+import { parseReviewCommand } from "../../../../shared/review-command";
 import { SkillChip } from "./SkillChip";
 
 type ComposerProps = {
@@ -42,7 +44,8 @@ type ComposerProps = {
   onMaterializeLaunchpad?: (
     directoryKey: string,
     input?: AppServerTurnInputItem[],
-    collaborationMode?: AppServerCollaborationModeRequest
+    collaborationMode?: AppServerCollaborationModeRequest,
+    reviewTarget?: AppServerReviewTarget
   ) => Promise<void>;
   onPendingStatusChange?: (status?: string) => void;
   onUpdateLaunchpad?: (
@@ -331,6 +334,66 @@ export function Composer(props: ComposerProps) {
   }, [draft, launchpad, props.onUpdateLaunchpad]);
 
   const submitTurn = async (): Promise<void> => {
+    const reviewCommand = parseReviewCommand(draft);
+    if (reviewCommand) {
+      if (props.disabled) {
+        return;
+      }
+      if (imageAttachments.length > 0) {
+        setSendError("/review does not accept image attachments.");
+        return;
+      }
+
+      setSendError(undefined);
+      setSending(true);
+      props.onPendingStatusChange?.("Reviewing");
+
+      if (props.launchpad && props.onMaterializeLaunchpad) {
+        try {
+          await props.onMaterializeLaunchpad(
+            props.launchpad.directoryKey,
+            undefined,
+            undefined,
+            reviewCommand.target
+          );
+          setDraft("");
+          setImageAttachments([]);
+        } catch (error) {
+          props.onPendingStatusChange?.(undefined);
+          setSendError(error instanceof Error ? error.message : String(error));
+        } finally {
+          setSending(false);
+        }
+        return;
+      }
+
+      if (!props.thread || !props.desktopApi?.startReview) {
+        props.onPendingStatusChange?.(undefined);
+        setSending(false);
+        return;
+      }
+
+      try {
+        const response = await props.desktopApi.startReview({
+          backend: props.thread.source,
+          threadId: props.thread.id,
+          target: reviewCommand.target,
+          delivery: "inline",
+        });
+        updateActiveTurnId(response.turnId);
+        props.onActiveTurnIdChange?.(response.turnId);
+        setDraft("");
+      } catch (error) {
+        props.onPendingStatusChange?.(undefined);
+        setSending(false);
+        setInterrupting(false);
+        updateActiveTurnId(undefined);
+        props.onActiveTurnIdChange?.(undefined);
+        setSendError(error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
+
     const text = hydrateSkillLabelsWithMarkdown(draft.trim(), mentionedSkills);
     const imageParts = imageAttachments.map((attachment, index) => ({
       type: "image" as const,

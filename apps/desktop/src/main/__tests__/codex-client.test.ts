@@ -36,6 +36,13 @@ class MockTransport implements JsonRpcTransport {
       id: "turn-1"
     }
   };
+  static reviewStartResult: unknown = {
+    reviewThreadId: "thread-2",
+    turn: {
+      id: "turn-review-1",
+      status: "inProgress"
+    }
+  };
   static threadArchiveResult: unknown = {
     thread: {
       id: "thread-2"
@@ -617,6 +624,17 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "review/start") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.reviewStartResult
+        })
+      );
+      return;
+    }
+
     if (payload.method === "turn/interrupt") {
       if (MockTransport.turnInterruptResponseMode === "timeout") {
         return;
@@ -708,6 +726,13 @@ describe("CodexAppServerClient", () => {
       },
       turn: {
         id: "turn-1"
+      }
+    };
+    MockTransport.reviewStartResult = {
+      reviewThreadId: "thread-2",
+      turn: {
+        id: "turn-review-1",
+        status: "inProgress"
       }
     };
     MockTransport.turnInterruptResult = {
@@ -2342,6 +2367,46 @@ describe("CodexAppServerClient", () => {
     const startIndex = rpcMethods.indexOf("turn/start");
     expect(resumeIndex).toBeGreaterThan(-1);
     expect(startIndex).toBeGreaterThan(resumeIndex);
+
+    await client.close();
+  });
+
+  it("best-effort resumes an existing thread before starting a review", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const result = await client.startReview({
+      threadId: "thread-2",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    expect(result).toEqual({
+      threadId: "thread-2",
+      reviewThreadId: "thread-2",
+      turnId: "turn-review-1",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const requests = transport!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: unknown }
+    );
+    expect(requests.map((request) => request.method)).toContain("thread/resume");
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "review/start",
+        params: {
+          threadId: "thread-2",
+          target: { type: "baseBranch", branch: "main" },
+          delivery: "inline",
+        },
+      })
+    );
 
     await client.close();
   });

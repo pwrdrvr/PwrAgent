@@ -1354,7 +1354,8 @@ textarea {
   color: var(--accent-bright);
 }
 
-.transcript-plan {
+.transcript-plan,
+.transcript-review {
   width: min(100%, 760px);
   display: flex;
   flex-direction: column;
