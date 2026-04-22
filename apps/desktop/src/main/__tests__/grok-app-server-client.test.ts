@@ -570,7 +570,7 @@ describe("GrokAppServerClient", () => {
     const server = new CodexAppServer({
       provider: new FakeProvider(),
       threadIdGenerator: () => "thread-1",
-      runIdGenerator: () => "turn-1",
+      turnIdGenerator: () => "turn-1",
     });
     const client = new GrokAppServerClient({ server });
     const notifications: string[] = [];
@@ -601,7 +601,7 @@ describe("GrokAppServerClient", () => {
     const server = new CodexAppServer({
       provider: new FakeProvider(),
       threadIdGenerator: () => "thread-1",
-      runIdGenerator: () => "turn-1",
+      turnIdGenerator: () => "turn-1",
     });
     const client = new GrokAppServerClient({ server });
     const notifications: string[] = [];
@@ -638,7 +638,7 @@ describe("GrokAppServerClient", () => {
     const server = new CodexAppServer({
       provider: new FakeProvider(),
       threadIdGenerator: () => "thread-1",
-      runIdGenerator: () => "turn-1",
+      turnIdGenerator: () => "turn-1",
     });
     const client = new GrokAppServerClient({ server });
     const notifications: string[] = [];
