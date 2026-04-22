@@ -194,11 +194,24 @@ test("keeps transient turn UI through metadata and premature idle notifications"
     await expect(
       app.window.getByText("Thinking")
     ).toHaveCount(0);
+    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    const previousMessagesToggle = transcript.getByRole("button", {
+      name: "1 previous message",
+    });
+    await expect(previousMessagesToggle).toBeVisible();
+    await expect(previousMessagesToggle).toHaveAttribute("aria-expanded", "false");
     await expect(
-      app.window.getByText(/I'll create the file now\.\s*Verifying the exact bytes next\./)
-    ).toHaveCount(0);
+      transcript.getByText(/I'll create the file now\.\s*Verifying the exact bytes next\./)
+    ).toBeHidden();
     await expect(
-      app.window.getByRole("region", { name: "Transcript" })
+      transcript.getByText(
+        "Created /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+      )
+    ).toBeVisible();
+    await previousMessagesToggle.click();
+    await expect(previousMessagesToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(
+      transcript.getByText(/I'll create the file now\.\s*Verifying the exact bytes next\./)
     ).toBeVisible();
   } finally {
     await app.close();
