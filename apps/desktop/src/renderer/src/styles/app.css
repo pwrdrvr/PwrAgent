@@ -22,12 +22,14 @@
   --accent-shadow: rgba(255, 138, 31, 0.34);
   --focus-ring: var(--accent);
   --danger-soft: rgba(185, 66, 50, 0.24);
+  --danger-border: rgba(255, 176, 161, 0.32);
   --danger-text: #ffb0a1;
   --success-soft: rgba(74, 148, 92, 0.18);
   --success-text: #9ce5b3;
   --info-soft: rgba(86, 137, 196, 0.16);
   --info-text: #9fc8ff;
   --button-text: #120800;
+  --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.42);
 }
 
 * {
@@ -238,7 +240,7 @@ textarea {
 .lens-switch__button {
   min-width: 0;
   height: 32px;
-  padding: 0 12px;
+  padding: 0 8px;
   background: transparent;
   color: var(--text-secondary);
   text-transform: capitalize;
@@ -364,6 +366,11 @@ textarea {
   padding: 0;
 }
 
+.thread-row-shell {
+  position: relative;
+  min-width: 0;
+}
+
 .thread-row {
   position: relative;
   display: flex;
@@ -388,6 +395,50 @@ textarea {
 .thread-row.is-selected {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
+}
+
+.thread-row__overflow-button {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 1;
+  display: grid;
+  width: 30px;
+  height: 26px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.thread-row-shell:hover .thread-row__time,
+.thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row__time {
+  opacity: 0;
+}
+
+.thread-row-shell:hover .thread-row__overflow-button,
+.thread-row__overflow-button:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.thread-row__overflow-button:hover,
+.thread-row__overflow-button:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
 }
 
 .thread-row.is-selected::before {
@@ -439,6 +490,10 @@ textarea {
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 500;
+}
+
+.thread-row__time {
+  transition: opacity 120ms ease;
 }
 
 .thread-row__status-indicator {
@@ -694,6 +749,18 @@ textarea {
   padding-left: 8px;
 }
 
+.directory-row__threads .thread-row--compact {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.directory-row__threads .thread-row__header,
+.directory-row__threads .thread-row__meta {
+  width: 100%;
+}
+
 .directory-row__empty {
   margin-top: 0;
   padding-left: 8px;
@@ -767,6 +834,103 @@ textarea {
 
 .sidebar-error--masthead {
   margin-top: 12px;
+}
+
+.thread-context-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 168px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.thread-context-menu button {
+  display: flex;
+  width: 100%;
+  min-height: 34px;
+  align-items: center;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.thread-context-menu button:hover,
+.thread-context-menu button:focus-visible {
+  background: var(--bg-panel-hover);
+}
+
+.rename-thread-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(18, 14, 10, 0.42);
+}
+
+.rename-thread-dialog {
+  width: min(420px, 100%);
+  padding: 18px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.rename-thread-dialog h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.rename-thread-dialog__field {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.rename-thread-dialog__field input {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.rename-thread-dialog__field input:focus,
+.rename-thread-dialog__field input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.rename-thread-dialog__error {
+  margin: 10px 0 0;
+  color: var(--danger-text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.rename-thread-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
 }
 
 .app-main {

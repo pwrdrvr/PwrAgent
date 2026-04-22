@@ -247,4 +247,131 @@ describe("useThreadNavigation", () => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
     });
   });
+
+  it("renames a thread and refreshes navigation with the explicit title", async () => {
+    let threadTitle = "First thread";
+    const renameThread = vi.fn(async ({ name }: { name: string }) => {
+      threadTitle = name;
+      return {
+        backend: "codex" as const,
+        threadId: "thread-1",
+        renamedAt: Date.now(),
+      };
+    });
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: threadTitle,
+          titleSource: "explicit" as const,
+          summary: "First thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread" as const,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      markThreadSeen: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "thread-1",
+        seenAt: Date.now(),
+      })),
+      renameThread,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.title).toBe("First thread");
+    });
+
+    await act(async () => {
+      await result.current.renameThread(result.current.threads[0]!, "  Renamed thread  ");
+    });
+
+    expect(renameThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Renamed thread",
+    });
+    await waitFor(() => {
+      expect(result.current.selectedThread?.title).toBe("Renamed thread");
+      expect(result.current.selectedThread?.titleSource).toBe("explicit");
+    });
+  });
+
+  it("restores backend state and surfaces errors when rename fails", async () => {
+    const renameThread = vi.fn(async () => {
+      throw new Error("rename failed");
+    });
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          summary: "First thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread" as const,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      markThreadSeen: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "thread-1",
+        seenAt: Date.now(),
+      })),
+      renameThread,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.title).toBe("First thread");
+    });
+
+    await act(async () => {
+      await result.current.renameThread(result.current.threads[0]!, "Broken rename");
+    });
+
+    await waitFor(() => {
+      expect(result.current.renameThreadError).toBe("rename failed");
+      expect(result.current.selectedThread?.title).toBe("First thread");
+    });
+  });
 });

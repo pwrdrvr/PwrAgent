@@ -30,6 +30,8 @@ export function App() {
         directories={navigation.directories}
         error={navigation.error}
         inboxThreads={navigation.inboxThreads}
+        archiveThreadError={navigation.archiveThreadError}
+        renameThreadError={navigation.renameThreadError}
         launchpadError={navigation.launchpadError}
         loading={navigation.loading}
         selectedItemKey={navigation.selectedItemKey}
@@ -39,6 +41,8 @@ export function App() {
         onCreateThread={navigation.createThread}
         onOpenLaunchpad={navigation.openDirectoryLaunchpad}
         onSelectThread={navigation.selectThread}
+        onArchiveThread={navigation.archiveThread}
+        onRenameThread={navigation.renameThread}
       />
 
       <main className="app-main">

@@ -41,6 +41,8 @@ const SUPPORTED_METHODS = [
   "thread/start",
   "thread/new",
   "thread/resume",
+  "thread/archive",
+  "thread/unarchive",
   "thread/name/set",
   "thread/read",
   "thread/compact/start",
@@ -134,12 +136,16 @@ export class CodexAppServer {
         return this.initialize();
       case "thread/list":
       case "thread/loaded/list":
-        return this.listThreads();
+        return this.listThreads(record);
       case "thread/start":
       case "thread/new":
         return this.startThread(record);
       case "thread/resume":
         return this.resumeThread(record);
+      case "thread/archive":
+        return await this.archiveThread(record);
+      case "thread/unarchive":
+        return await this.unarchiveThread(record);
       case "thread/name/set":
         return this.setThreadName(record);
       case "thread/read":
@@ -188,9 +194,13 @@ export class CodexAppServer {
     };
   }
 
-  private listThreads(): { threads: ReturnType<AppServerSessionState["listThreads"]> } {
+  private listThreads(params: Record<string, unknown> = {}): {
+    threads: ReturnType<AppServerSessionState["listThreads"]>;
+  } {
     return {
-      threads: this.state.listThreads(),
+      threads: this.state.listThreads({
+        archived: asOptionalBoolean(params.archived),
+      }),
     };
   }
 
@@ -238,6 +248,36 @@ export class CodexAppServer {
       params: {
         threadId,
         threadName: thread.threadName,
+      },
+    });
+    return thread;
+  }
+
+  private async archiveThread(params: Record<string, unknown>): Promise<ThreadState> {
+    const threadId = asRequiredString(params.threadId, "thread/archive requires threadId");
+    const thread = this.state.archiveThread(threadId);
+    if (!thread) {
+      throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
+    }
+    await this.emit({
+      method: "thread/archived",
+      params: {
+        threadId,
+      },
+    });
+    return thread;
+  }
+
+  private async unarchiveThread(params: Record<string, unknown>): Promise<ThreadState> {
+    const threadId = asRequiredString(params.threadId, "thread/unarchive requires threadId");
+    const thread = this.state.unarchiveThread(threadId);
+    if (!thread) {
+      throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
+    }
+    await this.emit({
+      method: "thread/unarchived",
+      params: {
+        threadId,
       },
     });
     return thread;

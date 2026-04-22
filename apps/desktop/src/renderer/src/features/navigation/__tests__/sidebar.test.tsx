@@ -14,6 +14,9 @@ const backends: BackendSummary[] = [
       listThreads: true,
       createThread: true,
       resumeThread: true,
+      archiveThread: true,
+      restoreThread: true,
+      renameThread: true,
       readThread: true,
       startTurn: true,
       interruptTurn: true,
@@ -46,6 +49,9 @@ const backends: BackendSummary[] = [
       listThreads: false,
       createThread: false,
       resumeThread: false,
+      archiveThread: false,
+      restoreThread: false,
+      renameThread: false,
       readThread: false,
       startTurn: false,
       interruptTurn: false,
@@ -326,6 +332,180 @@ describe("Sidebar", () => {
     expect(threadButton.querySelector('[data-thread-status="unread"]')).not.toBeNull();
     expect(within(threadButton).getByText("PwrAgnt")).toBeInTheDocument();
     expect(screen.queryByText("Cross-project cleanup")).not.toBeInTheDocument();
+  });
+
+  it("opens thread actions from the row overflow button", () => {
+    const onArchiveThread = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={onArchiveThread}
+      />
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread actions" })
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
+
+    expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
+  });
+
+  it("hides archive actions when the backend does not support archiving", () => {
+    const backendsWithoutArchive = backends.map((backend) =>
+      backend.kind === "codex"
+        ? {
+            ...backend,
+            capabilities: {
+              ...backend.capabilities,
+              archiveThread: false,
+            },
+          }
+        : backend
+    );
+
+    render(
+      <Sidebar
+        backends={backendsWithoutArchive}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+
+    expect(screen.getByRole("menuitem", { name: "Rename Thread" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Archive Thread" })).not.toBeInTheDocument();
+  });
+
+  it("renames a thread from the thread context menu", () => {
+    const onRenameThread = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onRenameThread={onRenameThread}
+      />
+    );
+
+    const threadButton = screen.getByText("Cross-project cleanup").closest("button");
+    expect(threadButton).not.toBeNull();
+    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
+    const input = within(dialog).getByLabelText("Name");
+    fireEvent.change(input, { target: { value: "  Renamed cleanup  " } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+
+    expect(onRenameThread).toHaveBeenCalledWith(sharedThread, "Renamed cleanup");
+  });
+
+  it("keeps the rename dialog open for blank names", () => {
+    const onRenameThread = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onRenameThread={onRenameThread}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
+    fireEvent.change(within(dialog).getByLabelText("Name"), {
+      target: { value: "   " },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+
+    expect(onRenameThread).not.toHaveBeenCalled();
+    expect(within(dialog).getByText("Thread name cannot be blank.")).toBeInTheDocument();
+  });
+
+  it("archives directly from the thread context menu", () => {
+    const onArchiveThread = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={onArchiveThread}
+      />
+    );
+
+    const threadButton = screen.getByText("Cross-project cleanup").closest("button");
+    expect(threadButton).not.toBeNull();
+    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
+
+    expect(screen.queryByRole("dialog", { name: "Archive Thread" })).not.toBeInTheDocument();
+    expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
   });
 
   it("renders directory rows without the raw chevron glyph affordance", () => {

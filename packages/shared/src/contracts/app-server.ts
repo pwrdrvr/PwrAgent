@@ -180,6 +180,7 @@ export type AppServerThreadReplay = {
 
 export type AppServerListThreadsRequest = {
   backend?: AppServerBackendKind;
+  archived?: boolean;
   filter?: string;
 };
 
@@ -187,6 +188,50 @@ export type AppServerListThreadsResponse = {
   backend: AppServerBackendScope;
   fetchedAt: number;
   threads: AppServerThreadSummary[];
+};
+
+export type ArchiveThreadCleanupResult = {
+  worktreePath: string;
+  branch?: string;
+  removedWorktree: boolean;
+  deletedBranch: boolean;
+  skippedReason?: string;
+  error?: string;
+};
+
+export type ArchiveThreadRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type ArchiveThreadResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  archivedAt: number;
+  cleanup: ArchiveThreadCleanupResult[];
+};
+
+export type RestoreThreadRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type RestoreThreadResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  restoredAt: number;
+};
+
+export type RenameThreadRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  name: string;
+};
+
+export type RenameThreadResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  renamedAt: number;
 };
 
 export type AppServerReadThreadRequest = {
@@ -392,6 +437,18 @@ export type AppServerNotification =
         status: {
           type: string;
         };
+      };
+    }
+  | {
+      method: "thread/archived";
+      params: {
+        threadId: string;
+      };
+    }
+  | {
+      method: "thread/unarchived";
+      params: {
+        threadId: string;
       };
     }
   | {

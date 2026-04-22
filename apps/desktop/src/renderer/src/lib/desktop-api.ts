@@ -7,6 +7,8 @@ import type {
 } from "../../../shared/image-normalization";
 import type {
   AgentEvent,
+  ArchiveThreadRequest,
+  ArchiveThreadResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
@@ -28,6 +30,10 @@ import type {
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
+  RenameThreadRequest,
+  RenameThreadResponse,
+  RestoreThreadRequest,
+  RestoreThreadResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -54,6 +60,15 @@ export type DesktopApi = {
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
+  archiveThread?: (
+    request: ArchiveThreadRequest
+  ) => Promise<ArchiveThreadResponse>;
+  restoreThread?: (
+    request: RestoreThreadRequest
+  ) => Promise<RestoreThreadResponse>;
+  renameThread?: (
+    request: RenameThreadRequest
+  ) => Promise<RenameThreadResponse>;
   startThread?: (request: StartThreadRequest) => Promise<StartThreadResponse>;
   startTurn?: (request: StartTurnRequest) => Promise<StartTurnResponse>;
   interruptTurn?: (

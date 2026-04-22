@@ -73,7 +73,10 @@ type ReplayRuntimeClient = {
     };
     methods?: string[];
   }>;
-  listThreads(params?: { filter?: string }): Promise<AppServerThreadSummary[]>;
+  listThreads(params?: {
+    archived?: boolean;
+    filter?: string;
+  }): Promise<AppServerThreadSummary[]>;
   listSkills(params?: {
     cwd?: string;
     cwds?: string[];

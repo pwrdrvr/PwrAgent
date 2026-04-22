@@ -89,6 +89,8 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "turn/diff/updated",
   "serverRequest/resolved",
   "thread/compacted",
+  "thread/archived",
+  "thread/unarchived",
   "thread/status/changed",
   "thread/tokenUsage/updated",
   "turn/requestApproval",
@@ -1884,7 +1886,10 @@ export class CodexAppServerClient {
     return this.initializeResult ?? {};
   }
 
-  async listThreads(params?: { filter?: string }): Promise<AppServerThreadSummary[]> {
+  async listThreads(params?: {
+    archived?: boolean;
+    filter?: string;
+  }): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
     const requestParams = {
@@ -1892,6 +1897,14 @@ export class CodexAppServerClient {
       methods: ["thread/list", "thread/loaded/list"] as string[],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     };
+    if (params?.archived === true) {
+      const archivedResult = await requestWithFallbacks({
+        ...requestParams,
+        payloads: buildThreadDiscoveryPayloads(params?.filter, true),
+      });
+      return await this.enrichThreads(extractThreadsFromValue(archivedResult));
+    }
+
     const [activeResult, archivedResult] = await Promise.all([
       requestWithFallbacks({
         ...requestParams,
@@ -1907,6 +1920,12 @@ export class CodexAppServerClient {
       archivedThreads: extractThreadsFromValue(archivedResult),
     });
 
+    return await this.enrichThreads(threads);
+  }
+
+  private async enrichThreads(
+    threads: RawCodexThreadSummary[],
+  ): Promise<AppServerThreadSummary[]> {
     const enrichedThreads = await Promise.all(
       threads.map(async (thread) => {
         const projectKey = await resolveThreadProjectKey(thread);
@@ -2087,6 +2106,54 @@ export class CodexAppServerClient {
       methods: ["thread/resume"],
       payloads: buildThreadResumePayloads(params),
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    return {
+      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+    };
+  }
+
+  async archiveThread(params: { threadId: string }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/archive"],
+      payloads: [{ threadId: params.threadId }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+    };
+  }
+
+  async restoreThread(params: { threadId: string }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/unarchive"],
+      payloads: [{ threadId: params.threadId }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+    };
+  }
+
+  async renameThread(params: {
+    threadId: string;
+    name: string;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/name/set"],
+      payloads: [{ threadId: params.threadId, name: params.name }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
     return {

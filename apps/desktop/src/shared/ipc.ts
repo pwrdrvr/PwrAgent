@@ -1,6 +1,9 @@
 export const APP_SERVER_LIST_THREADS_CHANNEL = "app-server:list-threads";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
 export const APP_SERVER_LIST_SKILLS_CHANNEL = "app-server:list-skills";
+export const APP_SERVER_ARCHIVE_THREAD_CHANNEL = "app-server:archive-thread";
+export const APP_SERVER_RESTORE_THREAD_CHANNEL = "app-server:restore-thread";
+export const APP_SERVER_RENAME_THREAD_CHANNEL = "app-server:rename-thread";
 export const FOCUSED_DIFF_ANALYZE_CHANNEL = "focused-diff:analyze";
 export const BACKEND_LIST_CHANNEL = "backend:list";
 export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";

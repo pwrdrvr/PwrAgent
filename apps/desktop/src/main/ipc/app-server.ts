@@ -2,6 +2,8 @@ import { ipcMain } from "electron";
 import { OverlayStore } from "@pwragnt/agent-core";
 import type {
   AppServerBackendScope,
+  ArchiveThreadRequest,
+  ArchiveThreadResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
@@ -18,6 +20,10 @@ import type {
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
+  RenameThreadRequest,
+  RenameThreadResponse,
+  RestoreThreadRequest,
+  RestoreThreadResponse,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragnt/shared";
@@ -29,6 +35,9 @@ import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
+  APP_SERVER_ARCHIVE_THREAD_CHANNEL,
+  APP_SERVER_RESTORE_THREAD_CHANNEL,
+  APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
@@ -84,6 +93,7 @@ class DesktopAppServerService {
     const backend = request.backend;
     const threads = await getDesktopBackendRegistry().listThreads({
       backend,
+      archived: request.archived,
       filter: request.filter,
     });
 
@@ -143,6 +153,58 @@ class DesktopAppServerService {
       hasLastUserMessage: Boolean(response.replay.lastUserMessage),
       hasLastAssistantMessage: Boolean(response.replay.lastAssistantMessage),
       hasPreviousPage: response.replay.pagination.hasPreviousPage,
+    });
+
+    return response;
+  }
+
+  async archiveThread(
+    request: ArchiveThreadRequest,
+  ): Promise<ArchiveThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const response = await getDesktopBackendRegistry().archiveThread({
+      ...request,
+      backend,
+    });
+
+    logDebug("archiveThread", {
+      backend,
+      threadId: request.threadId,
+      cleanupCount: response.cleanup.length,
+    });
+
+    return response;
+  }
+
+  async restoreThread(
+    request: RestoreThreadRequest,
+  ): Promise<RestoreThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const response = await getDesktopBackendRegistry().restoreThread({
+      ...request,
+      backend,
+    });
+
+    logDebug("restoreThread", {
+      backend,
+      threadId: request.threadId,
+    });
+
+    return response;
+  }
+
+  async renameThread(
+    request: RenameThreadRequest,
+  ): Promise<RenameThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const response = await getDesktopBackendRegistry().renameThread({
+      ...request,
+      backend,
+    });
+
+    logDebug("renameThread", {
+      backend,
+      threadId: request.threadId,
     });
 
     return response;
@@ -293,6 +355,36 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.readThread(request);
     }
   );
+  ipcMain.removeHandler(APP_SERVER_ARCHIVE_THREAD_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_ARCHIVE_THREAD_CHANNEL,
+    async (
+      _event,
+      request: ArchiveThreadRequest,
+    ): Promise<ArchiveThreadResponse> => {
+      return await appServerService.archiveThread(request);
+    },
+  );
+  ipcMain.removeHandler(APP_SERVER_RESTORE_THREAD_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_RESTORE_THREAD_CHANNEL,
+    async (
+      _event,
+      request: RestoreThreadRequest,
+    ): Promise<RestoreThreadResponse> => {
+      return await appServerService.restoreThread(request);
+    },
+  );
+  ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_RENAME_THREAD_CHANNEL,
+    async (
+      _event,
+      request: RenameThreadRequest,
+    ): Promise<RenameThreadResponse> => {
+      return await appServerService.renameThread(request);
+    },
+  );
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.handle(
     FOCUSED_DIFF_ANALYZE_CHANNEL,
@@ -359,6 +451,9 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_ARCHIVE_THREAD_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_RESTORE_THREAD_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);

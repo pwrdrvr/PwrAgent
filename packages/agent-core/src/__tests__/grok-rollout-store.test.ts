@@ -188,4 +188,120 @@ describe("GrokRolloutStore", () => {
       await temp.cleanup();
     }
   });
+
+  it("moves archived threads out of active storage and restores them", async () => {
+    const temp = await createTemporaryTestDirectory();
+
+    try {
+      const store = new GrokRolloutStore(temp.path);
+      const state = new AppServerSessionState({ store });
+      state.createThread({
+        threadId: "thread-archive",
+        model: "grok-4.20-non-reasoning",
+      });
+      state.setThreadName("thread-archive", "Archive me");
+      state.appendInput("thread-archive", [{ type: "text", text: "Keep history" }]);
+      state.setPreviousResponseId("thread-archive", "resp_archive");
+
+      state.archiveThread("thread-archive");
+
+      expect(
+        await exists(path.join(temp.path, "threads/thread-archive")),
+      ).toBe(false);
+      expect(
+        await exists(path.join(temp.path, "archived_threads/thread-archive/thread.toml")),
+      ).toBe(true);
+      expect(
+        await exists(path.join(temp.path, "archived_threads/thread-archive/rollout.jsonl")),
+      ).toBe(true);
+
+      const archived = new AppServerSessionState({
+        store: new GrokRolloutStore(temp.path),
+      });
+      expect(archived.listThreads()).toEqual([]);
+      expect(archived.listThreads({ archived: true })).toMatchObject([
+        {
+          threadId: "thread-archive",
+          title: "Archive me",
+        },
+      ]);
+      expect(archived.getPreviousResponseId("thread-archive")).toBe("resp_archive");
+
+      archived.unarchiveThread("thread-archive");
+
+      expect(
+        await exists(path.join(temp.path, "archived_threads/thread-archive")),
+      ).toBe(false);
+      expect(
+        await exists(path.join(temp.path, "threads/thread-archive/thread.toml")),
+      ).toBe(true);
+      const restored = new AppServerSessionState({
+        store: new GrokRolloutStore(temp.path),
+      });
+      expect(restored.listThreads()).toMatchObject([
+        {
+          threadId: "thread-archive",
+          title: "Archive me",
+        },
+      ]);
+      expect(restored.readThread("thread-archive").lastUserMessage).toBe("Keep history");
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it("migrates older archived-in-place threads out of active storage", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const threadDir = path.join(temp.path, "threads/thread-old-archive");
+
+    try {
+      await fs.mkdir(threadDir, { recursive: true });
+      await fs.writeFile(
+        path.join(threadDir, "thread.toml"),
+        [
+          'thread_id = "thread-old-archive"',
+          'thread_name = "Older archive"',
+          "archived = true",
+          "created_at = 1",
+          "updated_at = 2",
+          "",
+        ].join("\n"),
+      );
+      await fs.writeFile(
+        path.join(threadDir, "rollout.jsonl"),
+        `${JSON.stringify({
+          type: "message",
+          role: "user",
+          text: "Archived in place",
+        })}\n`,
+      );
+
+      const state = new AppServerSessionState({
+        store: new GrokRolloutStore(temp.path),
+      });
+
+      expect(await exists(threadDir)).toBe(false);
+      expect(
+        await exists(path.join(temp.path, "archived_threads/thread-old-archive")),
+      ).toBe(true);
+      expect(state.listThreads()).toEqual([]);
+      expect(state.listThreads({ archived: true })).toMatchObject([
+        {
+          threadId: "thread-old-archive",
+          title: "Older archive",
+        },
+      ]);
+    } finally {
+      await temp.cleanup();
+    }
+  });
 });
+
+async function exists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}

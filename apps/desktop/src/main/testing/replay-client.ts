@@ -60,8 +60,14 @@ export class ReplayClient {
     return await this.ensureInitialized();
   }
 
-  async listThreads(_params?: { filter?: string }): Promise<AppServerThreadSummary[]> {
+  async listThreads(_params?: {
+    archived?: boolean;
+    filter?: string;
+  }): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
+    if (_params?.archived) {
+      return [];
+    }
     return asThreadList(this.controller.consumeResponse("thread/list").result);
   }
 

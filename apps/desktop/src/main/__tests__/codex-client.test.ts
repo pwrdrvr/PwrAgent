@@ -33,6 +33,21 @@ class MockTransport implements JsonRpcTransport {
       id: "turn-1"
     }
   };
+  static threadArchiveResult: unknown = {
+    thread: {
+      id: "thread-2"
+    }
+  };
+  static threadUnarchiveResult: unknown = {
+    thread: {
+      id: "thread-2"
+    }
+  };
+  static threadNameSetResult: unknown = {
+    thread: {
+      id: "thread-2"
+    }
+  };
   static turnInterruptResponseMode: "success" | "timeout" = "success";
 
   readonly sentMessages: string[] = [];
@@ -540,6 +555,39 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/archive") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.threadArchiveResult
+        })
+      );
+      return;
+    }
+
+    if (payload.method === "thread/unarchive") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.threadUnarchiveResult
+        })
+      );
+      return;
+    }
+
+    if (payload.method === "thread/name/set") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.threadNameSetResult
+        })
+      );
+      return;
+    }
+
     if (payload.method === "turn/start") {
       this.messageHandler(
         JSON.stringify({
@@ -650,6 +698,16 @@ describe("CodexAppServerClient", () => {
       },
       turn: {
         id: "turn-1"
+      }
+    };
+    MockTransport.threadArchiveResult = {
+      thread: {
+        id: "thread-2"
+      }
+    };
+    MockTransport.threadNameSetResult = {
+      thread: {
+        id: "thread-2"
       }
     };
     MockTransport.turnInterruptResponseMode = "success";
@@ -1639,6 +1697,93 @@ describe("CodexAppServerClient", () => {
 
     expect(created).toEqual({
       threadId: "thread-3"
+    });
+
+    await client.close();
+  });
+
+  it("archives threads through the Codex app server", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await expect(client.archiveThread({ threadId: "thread-2" })).resolves.toEqual({
+      threadId: "thread-2",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const archiveRequest = transport?.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((message) => message.method === "thread/archive");
+
+    expect(archiveRequest).toMatchObject({
+      method: "thread/archive",
+      params: {
+        threadId: "thread-2",
+      },
+    });
+
+    await client.close();
+  });
+
+  it("restores threads through the Codex app server", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await expect(client.restoreThread({ threadId: "thread-2" })).resolves.toEqual({
+      threadId: "thread-2",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const restoreRequest = transport?.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((message) => message.method === "thread/unarchive");
+
+    expect(restoreRequest).toMatchObject({
+      method: "thread/unarchive",
+      params: {
+        threadId: "thread-2",
+      },
+    });
+
+    await client.close();
+  });
+
+  it("renames threads through the Codex app server", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await expect(
+      client.renameThread({
+        threadId: "thread-2",
+        name: "Renamed desktop shell",
+      })
+    ).resolves.toEqual({
+      threadId: "thread-2",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const renameRequest = transport?.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((message) => message.method === "thread/name/set");
+
+    expect(renameRequest).toMatchObject({
+      method: "thread/name/set",
+      params: {
+        threadId: "thread-2",
+        name: "Renamed desktop shell",
+      },
     });
 
     await client.close();

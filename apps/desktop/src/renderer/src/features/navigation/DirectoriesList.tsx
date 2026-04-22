@@ -5,14 +5,17 @@ import type {
   NavigationThreadSummary,
 } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
-import { ThreadMetaChips } from "./ThreadMetaChips";
-import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
+import { ThreadRow } from "./ThreadRow";
 
 type DirectoriesListProps = {
   directories: NavigationDirectorySummary[];
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
+  onOpenThreadContextMenu: (
+    thread: NavigationThreadSummary,
+    position: { x: number; y: number }
+  ) => void;
   onOpenLaunchpad: (
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
@@ -139,31 +142,17 @@ export function DirectoriesList(props: DirectoriesListProps) {
               <div className="directory-row__details">
                 {visibleThreads.length > 0 ? (
                   <div className="sidebar-list sidebar-list--compact directory-row__threads">
-                    {visibleThreads.map((thread) => {
-                      const selected =
-                        buildThreadIdentityKey(thread.source, thread.id) === props.selectedItemKey;
-                      const status = getThreadRowStatus(thread, props.thinkingThreadKeys);
-                      return (
-                        <button
-                          key={`${directory.key}:${buildThreadIdentityKey(thread.source, thread.id)}`}
-                          aria-pressed={selected}
-                          className={`thread-row${selected ? " is-selected" : ""}`}
-                          type="button"
-                          onClick={() => props.onSelectThread(thread)}
-                        >
-                          <span className="thread-row__header">
-                            <span className="thread-row__heading">
-                              <ThreadRowStatus status={status} />
-                              <span className="thread-row__title">{thread.title}</span>
-                            </span>
-                            <span className="thread-row__time">
-                              {formatRelativeTime(thread.updatedAt)}
-                            </span>
-                          </span>
-                          <ThreadMetaChips thread={thread} />
-                        </button>
-                      );
-                    })}
+                    {visibleThreads.map((thread) => (
+                      <ThreadRow
+                        key={`${directory.key}:${buildThreadIdentityKey(thread.source, thread.id)}`}
+                        compact
+                        selectedThreadKey={props.selectedItemKey}
+                        thinkingThreadKeys={props.thinkingThreadKeys}
+                        thread={thread}
+                        onOpenContextMenu={props.onOpenThreadContextMenu}
+                        onSelectThread={props.onSelectThread}
+                      />
+                    ))}
                   </div>
                 ) : (
                   <p className="sidebar-empty directory-row__empty">No threads in this directory yet.</p>
@@ -175,37 +164,4 @@ export function DirectoriesList(props: DirectoriesListProps) {
       })}
     </div>
   );
-}
-
-function formatRelativeTime(timestamp?: number): string {
-  if (!timestamp) {
-    return "now";
-  }
-
-  const deltaMinutes = Math.max(
-    0,
-    Math.round((Date.now() - timestamp) / (1000 * 60))
-  );
-
-  if (deltaMinutes < 1) {
-    return "now";
-  }
-  if (deltaMinutes < 60) {
-    return `${deltaMinutes}m`;
-  }
-
-  const deltaHours = Math.round(deltaMinutes / 60);
-  if (deltaHours < 24) {
-    return `${deltaHours}h`;
-  }
-
-  const deltaDays = Math.round(deltaHours / 24);
-  if (deltaDays < 7) {
-    return `${deltaDays}d`;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric"
-  }).format(timestamp);
 }

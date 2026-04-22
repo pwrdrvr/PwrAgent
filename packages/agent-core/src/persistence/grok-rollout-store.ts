@@ -29,6 +29,14 @@ export interface AppServerSessionStore {
     thread: ThreadState;
     previousResponseId?: string;
   }): void;
+  archiveThread(params: {
+    thread: ThreadState;
+    previousResponseId?: string;
+  }): void;
+  unarchiveThread(params: {
+    thread: ThreadState;
+    previousResponseId?: string;
+  }): void;
   appendMessage(params: {
     threadId: string;
     message: StoredMessage;
@@ -56,6 +64,8 @@ export class GrokRolloutStore implements AppServerSessionStore {
   constructor(private readonly stateRoot: string) {}
 
   load(): HydratedSessionState {
+    this.migrateArchivedActiveThreads();
+
     const threads: ThreadState[] = [];
     const messagesByThread: Record<string, StoredMessage[]> = {};
     const itemsByThread: Record<string, ThreadReplayItem[]> = {};
@@ -63,12 +73,15 @@ export class GrokRolloutStore implements AppServerSessionStore {
     let itemSequence = 0;
     let lastTimestamp = 0;
 
-    for (const threadDir of this.listThreadDirectories()) {
+    for (const { archived, threadDir } of this.listThreadDirectories()) {
       const threadPath = path.join(threadDir, "thread.toml");
       if (!fs.existsSync(threadPath)) {
         continue;
       }
-      const thread = readThreadToml(threadPath);
+      const thread = {
+        ...readThreadToml(threadPath),
+        ...(archived ? { archived: true } : {}),
+      };
       threads.push(thread);
       lastTimestamp = Math.max(lastTimestamp, thread.createdAt ?? 0, thread.updatedAt ?? 0);
 
@@ -100,29 +113,31 @@ export class GrokRolloutStore implements AppServerSessionStore {
     thread: ThreadState;
     previousResponseId?: string;
   }): void {
-    const threadDir = this.ensureThreadDirectory(params.thread.threadId);
-    const threadPath = path.join(threadDir, "thread.toml");
-    writeAtomicFile(
-      threadPath,
-      stringifyFlatToml({
-        approval_policy: params.thread.approvalPolicy,
-        created_at: params.thread.createdAt,
-        cwd: params.thread.cwd,
-        model: params.thread.model,
-        model_provider: params.thread.modelProvider,
-        previous_response_id: params.previousResponseId,
-        reasoning_effort: params.thread.reasoningEffort,
-        sandbox: params.thread.sandbox,
-        service_tier: params.thread.serviceTier,
-        fast_mode:
-          typeof params.thread.fastMode === "boolean"
-            ? params.thread.fastMode
-            : undefined,
-        thread_id: params.thread.threadId,
-        thread_name: params.thread.threadName,
-        updated_at: params.thread.updatedAt,
-      }),
-    );
+    this.writeThreadToml(params);
+  }
+
+  archiveThread(params: {
+    thread: ThreadState;
+    previousResponseId?: string;
+  }): void {
+    this.moveThreadDirectory({
+      threadId: params.thread.threadId,
+      from: this.activeThreadDirectory(params.thread.threadId),
+      to: this.archivedThreadDirectory(params.thread.threadId),
+    });
+    this.writeThreadToml(params);
+  }
+
+  unarchiveThread(params: {
+    thread: ThreadState;
+    previousResponseId?: string;
+  }): void {
+    this.moveThreadDirectory({
+      threadId: params.thread.threadId,
+      from: this.archivedThreadDirectory(params.thread.threadId),
+      to: this.activeThreadDirectory(params.thread.threadId),
+    });
+    this.writeThreadToml(params);
   }
 
   appendMessage(params: {
@@ -152,20 +167,32 @@ export class GrokRolloutStore implements AppServerSessionStore {
     });
   }
 
-  private listThreadDirectories(): string[] {
-    const threadsRoot = path.join(this.stateRoot, "threads");
-    if (!fs.existsSync(threadsRoot)) {
+  private listThreadDirectories(): Array<{ archived: boolean; threadDir: string }> {
+    return [
+      ...this.listThreadDirectoriesInRoot(this.activeThreadsRoot(), false),
+      ...this.listThreadDirectoriesInRoot(this.archivedThreadsRoot(), true),
+    ];
+  }
+
+  private listThreadDirectoriesInRoot(
+    root: string,
+    archived: boolean,
+  ): Array<{ archived: boolean; threadDir: string }> {
+    if (!fs.existsSync(root)) {
       return [];
     }
 
     return fs
-      .readdirSync(threadsRoot, { withFileTypes: true })
+      .readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(threadsRoot, entry.name));
+      .map((entry) => ({
+        archived,
+        threadDir: path.join(root, entry.name),
+      }));
   }
 
   private ensureThreadDirectory(threadId: string): string {
-    const threadDir = path.join(this.stateRoot, "threads", threadId);
+    const threadDir = this.activeThreadDirectory(threadId);
     fs.mkdirSync(threadDir, { recursive: true });
     return threadDir;
   }
@@ -177,6 +204,94 @@ export class GrokRolloutStore implements AppServerSessionStore {
       `${JSON.stringify(record)}\n`,
       "utf8",
     );
+  }
+
+  private writeThreadToml(params: {
+    thread: ThreadState;
+    previousResponseId?: string;
+  }): void {
+    const threadDir = params.thread.archived
+      ? this.archivedThreadDirectory(params.thread.threadId)
+      : this.activeThreadDirectory(params.thread.threadId);
+    fs.mkdirSync(threadDir, { recursive: true });
+    const threadPath = path.join(threadDir, "thread.toml");
+    writeAtomicFile(
+      threadPath,
+      stringifyFlatToml({
+        approval_policy: params.thread.approvalPolicy,
+        archived: params.thread.archived,
+        created_at: params.thread.createdAt,
+        cwd: params.thread.cwd,
+        model: params.thread.model,
+        model_provider: params.thread.modelProvider,
+        previous_response_id: params.previousResponseId,
+        reasoning_effort: params.thread.reasoningEffort,
+        sandbox: params.thread.sandbox,
+        service_tier: params.thread.serviceTier,
+        fast_mode:
+          typeof params.thread.fastMode === "boolean"
+            ? params.thread.fastMode
+            : undefined,
+        thread_id: params.thread.threadId,
+        thread_name: params.thread.threadName,
+        updated_at: params.thread.updatedAt,
+      }),
+    );
+  }
+
+  private migrateArchivedActiveThreads(): void {
+    for (const { threadDir } of this.listThreadDirectoriesInRoot(
+      this.activeThreadsRoot(),
+      false,
+    )) {
+      const threadPath = path.join(threadDir, "thread.toml");
+      if (!fs.existsSync(threadPath)) {
+        continue;
+      }
+      const thread = readThreadToml(threadPath);
+      if (!thread.archived) {
+        continue;
+      }
+      this.moveThreadDirectory({
+        threadId: thread.threadId,
+        from: threadDir,
+        to: this.archivedThreadDirectory(thread.threadId),
+      });
+    }
+  }
+
+  private moveThreadDirectory(params: {
+    threadId: string;
+    from: string;
+    to: string;
+  }): void {
+    if (!fs.existsSync(params.from)) {
+      fs.mkdirSync(params.to, { recursive: true });
+      return;
+    }
+    if (fs.existsSync(params.to)) {
+      throw new Error(
+        `Cannot move Grok thread ${params.threadId}: ${params.to} already exists`,
+      );
+    }
+    fs.mkdirSync(path.dirname(params.to), { recursive: true });
+    fs.renameSync(params.from, params.to);
+  }
+
+  private activeThreadsRoot(): string {
+    return path.join(this.stateRoot, "threads");
+  }
+
+  private archivedThreadsRoot(): string {
+    return path.join(this.stateRoot, "archived_threads");
+  }
+
+  private activeThreadDirectory(threadId: string): string {
+    return path.join(this.activeThreadsRoot(), threadId);
+  }
+
+  private archivedThreadDirectory(threadId: string): string {
+    return path.join(this.archivedThreadsRoot(), threadId);
   }
 }
 
@@ -191,6 +306,8 @@ function readThreadToml(filePath: string): ThreadState {
     model: asOptionalString(values.model),
     modelProvider: asOptionalString(values.model_provider),
     approvalPolicy: asOptionalString(values.approval_policy),
+    archived:
+      typeof values.archived === "boolean" ? values.archived : undefined,
     sandbox: asOptionalString(values.sandbox),
     serviceTier: asOptionalString(values.service_tier),
     reasoningEffort: asOptionalString(values.reasoning_effort),
