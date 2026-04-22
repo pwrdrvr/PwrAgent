@@ -850,6 +850,21 @@ export class GrokAppServerClient {
     };
   }
 
+  async renameThread(params: {
+    threadId: string;
+    name: string;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await this.request("thread/name/set", {
+      threadId: params.threadId,
+      name: params.name,
+    });
+    return {
+      threadId: extractThreadId(result) ?? params.threadId,
+    };
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) {
       return;

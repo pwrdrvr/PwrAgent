@@ -29,6 +29,8 @@ import type {
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
+  RenameThreadRequest,
+  RenameThreadResponse,
   StartThreadRequest,
   StartThreadResponse,
   StartTurnRequest,
@@ -56,6 +58,7 @@ import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
+  APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   BACKEND_LIST_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -114,6 +117,10 @@ const desktopApi = Object.freeze({
     request: ArchiveThreadRequest,
   ): Promise<ArchiveThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_ARCHIVE_THREAD_CHANNEL, request),
+  renameThread: async (
+    request: RenameThreadRequest,
+  ): Promise<RenameThreadResponse> =>
+    await ipcRenderer.invoke(APP_SERVER_RENAME_THREAD_CHANNEL, request),
   analyzeFocusedDiff: async (
     request: FocusedDiffAnalysisRequest
   ): Promise<FocusedDiffAnalysisResponse> =>

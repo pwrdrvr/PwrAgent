@@ -473,6 +473,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   inboxThreads: NavigationThreadSummary[];
   launchpadError?: string;
   archiveThreadError?: string;
+  renameThreadError?: string;
   loading: boolean;
   refreshing: boolean;
   refresh: () => Promise<void>;
@@ -514,11 +515,13 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
   archiveThread: (thread: NavigationThreadSummary) => Promise<void>;
+  renameThread: (thread: NavigationThreadSummary, name: string) => Promise<void>;
   snapshot?: NavigationSnapshot;
   threads: NavigationThreadSummary[];
 } {
   const markThreadSeen = desktopApi?.markThreadSeen;
   const archiveThreadRequest = desktopApi?.archiveThread;
+  const renameThreadRequest = desktopApi?.renameThread;
   const setThreadExecutionMode = desktopApi?.setThreadExecutionMode;
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
   const [browseMode, setBrowseMode] = useState<BrowseMode>("recents");
@@ -534,6 +537,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const [createThreadError, setCreateThreadError] = useState<string>();
   const [launchpadError, setLaunchpadError] = useState<string>();
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
+  const [renameThreadError, setRenameThreadError] = useState<string>();
   const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
     useState<ThreadExecutionMode>();
   const [setThreadExecutionModeError, setSetThreadExecutionModeError] =
@@ -1258,6 +1262,69 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     [archiveThreadRequest, optimisticThread, refresh, state.response]
   );
 
+  const renameThread = useCallback(
+    async (thread: NavigationThreadSummary, name: string): Promise<void> => {
+      const nextName = name.trim();
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+
+      if (!nextName) {
+        setRenameThreadError("Thread name cannot be blank.");
+        return;
+      }
+
+      if (!renameThreadRequest) {
+        setRenameThreadError("Desktop bridge is missing renameThread().");
+        return;
+      }
+
+      setRenameThreadError(undefined);
+      setArchiveThreadError(undefined);
+      setCreateThreadError(undefined);
+      setLaunchpadError(undefined);
+      setSetThreadExecutionModeError(undefined);
+      setSetThreadModelSettingsError(undefined);
+      setState((current) => ({
+        ...current,
+        response: applyThreadNameUpdate(current.response, {
+          backend: thread.source,
+          threadId: thread.id,
+          threadName: nextName,
+        }),
+      }));
+      setRetainedUnreadThread((current) =>
+        current?.source === thread.source && current.id === thread.id
+          ? {
+              ...current,
+              title: nextName,
+              titleSource: "explicit",
+            }
+          : current
+      );
+      setOptimisticThread((current) =>
+        current?.source === thread.source && current.id === thread.id
+          ? {
+              ...current,
+              title: nextName,
+              titleSource: "explicit",
+            }
+          : current
+      );
+
+      try {
+        await renameThreadRequest({
+          backend: thread.source,
+          threadId: thread.id,
+          name: nextName,
+        });
+        await refresh(threadKey);
+      } catch (error) {
+        setRenameThreadError(error instanceof Error ? error.message : String(error));
+        await refresh(threadKey);
+      }
+    },
+    [refresh, renameThreadRequest]
+  );
+
   const updateThreadExecutionMode = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -1383,6 +1450,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     inboxThreads,
     launchpadError,
     archiveThreadError,
+    renameThreadError,
     loading: state.loading,
     refreshing: state.refreshing,
     refresh: async () => await refresh(),
@@ -1403,6 +1471,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     setBrowseMode,
     selectThread,
     archiveThread,
+    renameThread,
     snapshot: state.response,
     threads,
   };

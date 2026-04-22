@@ -104,6 +104,10 @@ class MockBackendClient {
   lastArchiveThreadParams?: {
     threadId: string;
   };
+  lastRenameThreadParams?: {
+    threadId: string;
+    name: string;
+  };
   lastSetThreadPermissionsParams?: {
     threadId: string;
     cwd?: string;
@@ -156,6 +160,11 @@ class MockBackendClient {
 
   async archiveThread(params: { threadId: string }): Promise<{ threadId: string }> {
     this.lastArchiveThreadParams = params;
+    return { threadId: params.threadId };
+  }
+
+  async renameThread(params: { threadId: string; name: string }): Promise<{ threadId: string }> {
+    this.lastRenameThreadParams = params;
     return { threadId: params.threadId };
   }
 
@@ -277,6 +286,7 @@ describe("DesktopBackendRegistry", () => {
           listThreads: true,
           createThread: true,
           resumeThread: false,
+          renameThread: false,
           readThread: true,
           startTurn: true,
           interruptTurn: false,
@@ -326,6 +336,7 @@ describe("DesktopBackendRegistry", () => {
           listThreads: false,
           createThread: false,
           resumeThread: false,
+          renameThread: false,
           readThread: false,
           startTurn: false,
           interruptTurn: false,
@@ -377,6 +388,7 @@ describe("DesktopBackendRegistry", () => {
       methods: [],
       capabilities: {
         createThread: true,
+        renameThread: true,
         startTurn: true,
       },
     });
@@ -749,6 +761,58 @@ describe("DesktopBackendRegistry", () => {
           deletedBranch: true,
         },
       ],
+    });
+
+    await registry.close();
+  });
+
+  it("renames threads through the selected backend client", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/name/set"] },
+    });
+    const grokClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/name/set"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/name/set"] },
+      }),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.renameThread({
+        backend: "codex",
+        threadId: "thread-1",
+        name: "Renamed Codex thread",
+      })
+    ).resolves.toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      renamedAt: expect.any(Number),
+    });
+
+    await expect(
+      registry.renameThread({
+        backend: "grok",
+        threadId: "thread-2",
+        name: "Renamed Grok thread",
+      })
+    ).resolves.toEqual({
+      backend: "grok",
+      threadId: "thread-2",
+      renamedAt: expect.any(Number),
+    });
+
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-1",
+      name: "Renamed Codex thread",
+    });
+    expect(grokClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-2",
+      name: "Renamed Grok thread",
     });
 
     await registry.close();

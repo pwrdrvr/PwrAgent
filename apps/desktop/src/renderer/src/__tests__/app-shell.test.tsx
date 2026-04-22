@@ -158,6 +158,7 @@ describe("App", () => {
                 listThreads: true,
                 createThread: false,
                 resumeThread: true,
+                renameThread: false,
                 readThread: true,
                 startTurn: true,
                 interruptTurn: false,
@@ -190,6 +191,7 @@ describe("App", () => {
                 listThreads: true,
                 createThread: true,
                 resumeThread: true,
+                renameThread: false,
                 readThread: true,
                 startTurn: true,
                 interruptTurn: true,
@@ -410,6 +412,7 @@ describe("App", () => {
                 listThreads: true,
                 createThread: true,
                 resumeThread: true,
+                renameThread: false,
                 readThread: true,
                 startTurn: true,
                 interruptTurn: true,
@@ -599,6 +602,7 @@ describe("App", () => {
                 listThreads: true,
                 createThread: false,
                 resumeThread: true,
+                renameThread: false,
                 readThread: true,
                 startTurn: false,
                 interruptTurn: false,
@@ -631,6 +635,7 @@ describe("App", () => {
                 listThreads: true,
                 createThread: true,
                 resumeThread: true,
+                renameThread: false,
                 readThread: true,
                 startTurn: true,
                 interruptTurn: true,
@@ -929,6 +934,7 @@ describe("App", () => {
                 listThreads: true,
                 createThread: true,
                 resumeThread: true,
+                renameThread: false,
                 readThread: true,
                 startTurn: true,
                 interruptTurn: true,
@@ -1118,6 +1124,7 @@ describe("App", () => {
                 listThreads: true,
                 createThread: true,
                 resumeThread: true,
+                renameThread: false,
                 readThread: true,
                 startTurn: true,
                 interruptTurn: true,
@@ -1404,6 +1411,7 @@ describe("App", () => {
                 listThreads: true,
                 createThread: true,
                 resumeThread: true,
+                renameThread: false,
                 readThread: true,
                 startTurn: true,
                 interruptTurn: true,
@@ -1678,6 +1686,7 @@ describe("App", () => {
                 listThreads: true,
                 createThread: false,
                 resumeThread: true,
+                renameThread: false,
                 readThread: true,
                 startTurn: true,
                 interruptTurn: true,
@@ -1791,5 +1800,150 @@ describe("App", () => {
     });
 
     expect(readThread).toHaveBeenCalledTimes(2);
+  });
+
+  it("renames the selected thread from the sidebar actions menu", async () => {
+    let threadTitle = "Build Codex client";
+    const renameThread = vi.fn(
+      async ({ name }: { backend: "codex"; threadId: string; name: string }) => {
+        threadTitle = name;
+        return {
+          backend: "codex" as const,
+          threadId: "thread-1",
+          renamedAt: Date.now(),
+        };
+      }
+    );
+    const readThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      fetchedAt: Date.now(),
+      threadId: "thread-1",
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    }));
+
+    Object.defineProperty(window, "pwragnt", {
+      configurable: true,
+      value: {
+        copyText: async () => undefined,
+        ping: () => "pong",
+        listSkills: async () => ({
+          backend: "codex" as const,
+          fetchedAt: Date.now(),
+          data: [],
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex" as const,
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read", "thread/name/set"],
+              capabilities: {
+                listThreads: true,
+                createThread: false,
+                resumeThread: true,
+                renameThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: false,
+                steerTurn: false,
+                transcriptPagination: false,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: true,
+              },
+              executionModes: [
+                {
+                  mode: "default" as const,
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+              ],
+            },
+          ],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:thread-1"],
+          threads: [
+            {
+              id: "thread-1",
+              title: threadTitle,
+              titleSource: "explicit" as const,
+              summary: "Wire the app-server transport and list threads",
+              source: "codex" as const,
+              executionMode: "default" as const,
+              linkedDirectories: [],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread" as const,
+              },
+              updatedAt: 2_000,
+            },
+          ],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        markThreadSeen: async ({
+          backend,
+          threadId,
+        }: {
+          backend: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend,
+          threadId,
+          seenAt: Date.now(),
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        platform: "darwin",
+        readThread,
+        renameThread,
+      },
+    });
+
+    render(<App />);
+
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Build Codex client",
+    });
+
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    fireEvent.click(
+      within(browseSection).getByRole("button", { name: "Open thread actions" })
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
+    fireEvent.change(within(dialog).getByLabelText("Name"), {
+      target: { value: "Renamed Codex client" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+
+    expect(renameThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Renamed Codex client",
+    });
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Renamed Codex client",
+    });
   });
 });

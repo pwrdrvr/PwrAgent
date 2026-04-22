@@ -597,6 +597,41 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
+  it("renames Grok threads through the app-server contract", async () => {
+    const server = new CodexAppServer({
+      provider: new FakeProvider(),
+      threadIdGenerator: () => "thread-1",
+      runIdGenerator: () => "turn-1",
+    });
+    const client = new GrokAppServerClient({ server });
+    const notifications: string[] = [];
+    const unsubscribe = client.onNotification((notification) => {
+      notifications.push(notification.method);
+    });
+
+    await client.startThread({ cwd: "/repo/workspace" });
+    await expect(
+      client.renameThread({
+        threadId: "thread-1",
+        name: "Renamed Grok thread",
+      })
+    ).resolves.toEqual({
+      threadId: "thread-1",
+    });
+
+    await expect(client.listThreads()).resolves.toMatchObject([
+      {
+        id: "thread-1",
+        title: "Renamed Grok thread",
+        titleSource: "explicit",
+      },
+    ]);
+    expect(notifications).toContain("thread/name/updated");
+
+    unsubscribe();
+    await client.close();
+  });
+
   it("preserves the full Grok message sequence when last-message summaries are also present", async () => {
     const provider = new FakeProvider();
     const server = new CodexAppServer({

@@ -30,6 +30,8 @@ import type {
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
+  RenameThreadRequest,
+  RenameThreadResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -59,6 +61,9 @@ export type DesktopApi = {
   archiveThread?: (
     request: ArchiveThreadRequest
   ) => Promise<ArchiveThreadResponse>;
+  renameThread?: (
+    request: RenameThreadRequest
+  ) => Promise<RenameThreadResponse>;
   startThread?: (request: StartThreadRequest) => Promise<StartThreadResponse>;
   startTurn?: (request: StartTurnRequest) => Promise<StartTurnResponse>;
   interruptTurn?: (

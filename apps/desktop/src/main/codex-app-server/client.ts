@@ -2110,6 +2110,24 @@ export class CodexAppServerClient {
     };
   }
 
+  async renameThread(params: {
+    threadId: string;
+    name: string;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/name/set"],
+      payloads: [{ threadId: params.threadId, name: params.name }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+    };
+  }
+
   async interruptTurn(params: {
     threadId: string;
     runId: string;

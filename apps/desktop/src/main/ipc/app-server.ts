@@ -20,6 +20,8 @@ import type {
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
+  RenameThreadRequest,
+  RenameThreadResponse,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragnt/shared";
@@ -32,6 +34,7 @@ import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
+  APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
@@ -164,6 +167,23 @@ class DesktopAppServerService {
       backend,
       threadId: request.threadId,
       cleanupCount: response.cleanup.length,
+    });
+
+    return response;
+  }
+
+  async renameThread(
+    request: RenameThreadRequest,
+  ): Promise<RenameThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const response = await getDesktopBackendRegistry().renameThread({
+      ...request,
+      backend,
+    });
+
+    logDebug("renameThread", {
+      backend,
+      threadId: request.threadId,
     });
 
     return response;
@@ -322,6 +342,16 @@ export function registerAppServerIpcHandlers(): void {
       request: ArchiveThreadRequest,
     ): Promise<ArchiveThreadResponse> => {
       return await appServerService.archiveThread(request);
+    },
+  );
+  ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_RENAME_THREAD_CHANNEL,
+    async (
+      _event,
+      request: RenameThreadRequest,
+    ): Promise<RenameThreadResponse> => {
+      return await appServerService.renameThread(request);
     },
   );
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);

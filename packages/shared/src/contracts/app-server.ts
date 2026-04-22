@@ -210,6 +210,18 @@ export type ArchiveThreadResponse = {
   cleanup: ArchiveThreadCleanupResult[];
 };
 
+export type RenameThreadRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  name: string;
+};
+
+export type RenameThreadResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  renamedAt: number;
+};
+
 export type AppServerReadThreadRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;

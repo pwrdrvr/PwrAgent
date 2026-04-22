@@ -4,6 +4,7 @@ import type {
   AppServerListThreadsRequest,
   GetNavigationSnapshotRequest,
   MarkThreadSeenRequest,
+  RenameThreadRequest,
 } from "@pwragnt/shared";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
@@ -37,6 +38,11 @@ const archiveThread = vi.fn(async (request: ArchiveThreadRequest) => ({
   threadId: request.threadId,
   archivedAt: 3000,
   cleanup: [],
+}));
+const renameThread = vi.fn(async (request: RenameThreadRequest) => ({
+  backend: request.backend ?? "codex",
+  threadId: request.threadId,
+  renamedAt: 3000,
 }));
 const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
   backend: (params as { backend: "all" | "codex" | "grok" }).backend,
@@ -102,6 +108,7 @@ vi.mock("../app-server/backend-registry", () => ({
   disposeDesktopBackendRegistry: vi.fn(async () => undefined),
   getDesktopBackendRegistry: () => ({
     archiveThread,
+    renameThread,
     listThreads,
     readThread,
     readDirectoryStatuses,
@@ -112,6 +119,7 @@ describe("app server ipc", () => {
   beforeEach(() => {
     handlers.clear();
     archiveThread.mockClear();
+    renameThread.mockClear();
     listThreads.mockClear();
     readThread.mockClear();
     reconcileNavigationSnapshot.mockClear();
@@ -215,6 +223,30 @@ describe("app server ipc", () => {
       threadId: "thread-1",
       archivedAt: 3000,
       cleanup: [],
+    });
+  });
+
+  it("renames threads through the app-server IPC handler", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { APP_SERVER_RENAME_THREAD_CHANNEL } = await import("../../shared/ipc");
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(APP_SERVER_RENAME_THREAD_CHANNEL)?.({}, {
+      backend: "grok",
+      threadId: "thread-1",
+      name: "Renamed thread",
+    } satisfies RenameThreadRequest);
+
+    expect(renameThread).toHaveBeenCalledWith({
+      backend: "grok",
+      threadId: "thread-1",
+      name: "Renamed thread",
+    });
+    expect(response).toEqual({
+      backend: "grok",
+      threadId: "thread-1",
+      renamedAt: 3000,
     });
   });
 

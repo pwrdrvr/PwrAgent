@@ -855,6 +855,72 @@ textarea {
   background: var(--bg-panel-hover);
 }
 
+.rename-thread-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(18, 14, 10, 0.42);
+}
+
+.rename-thread-dialog {
+  width: min(420px, 100%);
+  padding: 18px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.rename-thread-dialog h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.rename-thread-dialog__field {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.rename-thread-dialog__field input {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.rename-thread-dialog__field input:focus,
+.rename-thread-dialog__field input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.rename-thread-dialog__error {
+  margin: 10px 0 0;
+  color: var(--danger-text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.rename-thread-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
 .app-main {
   display: flex;
   min-height: 0;

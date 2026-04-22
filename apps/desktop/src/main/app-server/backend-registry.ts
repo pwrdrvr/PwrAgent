@@ -27,6 +27,8 @@ import type {
   NavigationLaunchpadDefaults,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
+  RenameThreadRequest,
+  RenameThreadResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -66,6 +68,7 @@ type BackendClient = {
   getInitializeResult(): Promise<InitializeResult>;
   listThreads(params?: { filter?: string }): Promise<AppServerThreadSummary[]>;
   archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
+  renameThread?(params: { threadId: string; name: string }): Promise<{ threadId: string }>;
   listSkills(params?: {
     cwd?: string;
     cwds?: string[];
@@ -218,6 +221,7 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
       supported.has("thread/new") ||
       assumeCodexAppServerSurface,
     resumeThread: supported.has("thread/resume") || assumeCodexAppServerSurface,
+    renameThread: supported.has("thread/name/set") || assumeCodexAppServerSurface,
     readThread: supported.has("thread/read") || assumeCodexAppServerSurface,
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
     interruptTurn: supported.has("turn/interrupt"),
@@ -585,6 +589,24 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       archivedAt: Date.now(),
       cleanup,
+    };
+  }
+
+  async renameThread(
+    request: RenameThreadRequest,
+  ): Promise<RenameThreadResponse> {
+    const backend = request.backend ?? "codex";
+    const result =
+      backend === "codex"
+        ? await this.withCodexThreadClient(request.threadId, async (client) =>
+            await this.renameWithClient(client, request.threadId, request.name),
+          )
+        : await this.renameWithClient(this.grokClient, request.threadId, request.name);
+
+    return {
+      backend,
+      threadId: result.threadId,
+      renamedAt: Date.now(),
     };
   }
 
@@ -1222,6 +1244,18 @@ export class DesktopBackendRegistry {
     }
 
     return await client.archiveThread({ threadId });
+  }
+
+  private async renameWithClient(
+    client: BackendClient,
+    threadId: string,
+    name: string,
+  ): Promise<{ threadId: string }> {
+    if (!client.renameThread) {
+      throw new Error("Selected backend does not support thread renaming");
+    }
+
+    return await client.renameThread({ threadId, name });
   }
 
   private async handleServerRequest(

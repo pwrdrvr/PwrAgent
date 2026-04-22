@@ -25,6 +25,7 @@ type SidebarProps = {
   };
   launchpadError?: string;
   archiveThreadError?: string;
+  renameThreadError?: string;
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -36,6 +37,7 @@ type SidebarProps = {
   ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
+  onRenameThread?: (thread: NavigationThreadSummary, name: string) => Promise<void>;
 };
 
 export function Sidebar(props: SidebarProps) {
@@ -46,6 +48,9 @@ export function Sidebar(props: SidebarProps) {
       }
     | undefined
   >();
+  const [renameThread, setRenameThread] = useState<NavigationThreadSummary>();
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renameValidationError, setRenameValidationError] = useState<string>();
   const hasCreateThreadOptions = useMemo(
     () =>
       props.backends.some(
@@ -57,6 +62,15 @@ export function Sidebar(props: SidebarProps) {
     [props.backends]
   );
   const onArchiveThread = props.onArchiveThread ?? (async () => undefined);
+  const onRenameThread = props.onRenameThread ?? (async () => undefined);
+
+  const canRenameThread = (thread: NavigationThreadSummary): boolean =>
+    props.backends.some(
+      (backend) =>
+        backend.kind === thread.source &&
+        backend.available &&
+        backend.capabilities.renameThread
+    );
 
   useEffect(() => {
     if (!contextMenu) {
@@ -82,12 +96,37 @@ export function Sidebar(props: SidebarProps) {
     thread: NavigationThreadSummary,
     position: { x: number; y: number }
   ): void => {
+    setRenameThread(undefined);
     setContextMenu({ position, thread });
+  };
+
+  const requestRenameFromContextMenu = (thread: NavigationThreadSummary): void => {
+    setContextMenu(undefined);
+    setRenameThread(thread);
+    setRenameDraft(thread.title);
+    setRenameValidationError(undefined);
   };
 
   const archiveFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
     void onArchiveThread(thread);
+  };
+
+  const submitRename = (): void => {
+    if (!renameThread) {
+      return;
+    }
+
+    const nextName = renameDraft.trim();
+    if (!nextName) {
+      setRenameValidationError("Thread name cannot be blank.");
+      return;
+    }
+
+    const thread = renameThread;
+    setRenameThread(undefined);
+    setRenameValidationError(undefined);
+    void onRenameThread(thread, nextName);
   };
 
   return (
@@ -117,6 +156,8 @@ export function Sidebar(props: SidebarProps) {
         <p className="sidebar-error sidebar-error--masthead">{props.launchpadError}</p>
       ) : props.archiveThreadError ? (
         <p className="sidebar-error sidebar-error--masthead">{props.archiveThreadError}</p>
+      ) : props.renameThreadError ? (
+        <p className="sidebar-error sidebar-error--masthead">{props.renameThreadError}</p>
       ) : null}
 
       <section className="sidebar__section sidebar__section--fill" aria-label="Thread browser">
@@ -185,6 +226,15 @@ export function Sidebar(props: SidebarProps) {
           }}
           onClick={(event) => event.stopPropagation()}
         >
+          {canRenameThread(contextMenu.thread) ? (
+            <button
+              role="menuitem"
+              type="button"
+              onClick={() => requestRenameFromContextMenu(contextMenu.thread)}
+            >
+              Rename Thread
+            </button>
+          ) : null}
           <button
             role="menuitem"
             type="button"
@@ -192,6 +242,57 @@ export function Sidebar(props: SidebarProps) {
           >
             Archive Thread
           </button>
+        </div>
+      ) : null}
+
+      {renameThread ? (
+        <div className="rename-thread-backdrop" role="presentation">
+          <section
+            aria-labelledby="rename-thread-title"
+            aria-modal="true"
+            className="rename-thread-dialog"
+            role="dialog"
+          >
+            <h2 id="rename-thread-title">Rename Thread</h2>
+            <label className="rename-thread-dialog__field">
+              <span>Name</span>
+              <input
+                autoFocus
+                value={renameDraft}
+                onChange={(event) => {
+                  setRenameDraft(event.currentTarget.value);
+                  setRenameValidationError(undefined);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setRenameThread(undefined);
+                  } else if (event.key === "Enter") {
+                    event.preventDefault();
+                    submitRename();
+                  }
+                }}
+              />
+            </label>
+            {renameValidationError ? (
+              <p className="rename-thread-dialog__error">{renameValidationError}</p>
+            ) : null}
+            <div className="rename-thread-dialog__actions">
+              <button
+                className="button button--secondary"
+                type="button"
+                onClick={() => setRenameThread(undefined)}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button--primary"
+                type="button"
+                onClick={submitRename}
+              >
+                Rename Thread
+              </button>
+            </div>
+          </section>
         </div>
       ) : null}
 

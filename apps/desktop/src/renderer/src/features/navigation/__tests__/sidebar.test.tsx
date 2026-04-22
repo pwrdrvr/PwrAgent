@@ -14,6 +14,7 @@ const backends: BackendSummary[] = [
       listThreads: true,
       createThread: true,
       resumeThread: true,
+      renameThread: true,
       readThread: true,
       startTurn: true,
       interruptTurn: true,
@@ -46,6 +47,7 @@ const backends: BackendSummary[] = [
       listThreads: false,
       createThread: false,
       resumeThread: false,
+      renameThread: false,
       readThread: false,
       startTurn: false,
       interruptTurn: false,
@@ -357,6 +359,78 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
 
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
+  });
+
+  it("renames a thread from the thread context menu", () => {
+    const onRenameThread = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onRenameThread={onRenameThread}
+      />
+    );
+
+    const threadButton = screen.getByText("Cross-project cleanup").closest("button");
+    expect(threadButton).not.toBeNull();
+    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
+    const input = within(dialog).getByLabelText("Name");
+    fireEvent.change(input, { target: { value: "  Renamed cleanup  " } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+
+    expect(onRenameThread).toHaveBeenCalledWith(sharedThread, "Renamed cleanup");
+  });
+
+  it("keeps the rename dialog open for blank names", () => {
+    const onRenameThread = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onRenameThread={onRenameThread}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
+    fireEvent.change(within(dialog).getByLabelText("Name"), {
+      target: { value: "   " },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+
+    expect(onRenameThread).not.toHaveBeenCalled();
+    expect(within(dialog).getByText("Thread name cannot be blank.")).toBeInTheDocument();
   });
 
   it("archives directly from the thread context menu", () => {
