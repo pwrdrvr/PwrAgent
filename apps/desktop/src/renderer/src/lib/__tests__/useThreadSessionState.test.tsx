@@ -278,6 +278,7 @@ describe("useThreadSessionState", () => {
             turnId: "turn-1",
             itemId: "message-1",
             delta: "First commentary.",
+            phase: "commentary",
           },
         },
       });
@@ -296,6 +297,7 @@ describe("useThreadSessionState", () => {
             turnId: "turn-1",
             itemId: "message-2",
             delta: "Second commentary.",
+            phase: "commentary",
           },
         },
       });
@@ -352,6 +354,133 @@ describe("useThreadSessionState", () => {
       { id: "turn-1", status: "completed", durationMs: 524_447 },
     ]);
     expect(result.current.pendingAssistantMessage).toBeUndefined();
+  });
+
+  it("hydrates unphased streamed assistant text after completion", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    let readCount = 0;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: "codex" | "grok";
+        threadId: string;
+      }) => {
+        readCount += 1;
+        return {
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries:
+              readCount > 1
+                ? [
+                    {
+                      type: "message" as const,
+                      id: "hydrated-final",
+                      role: "assistant" as const,
+                      phase: "final" as const,
+                      text: "Hydrated final answer.",
+                      turn: {
+                        id: "turn-1",
+                        status: "completed" as const,
+                      },
+                    },
+                  ]
+                : [],
+            messages:
+              readCount > 1
+                ? [
+                    {
+                      id: "hydrated-final",
+                      role: "assistant" as const,
+                      text: "Hydrated final answer.",
+                    },
+                  ]
+                : [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        };
+      }
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-1",
+            delta: "Hydrated final answer.",
+          },
+        },
+      });
+    });
+
+    expect(result.current.pendingAssistantMessage?.phase).toBeUndefined();
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(result.current.entries).toEqual([
+        expect.objectContaining({
+          id: "hydrated-final",
+          phase: "final",
+          text: "Hydrated final answer.",
+        }),
+      ]);
+    });
   });
 
   it("tracks thinking state for a nonselected thread until the turn completes", async () => {

@@ -1419,7 +1419,7 @@ describe("CodexAppServerClient", () => {
                 markdown: "## Final plan\n\nShip the transcript renderer in small steps.",
                 steps: [
                   { step: "Normalize replay", status: "completed" },
-                  { step: "Render live plan progress", status: "in_progress" }
+                  { step: "Render live plan progress", status: "inProgress" }
                 ]
               }
             ]
@@ -1467,6 +1467,84 @@ describe("CodexAppServerClient", () => {
           { step: "Render live plan progress", status: "in_progress" }
         ],
         turn
+      }
+    ]);
+
+    await client.close();
+  });
+
+  it("normalizes generated in-progress activity statuses from thread/read", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-in-progress-tools", {
+      thread: {
+        turns: [
+          {
+            id: "turn-tools",
+            status: "inProgress",
+            startedAt: 1_763_500_210,
+            items: [
+              {
+                type: "dynamicToolCall",
+                id: "tool-1",
+                tool: "search_web",
+                arguments: {},
+                status: "inProgress",
+                contentItems: null,
+                success: null,
+                durationMs: null
+              },
+              {
+                type: "mcpToolCall",
+                id: "tool-2",
+                server: "github",
+                tool: "search_issues",
+                arguments: {},
+                status: "inProgress",
+                result: null,
+                error: null,
+                durationMs: null
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-in-progress-tools"
+    });
+
+    expect(replay.entries).toEqual([
+      {
+        type: "activity",
+        id: "activity-tool-1",
+        summary: "Used 2 tools",
+        createdAt: 1_763_500_210_000,
+        status: "in_progress",
+        turn: {
+          id: "turn-tools",
+          status: "in_progress",
+          startedAt: 1_763_500_210_000
+        },
+        details: [
+          {
+            id: "tool-1",
+            kind: "command",
+            label: "search_web",
+            status: "in_progress"
+          },
+          {
+            id: "tool-2",
+            kind: "command",
+            label: "search_issues",
+            status: "in_progress"
+          }
+        ]
       }
     ]);
 
@@ -1553,6 +1631,62 @@ describe("CodexAppServerClient", () => {
         }
       }
     });
+
+    await client.close();
+  });
+
+  it("normalizes generated turn notifications before forwarding", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    client.onNotification((notification) => {
+      notifications.push(
+        notification as { method: string; params: Record<string, unknown> }
+      );
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: {
+        threadId: "thread-2",
+        turn: {
+          id: "turn-from-generated",
+          status: "completed",
+          items: [],
+          error: null,
+          startedAt: 1_763_500_300,
+          completedAt: 1_763_500_360,
+          durationMs: 60_000
+        }
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(notifications).toEqual([
+      {
+        method: "turn/completed",
+        params: expect.objectContaining({
+          threadId: "thread-2",
+          turnId: "turn-from-generated",
+          turn: expect.objectContaining({
+            id: "turn-from-generated",
+            status: "completed"
+          })
+        })
+      }
+    ]);
 
     await client.close();
   });

@@ -172,11 +172,14 @@ function buildTurnMetadata(params: {
 
   const status =
     params.turn?.status === "in_progress" ||
+    params.turn?.status === "inProgress" ||
     params.turn?.status === "completed" ||
     params.turn?.status === "failed" ||
     params.turn?.status === "cancelled" ||
     params.turn?.status === "interrupted"
-      ? params.turn.status
+      ? params.turn.status === "inProgress"
+        ? "in_progress"
+        : params.turn.status
       : params.fallbackStatus;
   const startedAt =
     normalizeNotificationTimestamp(params.turn?.startedAt) ?? params.fallbackStartedAt;
@@ -206,9 +209,26 @@ function withTurnMetadata<T extends AppServerThreadMessageEntry>(
   };
 }
 
+function withTurnMetadataAndPhase(
+  entry: AppServerThreadMessageEntry,
+  turn: AppServerThreadTurnMetadata | undefined,
+  phase: AppServerThreadMessageEntry["phase"] | undefined
+): AppServerThreadMessageEntry {
+  const nextEntry = withTurnMetadata(entry, turn);
+  if (!phase || nextEntry.phase || nextEntry.role !== "assistant") {
+    return nextEntry;
+  }
+
+  return {
+    ...nextEntry,
+    phase,
+  };
+}
+
 function withCompletedResponseTurnMetadata(
   response: AppServerReadThreadResponse | undefined,
-  turn: AppServerThreadTurnMetadata | undefined
+  turn: AppServerThreadTurnMetadata | undefined,
+  unphasedAssistantPhase?: AppServerThreadMessageEntry["phase"]
 ): AppServerReadThreadResponse | undefined {
   if (!response || !turn) {
     return response;
@@ -219,7 +239,11 @@ function withCompletedResponseTurnMetadata(
     replay: {
       ...response.replay,
       entries: response.replay.entries.map((entry) =>
-        entry.turn?.id === turn.id ? { ...entry, turn } : entry
+        entry.turn?.id === turn.id
+          ? entry.type === "message"
+            ? withTurnMetadataAndPhase(entry, turn, unphasedAssistantPhase)
+            : { ...entry, turn }
+          : entry
       ),
     },
   };
@@ -659,8 +683,7 @@ export function useThreadSessionState(params: {
           });
           const phase =
             event.notification.params.phase ??
-            (isSamePendingMessage ? current.pendingAssistantMessage?.phase : undefined) ??
-            "commentary";
+            (isSamePendingMessage ? current.pendingAssistantMessage?.phase : undefined);
           const pendingText = current.pendingAssistantMessage?.text ?? "";
           const flushedResponse = isSamePendingMessage
             ? current.response
@@ -748,9 +771,21 @@ export function useThreadSessionState(params: {
             fallbackStatus: "completed",
             turn: event.notification.params.turn,
           });
+          const completedTurnText = readCompletedTurnText(event.notification.params);
           const completedText =
-            readCompletedTurnText(event.notification.params) ??
-            current.pendingAssistantMessage?.text;
+            completedTurnText ?? current.pendingAssistantMessage?.text;
+          const shouldAppendFinalMessage = Boolean(
+            completedText &&
+              current.pendingAssistantMessage?.text !== completedText
+          );
+          const unphasedAssistantCompletionPhase =
+            shouldAppendFinalMessage ? "commentary" : undefined;
+          const shouldHydrateUnknownPhaseAssistant =
+            !completedTurnText &&
+            Boolean(
+              current.pendingAssistantMessage &&
+                current.pendingAssistantMessage.phase === undefined
+            );
           const nextEntries = [
             ...current.optimisticEntries.map((entry) =>
               entry.turn?.id === completedTurn?.id
@@ -758,14 +793,17 @@ export function useThreadSessionState(params: {
                 : entry
             ),
             ...(current.pendingAssistantMessage
-              ? [withTurnMetadata(current.pendingAssistantMessage, completedTurn)]
+              ? [
+                  withTurnMetadataAndPhase(
+                    current.pendingAssistantMessage,
+                    completedTurn,
+                    unphasedAssistantCompletionPhase
+                  ),
+                ]
               : []),
           ];
 
-          if (
-            completedText &&
-            current.pendingAssistantMessage?.text !== completedText
-          ) {
+          if (shouldAppendFinalMessage && completedText) {
             nextEntries.push({
               type: "message",
               id: `${event.notification.params.turnId}:assistant`,
@@ -779,7 +817,8 @@ export function useThreadSessionState(params: {
 
           const responseWithCompletedTurn = withCompletedResponseTurnMetadata(
             current.response,
-            completedTurn
+            completedTurn,
+            unphasedAssistantCompletionPhase
           );
           const nextResponse =
             nextEntries.length > 0
@@ -793,7 +832,7 @@ export function useThreadSessionState(params: {
                 )
               : responseWithCompletedTurn ?? current.response;
           const shouldInvalidateHydration =
-            !completedText &&
+            (!completedText || shouldHydrateUnknownPhaseAssistant) &&
             !hasHydratedTranscriptContent({
               ...current,
               optimisticEntries: [],
@@ -810,12 +849,16 @@ export function useThreadSessionState(params: {
             completionHydrationRetries: 0,
             error: undefined,
             expectOwnUpdate: true,
-            hydratedUpdatedAt: !completedText || shouldInvalidateHydration
-              ? undefined
-              : current.hydratedUpdatedAt,
+            hydratedUpdatedAt:
+              !completedText ||
+              shouldInvalidateHydration ||
+              shouldHydrateUnknownPhaseAssistant
+                ? undefined
+                : current.hydratedUpdatedAt,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
-            needsHydrationAfterCompletion: !completedText,
+            needsHydrationAfterCompletion:
+              !completedText || shouldHydrateUnknownPhaseAssistant,
             optimisticEntries: [],
             pendingAssistantMessage: undefined,
             pendingRequest: undefined,

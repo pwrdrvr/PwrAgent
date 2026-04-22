@@ -325,6 +325,24 @@ function normalizePendingRequestNotification(
   };
 }
 
+function normalizeServerNotification(
+  method: string,
+  params: unknown,
+): AppServerNotification {
+  const record = asRecord(params) ?? {};
+  const metadata = extractRequestMetadata(params);
+
+  return {
+    method: method as AppServerNotification["method"],
+    params: {
+      ...record,
+      ...(metadata.threadId ? { threadId: metadata.threadId } : {}),
+      ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
+      ...(metadata.requestId ? { requestId: metadata.requestId } : {}),
+    } as AppServerNotification["params"],
+  } as AppServerNotification;
+}
+
 function normalizeEpochTimestamp(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
@@ -649,6 +667,9 @@ function normalizeActivityStatus(
   value: string | undefined
 ): AppServerThreadActivityStatus | undefined {
   const normalized = value?.trim().toLowerCase();
+  if (normalized === "inprogress") {
+    return "in_progress";
+  }
   if (
     normalized === "in_progress" ||
     normalized === "completed" ||
@@ -662,6 +683,9 @@ function normalizeActivityStatus(
 
 function normalizeTurnStatus(value: string | undefined): AppServerThreadTurnStatus | undefined {
   const normalized = value?.trim().toLowerCase();
+  if (normalized === "inprogress") {
+    return "in_progress";
+  }
   if (
     normalized === "in_progress" ||
     normalized === "completed" ||
@@ -704,6 +728,9 @@ function normalizePlanStepStatus(
   value: string | undefined
 ): AppServerThreadPlanStepStatus | undefined {
   const normalized = value?.trim().toLowerCase();
+  if (normalized === "inprogress") {
+    return "in_progress";
+  }
   if (
     normalized === "pending" ||
     normalized === "in_progress" ||
@@ -2140,10 +2167,12 @@ export class CodexAppServerClient {
               params: params ?? {},
             } as CodexServerNotification)
           : undefined;
-        await listener({
-          method: (wireNotification?.method ?? method) as AppServerNotification["method"],
-          params: (wireNotification?.params ?? params ?? {}) as AppServerNotification["params"],
-        } as AppServerNotification);
+        await listener(
+          normalizeServerNotification(
+            wireNotification?.method ?? method,
+            wireNotification?.params ?? params,
+          )
+        );
       }
     });
     this.connection.setRequestHandler(async (method, params, rpcId) => {
