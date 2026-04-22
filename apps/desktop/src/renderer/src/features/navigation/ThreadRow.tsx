@@ -13,7 +13,6 @@ type ThreadRowProps = {
     thread: NavigationThreadSummary,
     position: { x: number; y: number }
   ) => void;
-  onRequestArchive: (thread: NavigationThreadSummary) => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
 };
 
@@ -60,13 +59,21 @@ export function ThreadRow(props: ThreadRowProps) {
       </button>
 
       <button
-        aria-label="Archive thread"
-        className="thread-row__archive-button"
-        title={`Archive thread ${props.thread.title}`}
+        aria-haspopup="menu"
+        aria-label="Open thread actions"
+        className="thread-row__overflow-button"
+        title={`Open thread actions for ${props.thread.title}`}
         type="button"
-        onClick={() => props.onRequestArchive(props.thread)}
+        onClick={(event) => {
+          event.stopPropagation();
+          const rect = event.currentTarget.getBoundingClientRect();
+          props.onOpenContextMenu(props.thread, {
+            x: rect.left,
+            y: rect.bottom + 4,
+          });
+        }}
       >
-        Archive
+        ...
       </button>
     </div>
   );

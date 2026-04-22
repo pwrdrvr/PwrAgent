@@ -20,7 +20,6 @@ type DirectoriesListProps = {
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
-  onRequestArchiveThread: (thread: NavigationThreadSummary) => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
 };
 
@@ -151,7 +150,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
                         thinkingThreadKeys={props.thinkingThreadKeys}
                         thread={thread}
                         onOpenContextMenu={props.onOpenThreadContextMenu}
-                        onRequestArchive={props.onRequestArchiveThread}
                         onSelectThread={props.onSelectThread}
                       />
                     ))}

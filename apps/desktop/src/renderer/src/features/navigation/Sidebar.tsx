@@ -39,8 +39,6 @@ type SidebarProps = {
 };
 
 export function Sidebar(props: SidebarProps) {
-  const [confirmArchiveThread, setConfirmArchiveThread] =
-    useState<NavigationThreadSummary>();
   const [contextMenu, setContextMenu] = useState<
     | {
         position: { x: number; y: number };
@@ -80,31 +78,15 @@ export function Sidebar(props: SidebarProps) {
     };
   }, [contextMenu]);
 
-  const requestArchiveWithConfirmation = (thread: NavigationThreadSummary): void => {
-    setContextMenu(undefined);
-    setConfirmArchiveThread(thread);
-  };
-
   const openThreadContextMenu = (
     thread: NavigationThreadSummary,
     position: { x: number; y: number }
   ): void => {
-    setConfirmArchiveThread(undefined);
     setContextMenu({ position, thread });
   };
 
   const archiveFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
-    void onArchiveThread(thread);
-  };
-
-  const confirmArchive = (): void => {
-    if (!confirmArchiveThread) {
-      return;
-    }
-
-    const thread = confirmArchiveThread;
-    setConfirmArchiveThread(undefined);
     void onArchiveThread(thread);
   };
 
@@ -165,7 +147,6 @@ export function Sidebar(props: SidebarProps) {
               thinkingThreadKeys={props.thinkingThreadKeys}
               threads={props.inboxThreads}
               onOpenThreadContextMenu={openThreadContextMenu}
-              onRequestArchiveThread={requestArchiveWithConfirmation}
               onSelectThread={props.onSelectThread}
             />
           ) : props.browseMode === "directories" ? (
@@ -176,7 +157,6 @@ export function Sidebar(props: SidebarProps) {
               threads={props.threads}
               onOpenThreadContextMenu={openThreadContextMenu}
               onOpenLaunchpad={props.onOpenLaunchpad}
-              onRequestArchiveThread={requestArchiveWithConfirmation}
               onSelectThread={props.onSelectThread}
             />
           ) : (
@@ -188,7 +168,6 @@ export function Sidebar(props: SidebarProps) {
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 threads={props.threads}
                 onOpenThreadContextMenu={openThreadContextMenu}
-                onRequestArchiveThread={requestArchiveWithConfirmation}
                 onSelectThread={props.onSelectThread}
               />
             )
@@ -216,38 +195,6 @@ export function Sidebar(props: SidebarProps) {
         </div>
       ) : null}
 
-      {confirmArchiveThread ? (
-        <div className="archive-confirmation-backdrop" role="presentation">
-          <section
-            aria-labelledby="archive-confirmation-title"
-            aria-modal="true"
-            className="archive-confirmation-dialog"
-            role="dialog"
-          >
-            <h2 id="archive-confirmation-title">Archive Thread</h2>
-            <p>
-              Archive this thread and delete its worktree? Any uncommitted files in
-              that worktree will be removed.
-            </p>
-            <div className="archive-confirmation-actions">
-              <button
-                className="button button--secondary"
-                type="button"
-                onClick={() => setConfirmArchiveThread(undefined)}
-              >
-                Cancel
-              </button>
-              <button
-                className="button button--primary"
-                type="button"
-                onClick={confirmArchive}
-              >
-                Archive Thread
-              </button>
-            </div>
-          </section>
-        </div>
-      ) : null}
     </aside>
   );
 }

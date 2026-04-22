@@ -328,7 +328,7 @@ describe("Sidebar", () => {
     expect(screen.queryByText("Cross-project cleanup")).not.toBeInTheDocument();
   });
 
-  it("confirms archive requests from the row archive button", () => {
+  it("opens thread actions from the row overflow button", () => {
     const onArchiveThread = vi.fn(async () => undefined);
 
     render(
@@ -351,9 +351,10 @@ describe("Sidebar", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Archive thread" }));
-    const dialog = screen.getByRole("dialog", { name: "Archive Thread" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Archive Thread" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread actions" })
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
 
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
   });

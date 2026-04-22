@@ -10,7 +10,6 @@ type InboxListProps = {
     thread: NavigationThreadSummary,
     position: { x: number; y: number }
   ) => void;
-  onRequestArchiveThread: (thread: NavigationThreadSummary) => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
 };
 
@@ -33,7 +32,6 @@ export function InboxList(props: InboxListProps) {
           thinkingThreadKeys={props.thinkingThreadKeys}
           thread={thread}
           onOpenContextMenu={props.onOpenThreadContextMenu}
-          onRequestArchive={props.onRequestArchiveThread}
           onSelectThread={props.onSelectThread}
         />
       ))}

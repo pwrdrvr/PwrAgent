@@ -385,10 +385,6 @@ textarea {
   text-align: left;
 }
 
-.thread-row-shell > .thread-row {
-  padding-right: 82px;
-}
-
 .thread-row--compact {
   flex-direction: row;
   align-items: baseline;
@@ -401,19 +397,23 @@ textarea {
   background: var(--bg-row-active);
 }
 
-.thread-row__archive-button {
+.thread-row__overflow-button {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 9px;
+  right: 9px;
   z-index: 1;
-  height: 28px;
-  padding: 0 9px;
+  display: grid;
+  width: 30px;
+  height: 26px;
+  place-items: center;
+  padding: 0;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   background: var(--bg-panel-elevated);
   color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
   opacity: 0;
   pointer-events: none;
   transition:
@@ -423,17 +423,22 @@ textarea {
     opacity 120ms ease;
 }
 
-.thread-row-shell:hover .thread-row__archive-button,
-.thread-row__archive-button:focus-visible {
+.thread-row-shell:hover .thread-row__time,
+.thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row__time {
+  opacity: 0;
+}
+
+.thread-row-shell:hover .thread-row__overflow-button,
+.thread-row__overflow-button:focus-visible {
   opacity: 1;
   pointer-events: auto;
 }
 
-.thread-row__archive-button:hover,
-.thread-row__archive-button:focus-visible {
-  border-color: var(--danger-border);
-  background: var(--danger-soft);
-  color: var(--danger-text);
+.thread-row__overflow-button:hover,
+.thread-row__overflow-button:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
 }
 
 .thread-row.is-selected::before {
@@ -485,6 +490,10 @@ textarea {
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 500;
+}
+
+.thread-row__time {
+  transition: opacity 120ms ease;
 }
 
 .thread-row__status-indicator {
@@ -844,46 +853,6 @@ textarea {
 .thread-context-menu button:hover,
 .thread-context-menu button:focus-visible {
   background: var(--bg-panel-hover);
-}
-
-.archive-confirmation-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(18, 14, 10, 0.42);
-}
-
-.archive-confirmation-dialog {
-  width: min(420px, 100%);
-  padding: 18px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-panel-elevated);
-  box-shadow: var(--shadow-popover);
-}
-
-.archive-confirmation-dialog h2 {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 17px;
-  line-height: 1.25;
-}
-
-.archive-confirmation-dialog p {
-  margin: 10px 0 0;
-  color: var(--text-secondary);
-  font-size: 14px;
-  line-height: 1.45;
-}
-
-.archive-confirmation-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 18px;
 }
 
 .app-main {
