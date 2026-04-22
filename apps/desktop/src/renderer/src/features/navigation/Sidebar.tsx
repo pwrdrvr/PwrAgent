@@ -72,6 +72,14 @@ export function Sidebar(props: SidebarProps) {
         backend.capabilities.renameThread
     );
 
+  const canArchiveThread = (thread: NavigationThreadSummary): boolean =>
+    props.backends.some(
+      (backend) =>
+        backend.kind === thread.source &&
+        backend.available &&
+        backend.capabilities.archiveThread === true
+    );
+
   useEffect(() => {
     if (!contextMenu) {
       return;
@@ -128,6 +136,13 @@ export function Sidebar(props: SidebarProps) {
     setRenameValidationError(undefined);
     void onRenameThread(thread, nextName);
   };
+
+  const contextMenuCanRename = contextMenu
+    ? canRenameThread(contextMenu.thread)
+    : false;
+  const contextMenuCanArchive = contextMenu
+    ? canArchiveThread(contextMenu.thread)
+    : false;
 
   return (
     <aside className="sidebar" aria-label="Threads">
@@ -216,7 +231,7 @@ export function Sidebar(props: SidebarProps) {
         </div>
       </section>
 
-      {contextMenu ? (
+      {contextMenu && (contextMenuCanRename || contextMenuCanArchive) ? (
         <div
           className="thread-context-menu"
           role="menu"
@@ -226,7 +241,7 @@ export function Sidebar(props: SidebarProps) {
           }}
           onClick={(event) => event.stopPropagation()}
         >
-          {canRenameThread(contextMenu.thread) ? (
+          {contextMenuCanRename ? (
             <button
               role="menuitem"
               type="button"
@@ -235,13 +250,15 @@ export function Sidebar(props: SidebarProps) {
               Rename Thread
             </button>
           ) : null}
-          <button
-            role="menuitem"
-            type="button"
-            onClick={() => archiveFromContextMenu(contextMenu.thread)}
-          >
-            Archive Thread
-          </button>
+          {contextMenuCanArchive ? (
+            <button
+              role="menuitem"
+              type="button"
+              onClick={() => archiveFromContextMenu(contextMenu.thread)}
+            >
+              Archive Thread
+            </button>
+          ) : null}
         </div>
       ) : null}
 

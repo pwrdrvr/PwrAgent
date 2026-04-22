@@ -4,6 +4,7 @@ export type BackendCapabilities = {
   listThreads: boolean;
   createThread: boolean;
   resumeThread: boolean;
+  archiveThread?: boolean;
   renameThread: boolean;
   readThread: boolean;
   startTurn: boolean;

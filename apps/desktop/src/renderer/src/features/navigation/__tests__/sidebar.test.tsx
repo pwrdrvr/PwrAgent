@@ -14,6 +14,7 @@ const backends: BackendSummary[] = [
       listThreads: true,
       createThread: true,
       resumeThread: true,
+      archiveThread: true,
       renameThread: true,
       readThread: true,
       startTurn: true,
@@ -47,6 +48,7 @@ const backends: BackendSummary[] = [
       listThreads: false,
       createThread: false,
       resumeThread: false,
+      archiveThread: false,
       renameThread: false,
       readThread: false,
       startTurn: false,
@@ -359,6 +361,45 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
 
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
+  });
+
+  it("hides archive actions when the backend does not support archiving", () => {
+    const backendsWithoutArchive = backends.map((backend) =>
+      backend.kind === "codex"
+        ? {
+            ...backend,
+            capabilities: {
+              ...backend.capabilities,
+              archiveThread: false,
+            },
+          }
+        : backend
+    );
+
+    render(
+      <Sidebar
+        backends={backendsWithoutArchive}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+
+    expect(screen.getByRole("menuitem", { name: "Rename Thread" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Archive Thread" })).not.toBeInTheDocument();
   });
 
   it("renames a thread from the thread context menu", () => {

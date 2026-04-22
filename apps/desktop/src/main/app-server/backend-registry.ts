@@ -221,6 +221,7 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
       supported.has("thread/new") ||
       assumeCodexAppServerSurface,
     resumeThread: supported.has("thread/resume") || assumeCodexAppServerSurface,
+    archiveThread: supported.has("thread/archive") || assumeCodexAppServerSurface,
     renameThread: supported.has("thread/name/set") || assumeCodexAppServerSurface,
     readThread: supported.has("thread/read") || assumeCodexAppServerSurface,
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
