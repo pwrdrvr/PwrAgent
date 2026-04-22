@@ -1929,6 +1929,32 @@ function buildTurnStartPayload(params: {
   return base;
 }
 
+type CodexThreadReadPayload = CodexThreadReadParams & {
+  before?: string;
+  limit?: number;
+};
+
+function buildThreadReadPayload(params: {
+  threadId: string;
+  before?: string;
+  limit?: number;
+}): CodexThreadReadPayload {
+  const payload: CodexThreadReadPayload = {
+    threadId: params.threadId,
+    includeTurns: true,
+  };
+
+  if (params.before) {
+    payload.before = params.before;
+  }
+
+  if (params.limit !== undefined) {
+    payload.limit = params.limit;
+  }
+
+  return payload;
+}
+
 async function requestWithFallbacks(params: {
   client: JsonRpcConnection;
   methods: Array<CodexClientRequestMethod | (string & {})>;
@@ -2187,10 +2213,7 @@ export class CodexAppServerClient {
 
     let result: unknown;
     try {
-      const payload: CodexThreadReadParams = {
-        threadId: params.threadId,
-        includeTurns: true,
-      };
+      const payload = buildThreadReadPayload(params);
       result = await requestWithFallbacks({
         client: this.connection,
         methods: ["thread/read"],
