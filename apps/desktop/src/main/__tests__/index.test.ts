@@ -8,6 +8,8 @@ const registerAgentIpcHandlersMock = vi.fn();
 const disposeAgentIpcHandlersMock = vi.fn();
 const registerImageNormalizationIpcHandlersMock = vi.fn();
 const disposeImageNormalizationIpcHandlersMock = vi.fn();
+const registerPreloadLogIpcHandlersMock = vi.fn();
+const disposePreloadLogIpcHandlersMock = vi.fn();
 const registerRendererErrorIpcHandlersMock = vi.fn();
 const initializeMainLoggerMock = vi.fn();
 const setApplicationMenuMock = vi.fn();
@@ -63,6 +65,11 @@ vi.mock("../ipc/image-normalization", () => ({
   disposeImageNormalizationIpcHandlers: disposeImageNormalizationIpcHandlersMock,
 }));
 
+vi.mock("../ipc/preload-log", () => ({
+  registerPreloadLogIpcHandlers: registerPreloadLogIpcHandlersMock,
+  disposePreloadLogIpcHandlers: disposePreloadLogIpcHandlersMock,
+}));
+
 vi.mock("../ipc/renderer-error", () => ({
   registerRendererErrorIpcHandlers: registerRendererErrorIpcHandlersMock,
 }));
@@ -91,6 +98,8 @@ describe("bootstrapApp", () => {
     disposeAgentIpcHandlersMock.mockReset();
     registerImageNormalizationIpcHandlersMock.mockReset();
     disposeImageNormalizationIpcHandlersMock.mockReset();
+    registerPreloadLogIpcHandlersMock.mockReset();
+    disposePreloadLogIpcHandlersMock.mockReset();
     registerRendererErrorIpcHandlersMock.mockReset();
     initializeMainLoggerMock.mockReset();
     setApplicationMenuMock.mockReset();
@@ -135,6 +144,7 @@ describe("bootstrapApp", () => {
     expect(registerAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerAgentIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerImageNormalizationIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(registerPreloadLogIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerRendererErrorIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(1);
   });
