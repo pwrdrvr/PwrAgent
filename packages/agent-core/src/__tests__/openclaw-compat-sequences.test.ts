@@ -155,13 +155,10 @@ describe("OpenClaw compatibility sequences", () => {
           item: {
             id: "tool-1",
             type: "dynamicToolCall",
+            status: "in_progress",
             text: "search_code",
             toolName: "search_code",
             arguments: { query: "tool usage" },
-            review: undefined,
-            command: undefined,
-            commandAction: undefined,
-            success: undefined,
           },
         },
       },
@@ -173,12 +170,11 @@ describe("OpenClaw compatibility sequences", () => {
           item: {
             id: "tool-1",
             type: "dynamicToolCall",
+            status: "completed",
             text: "Found docs/plans/2026-04-16-003-feat-grok-tool-usage-code-search-plan.md.",
             toolName: "search_code",
             success: true,
             arguments: { query: "tool usage" },
-            review: undefined,
-            command: undefined,
             commandAction: "search",
           },
         },
@@ -522,7 +518,7 @@ describe("OpenClaw compatibility sequences", () => {
       payloads: [
         {
           threadId: "thread-1",
-          model: "grok-4.20-fast",
+          model: "grok-4.20-non-reasoning",
           approvalPolicy: "never",
           sandbox: "danger-full-access",
           persistExtendedHistory: false,
@@ -539,7 +535,7 @@ describe("OpenClaw compatibility sequences", () => {
           collaboration_mode: {
             mode: "default",
             settings: {
-              model: "grok-4.20-fast",
+              model: "grok-4.20-non-reasoning",
               developer_instructions: null,
             },
           },
@@ -562,7 +558,7 @@ describe("OpenClaw compatibility sequences", () => {
     expect(resumed).toEqual(
       expect.objectContaining({
         threadId: "thread-1",
-        model: "grok-4.20-fast",
+        model: "grok-4.20-non-reasoning",
         approvalPolicy: "never",
         sandbox: "danger-full-access",
       }),

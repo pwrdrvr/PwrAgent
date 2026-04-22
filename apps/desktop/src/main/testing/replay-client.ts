@@ -36,6 +36,15 @@ export class ReplayClient {
   >();
   private initializeResult?: InitializeResult;
   private initializePromise?: Promise<InitializeResult>;
+  private lastStartTurnParams?: {
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+  };
 
   constructor(private readonly controller: ReplayController) {}
 
@@ -108,7 +117,7 @@ export class ReplayClient {
     };
   }
 
-  async startTurn(_params: {
+  async startTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
     model?: string;
@@ -118,6 +127,7 @@ export class ReplayClient {
     fastMode?: boolean;
   }): Promise<{ threadId: string; runId: string }> {
     await this.ensureInitialized();
+    this.lastStartTurnParams = params;
     return this.controller.consumeResponse("turn/start").result as {
       threadId: string;
       runId: string;
@@ -157,6 +167,20 @@ export class ReplayClient {
 
   getPendingRequest(): AppServerPendingRequestNotification | undefined {
     return this.controller.getPendingRequest()?.request;
+  }
+
+  getLastStartTurnParams():
+    | {
+        threadId: string;
+        input: AppServerTurnInputItem[];
+        model?: string;
+        collaborationMode?: AppServerCollaborationModeRequest;
+        serviceTier?: string;
+        reasoningEffort?: string;
+        fastMode?: boolean;
+      }
+    | undefined {
+    return this.lastStartTurnParams;
   }
 
   async respondToPendingRequest(requestId: string): Promise<void> {

@@ -1,13 +1,26 @@
 import type {
   AppServerCommandAction,
   AppServerTurnInputItem,
+  AppServerRole,
   ThreadState,
 } from "../app-server/protocol.js";
 import type { ToolExecutor } from "../tools/tool-contract.js";
 
+export type ProviderSource = {
+  id?: string;
+  sourceType?: string;
+  url?: string;
+  title?: string;
+  providerMetadata?: Record<string, unknown>;
+};
+
 export type ProviderTurnParams = {
   thread: ThreadState;
   input: AppServerTurnInputItem[];
+  history?: Array<{
+    role: AppServerRole;
+    text: string;
+  }>;
   previousResponseId?: string;
   tools?: ToolExecutor;
 };
@@ -21,6 +34,8 @@ export type ProviderSteerParams = {
 export type ProviderTurnResult = {
   assistantText?: string;
   providerResponseId?: string;
+  sources?: ProviderSource[];
+  providerMetadata?: Record<string, unknown>;
 };
 
 export type ProviderPlanStep = {
@@ -42,6 +57,7 @@ export type ProviderTurnEvent =
         success?: boolean;
         arguments?: Record<string, unknown>;
         data?: Record<string, unknown>;
+        sources?: ProviderSource[];
       };
     }
   | {

@@ -14,6 +14,8 @@ import type {
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadEntry,
+  AppServerThreadImagePart,
+  AppServerThreadMessagePart,
   AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadTitleSource,
@@ -24,8 +26,10 @@ import type {
 } from "@pwragnt/shared";
 import type { JsonRpcObserver } from "../codex-app-server/json-rpc";
 import { summarizeToolActivityItems } from "../app-server/thread-activity";
+import { getMainLogger } from "../log";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
+const grokClientLog = getMainLogger("pwragnt:grok-client");
 
 type InitializeResult = {
   serverInfo?: {
@@ -84,6 +88,7 @@ type SkillCatalogEntry = {
 
 type ReplayMessage = {
   id: string;
+  parts?: AppServerThreadMessagePart[];
   role: "user" | "assistant";
   text: string;
 };
@@ -116,6 +121,12 @@ function normalizeTitleSource(
 ): AppServerThreadTitleSource | undefined {
   return value === "explicit" || value === "derived" || value === "fallback"
     ? value
+    : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
     : undefined;
 }
 
@@ -212,7 +223,7 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
   const record = value as {
     lastUserMessage?: unknown;
     lastAssistantMessage?: unknown;
-    messages?: Array<{ role?: unknown; text?: unknown }>;
+    messages?: Array<{ role?: unknown; text?: unknown; parts?: unknown }>;
     items?: unknown[];
   };
 
@@ -220,11 +231,7 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
   const messages = normalizeRawMessages(rawMessages);
   const rawItems = Array.isArray(record.items)
     ? record.items
-        .map((item) =>
-          item && typeof item === "object" && !Array.isArray(item)
-            ? (item as Record<string, unknown>)
-            : undefined
-        )
+        .map((item) => asRecord(item))
         .filter((item): item is Record<string, unknown> => item !== undefined)
     : [];
   const replayFromItems = extractReplayFromItems(rawItems, pagination);
@@ -276,8 +283,66 @@ function fallbackLastMessages(record: {
   );
 }
 
+function normalizeRenderableImageUrl(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (
+    trimmed.startsWith("http://") ||
+    trimmed.startsWith("https://") ||
+    trimmed.startsWith("file://") ||
+    trimmed.startsWith("data:image/")
+  ) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith("/")) {
+    return `file://${trimmed}`;
+  }
+
+  return undefined;
+}
+
+function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePart[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => extractStructuredMessageParts(entry));
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+
+  const normalizedType =
+    typeof record.type === "string" ? record.type.trim().toLowerCase() : undefined;
+
+  if (normalizedType === "text" || normalizedType === "input_text") {
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    return text ? [{ type: "text", text }] : [];
+  }
+
+  const imageUrl = normalizeRenderableImageUrl(
+    typeof record.url === "string"
+      ? record.url
+      : typeof record.path === "string"
+        ? record.path
+        : undefined,
+  );
+  if (imageUrl && (normalizedType === "image" || normalizedType === "localimage")) {
+    const part: AppServerThreadImagePart = {
+      type: "image",
+      url: imageUrl,
+    };
+    return [part];
+  }
+
+  return [];
+}
+
 function normalizeRawMessages(
-  rawMessages: Array<{ role?: unknown; text?: unknown }>,
+  rawMessages: Array<{ role?: unknown; text?: unknown; parts?: unknown }>,
 ): ReplayMessage[] {
   return rawMessages.flatMap((message, index) => {
     if (!message || typeof message !== "object") {
@@ -289,7 +354,8 @@ function normalizeRawMessages(
         ? message.role
         : undefined;
     const text = typeof message.text === "string" ? message.text : undefined;
-    if (!role || !text) {
+    const parts = extractStructuredMessageParts(message.parts);
+    if (!role || (text === undefined && parts.length === 0)) {
       return [];
     }
 
@@ -297,7 +363,8 @@ function normalizeRawMessages(
       {
         id: `message-${index + 1}`,
         role,
-        text,
+        text: text ?? "",
+        ...(parts.length > 0 ? { parts } : {}),
       },
     ];
   });
@@ -365,7 +432,7 @@ function extractReplayFromItems(
   }
 
   const entries: AppServerThreadEntry[] = [];
-  const messages: Array<{ id: string; role: "user" | "assistant"; text: string }> = [];
+  const messages: ReplayMessage[] = [];
   let pendingActivity: Record<string, unknown>[] = [];
   let messageIndex = 0;
 
@@ -419,10 +486,7 @@ function extractReplayFromItems(
   };
 }
 
-function itemToMessage(
-  item: Record<string, unknown>,
-  index: number,
-): { id: string; role: "user" | "assistant"; text: string } | undefined {
+function itemToMessage(item: Record<string, unknown>, index: number): ReplayMessage | undefined {
   const type = typeof item.type === "string" ? item.type : undefined;
   const role =
     item.role === "user" || type === "userMessage"
@@ -431,13 +495,15 @@ function itemToMessage(
         ? "assistant"
         : undefined;
   const text = typeof item.text === "string" ? item.text : undefined;
-  if (!role || !text) {
+  const parts = extractStructuredMessageParts(item.parts ?? item.content);
+  if (!role || (text === undefined && parts.length === 0)) {
     return undefined;
   }
   return {
     id: `message-${index}`,
     role,
-    text,
+    text: text ?? "",
+    ...(parts.length > 0 ? { parts } : {}),
   };
 }
 
@@ -970,11 +1036,11 @@ export class GrokAppServerClient {
         envelope: params.envelope,
       });
     } catch (error) {
-      console.error(
-        `[pwragnt:grok-client] observer failed for ${params.direction} ${
-          params.envelope.method ?? params.envelope.id ?? "message"
-        }: ${error instanceof Error ? error.message : String(error)}`
-      );
+      grokClientLog.error("observer failed", {
+        direction: params.direction,
+        message: params.envelope.method ?? params.envelope.id ?? "message",
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }

@@ -1,6 +1,14 @@
 import { app, BrowserWindow, Menu, shell } from "electron";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import { disposeAppServerIpcHandlers, registerAppServerIpcHandlers } from "./ipc/app-server";
+import {
+  disposeImageNormalizationIpcHandlers,
+  registerImageNormalizationIpcHandlers,
+} from "./ipc/image-normalization";
+import {
+  disposePreloadLogIpcHandlers,
+  registerPreloadLogIpcHandlers,
+} from "./ipc/preload-log";
 import { registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
 import { initializeMainLogger } from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
@@ -42,6 +50,8 @@ export function bootstrapApp(): void {
     installApplicationMenu();
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();
+    registerImageNormalizationIpcHandlers();
+    registerPreloadLogIpcHandlers();
     registerRendererErrorIpcHandlers();
     createMainWindow({
       startupCpuProfiler,
@@ -64,6 +74,8 @@ export function bootstrapApp(): void {
 
   app.on("before-quit", () => {
     disposeAgentIpcHandlers();
+    disposeImageNormalizationIpcHandlers();
+    disposePreloadLogIpcHandlers();
     void disposeAppServerIpcHandlers();
   });
 }

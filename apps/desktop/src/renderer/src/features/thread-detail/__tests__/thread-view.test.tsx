@@ -1098,6 +1098,152 @@ describe("ThreadView", () => {
     expect(screen.getAllByRole("heading", { name: "Final breakfast plan" })).toHaveLength(1);
   });
 
+  it("renders live tool activity from item notifications", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Search Matt",
+      titleSource: "explicit" as const,
+      source: "grok" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "grok";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "grok",
+            label: "Grok app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: true,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "grok",
+            threadId: "thread-2",
+            runId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Search for Matt Van Horn."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "grok",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-2",
+            runId: "turn-1",
+            item: {
+              id: "call-search-web",
+              type: "dynamicToolCall",
+              status: "in_progress",
+              toolName: "search_web",
+              text: "search_web",
+              arguments: { query: "Matt Van Horn" },
+            },
+          },
+        } as AppServerNotification,
+      });
+    });
+
+    expect(screen.getByText("Searching Web")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Searching Web/ }));
+    expect(screen.getByText("Searching Web: Matt Van Horn")).toBeInTheDocument();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "grok",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-2",
+            runId: "turn-1",
+            item: {
+              id: "call-search-web",
+              type: "dynamicToolCall",
+              status: "completed",
+              toolName: "search_web",
+              text: "Matt Van Horn co-founded Zimride.",
+              arguments: { query: "Matt Van Horn" },
+              data: {
+                output: "Matt Van Horn co-founded Zimride.",
+                sources: [
+                  {
+                    title: "Matt Van Horn profile",
+                    url: "https://example.com/matt",
+                  },
+                ],
+              },
+            },
+          },
+        } as AppServerNotification,
+      });
+    });
+
+    expect(
+      screen.getByText("Searched Web: Matt Van Horn - Matt Van Horn co-founded Zimride.")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Matt Van Horn profile" })).toHaveAttribute(
+      "href",
+      "https://example.com/matt"
+    );
+  });
+
   it("renders live diff activity from turn/diff/updated and clears it once replay catches up", async () => {
     const selectedThread = {
       id: "thread-2",

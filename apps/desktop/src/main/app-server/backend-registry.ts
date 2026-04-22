@@ -46,6 +46,10 @@ import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createReplayClientsFromEnv } from "../testing/replay-runtime";
 import { GitDirectoryService } from "./git-directory-service";
+import {
+  createCompositeJsonRpcObserver,
+  createProtocolLogObserverFromEnv,
+} from "./protocol-log-observer";
 
 type InitializeResult = {
   serverInfo?: {
@@ -140,11 +144,34 @@ const GROK_FALLBACK_MODELS: BackendModelOption[] = [
     id: "grok-4.20-reasoning",
     label: "Grok 4.20 Reasoning",
     current: true,
-    supportsReasoning: true,
+    supportsReasoning: false,
   },
   {
-    id: "grok-4.20-fast",
-    label: "Grok 4.20 Fast",
+    id: "grok-4.20-non-reasoning",
+    label: "Grok 4.20 Non-Reasoning",
+    supportsReasoning: false,
+  },
+  {
+    id: "grok-4-1-fast-reasoning",
+    label: "Grok 4.1 Fast Reasoning",
+    supportsReasoning: false,
+    supportsFast: true,
+  },
+  {
+    id: "grok-4-1-fast-non-reasoning",
+    label: "Grok 4.1 Fast Non-Reasoning",
+    supportsReasoning: false,
+    supportsFast: true,
+  },
+  {
+    id: "grok-4-fast-reasoning",
+    label: "Grok 4 Fast Reasoning",
+    supportsReasoning: false,
+    supportsFast: true,
+  },
+  {
+    id: "grok-4-fast-non-reasoning",
+    label: "Grok 4 Fast Non-Reasoning",
     supportsReasoning: false,
     supportsFast: true,
   },
@@ -421,6 +448,12 @@ export class DesktopBackendRegistry {
     if (codexCapture) {
       this.captureStores.push(codexCapture.store);
     }
+    const codexObserver = createCompositeJsonRpcObserver([
+      codexCapture?.observer,
+      createProtocolLogObserverFromEnv({
+        backend: "codex",
+      }),
+    ]);
     const grokCapture = options?.grokClient
       || replayClients
       ? undefined
@@ -431,25 +464,31 @@ export class DesktopBackendRegistry {
     if (grokCapture) {
       this.captureStores.push(grokCapture.store);
     }
+    const grokObserver = createCompositeJsonRpcObserver([
+      grokCapture?.observer,
+      createProtocolLogObserverFromEnv({
+        backend: "grok",
+      }),
+    ]);
 
     this.codexDefaultClient =
       options?.codexClient ??
       replayClients?.codexDefaultClient ??
       new CodexAppServerClient({
-        connectionObserver: codexCapture?.observer,
+        connectionObserver: codexObserver,
       });
     this.codexFullAccessClient =
       options?.codexFullAccessClient ??
       replayClients?.codexFullAccessClient ??
       new CodexAppServerClient({
         args: buildCodexClientArgs("full-access"),
-        connectionObserver: codexCapture?.observer,
+        connectionObserver: codexObserver,
       });
     this.grokClient =
       options?.grokClient ??
       replayClients?.grokClient ??
       new GrokAppServerClient({
-        connectionObserver: grokCapture?.observer,
+        connectionObserver: grokObserver,
       });
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
     this.gitDirectoryService = options?.gitDirectoryService ?? new GitDirectoryService();

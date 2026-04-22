@@ -75,6 +75,33 @@ function summarizeAgentEvent(event: AgentEvent): Record<string, unknown> | undef
       ? params.runId
       : undefined;
 
+  if (
+    event.notification.method === "item/started" ||
+    event.notification.method === "item/completed"
+  ) {
+    const item =
+      "item" in params && typeof params.item === "object" && params.item !== null
+        ? (params.item as Record<string, unknown>)
+        : undefined;
+    return {
+      backend: event.backend,
+      method: event.notification.method,
+      threadId: threadId ?? null,
+      runId: runId ?? null,
+      itemType: typeof item?.type === "string" ? item.type : null,
+      toolName: typeof item?.toolName === "string" ? item.toolName : null,
+      status: typeof item?.status === "string" ? item.status : null,
+      textChars: typeof item?.text === "string" ? item.text.length : 0,
+      elapsedMs:
+        item?.data &&
+        typeof item.data === "object" &&
+        !Array.isArray(item.data) &&
+        typeof (item.data as Record<string, unknown>).elapsedMs === "number"
+          ? (item.data as Record<string, unknown>).elapsedMs
+          : null,
+    };
+  }
+
   if (!event.notification.method.startsWith("turn/")) {
     return undefined;
   }

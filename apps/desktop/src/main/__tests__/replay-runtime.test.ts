@@ -44,6 +44,15 @@ describe("replay-runtime", () => {
           result: []
         },
         {
+          id: "turn-start-1",
+          kind: "response",
+          method: "turn/start",
+          result: {
+            threadId: "thread-full-access",
+            runId: "turn-1"
+          }
+        },
+        {
           id: "req-1",
           kind: "request",
           request: {
@@ -65,6 +74,19 @@ describe("replay-runtime", () => {
 
     await clients!.codexFullAccessClient.getInitializeResult();
     await clients!.codexFullAccessClient.listThreads();
+    await clients!.codexFullAccessClient.startTurn({
+      threadId: "thread-full-access",
+      input: [{ type: "text", text: "Check payload capture" }]
+    });
+
+    expect(
+      globalThis.__PWRAGNT_REPLAY_DRIVER__?.getLastStartTurn({
+        executionMode: "full-access"
+      })
+    ).toEqual({
+      threadId: "thread-full-access",
+      input: [{ type: "text", text: "Check payload capture" }]
+    });
 
     await globalThis.__PWRAGNT_REPLAY_DRIVER__?.advance({
       executionMode: "full-access",

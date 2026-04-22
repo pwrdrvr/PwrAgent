@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type {
   AppServerRole,
+  AppServerTurnInputItem,
   ThreadReplayItem,
   ThreadState,
 } from "../app-server/protocol.js";
@@ -10,6 +11,7 @@ import { parseFlatToml, stringifyFlatToml } from "../config/simple-toml.js";
 export type StoredMessage = {
   role: AppServerRole;
   text: string;
+  parts?: AppServerTurnInputItem[];
 };
 
 export type HydratedSessionState = {
@@ -43,6 +45,7 @@ type RolloutRecord =
       type: "message";
       role: AppServerRole;
       text: string;
+      parts?: AppServerTurnInputItem[];
     }
   | {
       type: "item";
@@ -131,6 +134,7 @@ export class GrokRolloutStore implements AppServerSessionStore {
       type: "message",
       role: params.message.role,
       text: params.message.text,
+      parts: params.message.parts,
     });
     this.appendRecord(params.threadId, {
       type: "item",
@@ -233,6 +237,7 @@ function readRolloutFile(filePath: string): {
       messages.push({
         role: record.role,
         text: record.text,
+        parts: record.parts,
       });
       messageCount += 1;
       continue;

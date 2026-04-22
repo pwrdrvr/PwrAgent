@@ -60,7 +60,18 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
         <ul id={detailsId} className="transcript-activity__details">
           {props.entry.details.map((detail) => (
             <li key={detail.id} className="transcript-activity__detail">
-              <span className="transcript-activity__detail-label">{detail.label}</span>
+              {detail.url ? (
+                <a
+                  className="transcript-activity__detail-label"
+                  href={detail.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {detail.label}
+                </a>
+              ) : (
+                <span className="transcript-activity__detail-label">{detail.label}</span>
+              )}
               {detail.fileDiff ? <TranscriptDiff detail={detail} /> : null}
             </li>
           ))}

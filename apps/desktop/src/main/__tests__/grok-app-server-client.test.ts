@@ -242,6 +242,65 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
+  it("preserves Grok user image parts in thread replay", async () => {
+    const provider = new FakeProvider();
+    const server = new CodexAppServer({
+      provider,
+      threadIdGenerator: () => "thread-1",
+      runIdGenerator: () => "turn-1",
+    });
+    const client = new GrokAppServerClient({ server });
+
+    await client.startThread({ model: "grok-4.20-reasoning" });
+    await client.startTurn({
+      threadId: "thread-1",
+      input: [
+        { type: "text", text: "What's in this picture?" },
+        { type: "image", url: "data:image/jpeg;base64,AQID" },
+      ],
+    });
+    provider.runs[0]?.deferred.resolve({
+      assistantText: "It is a photo.",
+      providerResponseId: "resp_1",
+    });
+    await flushAsync();
+
+    await expect(client.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+      entries: [
+        {
+          type: "message",
+          role: "user",
+          text: "What's in this picture?",
+          parts: [
+            { type: "text", text: "What's in this picture?" },
+            { type: "image", url: "data:image/jpeg;base64,AQID" },
+          ],
+        },
+        {
+          type: "message",
+          role: "assistant",
+          text: "It is a photo.",
+        },
+      ],
+      messages: [
+        {
+          role: "user",
+          text: "What's in this picture?",
+          parts: [
+            { type: "text", text: "What's in this picture?" },
+            { type: "image", url: "data:image/jpeg;base64,AQID" },
+          ],
+        },
+        {
+          role: "assistant",
+          text: "It is a photo.",
+        },
+      ],
+    });
+
+    await client.close();
+  });
+
   it("hydrates Grok tool replay items as transcript activity", async () => {
     const server = {
       request: async (method: string): Promise<unknown> => {
@@ -415,6 +474,98 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
+  it("surfaces Grok tool calls and search sources in thread replay", async () => {
+    const provider = new FakeProvider();
+    const server = new CodexAppServer({
+      provider,
+      threadIdGenerator: () => "thread-1",
+      runIdGenerator: () => "turn-1",
+    });
+    const client = new GrokAppServerClient({ server });
+
+    await client.startThread({ model: "grok-4.20-reasoning" });
+    await client.startTurn({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Search for Matt Van Horn" }],
+    });
+
+    await provider.runs[0]?.emit({
+      type: "item_started",
+      item: {
+        id: "call-search-web",
+        type: "dynamicToolCall",
+        text: "search_web",
+        toolName: "search_web",
+        arguments: { query: "Matt Van Horn" },
+      },
+    });
+    await provider.runs[0]?.emit({
+      type: "item_completed",
+      item: {
+        id: "call-search-web",
+        type: "dynamicToolCall",
+        text: "Matt Van Horn co-founded Zimride and works on startup investing.",
+        toolName: "search_web",
+        success: true,
+        arguments: { query: "Matt Van Horn" },
+        data: {
+          output: "Matt Van Horn co-founded Zimride and works on startup investing.",
+          sources: [
+            {
+              title: "Matt Van Horn profile",
+              url: "https://example.com/matt-van-horn",
+            },
+          ],
+        },
+      },
+    });
+    provider.runs[0]?.deferred.resolve({
+      assistantText: "I found a profile.",
+      providerResponseId: "resp_1",
+    });
+    await flushAsync();
+
+    const replay = await client.readThread({ threadId: "thread-1" });
+    expect(replay.entries).toEqual([
+      {
+        type: "message",
+        id: "message-1",
+        role: "user",
+        text: "Search for Matt Van Horn",
+      },
+      {
+        type: "activity",
+        id: "activity-call-search-web",
+        summary: "Searched Web",
+        status: "completed",
+        details: [
+          {
+            id: "call-search-web",
+            kind: "read",
+            label:
+              "Searched Web: Matt Van Horn - Matt Van Horn co-founded Zimride and works on startup investing.",
+            status: "completed",
+          },
+          {
+            id: "call-search-web-source-1",
+            kind: "read",
+            label: "Matt Van Horn profile",
+            url: "https://example.com/matt-van-horn",
+            status: "completed",
+          },
+        ],
+      },
+      {
+        type: "message",
+        id: "message-2",
+        role: "assistant",
+        text: "I found a profile.",
+      },
+    ]);
+
+    await client.close();
+  });
+
   it("preserves the full Grok message sequence when last-message summaries are also present", async () => {
     const provider = new FakeProvider();
     const server = new CodexAppServer({
@@ -512,7 +663,7 @@ describe("GrokAppServerClient", () => {
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
       configPath,
-      "XAI_API_KEY=config-key\nGROK_MODEL=grok-4.20-fast\nXAI_BASE_URL=https://api.example.test/v1\n",
+      "XAI_API_KEY=config-key\nGROK_MODEL=grok-4.20-non-reasoning\nXAI_BASE_URL=https://api.example.test/v1\n",
       "utf8",
     );
 
@@ -557,7 +708,7 @@ describe("GrokAppServerClient", () => {
       configPath,
       [
         'xai_api_key = "config-key"',
-        'grok_model = "grok-4.20-fast"',
+        'grok_model = "grok-4.20-non-reasoning"',
         'xai_base_url = "https://api.example.test/v1"',
         "",
       ].join("\n"),
@@ -600,7 +751,7 @@ describe("GrokAppServerClient", () => {
         threadIdGenerator: () => "thread-1",
       });
       await firstClient.startThread({
-        model: "grok-4.20-fast",
+        model: "grok-4.20-non-reasoning",
       });
       await firstClient.close();
 
@@ -615,7 +766,7 @@ describe("GrokAppServerClient", () => {
           title: "Untitled thread",
           titleSource: "fallback",
           summary: undefined,
-          model: "grok-4.20-fast",
+          model: "grok-4.20-non-reasoning",
           serviceTier: undefined,
           reasoningEffort: undefined,
           fastMode: undefined,

@@ -138,6 +138,13 @@ export class AppServerSessionState {
   }
 
   appendInput(threadId: string, input: AppServerTurnInputItem[]): void {
+    const parts = input.flatMap((item): AppServerTurnInputItem[] => {
+      if (item.type === "text") {
+        const trimmed = item.text.trim();
+        return trimmed ? [{ type: "text", text: trimmed }] : [];
+      }
+      return [item];
+    });
     const text = input
       .filter(
         (item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text",
@@ -145,24 +152,30 @@ export class AppServerSessionState {
       .map((item) => item.text.trim())
       .filter(Boolean)
       .join("\n");
-    if (!text) {
+    if (!text && parts.length === 0) {
       this.touchThread(threadId);
       return;
     }
+    const partsForMessage = parts.some((item) => item.type !== "text") ? parts : undefined;
     const thread = this.threads.get(threadId);
     if (thread && !thread.firstUserMessage) {
       thread.firstUserMessage = text;
     }
-    this.appendMessage(threadId, { role: "user", text }, {
+    this.appendMessage(threadId, { role: "user", text, parts: partsForMessage }, {
       id: this.nextItemId("user"),
       type: "userMessage",
       status: "completed",
       role: "user",
       text,
+      parts: partsForMessage,
     });
   }
 
-  appendAssistant(threadId: string, text: string): void {
+  appendAssistant(
+    threadId: string,
+    text: string,
+    metadata?: Pick<ThreadReplayItem, "sources" | "data">,
+  ): void {
     const trimmed = text.trim();
     if (!trimmed) {
       this.touchThread(threadId);
@@ -174,6 +187,8 @@ export class AppServerSessionState {
       status: "completed",
       role: "assistant",
       text: trimmed,
+      sources: metadata?.sources,
+      data: metadata?.data,
     });
   }
 
@@ -226,6 +241,8 @@ export class AppServerSessionState {
       toolName: existing?.toolName,
       success: existing?.success,
       arguments: existing?.arguments,
+      data: existing?.data,
+      sources: existing?.sources,
     });
   }
 

@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createTemporaryTestDirectory } from "@pwragnt/agent-core";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { parseUnifiedDiff, summarizeHunksForFocus } from "../../shared/diff-focus";
-import { makeXaiResponse } from "../../../../../packages/agent-core/src/testing/xai-fixtures.js";
 import { defaultGrokAppServerConfigPath } from "../../../../../packages/agent-core/src/config/grok-app-server-config.js";
 import { stringifyFlatToml } from "../../../../../packages/agent-core/src/config/simple-toml.js";
 
@@ -55,6 +54,47 @@ function makeRequest(diff = ELIGIBLE_DIFF) {
   };
 }
 
+function makeStructuredResult(object: unknown, cachedTokens?: number) {
+  return {
+    object,
+    cachedTokens
+  };
+}
+
+function makeAiSdkXaiResponse(text: string, cachedTokens?: number): Record<string, unknown> {
+  return {
+    id: "resp_123",
+    object: "response",
+    created_at: 0,
+    model: "grok-4.20-non-reasoning",
+    status: "completed",
+    output: [
+      {
+        id: "msg_1",
+        type: "message",
+        status: "completed",
+        role: "assistant",
+        content: [
+          {
+            type: "output_text",
+            text
+          }
+        ]
+      }
+    ],
+    usage: {
+      input_tokens: 10,
+      output_tokens: 2,
+      total_tokens: 12,
+      input_tokens_details:
+        typeof cachedTokens === "number" ? { cached_tokens: cachedTokens } : undefined,
+      output_tokens_details: {
+        reasoning_tokens: 0
+      }
+    }
+  };
+}
+
 describe("FocusedDiffService", () => {
   it("uses a test override response when configured", async () => {
     const originalOverride = process.env.PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE;
@@ -65,7 +105,7 @@ describe("FocusedDiffService", () => {
 
     try {
       const client = {
-        createResponse: vi.fn(async () => makeXaiResponse())
+        generateObject: vi.fn(async () => makeStructuredResult({ decisions: [] }))
       };
       const service = new FocusedDiffService({ client });
 
@@ -78,7 +118,7 @@ describe("FocusedDiffService", () => {
         hiddenHunkCount: 1,
         reason: "test override"
       });
-      expect(client.createResponse).not.toHaveBeenCalled();
+      expect(client.generateObject).not.toHaveBeenCalled();
     } finally {
       if (originalOverride === undefined) {
         delete process.env.PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE;
@@ -90,9 +130,9 @@ describe("FocusedDiffService", () => {
 
   it("returns focused hide decisions for eligible diffs", async () => {
     const client = {
-      createResponse: vi.fn(async () => ({
-        ...makeXaiResponse({
-          text: JSON.stringify({
+      generateObject: vi.fn(async () =>
+        makeStructuredResult(
+          {
             decisions: [
               {
                 index: 1,
@@ -109,14 +149,10 @@ describe("FocusedDiffService", () => {
                 confidence: 0.93
               }
             ]
-          })
-        }),
-        usage: {
-          input_tokens_details: {
-            cached_tokens: 128
-          }
-        }
-      }))
+          },
+          128
+        )
+      )
     };
     const service = new FocusedDiffService({ client });
 
@@ -138,19 +174,17 @@ describe("FocusedDiffService", () => {
 
   it("reuses cached analysis for the same diff", async () => {
     const client = {
-      createResponse: vi.fn(async () =>
-        makeXaiResponse({
-          text: JSON.stringify({
-            decisions: [
-              {
-                index: 0,
-                disposition: "hide",
-                reasonCode: "import_reorder",
-                reason: "Import-only change.",
-                confidence: 0.92
-              }
-            ]
-          })
+      generateObject: vi.fn(async () =>
+        makeStructuredResult({
+          decisions: [
+            {
+              index: 0,
+              disposition: "hide",
+              reasonCode: "import_reorder",
+              reason: "Import-only change.",
+              confidence: 0.92
+            }
+          ]
         })
       )
     };
@@ -161,12 +195,14 @@ describe("FocusedDiffService", () => {
 
     expect(first.source).toBe("grok");
     expect(second.source).toBe("cache");
-    expect(client.createResponse).toHaveBeenCalledTimes(1);
+    expect(client.generateObject).toHaveBeenCalledTimes(1);
   });
 
   it("falls back when Grok returns invalid JSON", async () => {
     const client = {
-      createResponse: vi.fn(async () => makeXaiResponse({ text: "{not-json" }))
+      generateObject: vi.fn(async () => {
+        throw new Error("invalid structured diff response: Unexpected token");
+      })
     };
     const service = new FocusedDiffService({ client });
 
@@ -183,22 +219,20 @@ describe("FocusedDiffService", () => {
 
   it("does not cache fallback responses from transient failures", async () => {
     const client = {
-      createResponse: vi
+      generateObject: vi
         .fn()
         .mockRejectedValueOnce(new Error("timeout"))
         .mockResolvedValueOnce(
-          makeXaiResponse({
-            text: JSON.stringify({
-              decisions: [
-                {
-                  index: 1,
-                  disposition: "hide",
-                  reasonCode: "comment_only",
-                  reason: "Comment-only hunk.",
-                  confidence: 0.96
-                }
-              ]
-            })
+          makeStructuredResult({
+            decisions: [
+              {
+                index: 1,
+                disposition: "hide",
+                reasonCode: "comment_only",
+                reason: "Comment-only hunk.",
+                confidence: 0.96
+              }
+            ]
           })
         )
     };
@@ -217,12 +251,12 @@ describe("FocusedDiffService", () => {
       source: "grok",
       hiddenHunkIndices: [1]
     });
-    expect(client.createResponse).toHaveBeenCalledTimes(2);
+    expect(client.generateObject).toHaveBeenCalledTimes(2);
   });
 
   it("returns a full ineligible response for small diffs", async () => {
     const client = {
-      createResponse: vi.fn(async () => makeXaiResponse())
+      generateObject: vi.fn(async () => makeStructuredResult({ decisions: [] }))
     };
     const service = new FocusedDiffService({ client });
     const request = makeRequest(
@@ -246,33 +280,42 @@ describe("FocusedDiffService", () => {
       hiddenHunkCount: 0,
       reason: "too_few_hunks"
     });
-    expect(client.createResponse).not.toHaveBeenCalled();
+    expect(client.generateObject).not.toHaveBeenCalled();
   });
 
-  it("reads xAI credentials and model from runtime config.toml", async () => {
+  it("reads xAI credentials from runtime config.toml and uses the focused-diff model", async () => {
     const temp = await createTemporaryTestDirectory();
     const originalHome = process.env.HOME;
     const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
     const originalXaiApiKey = process.env.XAI_API_KEY;
     const originalXaiBaseUrl = process.env.XAI_BASE_URL;
     const originalGrokModel = process.env.GROK_MODEL;
-    const fetchSpy = vi.fn(async (_input, init) => ({
-      ok: true,
-      json: async () =>
-        makeXaiResponse({
-          text: JSON.stringify({
-            decisions: [
-              {
-                index: 1,
-                disposition: "hide",
-                reasonCode: "comment_only",
-                reason: "Comment-only hunk.",
-                confidence: 0.96
-              }
-            ]
-          })
-        })
-    }));
+    const fetchSpy = vi.fn(async (_input, init) =>
+      new Response(
+        JSON.stringify(
+          makeAiSdkXaiResponse(
+            JSON.stringify({
+              decisions: [
+                {
+                  index: 1,
+                  disposition: "hide",
+                  reasonCode: "comment_only",
+                  reason: "Comment-only hunk.",
+                  confidence: 0.96
+                }
+              ]
+            }),
+            64
+          )
+        ),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      )
+    );
     const originalFetch = globalThis.fetch;
 
     try {
@@ -289,7 +332,7 @@ describe("FocusedDiffService", () => {
         stringifyFlatToml({
           xai_api_key: "config-key",
           xai_base_url: "https://api.example.test/v1",
-          grok_model: "grok-4.20-fast"
+          grok_model: "grok-4.20-non-reasoning"
         })
       );
 
@@ -301,15 +344,23 @@ describe("FocusedDiffService", () => {
       expect(response).toMatchObject({
         mode: "focused",
         source: "grok",
-        hiddenHunkIndices: [1]
+        hiddenHunkIndices: [1],
+        cachedTokens: 64
       });
       expect(fetchSpy).toHaveBeenCalledWith(
         "https://api.example.test/v1/responses",
         expect.objectContaining({
           headers: expect.objectContaining({
-            Authorization: "Bearer config-key"
+            authorization: "Bearer config-key",
+            "x-grok-conv-id": "focused-diff-v1"
           }),
-          body: expect.stringContaining('"model":"grok-4.20-fast"')
+          body: expect.stringContaining('"model":"grok-4-1-fast-reasoning"')
+        })
+      );
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: expect.stringContaining('"prompt_cache_key":"focused-diff-v1"')
         })
       );
     } finally {

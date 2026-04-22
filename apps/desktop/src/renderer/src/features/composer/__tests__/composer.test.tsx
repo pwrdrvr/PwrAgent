@@ -4,6 +4,24 @@ import type { BackendSummary, StartTurnRequest } from "@pwragnt/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Composer } from "../Composer";
 
+vi.mock("../../../lib/image-normalization", () => ({
+  normalizeImageFile: vi.fn(async (file: File) => ({
+    conversionPath: "renderer",
+    dataUrl: `data:${file.type || "image/png"};base64,AQID`,
+    height: 24,
+    mimeType: file.type || "image/png",
+    original: {
+      height: 24,
+      mimeType: file.type || "image/png",
+      name: file.name,
+      size: file.size,
+      width: 32,
+    },
+    size: 3,
+    width: 32,
+  })),
+}));
+
 afterEach(() => {
   cleanup();
 });
@@ -88,7 +106,7 @@ describe("Composer", () => {
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
   });
 
-  it("shows Grok reasoning defaults for the reasoning model", () => {
+  it("hides reasoning controls for Grok 4.20 models", () => {
     render(
       <Composer
         backends={[
@@ -98,15 +116,14 @@ describe("Composer", () => {
                 id: "grok-4.20-reasoning",
                 label: "Grok 4.20 Reasoning",
                 current: true,
-                supportsReasoning: true,
+                supportsReasoning: false,
               },
               {
-                id: "grok-4.20-fast",
-                label: "Grok 4.20 Fast",
+                id: "grok-4.20-non-reasoning",
+                label: "Grok 4.20 Non-Reasoning",
                 supportsReasoning: false,
               },
             ],
-            reasoningEfforts: ["low", "medium", "high"],
           }),
         ]}
         launchpad={{
@@ -128,7 +145,7 @@ describe("Composer", () => {
     );
 
     expect(screen.getByLabelText("Model")).toHaveValue("grok-4.20-reasoning");
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
+    expect(screen.queryByLabelText("Reasoning")).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
   });
 
@@ -455,6 +472,7 @@ describe("Composer", () => {
       runId: "turn-1",
     }));
     const addOptimisticUserMessage = vi.fn(() => "optimistic-1");
+    const recordImageUploadNormalization = vi.fn(async () => undefined);
     const imageFile = new File([new Uint8Array([1, 2, 3])], "screenshot.jpeg", {
       type: "image/jpeg",
     });
@@ -464,6 +482,7 @@ describe("Composer", () => {
         addOptimisticUserMessage={addOptimisticUserMessage}
         desktopApi={{
           onAgentEvent: () => () => undefined,
+          recordImageUploadNormalization,
           startTurn,
         }}
         disabled={false}
@@ -521,6 +540,23 @@ describe("Composer", () => {
         },
       ]
     );
+    expect(recordImageUploadNormalization).toHaveBeenCalledWith({
+      fileName: "screenshot.jpeg",
+      original: {
+        height: 24,
+        mimeType: "image/jpeg",
+        size: 3,
+        width: 32,
+      },
+      normalized: {
+        height: 24,
+        mimeType: "image/jpeg",
+        size: 3,
+        width: 32,
+      },
+      path: "renderer",
+      resized: false,
+    });
   });
 
   it("allows pasted image-only replies", async () => {

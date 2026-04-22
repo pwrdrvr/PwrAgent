@@ -98,6 +98,20 @@ export type AppServerThreadActivityStatus =
   | "failed"
   | "cancelled";
 
+export type AppServerCommandAction =
+  | "read"
+  | "listFiles"
+  | "search"
+  | "unknown";
+
+export type AppServerSource = {
+  id?: string;
+  sourceType?: string;
+  url?: string;
+  title?: string;
+  providerMetadata?: Record<string, unknown>;
+};
+
 export type AppServerThreadFileChangeKind = "add" | "delete" | "update";
 
 export type AppServerThreadFileDiff = {
@@ -112,6 +126,7 @@ export type AppServerThreadActivityDetail = {
   kind: "read" | "write" | "command";
   label: string;
   path?: string;
+  url?: string;
   status?: AppServerThreadActivityStatus;
   fileDiff?: AppServerThreadFileDiff;
 };
@@ -320,6 +335,13 @@ export type AppServerNotification =
           type: string;
           text?: string;
           review?: string;
+          command?: string;
+          commandAction?: AppServerCommandAction;
+          toolName?: string;
+          success?: boolean;
+          arguments?: Record<string, unknown>;
+          data?: Record<string, unknown>;
+          sources?: AppServerSource[];
         };
       };
     }

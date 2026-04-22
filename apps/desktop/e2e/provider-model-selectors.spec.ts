@@ -118,7 +118,7 @@ test("OpenAI new-thread selector uses concrete model and reasoning defaults", as
   }
 });
 
-test("Grok new-thread selector defaults to reasoning model with medium reasoning", async () => {
+test("Grok new-thread selector hides reasoning for Grok 4.20 models", async () => {
   const fixture = await createProviderSelectorFixture({
     backend: "grok",
     launchpadDefaults: {
@@ -140,20 +140,18 @@ test("Grok new-thread selector defaults to reasoning model with medium reasoning
     const settings = app.window.getByLabel("New thread settings");
     const providerSelect = settings.getByLabel("Provider");
     const modelSelect = settings.getByLabel("Model");
-    const reasoningSelect = settings.getByLabel("Reasoning");
     await expect(providerSelect).toHaveValue("grok");
     await expect(modelSelect).toHaveValue("grok-4.20-reasoning");
-    await expect(reasoningSelect).toHaveValue("medium");
+    await expect(settings.getByLabel("Reasoning")).toHaveCount(0);
     await expect(settings.getByRole("option", { name: /^Default$/ })).toHaveCount(0);
     await assertTangerineFocusRing(providerSelect);
     await assertTangerineFocusRing(modelSelect);
-    await assertTangerineFocusRing(reasoningSelect);
 
-    await modelSelect.selectOption("grok-4.20-fast");
+    await modelSelect.selectOption("grok-4.20-non-reasoning");
     await expect(settings.getByLabel("Reasoning")).toHaveCount(0);
 
     await modelSelect.selectOption("grok-4.20-reasoning");
-    await expect(settings.getByLabel("Reasoning")).toHaveValue("medium");
+    await expect(settings.getByLabel("Reasoning")).toHaveCount(0);
   } finally {
     await app.close();
     await fixture.cleanup();

@@ -313,6 +313,7 @@ export class CodexAppServer {
     const handle = await this.provider.startTurn({
       thread: effectiveThread,
       input: normalizedInput,
+      history: this.state.readThread(threadId).messages,
       previousResponseId: this.state.getPreviousResponseId(threadId),
       tools: this.toolExecutor,
     });

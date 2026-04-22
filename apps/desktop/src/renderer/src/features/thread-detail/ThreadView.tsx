@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type {
   AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification,
+  AppServerSource,
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
@@ -133,6 +134,222 @@ function readCompletedPlanMarkdown(params: Record<string, unknown>): string | un
         : "";
   const trimmed = markdown.trim();
   return trimmed || undefined;
+}
+
+function getNotificationItem(params: Record<string, unknown>): Record<string, unknown> | undefined {
+  return typeof params.item === "object" && params.item !== null && !Array.isArray(params.item)
+    ? params.item as Record<string, unknown>
+    : undefined;
+}
+
+function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readToolArgument(
+  item: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const args =
+    typeof item.arguments === "object" && item.arguments !== null && !Array.isArray(item.arguments)
+      ? item.arguments as Record<string, unknown>
+      : undefined;
+  return readString(args, key);
+}
+
+function readToolOutputText(item: Record<string, unknown>): string | undefined {
+  const toolName = readString(item, "toolName") ?? readString(item, "tool_name");
+  const data =
+    typeof item.data === "object" && item.data !== null && !Array.isArray(item.data)
+      ? item.data as Record<string, unknown>
+      : undefined;
+  const output =
+    readString(data, "output") ??
+    readString(data, "text") ??
+    readString(data, "result") ??
+    readString(item, "text");
+  return output && output !== toolName ? output : undefined;
+}
+
+function readElapsedMs(item: Record<string, unknown>): number | undefined {
+  const data =
+    typeof item.data === "object" && item.data !== null && !Array.isArray(item.data)
+      ? item.data as Record<string, unknown>
+      : undefined;
+  return typeof data?.elapsedMs === "number" && Number.isFinite(data.elapsedMs)
+    ? data.elapsedMs
+    : undefined;
+}
+
+function formatElapsedMs(elapsedMs: number): string {
+  if (elapsedMs < 1_000) {
+    return `${elapsedMs}ms`;
+  }
+  const seconds = elapsedMs / 1_000;
+  return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
+}
+
+function readItemSources(item: Record<string, unknown>): AppServerSource[] {
+  const data =
+    typeof item.data === "object" && item.data !== null && !Array.isArray(item.data)
+      ? item.data as Record<string, unknown>
+      : undefined;
+  const rawSources = Array.isArray(item.sources)
+    ? item.sources
+    : Array.isArray(data?.sources)
+      ? data.sources
+      : [];
+
+  return rawSources.flatMap((source): AppServerSource[] => {
+    if (typeof source !== "object" || source === null || Array.isArray(source)) {
+      return [];
+    }
+    const record = source as Record<string, unknown>;
+    const title = readString(record, "title");
+    const url = readString(record, "url");
+    if (!title && !url) {
+      return [];
+    }
+    return [{ title, url }];
+  });
+}
+
+function normalizeItemStatus(value: unknown): AppServerThreadActivityDetail["status"] {
+  return value === "completed" ||
+    value === "failed" ||
+    value === "cancelled" ||
+    value === "in_progress"
+    ? value
+    : "in_progress";
+}
+
+function summarizeToolOutput(text: string | undefined): string | undefined {
+  const normalized = text
+    ?.replace(/[#*_`>[\]()]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
+}
+
+function formatLiveToolName(
+  toolName: string,
+  status: AppServerThreadActivityDetail["status"],
+): string {
+  if (toolName === "search_web") {
+    return status === "in_progress" ? "Searching Web" : "Searched Web";
+  }
+  if (toolName === "search_x") {
+    return status === "in_progress" ? "Searching X" : "Searched X";
+  }
+  if (toolName === "shell_command") {
+    return "Ran command";
+  }
+  return toolName.replace(/_/g, " ");
+}
+
+function buildLiveToolDetails(
+  item: Record<string, unknown>,
+): AppServerThreadActivityDetail[] {
+  const itemType = readString(item, "type")?.replace(/[-_\s]/g, "").toLowerCase();
+  if (itemType !== "dynamictoolcall" && itemType !== "commandexecution") {
+    return [];
+  }
+
+  const itemId = readString(item, "id") ?? readString(item, "itemId") ?? "tool";
+  const toolName =
+    readString(item, "toolName") ??
+    readString(item, "tool_name") ??
+    readString(item, "name") ??
+    "tool";
+  const status = normalizeItemStatus(item.status);
+  const query = readToolArgument(item, "query") ?? readToolArgument(item, "q");
+  const preview = summarizeToolOutput(readToolOutputText(item));
+  const elapsedMs = readElapsedMs(item);
+  const details: AppServerThreadActivityDetail[] = [
+    {
+      id: itemId,
+      kind: toolName.startsWith("search_") ? "read" : "command",
+      label: [
+        formatLiveToolName(toolName, status),
+        elapsedMs ? ` (${formatElapsedMs(elapsedMs)})` : "",
+        query ? `: ${query}` : "",
+        preview ? ` - ${preview}` : "",
+      ].join(""),
+      status,
+    },
+  ];
+
+  for (const [index, source] of readItemSources(item).slice(0, 5).entries()) {
+    const label = source.title || source.url;
+    if (!label) {
+      continue;
+    }
+    details.push({
+      id: `${itemId}-source-${index + 1}`,
+      kind: "read",
+      label,
+      url: source.url,
+      status,
+    });
+  }
+
+  return details;
+}
+
+function summarizeActivityStatus(
+  details: AppServerThreadActivityDetail[],
+): AppServerThreadActivityEntry["status"] {
+  if (details.some((detail) => detail.status === "failed")) {
+    return "failed";
+  }
+  if (details.some((detail) => detail.status === "in_progress")) {
+    return "in_progress";
+  }
+  if (details.some((detail) => detail.status === "cancelled")) {
+    return "cancelled";
+  }
+  return details.some((detail) => detail.status === "completed") ? "completed" : undefined;
+}
+
+function summarizeLiveToolActivity(details: AppServerThreadActivityDetail[]): string {
+  const toolLabels = [
+    ...new Set(
+      details
+        .filter((detail) => !detail.id.includes("-source-"))
+        .map((detail) => detail.label.split(":")[0]?.split(" - ")[0]?.trim())
+        .filter(Boolean)
+    ),
+  ];
+  if (toolLabels.length === 1 && toolLabels[0]) {
+    return toolLabels[0];
+  }
+  if (toolLabels.length > 1) {
+    return `Used ${toolLabels.length} tools`;
+  }
+  return "Tool activity";
+}
+
+function mergeActivityDetails(
+  current: AppServerThreadActivityDetail[],
+  next: AppServerThreadActivityDetail[],
+): AppServerThreadActivityDetail[] {
+  const merged = [...current];
+  for (const detail of next) {
+    const existingIndex = merged.findIndex((entry) => entry.id === detail.id);
+    if (existingIndex >= 0) {
+      merged[existingIndex] = {
+        ...merged[existingIndex],
+        ...detail,
+      };
+    } else {
+      merged.push(detail);
+    }
+  }
+  return merged;
 }
 
 function normalizeLivePlanSteps(value: unknown): AppServerThreadPlanStep[] {
@@ -374,6 +591,8 @@ type ThreadViewProps = {
 export function ThreadView(props: ThreadViewProps) {
   const [pendingActivityEntry, setPendingActivityEntry] =
     useState<AppServerThreadActivityEntry>();
+  const [pendingToolActivityEntry, setPendingToolActivityEntry] =
+    useState<AppServerThreadActivityEntry>();
   const [pendingPlanEntry, setPendingPlanEntry] =
     useState<AppServerThreadPlanEntry>();
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
@@ -382,6 +601,7 @@ export function ThreadView(props: ThreadViewProps) {
 
   useEffect(() => {
     setPendingActivityEntry(undefined);
+    setPendingToolActivityEntry(undefined);
     setPendingPlanEntry(undefined);
     setPendingRequestBusy(false);
     setPendingRequestError(undefined);
@@ -408,6 +628,23 @@ export function ThreadView(props: ThreadViewProps) {
       setPendingActivityEntry(undefined);
     }
   }, [pendingActivityEntry, props.transcriptEntries]);
+
+  useEffect(() => {
+    if (!pendingToolActivityEntry) {
+      return;
+    }
+
+    const persistedActivity = props.transcriptEntries.find(
+      (entry): entry is AppServerThreadActivityEntry =>
+        entry.type === "activity" &&
+        pendingToolActivityEntry.details.every((detail) =>
+          entry.details.some((candidate) => candidate.id === detail.id)
+        )
+    );
+    if (persistedActivity) {
+      setPendingToolActivityEntry(undefined);
+    }
+  }, [pendingToolActivityEntry, props.transcriptEntries]);
 
   useEffect(() => {
     if (!pendingPlanEntry) {
@@ -447,6 +684,7 @@ export function ThreadView(props: ThreadViewProps) {
         event.notification.method === "turn/cancelled"
       ) {
         setPendingActivityEntry(undefined);
+        setPendingToolActivityEntry(undefined);
         return;
       }
 
@@ -467,6 +705,28 @@ export function ThreadView(props: ThreadViewProps) {
             }`,
           })
         );
+        return;
+      }
+
+      if (event.notification.method === "item/started") {
+        const params = event.notification.params as Record<string, unknown>;
+        const item = getNotificationItem(params);
+        const details = item ? buildLiveToolDetails(item) : [];
+        if (details.length > 0) {
+          const runId =
+            typeof params.runId === "string" ? params.runId : selectedThread.id;
+          setPendingToolActivityEntry((current) => {
+            const mergedDetails = mergeActivityDetails(current?.details ?? [], details);
+            return {
+              type: "activity",
+              id: current?.id ?? `live-tools-${runId}`,
+              createdAt: current?.createdAt ?? Date.now(),
+              summary: summarizeLiveToolActivity(mergedDetails),
+              status: summarizeActivityStatus(mergedDetails),
+              details: mergedDetails,
+            };
+          });
+        }
         return;
       }
 
@@ -493,20 +753,37 @@ export function ThreadView(props: ThreadViewProps) {
       if (event.notification.method === "item/completed") {
         const params = event.notification.params as Record<string, unknown>;
         const markdown = readCompletedPlanMarkdown(params);
-        if (!markdown) {
+        if (markdown) {
+          const itemId = getPlanNotificationItemId(params);
+          const runId = getPlanNotificationRunId(params) ?? itemId ?? selectedThread.id;
+          setPendingPlanEntry((current) => ({
+            type: "plan",
+            id: `live-plan-${runId}`,
+            createdAt: current?.createdAt ?? Date.now(),
+            ...(current?.explanation ? { explanation: current.explanation } : {}),
+            markdown,
+            steps: current?.steps ?? [],
+          }));
           return;
         }
 
-        const itemId = getPlanNotificationItemId(params);
-        const runId = getPlanNotificationRunId(params) ?? itemId ?? selectedThread.id;
-        setPendingPlanEntry((current) => ({
-          type: "plan",
-          id: `live-plan-${runId}`,
-          createdAt: current?.createdAt ?? Date.now(),
-          ...(current?.explanation ? { explanation: current.explanation } : {}),
-          markdown,
-          steps: current?.steps ?? [],
-        }));
+        const item = getNotificationItem(params);
+        const details = item ? buildLiveToolDetails(item) : [];
+        if (details.length > 0) {
+          const runId =
+            typeof params.runId === "string" ? params.runId : selectedThread.id;
+          setPendingToolActivityEntry((current) => {
+            const mergedDetails = mergeActivityDetails(current?.details ?? [], details);
+            return {
+              type: "activity",
+              id: current?.id ?? `live-tools-${runId}`,
+              createdAt: current?.createdAt ?? Date.now(),
+              summary: summarizeLiveToolActivity(mergedDetails),
+              status: summarizeActivityStatus(mergedDetails),
+              details: mergedDetails,
+            };
+          });
+        }
         return;
       }
 
@@ -728,7 +1005,7 @@ export function ThreadView(props: ThreadViewProps) {
             loading={props.loading}
             loadingMore={props.loadingMore}
             pagination={props.transcriptPagination}
-            pendingActivityEntry={pendingActivityEntry}
+            pendingActivityEntry={pendingToolActivityEntry ?? pendingActivityEntry}
             pendingAssistantMessage={props.pendingAssistantMessage}
             pendingPlanEntry={pendingPlanEntry}
             pendingRequest={props.pendingRequest}

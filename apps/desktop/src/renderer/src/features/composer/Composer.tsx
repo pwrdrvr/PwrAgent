@@ -13,6 +13,7 @@ import type {
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { normalizeImageFile } from "../../lib/image-normalization";
 import {
   findSkillTrigger,
   hydrateSkillLabelsWithMarkdown,
@@ -83,10 +84,12 @@ type ComposerProps = {
 
 type ComposerImageAttachment = {
   id: string;
+  height?: number;
   name: string;
   size: number;
   type: string;
   url: string;
+  width?: number;
 };
 
 type PastedImageFile = {
@@ -503,13 +506,39 @@ export function Composer(props: ComposerProps) {
   const attachPastedImages = async (files: PastedImageFile[]): Promise<void> => {
     try {
       const nextAttachments = await Promise.all(
-        files.map(async ({ file, type }, index) => ({
-          id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
-          name: file.name || formatPastedImageName(type, index),
-          size: file.size,
-          type,
-          url: await readFileAsDataUrl(file, type),
-        }))
+        files.map(async ({ file, type }, index) => {
+          const normalized = await normalizeImageFile(file, {
+            fallback: props.desktopApi?.normalizeImageForUpload,
+          });
+          void props.desktopApi?.recordImageUploadNormalization?.({
+            fileName: file.name || formatPastedImageName(type, index),
+            original: {
+              height: normalized.original.height,
+              mimeType: normalized.original.mimeType,
+              size: normalized.original.size,
+              width: normalized.original.width,
+            },
+            normalized: {
+              height: normalized.height,
+              mimeType: normalized.mimeType,
+              size: normalized.size,
+              width: normalized.width,
+            },
+            path: normalized.conversionPath,
+            resized:
+              normalized.original.width !== normalized.width ||
+              normalized.original.height !== normalized.height,
+          });
+          return {
+            id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+            name: file.name || formatPastedImageName(type, index),
+            size: normalized.size,
+            type: normalized.mimeType,
+            url: normalized.dataUrl,
+            width: normalized.width,
+            height: normalized.height,
+          };
+        })
       );
 
       setImageAttachments((current) => [...current, ...nextAttachments]);
@@ -1104,32 +1133,6 @@ function getPastedImageFiles(clipboardData: DataTransfer): PastedImageFile[] {
 
 function buildFileKey(file: File): string {
   return `${file.name}:${file.type}:${file.size}:${file.lastModified}`;
-}
-
-function readFileAsDataUrl(file: File, mimeType: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      if (typeof reader.result === "string" && reader.result.startsWith("data:image/")) {
-        resolve(reader.result);
-        return;
-      }
-
-      if (typeof reader.result === "string") {
-        const dataSeparatorIndex = reader.result.indexOf(",");
-        if (mimeType.startsWith("image/") && dataSeparatorIndex >= 0) {
-          resolve(`data:${mimeType};base64,${reader.result.slice(dataSeparatorIndex + 1)}`);
-          return;
-        }
-      }
-
-      reject(new Error("The pasted image did not produce an image data URL."));
-    });
-    reader.addEventListener("error", () => {
-      reject(reader.error ?? new Error("The pasted image could not be read."));
-    });
-    reader.readAsDataURL(file);
-  });
 }
 
 function formatPastedImageName(type: string, index: number): string {

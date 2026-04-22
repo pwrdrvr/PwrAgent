@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import {
-  normalizeXaiResponse,
   resolveGrokAppServerRuntimeConfig,
-  XaiResponsesClient
+  XaiAiSdkObjectClient,
+  type XaiAiSdkObjectResult
 } from "@pwragnt/agent-core";
 import type {
   FocusedDiffAnalysisRequest,
@@ -18,7 +18,7 @@ import {
 } from "../../shared/diff-focus";
 
 const FOCUSED_DIFF_PROMPT_VERSION = "focused-diff-v1";
-const FOCUSED_DIFF_MODEL = "grok-4.20-fast";
+const FOCUSED_DIFF_MODEL = "grok-4-1-fast-reasoning";
 const FOCUSED_DIFF_TIMEOUT_MS = 5_000;
 const MIN_HIDE_CONFIDENCE = 0.8;
 const FOCUSED_DIFF_TEST_RESPONSE_ENV = "PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE";
@@ -71,7 +71,7 @@ const FOCUSED_DIFF_SYSTEM_PROMPT = [
   "Return JSON that matches the schema exactly."
 ].join("\n");
 
-type XaiClientLike = Pick<XaiResponsesClient, "createResponse">;
+type XaiClientLike = Pick<XaiAiSdkObjectClient, "generateObject">;
 
 type FocusedDiffServiceOptions = {
   apiKey?: string;
@@ -160,7 +160,7 @@ export class FocusedDiffService {
         hiddenHunkIndices: result.hiddenHunkIndices,
         hiddenHunkCount: result.hiddenHunkIndices.length,
         decisions: result.decisions,
-        cachedTokens: readCachedTokenCount(response),
+        cachedTokens: response.cachedTokens,
         ...(result.hiddenHunkIndices.length === 0 ? { reason: "no_hideable_hunks" } : {})
       };
       this.cache.set(cacheKey, analysis);
@@ -203,7 +203,7 @@ export class FocusedDiffService {
       return this.envClient;
     }
 
-    this.envClient = new XaiResponsesClient({
+    this.envClient = new XaiAiSdkObjectClient({
       apiKey,
       baseUrl: this.configuredBaseUrl ?? runtimeConfig.baseUrl,
       model: this.getModel()
@@ -222,53 +222,34 @@ export class FocusedDiffService {
   }
 
   private getModel(): string {
-    return this.configuredModel ?? this.getRuntimeConfig().model ?? FOCUSED_DIFF_MODEL;
+    return this.configuredModel ?? FOCUSED_DIFF_MODEL;
   }
 
   private async requestFocusedDiffDecision(
     client: XaiClientLike,
     filePath: string | undefined,
     hunks: FocusedDiffHunkSummary[]
-  ): Promise<unknown> {
+  ): Promise<XaiAiSdkObjectResult> {
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => {
       controller.abort();
     }, this.timeoutMs);
 
     try {
-      return await client.createResponse({
+      return await client.generateObject({
         model: this.getModel(),
         promptCacheKey: this.promptVersion,
         headers: {
           "x-grok-conv-id": this.promptVersion
         },
         signal: controller.signal,
-        text: {
-          format: {
-            type: "json_schema",
-            name: "focused_diff_hunk_decisions",
-            schema: FOCUSED_DIFF_RESPONSE_SCHEMA,
-            strict: true
-          }
-        },
-        input: [
-          {
-            role: "system",
-            content: [{ type: "input_text", text: FOCUSED_DIFF_SYSTEM_PROMPT }]
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: JSON.stringify({
-                  filePath,
-                  hunks
-                })
-              }
-            ]
-          }
-        ]
+        schema: FOCUSED_DIFF_RESPONSE_SCHEMA,
+        schemaName: "focused_diff_hunk_decisions",
+        system: FOCUSED_DIFF_SYSTEM_PROMPT,
+        prompt: JSON.stringify({
+          filePath,
+          hunks
+        })
       });
     } finally {
       clearTimeout(timeoutHandle);
@@ -277,22 +258,10 @@ export class FocusedDiffService {
 }
 
 function normalizeFocusedDiffResult(
-  response: unknown,
+  response: XaiAiSdkObjectResult,
   hunkCount: number
 ): { decisions: FocusedDiffHunkDecision[]; hiddenHunkIndices: number[] } {
-  const rawText = normalizeXaiResponse(response).assistantText;
-  if (!rawText) {
-    throw new Error("grok returned no structured diff decisions");
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawText);
-  } catch (error) {
-    throw new Error(
-      `invalid structured diff response: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
+  const parsed = response.object;
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("invalid structured diff response: decisions payload must be an object");
@@ -454,27 +423,4 @@ function clampConfidence(value: unknown): number {
   }
 
   return Math.min(1, Math.max(0, value));
-}
-
-function readCachedTokenCount(response: unknown): number | undefined {
-  if (!response || typeof response !== "object" || Array.isArray(response)) {
-    return undefined;
-  }
-
-  const usage = (response as { usage?: unknown }).usage;
-  if (!usage || typeof usage !== "object" || Array.isArray(usage)) {
-    return undefined;
-  }
-
-  const inputTokensDetails = (usage as { input_tokens_details?: unknown }).input_tokens_details;
-  if (
-    !inputTokensDetails ||
-    typeof inputTokensDetails !== "object" ||
-    Array.isArray(inputTokensDetails)
-  ) {
-    return undefined;
-  }
-
-  const cachedTokens = (inputTokensDetails as { cached_tokens?: unknown }).cached_tokens;
-  return typeof cachedTokens === "number" ? cachedTokens : undefined;
 }

@@ -1,4 +1,8 @@
+import { getMainLogger } from "../log";
+
 export type JsonRpcId = string | number;
+
+const jsonRpcLog = getMainLogger("pwragnt:json-rpc");
 
 type JsonRpcEnvelope = {
   jsonrpc?: string;
@@ -221,11 +225,11 @@ export class JsonRpcConnection {
     try {
       await this.observer.onMessage(event);
     } catch (error) {
-      console.error(
-        `[pwragnt:json-rpc] observer failed for ${event.direction} ${
-          event.envelope.method ?? event.envelope.id ?? "message"
-        }: ${error instanceof Error ? error.message : String(error)}`
-      );
+      jsonRpcLog.error("observer failed", {
+        direction: event.direction,
+        message: event.envelope.method ?? event.envelope.id ?? "message",
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

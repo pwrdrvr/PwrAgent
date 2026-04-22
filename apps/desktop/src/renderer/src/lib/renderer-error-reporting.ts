@@ -48,12 +48,7 @@ export function createRendererErrorReport(
 }
 
 export function reportRendererError(report: RendererErrorReport): void {
-  console.error("[pwragnt:renderer:error]", report);
-  void getDesktopApi()
-    ?.reportRendererError?.(report)
-    .catch((error: unknown) => {
-      console.error("[pwragnt:renderer:error] failed to report", error);
-    });
+  void getDesktopApi()?.reportRendererError?.(report).catch(() => undefined);
 }
 
 export function installGlobalRendererErrorHandlers(): () => void {
@@ -81,4 +76,3 @@ export function installGlobalRendererErrorHandlers(): () => void {
     window.removeEventListener("unhandledrejection", handleUnhandledRejection);
   };
 }
-

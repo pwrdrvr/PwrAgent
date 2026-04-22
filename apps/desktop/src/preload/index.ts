@@ -37,6 +37,11 @@ import type {
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragnt/shared";
 import type { RendererErrorReport } from "../shared/renderer-error";
+import type {
+  ImageUploadFallbackRequest,
+  ImageUploadFallbackResponse,
+  ImageUploadNormalizationLogRequest,
+} from "../shared/image-normalization";
 import {
   AGENT_EVENT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
@@ -52,15 +57,30 @@ import {
   BACKEND_LIST_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
+  IMAGE_UPLOAD_FALLBACK_CHANNEL,
+  IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  PRELOAD_LOG_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
 } from "../shared/ipc";
 
-console.info("[pwragnt:preload] start", {
+function recordPreloadLog(
+  level: "info" | "warn",
+  message: string,
+  details?: unknown,
+): void {
+  ipcRenderer.send(PRELOAD_LOG_CHANNEL, {
+    details,
+    level,
+    message,
+  });
+}
+
+recordPreloadLog("info", "start", {
   contextIsolated: process.contextIsolated,
   platform: process.platform,
   electron: process.versions.electron
@@ -142,6 +162,15 @@ const desktopApi = Object.freeze({
   reportRendererError: async (report: RendererErrorReport): Promise<void> => {
     await ipcRenderer.invoke(RENDERER_ERROR_REPORT_CHANNEL, report);
   },
+  normalizeImageForUpload: async (
+    request: ImageUploadFallbackRequest,
+  ): Promise<ImageUploadFallbackResponse> =>
+    await ipcRenderer.invoke(IMAGE_UPLOAD_FALLBACK_CHANNEL, request),
+  recordImageUploadNormalization: async (
+    request: ImageUploadNormalizationLogRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL, request);
+  },
   onWindowFocus: (callback: () => void): (() => void) => {
     const listener = () => callback();
     ipcRenderer.on(WINDOW_FOCUS_SYNC_CHANNEL, listener);
@@ -167,9 +196,9 @@ const desktopApi = Object.freeze({
 
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld("pwragnt", desktopApi);
-  console.info("[pwragnt:preload] exposed context bridge", {
+  recordPreloadLog("info", "exposed context bridge", {
     keys: Object.keys(desktopApi)
   });
 } else {
-  console.warn("[pwragnt:preload] context isolation disabled; bridge not exposed");
+  recordPreloadLog("warn", "context isolation disabled; bridge not exposed");
 }
