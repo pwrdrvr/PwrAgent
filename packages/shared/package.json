@@ -4,9 +4,12 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./codex-app-server-protocol": "./src/generated/codex-app-server-protocol/index.ts",
+    "./codex-app-server-protocol/v2": "./src/generated/codex-app-server-protocol/v2/index.ts"
   },
   "scripts": {
+    "codex:generate-app-server-protocol": "codex app-server generate-ts --out ./src/generated/codex-app-server-protocol",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   }
 }

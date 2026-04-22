@@ -4,7 +4,7 @@ import type {
   ThreadExecutionMode,
   AppServerTurnInputItem,
   ThreadIdentifier,
-} from "./app-server";
+} from "./normalized-app-server";
 import type {
   DirectorySummaryKind,
   LaunchpadWorkMode,

@@ -6,7 +6,7 @@ import type {
   ThreadState,
   ThreadSummary,
   ThreadTitleSource,
-} from "./protocol.js";
+} from "./internal-contract.js";
 import type {
   AppServerSessionStore,
   HydratedSessionState,

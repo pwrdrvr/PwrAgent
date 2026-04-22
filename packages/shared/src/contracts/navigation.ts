@@ -5,7 +5,7 @@ import type {
   LinkedDirectorySummary,
   ThreadExecutionMode,
   ThreadIdentifier,
-} from "./app-server";
+} from "./normalized-app-server";
 
 export type InboxReason = "new-thread" | "updated-since-seen";
 

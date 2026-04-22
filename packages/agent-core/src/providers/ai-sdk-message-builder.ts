@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { ImagePart, ModelMessage, TextPart, UserModelMessage } from "ai";
-import type { AppServerTurnInputItem } from "../app-server/protocol.js";
+import type { AppServerTurnInputItem } from "../app-server/internal-contract.js";
 
 export type AiSdkMessageHistoryEntry = {
   role: "user" | "assistant";

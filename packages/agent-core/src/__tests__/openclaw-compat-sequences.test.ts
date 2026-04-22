@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AppServerProtocolError } from "../app-server/protocol.js";
+import { AppServerProtocolError } from "../app-server/internal-contract.js";
 import { createTestHarness, FakeProvider } from "../testing/test-harness.js";
 
 type RequestTransport = {

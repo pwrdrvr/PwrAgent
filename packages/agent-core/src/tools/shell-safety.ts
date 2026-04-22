@@ -1,4 +1,4 @@
-import type { AppServerCommandAction } from "../app-server/protocol.js";
+import type { AppServerCommandAction } from "../app-server/internal-contract.js";
 
 export type ShellSafetyClassification = {
   safe: boolean;

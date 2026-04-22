@@ -1,4 +1,4 @@
-import type { AppServerNotification, ThreadReplayItem } from "./protocol.js";
+import type { AppServerNotification, ThreadReplayItem } from "./internal-contract.js";
 import { AppServerSessionState } from "./session-state.js";
 import { PendingInputCoordinator } from "./pending-input.js";
 import type {

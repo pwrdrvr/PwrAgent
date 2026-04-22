@@ -8,7 +8,7 @@ import {
   type AppServerTurnResult,
   type ThreadReplay,
   type ThreadState,
-} from "./protocol.js";
+} from "./internal-contract.js";
 import { AppServerSessionState } from "./session-state.js";
 import { AppServerMetadataService } from "./metadata-service.js";
 import { TurnRunner } from "./turn-runner.js";

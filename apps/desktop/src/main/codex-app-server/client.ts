@@ -34,7 +34,7 @@ import type {
   ServerNotification as CodexServerNotification,
   ServerRequest as CodexServerRequest,
   ServiceTier as CodexServiceTier,
-} from "./generated/protocol";
+} from "@pwragnt/shared/codex-app-server-protocol";
 import type {
   AskForApproval as CodexAskForApproval,
   ModelListParams as CodexModelListParams,
@@ -47,7 +47,7 @@ import type {
   TurnInterruptParams as CodexTurnInterruptParams,
   TurnStartParams as CodexTurnStartParams,
   UserInput as CodexUserInput,
-} from "./generated/protocol/v2";
+} from "@pwragnt/shared/codex-app-server-protocol/v2";
 import {
   JsonRpcConnection,
   type JsonRpcId,

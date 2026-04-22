@@ -5,6 +5,7 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "pnpm --filter @pwragnt/desktop build",
+    "codex:generate-app-server-protocol": "pnpm --filter @pwragnt/shared codex:generate-app-server-protocol",
     "dev": "pnpm --filter @pwragnt/desktop dev",
     "lint": "pnpm typecheck",
     "test:desktop-e2e": "pnpm --filter @pwragnt/desktop build && pnpm --filter @pwragnt/desktop test:e2e",

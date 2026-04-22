@@ -1,11 +1,11 @@
-# Codex App Server Protocol Guidance
+# Codex App Server Adapter Guidance
 
-The Codex App Server wire protocol types in `generated/protocol/` are generated from the installed Codex binary. Do not edit generated files by hand.
+The Codex App Server wire protocol types are generated in `@pwragnt/shared/codex-app-server-protocol`. Do not add desktop-local protocol mirrors here.
 
-Regenerate the stable TypeScript bindings with:
+Regenerate the stable TypeScript bindings from the repo root with:
 
 ```bash
-codex app-server generate-ts --out apps/desktop/src/main/codex-app-server/generated/protocol
+pnpm codex:generate-app-server-protocol
 ```
 
 Use the stable surface by default. Only pass `--experimental` when the desktop client intentionally opts into experimental App Server APIs during `initialize`.

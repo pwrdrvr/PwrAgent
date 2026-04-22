@@ -1,4 +1,4 @@
-import type { AppServerCommandAction } from "../app-server/protocol.js";
+import type { AppServerCommandAction } from "../app-server/internal-contract.js";
 import type { ProcessOutputDelta } from "./process-runner.js";
 import { InvalidToolArgumentsError } from "./tool-errors.js";
 

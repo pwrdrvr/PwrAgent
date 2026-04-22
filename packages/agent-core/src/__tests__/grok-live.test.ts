@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CodexAppServer } from "../app-server/codex-app-server.js";
 import { resolveGrokAppServerRuntimeConfig } from "../config/grok-app-server-config.js";
-import type { AppServerNotification } from "../app-server/protocol.js";
+import type { AppServerNotification } from "../app-server/internal-contract.js";
 import { GrokProvider } from "../providers/grok-provider.js";
 import { createTemporaryTestDirectory } from "../testing/test-harness.js";
 

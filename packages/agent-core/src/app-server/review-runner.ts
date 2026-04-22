@@ -1,4 +1,4 @@
-import type { AppServerNotification, ThreadState } from "./protocol.js";
+import type { AppServerNotification, ThreadState } from "./internal-contract.js";
 import { AppServerSessionState } from "./session-state.js";
 import { TurnRunner } from "./turn-runner.js";
 import type { AppServerProvider } from "../providers/provider-contract.js";

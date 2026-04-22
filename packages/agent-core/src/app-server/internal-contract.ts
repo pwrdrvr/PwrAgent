@@ -1,26 +1,24 @@
+import type {
+  AppServerCommandAction,
+  AppServerImageInputItem,
+  AppServerLocalImageInputItem,
+  AppServerSource,
+  AppServerTextInputItem,
+  AppServerTurnInputItem,
+} from "@pwragnt/shared";
+
+export type {
+  AppServerCommandAction,
+  AppServerImageInputItem,
+  AppServerLocalImageInputItem,
+  AppServerSource,
+  AppServerTextInputItem,
+  AppServerTurnInputItem,
+};
+
 export const APP_SERVER_PROTOCOL_VERSION = "1.0" as const;
 
 export type AppServerRole = "user" | "assistant";
-
-export type AppServerTextInputItem = {
-  type: "text";
-  text: string;
-};
-
-export type AppServerImageInputItem = {
-  type: "image";
-  url: string;
-};
-
-export type AppServerLocalImageInputItem = {
-  type: "localImage";
-  path: string;
-};
-
-export type AppServerTurnInputItem =
-  | AppServerTextInputItem
-  | AppServerImageInputItem
-  | AppServerLocalImageInputItem;
 
 export type AppServerTurnInput = {
   threadId: string;
@@ -83,12 +81,6 @@ export type AppServerItemStatus =
   | "failed"
   | "cancelled";
 
-export type AppServerCommandAction =
-  | "read"
-  | "listFiles"
-  | "search"
-  | "unknown";
-
 export type ThreadReplayItem = {
   id: string;
   type: string;
@@ -104,14 +96,6 @@ export type ThreadReplayItem = {
   arguments?: Record<string, unknown>;
   data?: Record<string, unknown>;
   sources?: AppServerSource[];
-};
-
-export type AppServerSource = {
-  id?: string;
-  sourceType?: string;
-  url?: string;
-  title?: string;
-  providerMetadata?: Record<string, unknown>;
 };
 
 export type ModelSummary = {
