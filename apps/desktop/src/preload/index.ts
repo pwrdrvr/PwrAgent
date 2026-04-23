@@ -1,6 +1,8 @@
 import { clipboard, contextBridge, ipcRenderer } from "electron";
 import type {
   AgentEvent,
+  ArchiveWorktreeRequest,
+  ArchiveWorktreeResponse,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
   EnsureDirectoryLaunchpadRequest,
@@ -31,6 +33,8 @@ import type {
   ResetDirectoryLaunchpadResponse,
   RenameThreadRequest,
   RenameThreadResponse,
+  RestoreWorktreeRequest,
+  RestoreWorktreeResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
   StartThreadRequest,
@@ -60,7 +64,9 @@ import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
+  APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_RESTORE_THREAD_CHANNEL,
+  APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   BACKEND_LIST_CHANNEL,
@@ -124,6 +130,14 @@ const desktopApi = Object.freeze({
     request: RestoreThreadRequest,
   ): Promise<RestoreThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_RESTORE_THREAD_CHANNEL, request),
+  archiveWorktree: async (
+    request: ArchiveWorktreeRequest,
+  ): Promise<ArchiveWorktreeResponse> =>
+    await ipcRenderer.invoke(APP_SERVER_ARCHIVE_WORKTREE_CHANNEL, request),
+  restoreWorktree: async (
+    request: RestoreWorktreeRequest,
+  ): Promise<RestoreWorktreeResponse> =>
+    await ipcRenderer.invoke(APP_SERVER_RESTORE_WORKTREE_CHANNEL, request),
   renameThread: async (
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> =>

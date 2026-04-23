@@ -2,6 +2,8 @@ import { ipcMain } from "electron";
 import { OverlayStore } from "@pwragnt/agent-core";
 import type {
   AppServerBackendScope,
+  ArchiveWorktreeRequest,
+  ArchiveWorktreeResponse,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
   AppServerListSkillsRequest,
@@ -22,6 +24,8 @@ import type {
   ResetDirectoryLaunchpadResponse,
   RenameThreadRequest,
   RenameThreadResponse,
+  RestoreWorktreeRequest,
+  RestoreWorktreeResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
   UpdateDirectoryLaunchpadRequest,
@@ -36,7 +40,9 @@ import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
+  APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_RESTORE_THREAD_CHANNEL,
+  APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
@@ -188,6 +194,36 @@ class DesktopAppServerService {
     logDebug("restoreThread", {
       backend,
       threadId: request.threadId,
+    });
+
+    return response;
+  }
+
+  async archiveWorktree(
+    request: ArchiveWorktreeRequest,
+  ): Promise<ArchiveWorktreeResponse> {
+    const response = await getDesktopBackendRegistry().archiveWorktree(request);
+
+    logDebug("archiveWorktree", {
+      backend: request.backend,
+      threadId: request.threadId,
+      worktreePath: request.worktreePath,
+      snapshotRef: response.snapshot.snapshotRef,
+    });
+
+    return response;
+  }
+
+  async restoreWorktree(
+    request: RestoreWorktreeRequest,
+  ): Promise<RestoreWorktreeResponse> {
+    const response = await getDesktopBackendRegistry().restoreWorktree(request);
+
+    logDebug("restoreWorktree", {
+      backend: request.backend,
+      threadId: request.threadId,
+      worktreePath: request.worktreePath,
+      snapshotRef: response.snapshot.snapshotRef,
     });
 
     return response;
@@ -375,6 +411,26 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.restoreThread(request);
     },
   );
+  ipcMain.removeHandler(APP_SERVER_ARCHIVE_WORKTREE_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
+    async (
+      _event,
+      request: ArchiveWorktreeRequest,
+    ): Promise<ArchiveWorktreeResponse> => {
+      return await appServerService.archiveWorktree(request);
+    },
+  );
+  ipcMain.removeHandler(APP_SERVER_RESTORE_WORKTREE_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_RESTORE_WORKTREE_CHANNEL,
+    async (
+      _event,
+      request: RestoreWorktreeRequest,
+    ): Promise<RestoreWorktreeResponse> => {
+      return await appServerService.restoreWorktree(request);
+    },
+  );
   ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
   ipcMain.handle(
     APP_SERVER_RENAME_THREAD_CHANNEL,
@@ -453,6 +509,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_THREAD_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTORE_THREAD_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_ARCHIVE_WORKTREE_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_RESTORE_WORKTREE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);

@@ -52,6 +52,7 @@ export function materializeNavigationThreads(params: {
       serviceTier: overlay?.serviceTier ?? thread.serviceTier,
       fastMode: overlay?.fastMode ?? thread.fastMode,
       linkedDirectories,
+      worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
       inbox: deriveInboxState({
         firstSnapshot: params.firstSnapshot,
         isNewThread: !previousKnownThreadKeys.has(threadKey),
@@ -129,6 +130,17 @@ export function buildNavigationSnapshotHash(params: {
         id: directory.id,
         kind: directory.kind,
         path: directory.path,
+      })),
+      worktreeSnapshots: (thread.worktreeSnapshots ?? []).map((snapshot) => ({
+        id: snapshot.id,
+        worktreePath: snapshot.worktreePath,
+        repositoryPath: snapshot.repositoryPath,
+        snapshotRef: snapshot.snapshotRef,
+        snapshotCommit: snapshot.snapshotCommit,
+        state: snapshot.state,
+        archivedAt: snapshot.archivedAt ?? null,
+        restoredAt: snapshot.restoredAt ?? null,
+        unavailableReason: snapshot.unavailableReason ?? null,
       })),
       inbox: {
         inInbox: thread.inbox.inInbox,

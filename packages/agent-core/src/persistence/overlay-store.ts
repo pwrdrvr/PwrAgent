@@ -12,6 +12,7 @@ import type {
   NavigationSnapshot,
   ThreadExecutionMode,
   ThreadOverlayState,
+  WorktreeSnapshotSummary,
 } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
 import {
@@ -56,6 +57,7 @@ export class OverlayStore {
             lastSeenUpdatedAt: thread.updatedAt,
             extraLinkedDirectories:
               data.threads[threadKey]?.extraLinkedDirectories ?? [],
+            worktreeSnapshots: data.threads[threadKey]?.worktreeSnapshots ?? [],
           };
         }
       }
@@ -126,6 +128,7 @@ export class OverlayStore {
         lastSeenAt: seenAt,
         lastSeenUpdatedAt: params.seenUpdatedAt ?? current?.lastSeenUpdatedAt,
         extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
+        worktreeSnapshots: current?.worktreeSnapshots ?? [],
       };
 
       return {
@@ -199,6 +202,34 @@ export class OverlayStore {
         }),
       ),
     );
+  }
+
+  async upsertWorktreeSnapshot(params: {
+    backend: ThreadOverlayState["backend"];
+    snapshot: WorktreeSnapshotSummary;
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const nextSnapshots = [
+        ...(current.worktreeSnapshots ?? []).filter(
+          (snapshot) => snapshot.id !== params.snapshot.id,
+        ),
+        params.snapshot,
+      ].sort((left, right) => left.worktreePath.localeCompare(right.worktreePath));
+      const nextState: ThreadOverlayState = {
+        ...current,
+        worktreeSnapshots: nextSnapshots,
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
   }
 
   async setThreadExecutionMode(params: {

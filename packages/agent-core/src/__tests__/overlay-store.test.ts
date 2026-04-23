@@ -99,6 +99,43 @@ describe("OverlayStore", () => {
     ]);
   });
 
+  it("stores worktree snapshot metadata by backend-qualified thread", async () => {
+    const store = await createStore();
+
+    await store.upsertWorktreeSnapshot({
+      backend: "codex",
+      threadId: "thread-1",
+      snapshot: {
+        id: "snapshot-1",
+        backend: "codex",
+        threadId: "thread-1",
+        worktreePath: "/Users/huntharo/.codex/worktrees/d593/PwrAgnt",
+        repositoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        snapshotRef: "refs/codex/snapshots/snapshot-1",
+        snapshotCommit: "abc123",
+        createdAt: 1000,
+        archivedAt: 1000,
+        state: "archived",
+        ignoredFilesExcluded: true,
+      },
+    });
+
+    const reloaded = new OverlayStore(path.join(tempDirs[0]!, "overlay-state.json"));
+
+    await expect(
+      reloaded.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      worktreeSnapshots: [
+        expect.objectContaining({
+          snapshotRef: "refs/codex/snapshots/snapshot-1",
+          state: "archived",
+        }),
+      ],
+    });
+  });
+
   it("keeps backend-qualified overlay state separate for duplicate thread ids", async () => {
     const store = await createStore();
 

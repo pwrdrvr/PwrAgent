@@ -8,7 +8,7 @@ import type {
 } from "@pwragnt/shared";
 import { buildThreadIdentityKey } from "@pwragnt/shared";
 
-export const CURRENT_OVERLAY_STORE_VERSION = 4;
+export const CURRENT_OVERLAY_STORE_VERSION = 5;
 
 export type OverlayStoreData = {
   version: number;
@@ -280,6 +280,9 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
                 : undefined,
             extraLinkedDirectories: Array.isArray(threadRecord.extraLinkedDirectories)
               ? (threadRecord.extraLinkedDirectories as ThreadOverlayState["extraLinkedDirectories"])
+              : [],
+            worktreeSnapshots: Array.isArray(threadRecord.worktreeSnapshots)
+              ? (threadRecord.worktreeSnapshots as ThreadOverlayState["worktreeSnapshots"])
               : [],
           } satisfies ThreadOverlayState,
         ];
