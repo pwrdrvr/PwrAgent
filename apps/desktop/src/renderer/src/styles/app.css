@@ -2458,17 +2458,23 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  max-height: clamp(180px, 34vh, 320px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 8px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: rgba(10, 10, 10, 0.98);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.34);
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
 }
 
-.composer__skill-option {
+.composer__autocomplete-option {
   display: flex;
   width: 100%;
   min-width: 0;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 4px;
   padding: 10px 12px;
@@ -2476,15 +2482,16 @@ textarea {
   border-radius: 8px;
   background: transparent;
   color: var(--text-primary);
+  cursor: pointer;
   text-align: left;
 }
 
-.composer__skill-option:hover,
-.composer__skill-option.is-active {
+.composer__autocomplete-option:hover,
+.composer__autocomplete-option.is-active {
   background: var(--bg-row-active);
 }
 
-.composer__skill-option-title {
+.composer__autocomplete-title {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -2492,7 +2499,25 @@ textarea {
   font-weight: 600;
 }
 
-.composer__skill-option-meta {
+.composer__autocomplete-match {
+  color: var(--accent-bright);
+}
+
+.composer__autocomplete-token {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--accent-border);
+  border-radius: 5px;
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.composer__autocomplete-meta {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;

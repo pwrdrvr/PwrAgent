@@ -12,6 +12,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     (findingCount === undefined
       ? "Code review"
       : `${findingCount} review ${findingCount === 1 ? "finding" : "findings"}`);
+  const body = props.entry.review.trim() === summary.trim() ? "" : props.entry.review;
 
   return (
     <aside className="transcript-review" role="group" aria-label="Code review">
@@ -35,7 +36,9 @@ export function TranscriptReview(props: TranscriptReviewProps) {
           </time>
         ) : null}
       </header>
-      <ThreadMarkdown className="transcript-plan__markdown" text={props.entry.review} />
+      {body ? (
+        <ThreadMarkdown className="transcript-plan__markdown" text={body} />
+      ) : null}
     </aside>
   );
 }

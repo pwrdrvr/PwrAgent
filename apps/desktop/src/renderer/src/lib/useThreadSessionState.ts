@@ -43,7 +43,7 @@ type ThreadSessionEntry = {
   loading: boolean;
   loadingMore: boolean;
   needsHydrationAfterCompletion: boolean;
-  optimisticEntries: AppServerThreadMessageEntry[];
+  optimisticEntries: AppServerThreadEntry[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
@@ -103,19 +103,31 @@ function getThreadHydrationVersion(
 }
 
 function pruneOptimisticEntries(
-  optimisticEntries: AppServerThreadMessageEntry[],
+  optimisticEntries: AppServerThreadEntry[],
   response: AppServerReadThreadResponse | undefined
-): AppServerThreadMessageEntry[] {
+): AppServerThreadEntry[] {
   if (!response) {
     return optimisticEntries;
   }
 
-  return optimisticEntries.filter(
-    (entry) =>
-      !response.replay.messages.some(
-        (message) => messageMatchesOptimisticEntry(message, entry)
-      )
-  );
+  return optimisticEntries.filter((entry) => {
+    if (entry.type === "message") {
+      return !response.replay.messages.some((message) =>
+        messageMatchesOptimisticEntry(message, entry)
+      );
+    }
+
+    if (entry.type === "review") {
+      return !response.replay.entries.some(
+        (candidate) =>
+          candidate.type === "review" &&
+          (candidate.review === entry.review ||
+            candidate.displayText === entry.displayText)
+      );
+    }
+
+    return !response.replay.entries.some((candidate) => candidate.id === entry.id);
+  });
 }
 
 function hasHydratedTranscriptContent(session: ThreadSessionEntry): boolean {
@@ -416,6 +428,7 @@ export function useThreadSessionState(params: {
     text: string,
     imageParts?: AppServerThreadImagePart[]
   ) => string;
+  addOptimisticReviewEntry: (displayText: string) => string;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   entries: AppServerThreadEntry[];
   error?: string;
@@ -838,11 +851,13 @@ export function useThreadSessionState(params: {
                 current.pendingAssistantMessage.phase === undefined
             );
           const nextEntries = [
-            ...current.optimisticEntries.map((entry) =>
-              entry.turn?.id === completedTurn?.id
-                ? withTurnMetadata(entry, completedTurn)
-                : entry
-            ),
+            ...current.optimisticEntries
+              .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
+              .map((entry) =>
+                entry.turn?.id === completedTurn?.id
+                  ? { ...entry, turn: completedTurn }
+                  : entry
+              ),
             ...(current.pendingAssistantMessage
               ? [
                   withTurnMetadataAndPhase(
@@ -1114,6 +1129,34 @@ export function useThreadSessionState(params: {
     [threadKey, updateSession]
   );
 
+  const addOptimisticReviewEntry = useCallback(
+    (displayText: string): string => {
+      if (!thread || !threadKey) {
+        return `optimistic-review-${Date.now()}`;
+      }
+
+      const id = `optimistic-review-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      updateSession(threadKey, (current) => ({
+        ...current,
+        expectOwnUpdate: true,
+        interacted: true,
+        lastTouchedAt: Date.now(),
+        optimisticEntries: [
+          ...current.optimisticEntries,
+          {
+            type: "review",
+            id,
+            review: displayText,
+            displayText,
+            createdAt: Date.now(),
+          },
+        ],
+      }));
+      return id;
+    },
+    [thread, threadKey, updateSession]
+  );
+
   const setPendingStatusText = useCallback(
     (status?: string): void => {
       if (!threadKey) {
@@ -1246,7 +1289,9 @@ export function useThreadSessionState(params: {
     () =>
       mergeItems(
         selectedSession?.response?.replay.messages ?? [],
-        visibleOptimisticEntries.map(({ type: _type, ...message }) => message)
+        visibleOptimisticEntries
+          .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
+          .map(({ type: _type, ...message }) => message)
       ),
     [selectedSession?.response?.replay.messages, visibleOptimisticEntries]
   );
@@ -1268,6 +1313,7 @@ export function useThreadSessionState(params: {
     activeTurnId: selectedSession?.activeTurnId,
     activeTurnStartedAt: selectedSession?.activeTurnStartedAt,
     addOptimisticUserMessage,
+    addOptimisticReviewEntry,
     clearPendingRequest,
     entries,
     error: selectedSession?.error,

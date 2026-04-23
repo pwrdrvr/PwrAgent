@@ -27,6 +27,7 @@ import { SkillChip } from "./SkillChip";
 
 type ComposerProps = {
   activeTurnId?: string;
+  addOptimisticReviewEntry?: (displayText: string) => string;
   addOptimisticUserMessage?: (
     text: string,
     imageParts?: AppServerThreadImagePart[]
@@ -98,7 +99,25 @@ type ModelOption = NonNullable<
   NonNullable<BackendSummary["launchpadOptions"]>["models"]
 >[number];
 
+type SlashCommandSuggestion = {
+  description: string;
+  id: string;
+  insertText: string;
+  label: string;
+};
+
+type AutocompleteKind = "skills" | "slash";
+
 const DEFAULT_REASONING_EFFORT = "medium";
+
+const SLASH_COMMANDS: SlashCommandSuggestion[] = [
+  {
+    id: "review-current",
+    label: "/review",
+    insertText: "/review",
+    description: "Review current staged, unstaged, and untracked changes",
+  },
+];
 
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
@@ -126,9 +145,49 @@ function getReasoningEffortValue(
     : getDefaultReasoningEffort(backend);
 }
 
+function findSlashCommandTrigger(text: string, caret: number): {
+  end: number;
+  query: string;
+  start: number;
+} | undefined {
+  const prefix = text.slice(0, caret);
+  if (/\s$/.test(prefix)) {
+    return undefined;
+  }
+  const match = /^\/([^\r\n]*)$/.exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+
+  return {
+    start: 0,
+    end: caret,
+    query: match[1] ?? "",
+  };
+}
+
+function HighlightedAutocompleteLabel(props: {
+  label: string;
+  query: string;
+}) {
+  if (!props.query || !props.label.toLowerCase().startsWith(props.query.toLowerCase())) {
+    return <span>{props.label}</span>;
+  }
+
+  return (
+    <span>
+      <span className="composer__autocomplete-match">
+        {props.label.slice(0, props.query.length)}
+      </span>
+      {props.label.slice(props.query.length)}
+    </span>
+  );
+}
+
 export function Composer(props: ComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(undefined);
+  const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
@@ -137,6 +196,7 @@ export function Composer(props: ComposerProps) {
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>([]);
   const [planModeEnabled, setPlanModeEnabled] = useState(false);
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
+  const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
   const isLaunchpad = Boolean(props.launchpad && props.directory);
   const launchpad = props.launchpad;
@@ -154,6 +214,7 @@ export function Composer(props: ComposerProps) {
     setActiveTurnId(nextTurnId);
   };
   const trigger = findSkillTrigger(draft, selectionStart);
+  const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
   const filteredSkills = useMemo(() => {
     if (!trigger) {
       return [];
@@ -176,7 +237,34 @@ export function Composer(props: ComposerProps) {
       );
     });
   }, [props.skills, trigger]);
-  const hasAutocomplete = Boolean(trigger && filteredSkills.length > 0);
+  const filteredSlashCommands = useMemo(() => {
+    if (!slashTrigger) {
+      return [];
+    }
+
+    const typed = draft.slice(slashTrigger.start, slashTrigger.end).trim().toLowerCase();
+    return SLASH_COMMANDS.filter(
+      (command) =>
+        command.label.toLowerCase().startsWith(typed) ||
+        command.description.toLowerCase().includes(typed.slice(1))
+    );
+  }, [draft, slashTrigger]);
+  const displayedAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
+    ? "skills"
+    : slashTrigger && filteredSlashCommands.length > 0
+      ? "slash"
+      : undefined;
+  const autocompleteKind: AutocompleteKind | undefined =
+    displayedAutocompleteKind === "slash" &&
+    parseReviewCommand(draft) &&
+    draft.trim() === "/review"
+      ? undefined
+      : displayedAutocompleteKind;
+  const hasAutocomplete = Boolean(autocompleteKind);
+  const activeAutocompleteIndex =
+    displayedAutocompleteKind === "skills" ? activeSkillIndex : activeSlashIndex;
+  const autocompleteLength =
+    displayedAutocompleteKind === "skills" ? filteredSkills.length : filteredSlashCommands.length;
   const mentionedSkills = useMemo(
     () => listMentionedSkills(draft, props.skills),
     [draft, props.skills]
@@ -185,6 +273,20 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     setActiveSkillIndex(0);
   }, [trigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
+
+  useEffect(() => {
+    setActiveSlashIndex(0);
+  }, [slashTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
+
+  useEffect(() => {
+    if (!displayedAutocompleteKind) {
+      return;
+    }
+
+    autocompleteOptionRefs.current[activeAutocompleteIndex]?.scrollIntoView?.({
+      block: "nearest",
+    });
+  }, [activeAutocompleteIndex, displayedAutocompleteKind]);
 
   useEffect(() => {
     if (!trigger) {
@@ -373,6 +475,10 @@ export function Composer(props: ComposerProps) {
         return;
       }
 
+      const optimisticReviewId = props.addOptimisticReviewEntry?.(
+        reviewCommand.displayText
+      );
+      setActiveOptimisticMessageId(optimisticReviewId);
       try {
         const response = await props.desktopApi.startReview({
           backend: props.thread.source,
@@ -384,6 +490,9 @@ export function Composer(props: ComposerProps) {
         props.onActiveTurnIdChange?.(response.turnId);
         setDraft("");
       } catch (error) {
+        if (optimisticReviewId) {
+          props.removeOptimisticMessage?.(optimisticReviewId);
+        }
         props.onPendingStatusChange?.(undefined);
         setSending(false);
         setInterrupting(false);
@@ -537,6 +646,32 @@ export function Composer(props: ComposerProps) {
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(inserted.nextSelection, inserted.nextSelection);
+    });
+  };
+
+  const applySlashCommand = (command: SlashCommandSuggestion): void => {
+    if (!inputRef.current) {
+      return;
+    }
+
+    const selectionStart = inputRef.current.selectionStart ?? draft.length;
+    const selectionEnd = inputRef.current.selectionEnd ?? selectionStart;
+    const trigger = findSlashCommandTrigger(draft, selectionStart);
+    if (!trigger) {
+      return;
+    }
+
+    const before = draft.slice(0, trigger.start);
+    const after = draft.slice(Math.max(trigger.end, selectionEnd));
+    const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
+    const nextDraft = `${before}${command.insertText}${needsTrailingSpace ? " " : ""}${after}`;
+    const nextSelection = before.length + command.insertText.length + (needsTrailingSpace ? 1 : 0);
+
+    setDraft(nextDraft);
+    setActiveSlashIndex(0);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -731,6 +866,7 @@ export function Composer(props: ComposerProps) {
           onPaste={handlePaste}
           onClick={() => {
             setActiveSkillIndex(0);
+            setActiveSlashIndex(0);
           }}
           onKeyDown={(event) => {
             if (!hasAutocomplete) {
@@ -743,38 +879,58 @@ export function Composer(props: ComposerProps) {
 
             if (event.key === "ArrowDown") {
               event.preventDefault();
-              setActiveSkillIndex((current) =>
-                Math.min(current + 1, filteredSkills.length - 1)
-              );
+              if (autocompleteKind === "skills") {
+                setActiveSkillIndex((current) =>
+                  Math.min(current + 1, autocompleteLength - 1)
+                );
+              } else {
+                setActiveSlashIndex((current) =>
+                  Math.min(current + 1, autocompleteLength - 1)
+                );
+              }
               return;
             }
 
             if (event.key === "ArrowUp") {
               event.preventDefault();
-              setActiveSkillIndex((current) => Math.max(current - 1, 0));
+              if (autocompleteKind === "skills") {
+                setActiveSkillIndex((current) => Math.max(current - 1, 0));
+              } else {
+                setActiveSlashIndex((current) => Math.max(current - 1, 0));
+              }
               return;
             }
 
             if (event.key === "Escape") {
               event.preventDefault();
               setActiveSkillIndex(0);
+              setActiveSlashIndex(0);
               return;
             }
 
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
+              if (autocompleteKind === "skills") {
+                applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
+              } else {
+                applySlashCommand(
+                  filteredSlashCommands[activeSlashIndex] ?? filteredSlashCommands[0]!
+                );
+              }
             }
           }}
         />
 
-        {hasAutocomplete ? (
+        {displayedAutocompleteKind === "skills" ? (
           <div className="composer__autocomplete" role="listbox" aria-label="Skills">
             {filteredSkills.map((skill, index) => (
               <button
                 key={skill.path ?? skill.name}
+                ref={(node) => {
+                  autocompleteOptionRefs.current[index] = node;
+                }}
                 aria-selected={index === activeSkillIndex}
-                className={`composer__skill-option${index === activeSkillIndex ? " is-active" : ""}`}
+                className={`composer__autocomplete-option${index === activeSkillIndex ? " is-active" : ""}`}
                 type="button"
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -784,12 +940,49 @@ export function Composer(props: ComposerProps) {
                   applySkill(skill);
                 }}
               >
-                <span className="composer__skill-option-title">
+                <span className="composer__autocomplete-title">
                   <span aria-hidden="true">🧰</span>
-                  <span>{`$${skill.name}`}</span>
+                  <HighlightedAutocompleteLabel
+                    label={`$${skill.name}`}
+                    query={trigger?.query ? `$${trigger.query}` : "$"}
+                  />
                 </span>
-                <span className="composer__skill-option-meta">
+                <span className="composer__autocomplete-meta">
                   {skill.shortDescription || skill.description || skill.path}
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : displayedAutocompleteKind === "slash" ? (
+          <div className="composer__autocomplete" role="listbox" aria-label="Commands">
+            {filteredSlashCommands.map((command, index) => (
+              <button
+                key={command.id}
+                ref={(node) => {
+                  autocompleteOptionRefs.current[index] = node;
+                }}
+                aria-selected={index === activeSlashIndex}
+                className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  applySlashCommand(command);
+                }}
+                onClick={() => {
+                  applySlashCommand(command);
+                }}
+              >
+                <span className="composer__autocomplete-title">
+                  <span className="composer__autocomplete-token" aria-hidden="true">/</span>
+                  <HighlightedAutocompleteLabel
+                    label={command.label}
+                    query={slashTrigger
+                      ? draft.slice(slashTrigger.start, slashTrigger.end).trim()
+                      : "/"}
+                  />
+                </span>
+                <span className="composer__autocomplete-meta">
+                  {command.description}
                 </span>
               </button>
             ))}

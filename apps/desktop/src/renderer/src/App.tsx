@@ -49,6 +49,7 @@ export function App() {
         <ThreadView
           activeTurnId={session.activeTurnId}
           activeTurnStartedAt={session.activeTurnStartedAt}
+          addOptimisticReviewEntry={session.addOptimisticReviewEntry}
           addOptimisticUserMessage={session.addOptimisticUserMessage}
           backendError={backendSummaries.error}
           backends={backendSummaries.backends}

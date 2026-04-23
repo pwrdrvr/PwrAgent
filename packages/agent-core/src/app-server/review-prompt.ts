@@ -1,8 +1,5 @@
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";
-
-const REVIEW_PROMPT_URL = new URL("./review-prompt.md", import.meta.url);
+import reviewPrompt from "./review-prompt.md?raw";
 
 export function readReviewPrompt(): string {
-  return fs.readFileSync(fileURLToPath(REVIEW_PROMPT_URL), "utf8");
+  return reviewPrompt;
 }

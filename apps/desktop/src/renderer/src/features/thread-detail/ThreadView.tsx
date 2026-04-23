@@ -771,6 +771,7 @@ function activityContainsDiff(
 type ThreadViewProps = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
+  addOptimisticReviewEntry?: (displayText: string) => string;
   addOptimisticUserMessage: (text: string) => string;
   backendError?: string;
   backends: BackendSummary[];
@@ -1439,6 +1440,7 @@ export function ThreadView(props: ThreadViewProps) {
 
       <Composer
         activeTurnId={props.activeTurnId}
+        addOptimisticReviewEntry={props.addOptimisticReviewEntry}
         addOptimisticUserMessage={props.addOptimisticUserMessage}
         backends={props.backends}
         desktopApi={props.desktopApi}
