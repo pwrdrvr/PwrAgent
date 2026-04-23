@@ -107,6 +107,14 @@ type SlashCommandSuggestion = {
 };
 
 type AutocompleteKind = "skills" | "slash";
+type ReviewTargetChoice = AppServerReviewTarget["type"];
+
+type ReviewConfigState = {
+  branch: string;
+  commit: string;
+  customInstructions: string;
+  target?: ReviewTargetChoice;
+};
 
 const DEFAULT_REASONING_EFFORT = "medium";
 
@@ -116,6 +124,33 @@ const SLASH_COMMANDS: SlashCommandSuggestion[] = [
     label: "/review",
     insertText: "/review",
     description: "Review current staged, unstaged, and untracked changes",
+  },
+];
+
+const REVIEW_TARGET_OPTIONS: Array<{
+  description: string;
+  label: string;
+  target: ReviewTargetChoice;
+}> = [
+  {
+    target: "baseBranch",
+    label: "Base branch",
+    description: "Compare this branch with a base branch",
+  },
+  {
+    target: "uncommittedChanges",
+    label: "Current changes",
+    description: "Review staged, unstaged, and untracked files",
+  },
+  {
+    target: "commit",
+    label: "Commit",
+    description: "Review one commit by SHA",
+  },
+  {
+    target: "custom",
+    label: "Custom",
+    description: "Review using custom instructions",
   },
 ];
 
@@ -143,6 +178,82 @@ function getReasoningEffortValue(
   return reasoningEfforts.includes(currentValue ?? "")
     ? currentValue
     : getDefaultReasoningEffort(backend);
+}
+
+function buildReviewBranchOptions(params: {
+  directory?: NavigationDirectorySummary;
+  thread?: NavigationThreadSummary;
+}): string[] {
+  const candidates = [
+    "main",
+    params.thread?.gitBranch,
+    params.thread?.observedGitBranch,
+    params.directory?.gitStatus?.currentBranch,
+    params.directory?.gitStatus?.upstreamBranch?.replace(/^origin\//, ""),
+    ...(params.directory?.gitStatus?.branches ?? []),
+  ];
+  const options = new Set<string>();
+  for (const candidate of candidates) {
+    const value = candidate?.trim();
+    if (value) {
+      options.add(value);
+    }
+  }
+  return [...options];
+}
+
+function createReviewConfig(params: {
+  directory?: NavigationDirectorySummary;
+  thread?: NavigationThreadSummary;
+}): ReviewConfigState {
+  return {
+    branch: buildReviewBranchOptions(params)[0] ?? "main",
+    commit: "",
+    customInstructions: "",
+  };
+}
+
+function buildConfiguredReviewCommand(
+  config: ReviewConfigState | undefined
+): { displayText: string; target: AppServerReviewTarget } | undefined {
+  if (!config?.target) {
+    return undefined;
+  }
+
+  if (config.target === "uncommittedChanges") {
+    return {
+      target: { type: "uncommittedChanges" },
+      displayText: "Review current changes",
+    };
+  }
+
+  if (config.target === "baseBranch") {
+    const branch = config.branch.trim();
+    return branch
+      ? {
+          target: { type: "baseBranch", branch },
+          displayText: `Review changes against ${branch}`,
+        }
+      : undefined;
+  }
+
+  if (config.target === "commit") {
+    const sha = config.commit.trim();
+    return sha
+      ? {
+          target: { type: "commit", sha, title: null },
+          displayText: `Review commit ${sha}`,
+        }
+      : undefined;
+  }
+
+  const instructions = config.customInstructions.trim();
+  return instructions
+    ? {
+        target: { type: "custom", instructions },
+        displayText: "Review custom instructions",
+      }
+    : undefined;
 }
 
 function findSlashCommandTrigger(text: string, caret: number): {
@@ -198,6 +309,7 @@ export function Composer(props: ComposerProps) {
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
+  const [reviewConfig, setReviewConfig] = useState<ReviewConfigState>();
   const isLaunchpad = Boolean(props.launchpad && props.directory);
   const launchpad = props.launchpad;
   const backend = useMemo(
@@ -269,6 +381,14 @@ export function Composer(props: ComposerProps) {
     () => listMentionedSkills(draft, props.skills),
     [draft, props.skills]
   );
+  const reviewBranchOptions = useMemo(
+    () => buildReviewBranchOptions({
+      directory: props.directory,
+      thread: props.thread,
+    }),
+    [props.directory, props.thread]
+  );
+  const isBareReviewCommand = draft.trim() === "/review";
 
   useEffect(() => {
     setActiveSkillIndex(0);
@@ -307,6 +427,7 @@ export function Composer(props: ComposerProps) {
     setInterrupting(false);
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
+    setReviewConfig(undefined);
   }, [isLaunchpad, props.launchpad?.directoryKey, props.launchpad?.updatedAt]);
 
   useEffect(() => {
@@ -319,6 +440,7 @@ export function Composer(props: ComposerProps) {
     setInterrupting(false);
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
+    setReviewConfig(undefined);
     setImageAttachments([]);
   }, [props.thread?.id, props.thread?.source]);
 
@@ -435,71 +557,97 @@ export function Composer(props: ComposerProps) {
     };
   }, [draft, launchpad, props.onUpdateLaunchpad]);
 
+  const submitReviewCommand = async (reviewCommand: {
+    displayText: string;
+    target: AppServerReviewTarget;
+  }): Promise<void> => {
+    if (props.disabled) {
+      return;
+    }
+    if (imageAttachments.length > 0) {
+      setSendError("/review does not accept image attachments.");
+      return;
+    }
+
+    setSendError(undefined);
+    setSending(true);
+    props.onPendingStatusChange?.("Reviewing");
+
+    if (props.launchpad && props.onMaterializeLaunchpad) {
+      try {
+        await props.onMaterializeLaunchpad(
+          props.launchpad.directoryKey,
+          undefined,
+          undefined,
+          reviewCommand.target
+        );
+        setDraft("");
+        setReviewConfig(undefined);
+        setImageAttachments([]);
+      } catch (error) {
+        props.onPendingStatusChange?.(undefined);
+        setSendError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
+    if (!props.thread || !props.desktopApi?.startReview) {
+      props.onPendingStatusChange?.(undefined);
+      setSending(false);
+      return;
+    }
+
+    const optimisticReviewId = props.addOptimisticReviewEntry?.(
+      reviewCommand.displayText
+    );
+    setActiveOptimisticMessageId(optimisticReviewId);
+    try {
+      const response = await props.desktopApi.startReview({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        target: reviewCommand.target,
+        delivery: "inline",
+      });
+      updateActiveTurnId(response.turnId);
+      props.onActiveTurnIdChange?.(response.turnId);
+      setDraft("");
+      setReviewConfig(undefined);
+    } catch (error) {
+      if (optimisticReviewId) {
+        props.removeOptimisticMessage?.(optimisticReviewId);
+      }
+      props.onPendingStatusChange?.(undefined);
+      setSending(false);
+      setInterrupting(false);
+      updateActiveTurnId(undefined);
+      props.onActiveTurnIdChange?.(undefined);
+      setSendError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const submitTurn = async (): Promise<void> => {
     const reviewCommand = parseReviewCommand(draft);
     if (reviewCommand) {
-      if (props.disabled) {
-        return;
-      }
-      if (imageAttachments.length > 0) {
-        setSendError("/review does not accept image attachments.");
-        return;
-      }
-
-      setSendError(undefined);
-      setSending(true);
-      props.onPendingStatusChange?.("Reviewing");
-
-      if (props.launchpad && props.onMaterializeLaunchpad) {
-        try {
-          await props.onMaterializeLaunchpad(
-            props.launchpad.directoryKey,
-            undefined,
-            undefined,
-            reviewCommand.target
-          );
-          setDraft("");
-          setImageAttachments([]);
-        } catch (error) {
-          props.onPendingStatusChange?.(undefined);
-          setSendError(error instanceof Error ? error.message : String(error));
-        } finally {
-          setSending(false);
+      if (isBareReviewCommand) {
+        const nextReviewConfig =
+          reviewConfig ??
+          createReviewConfig({
+            directory: props.directory,
+            thread: props.thread,
+          });
+        const configuredReviewCommand = buildConfiguredReviewCommand(nextReviewConfig);
+        if (!configuredReviewCommand) {
+          setReviewConfig(nextReviewConfig);
+          setSendError(undefined);
+          return;
         }
+        await submitReviewCommand(configuredReviewCommand);
         return;
       }
 
-      if (!props.thread || !props.desktopApi?.startReview) {
-        props.onPendingStatusChange?.(undefined);
-        setSending(false);
-        return;
-      }
-
-      const optimisticReviewId = props.addOptimisticReviewEntry?.(
-        reviewCommand.displayText
-      );
-      setActiveOptimisticMessageId(optimisticReviewId);
-      try {
-        const response = await props.desktopApi.startReview({
-          backend: props.thread.source,
-          threadId: props.thread.id,
-          target: reviewCommand.target,
-          delivery: "inline",
-        });
-        updateActiveTurnId(response.turnId);
-        props.onActiveTurnIdChange?.(response.turnId);
-        setDraft("");
-      } catch (error) {
-        if (optimisticReviewId) {
-          props.removeOptimisticMessage?.(optimisticReviewId);
-        }
-        props.onPendingStatusChange?.(undefined);
-        setSending(false);
-        setInterrupting(false);
-        updateActiveTurnId(undefined);
-        props.onActiveTurnIdChange?.(undefined);
-        setSendError(error instanceof Error ? error.message : String(error));
-      }
+      await submitReviewCommand(reviewCommand);
       return;
     }
 
@@ -860,7 +1008,11 @@ export function Composer(props: ComposerProps) {
           }
           value={draft}
           onChange={(event) => {
-            setDraft(event.target.value);
+            const nextDraft = event.target.value;
+            setDraft(nextDraft);
+            if (nextDraft.trim() !== "/review") {
+              setReviewConfig(undefined);
+            }
             setSendError(undefined);
           }}
           onPaste={handlePaste}
@@ -989,6 +1141,138 @@ export function Composer(props: ComposerProps) {
           </div>
         ) : null}
       </div>
+
+      {reviewConfig && isBareReviewCommand ? (
+        <fieldset className="composer__review-config" aria-label="Review target">
+          <legend>Review target</legend>
+          <div className="composer__review-options">
+            {REVIEW_TARGET_OPTIONS.map((option) => (
+              <button
+                key={option.target}
+                type="button"
+                aria-pressed={reviewConfig.target === option.target}
+                className={`composer__review-option${reviewConfig.target === option.target ? " is-active" : ""}`}
+                onClick={() => {
+                  setReviewConfig((current) => ({
+                    ...(current ??
+                      createReviewConfig({
+                        directory: props.directory,
+                        thread: props.thread,
+                      })),
+                    target: option.target,
+                  }));
+                  setSendError(undefined);
+                }}
+              >
+                <span>{option.label}</span>
+                <small>{option.description}</small>
+              </button>
+            ))}
+          </div>
+
+          {reviewConfig.target === "baseBranch" ? (
+            <label className="composer__review-field">
+              <span>Base branch</span>
+              <input
+                className="composer__review-input"
+                list="composer-review-branches"
+                value={reviewConfig.branch}
+                onChange={(event) => {
+                  setReviewConfig((current) => ({
+                    ...(current ??
+                      createReviewConfig({
+                        directory: props.directory,
+                        thread: props.thread,
+                      })),
+                    branch: event.target.value,
+                    target: "baseBranch",
+                  }));
+                  setSendError(undefined);
+                }}
+              />
+              {reviewBranchOptions.length > 0 ? (
+                <datalist id="composer-review-branches">
+                  {reviewBranchOptions.map((branch) => (
+                    <option key={branch} value={branch} />
+                  ))}
+                </datalist>
+              ) : null}
+            </label>
+          ) : null}
+
+          {reviewConfig.target === "commit" ? (
+            <label className="composer__review-field">
+              <span>Commit SHA</span>
+              <input
+                className="composer__review-input"
+                value={reviewConfig.commit}
+                onChange={(event) => {
+                  setReviewConfig((current) => ({
+                    ...(current ??
+                      createReviewConfig({
+                        directory: props.directory,
+                        thread: props.thread,
+                      })),
+                    commit: event.target.value,
+                    target: "commit",
+                  }));
+                  setSendError(undefined);
+                }}
+              />
+            </label>
+          ) : null}
+
+          {reviewConfig.target === "custom" ? (
+            <label className="composer__review-field">
+              <span>Instructions</span>
+              <textarea
+                className="composer__review-input composer__review-input--textarea"
+                value={reviewConfig.customInstructions}
+                onChange={(event) => {
+                  setReviewConfig((current) => ({
+                    ...(current ??
+                      createReviewConfig({
+                        directory: props.directory,
+                        thread: props.thread,
+                      })),
+                    customInstructions: event.target.value,
+                    target: "custom",
+                  }));
+                  setSendError(undefined);
+                }}
+              />
+            </label>
+          ) : null}
+
+          <div className="composer__review-actions">
+            <button
+              type="button"
+              className="composer__secondary-action"
+              onClick={() => {
+                setReviewConfig(undefined);
+                setSendError(undefined);
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="composer__primary-action"
+              disabled={!buildConfiguredReviewCommand(reviewConfig)}
+              onClick={() => {
+                const configuredReviewCommand =
+                  buildConfiguredReviewCommand(reviewConfig);
+                if (!configuredReviewCommand) {
+                  return;
+                }
+                void submitReviewCommand(configuredReviewCommand);
+              }}
+            >
+              Start review
+            </button>
+          </div>
+        </fieldset>
+      ) : null}
 
       {imageAttachments.length > 0 ? (
         <div className="composer__attachments" aria-label="Pasted images">

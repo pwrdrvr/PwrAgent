@@ -320,7 +320,61 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
-  it("submits exact slash review commands from the keyboard", async () => {
+  it("asks for a review target before submitting bare slash review commands", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "codex/feature",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/review" } });
+
+    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(startReview).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Base branch/i }));
+    fireEvent.change(screen.getByLabelText("Base branch"), {
+      target: { value: "release" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "release" },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("submits current changes when selected from the bare review target prompt", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -348,11 +402,12 @@ describe("Composer", () => {
       />
     );
 
-    const textarea = screen.getByLabelText("Reply");
-    fireEvent.change(textarea, { target: { value: "/review" } });
-
-    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
-    fireEvent.keyDown(textarea, { key: "Enter" });
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(screen.getByRole("button", { name: /Current changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
     await waitFor(() => {
       expect(startReview).toHaveBeenCalledWith({

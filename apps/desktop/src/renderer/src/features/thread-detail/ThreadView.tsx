@@ -1444,6 +1444,7 @@ export function ThreadView(props: ThreadViewProps) {
         addOptimisticUserMessage={props.addOptimisticUserMessage}
         backends={props.backends}
         desktopApi={props.desktopApi}
+        directory={props.selectedDirectory}
         disabled={props.composerDisabled}
         onActiveTurnIdChange={props.onActiveTurnIdChange}
         onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}

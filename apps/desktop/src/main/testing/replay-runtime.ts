@@ -5,6 +5,8 @@ import type {
   AppServerListSkillsResponse,
   AppServerNotification,
   AppServerPendingRequestNotification,
+  AppServerReviewDelivery,
+  AppServerReviewTarget,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
   AppServerTurnInputItem,
@@ -37,6 +39,16 @@ type ReplayDriver = {
         fastMode?: boolean;
       }
     | undefined;
+  getLastStartReview(params?: {
+    backend?: AppServerBackendKind;
+    executionMode?: ThreadExecutionMode;
+  }):
+    | {
+        threadId: string;
+        target: AppServerReviewTarget;
+        delivery?: AppServerReviewDelivery;
+      }
+    | undefined;
   getPendingRequest(params?: {
     backend?: AppServerBackendKind;
     executionMode?: ThreadExecutionMode;
@@ -64,6 +76,13 @@ type ReplayRuntimeClient = {
         serviceTier?: string;
         reasoningEffort?: string;
         fastMode?: boolean;
+      }
+    | undefined;
+  getLastStartReviewParams?():
+    | {
+        threadId: string;
+        target: AppServerReviewTarget;
+        delivery?: AppServerReviewDelivery;
       }
     | undefined;
   getInitializeResult(): Promise<{
@@ -112,6 +131,11 @@ type ReplayRuntimeClient = {
     reasoningEffort?: string;
     fastMode?: boolean;
   }): Promise<{ threadId: string; turnId: string }>;
+  startReview(params: {
+    threadId: string;
+    target: AppServerReviewTarget;
+    delivery?: AppServerReviewDelivery;
+  }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }>;
   interruptTurn(params: {
     threadId: string;
     turnId: string;
@@ -164,6 +188,13 @@ export function createReplayClientsFromEnv():
         executionMode: params?.executionMode,
       });
       return client.getLastStartTurnParams?.();
+    },
+    getLastStartReview: (params) => {
+      const client = getReplayClient(clients, {
+        backend: params?.backend,
+        executionMode: params?.executionMode,
+      });
+      return client.getLastStartReviewParams?.();
     },
     respondToPendingRequest: async (params) => {
       const client = getReplayClient(clients, {
@@ -244,6 +275,7 @@ function createUnavailableReplayClient(
     close: async () => undefined,
     getPendingRequest: () => undefined,
     getLastStartTurnParams: () => undefined,
+    getLastStartReviewParams: () => undefined,
     getInitializeResult: async () => {
       throw new Error(message);
     },
@@ -262,6 +294,9 @@ function createUnavailableReplayClient(
       throw new Error(message);
     },
     startTurn: async () => {
+      throw new Error(message);
+    },
+    startReview: async () => {
       throw new Error(message);
     },
     interruptTurn: async () => {
