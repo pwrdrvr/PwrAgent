@@ -1372,7 +1372,7 @@ describe("CodexAppServerClient", () => {
         {
           type: "activity",
           id: "activity-item-3",
-          summary: "Explored 1 file, Ran 1 command, Edited 1 file",
+          summary: "Explored 1 file, Ran 1 command, Edited 1 file, +2, -1",
           createdAt: 1_763_500_100_000,
           status: "completed",
           turn,

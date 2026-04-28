@@ -152,6 +152,7 @@ export type AppServerThreadActivityEntry = {
   id: string;
   summary: string;
   createdAt?: number;
+  tone?: "warning";
   status?: AppServerThreadActivityStatus;
   details: AppServerThreadActivityDetail[];
   turn?: AppServerThreadTurnMetadata;
@@ -509,6 +510,39 @@ export type AppServerNotification =
         turnId?: string;
         itemId: string;
         delta: string;
+      };
+    }
+  | {
+      method: "item/commandExecution/terminalInteraction";
+      params: {
+        threadId: string;
+        turnId?: string;
+        itemId: string;
+        processId?: string;
+        stdin?: string;
+      };
+    }
+  | {
+      method: "item/fileChange/outputDelta";
+      params: {
+        threadId: string;
+        turnId?: string;
+        itemId: string;
+        delta: string;
+      };
+    }
+  | {
+      method: "thread/started";
+      params: {
+        threadId?: string;
+        thread?: Record<string, unknown>;
+      };
+    }
+  | {
+      method: "warning";
+      params: {
+        threadId?: string;
+        message: string;
       };
     }
   | {

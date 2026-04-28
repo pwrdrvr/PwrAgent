@@ -10,9 +10,13 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
   const detailsId = useId();
   const [isExpanded, setIsExpanded] = useState(false);
   const hasDetails = props.entry.details.length > 0;
+  const className =
+    props.entry.tone === "warning"
+      ? "transcript-activity transcript-activity--warning"
+      : "transcript-activity";
 
   return (
-    <aside className="transcript-activity">
+    <aside className={className}>
       <header className="transcript-activity__header">
         {hasDetails ? (
           <button
@@ -72,6 +76,16 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
               ) : (
                 <span className="transcript-activity__detail-label">{detail.label}</span>
               )}
+              {detail.fileDiff ? (
+                <span className="transcript-activity__detail-stats" aria-label="File diff summary">
+                  <span className="transcript-activity__detail-stat transcript-activity__detail-stat--removed">
+                    -{detail.fileDiff.removals.toLocaleString()}
+                  </span>
+                  <span className="transcript-activity__detail-stat transcript-activity__detail-stat--added">
+                    +{detail.fileDiff.additions.toLocaleString()}
+                  </span>
+                </span>
+              ) : null}
               {detail.fileDiff ? <TranscriptDiff detail={detail} /> : null}
             </li>
           ))}

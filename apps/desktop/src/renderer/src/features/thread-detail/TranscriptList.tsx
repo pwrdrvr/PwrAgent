@@ -27,6 +27,7 @@ type TranscriptListProps = {
   loading: boolean;
   loadingMore: boolean;
   pendingActivityEntry?: AppServerThreadActivityEntry;
+  pendingProtocolActivityEntry?: AppServerThreadActivityEntry;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingPlanEntry?: AppServerThreadPlanEntry;
   pendingRequest?: AppServerPendingRequestNotification;
@@ -179,6 +180,7 @@ export function TranscriptList(props: TranscriptListProps) {
   );
   const hasPendingContent = Boolean(
     props.pendingActivityEntry ||
+      props.pendingProtocolActivityEntry ||
       props.pendingAssistantMessage ||
       props.pendingPlanEntry ||
       props.pendingRequest ||
@@ -193,6 +195,9 @@ export function TranscriptList(props: TranscriptListProps) {
     if (props.pendingActivityEntry) {
       entries.push(props.pendingActivityEntry);
     }
+    if (props.pendingProtocolActivityEntry) {
+      entries.push(props.pendingProtocolActivityEntry);
+    }
     if (props.pendingAssistantMessage) {
       entries.push(props.pendingAssistantMessage);
     }
@@ -200,6 +205,7 @@ export function TranscriptList(props: TranscriptListProps) {
   }, [
     props.entries,
     props.pendingActivityEntry,
+    props.pendingProtocolActivityEntry,
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
   ]);
@@ -261,6 +267,7 @@ export function TranscriptList(props: TranscriptListProps) {
     const itemCount =
       props.entries.length +
       (props.pendingActivityEntry ? 1 : 0) +
+      (props.pendingProtocolActivityEntry ? 1 : 0) +
       (props.pendingAssistantMessage ? 1 : 0) +
       (props.pendingPlanEntry ? 1 : 0) +
       (props.pendingStatusText ? 1 : 0) +
@@ -285,6 +292,7 @@ export function TranscriptList(props: TranscriptListProps) {
   }, [
     props.entries,
     props.pendingActivityEntry,
+    props.pendingProtocolActivityEntry,
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
     props.pendingRequest,
@@ -375,6 +383,7 @@ export function TranscriptList(props: TranscriptListProps) {
       previousSnapshot.itemCount <
             props.entries.length +
               (props.pendingActivityEntry ? 1 : 0) +
+              (props.pendingProtocolActivityEntry ? 1 : 0) +
               (props.pendingAssistantMessage ? 1 : 0) +
               (props.pendingPlanEntry ? 1 : 0) +
               (props.pendingStatusText ? 1 : 0) +
@@ -430,6 +439,7 @@ export function TranscriptList(props: TranscriptListProps) {
   }, [
     props.entries,
     props.pendingActivityEntry,
+    props.pendingProtocolActivityEntry,
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
     props.pendingRequest,

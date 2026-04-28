@@ -1343,6 +1343,17 @@ textarea {
   border-top: 1px solid var(--border-subtle);
 }
 
+.transcript-activity--warning {
+  padding: 10px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+
+.transcript-activity--warning .transcript-activity__label {
+  color: var(--accent-bright);
+}
+
 .transcript-plan {
   width: min(100%, 760px);
   display: flex;
@@ -1782,6 +1793,22 @@ textarea {
 
 .transcript-activity__detail-label {
   color: var(--text-primary);
+}
+
+.transcript-activity__detail-stats {
+  display: inline-flex;
+  gap: 8px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.transcript-activity__detail-stat--added {
+  color: var(--success-text);
+}
+
+.transcript-activity__detail-stat--removed {
+  color: var(--danger-text);
 }
 
 .transcript-diff {

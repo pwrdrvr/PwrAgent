@@ -687,7 +687,7 @@ describe("useThreadSessionState", () => {
     });
   });
 
-  it("does not reread an interacted thread when only updatedAt changed on reselect", async () => {
+  it("rereads an interacted thread when updatedAt changed on reselect", async () => {
     const readThread = vi.fn(
       async ({
         backend,
@@ -774,10 +774,13 @@ describe("useThreadSessionState", () => {
     rerender({ thread: thread1Updated });
 
     await waitFor(() => {
-      expect(result.current.entries[0]?.id).toBe("thread-1-message-1");
+      expect(readThread).toHaveBeenCalledTimes(3);
     });
 
-    expect(readThread).toHaveBeenCalledTimes(2);
+    expect(readThread).toHaveBeenNthCalledWith(3, {
+      backend: "codex",
+      threadId: "thread-1",
+    });
   });
 
   it("rereads an interacted thread when the cached transcript is still empty", async () => {

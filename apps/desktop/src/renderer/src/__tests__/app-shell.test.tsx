@@ -1773,7 +1773,9 @@ describe("App", () => {
       name: "First cached thread",
     });
 
-    expect(readThread).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+    });
     expect(readThread).toHaveBeenNthCalledWith(1, {
       backend: "codex",
       threadId: "thread-1",
@@ -1786,7 +1788,9 @@ describe("App", () => {
       name: "Second cached thread",
     });
 
-    expect(readThread).toHaveBeenCalledTimes(2);
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
     expect(readThread).toHaveBeenNthCalledWith(2, {
       backend: "codex",
       threadId: "thread-2",

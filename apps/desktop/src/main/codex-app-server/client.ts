@@ -35,7 +35,6 @@ import type {
   CollaborationMode as CodexCollaborationMode,
   InitializeParams as CodexInitializeParams,
   ReasoningEffort as CodexReasoningEffort,
-  ServerNotification as CodexServerNotification,
   ServerRequest as CodexServerRequest,
   ServiceTier as CodexServiceTier,
 } from "@pwragnt/shared/codex-app-server-protocol";
@@ -119,7 +118,6 @@ type CodexSessionIndexEntry = {
 };
 
 type CodexClientRequestMethod = CodexClientRequest["method"];
-type CodexServerNotificationMethod = CodexServerNotification["method"];
 type CodexServerRequestMethod = CodexServerRequest["method"];
 
 const KNOWN_NOTIFICATION_METHODS = new Set<string>([
@@ -135,18 +133,23 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "turn/plan/updated",
   "turn/diff/updated",
   "serverRequest/resolved",
+  "warning",
   "thread/compacted",
   "thread/archived",
   "thread/unarchived",
+  "thread/name/updated",
   "thread/status/changed",
   "thread/tokenUsage/updated",
   "turn/requestApproval",
   "review/requestApproval",
   "account/rateLimits/updated",
   "item/commandExecution/outputDelta",
+  "item/commandExecution/terminalInteraction",
+  "item/fileChange/outputDelta",
   "mcpServer/startupStatus/updated",
 ]);
-const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<CodexServerNotificationMethod>([
+const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
+  "warning",
   "thread/started",
   "turn/started",
   "turn/completed",
@@ -158,10 +161,13 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<CodexServerNotificationMeth
   "turn/diff/updated",
   "serverRequest/resolved",
   "thread/compacted",
+  "thread/name/updated",
   "thread/status/changed",
   "thread/tokenUsage/updated",
   "account/rateLimits/updated",
   "item/commandExecution/outputDelta",
+  "item/commandExecution/terminalInteraction",
+  "item/fileChange/outputDelta",
   "mcpServer/startupStatus/updated",
 ]);
 const GENERATED_CODEX_SERVER_REQUEST_METHODS = new Set<CodexServerRequestMethod>([
@@ -187,10 +193,8 @@ function isHandledServerRequestMethod(method: string): boolean {
 
 function isKnownCodexNotificationMethod(
   method: string
-): method is CodexServerNotificationMethod {
-  return GENERATED_CODEX_NOTIFICATION_METHODS.has(
-    method as CodexServerNotificationMethod
-  );
+): boolean {
+  return GENERATED_CODEX_NOTIFICATION_METHODS.has(method);
 }
 
 function isKnownCodexServerRequestMethod(
@@ -1119,6 +1123,8 @@ function summarizeActivityItems(
   let inspectedFiles = 0;
   let commandsRun = 0;
   let changedFiles = 0;
+  let changedFileAdditions = 0;
+  let changedFileRemovals = 0;
   let toolCalls = 0;
   let status: AppServerThreadActivityStatus | undefined;
 
@@ -1217,6 +1223,8 @@ function summarizeActivityItems(
         const diff = extractDiffText(change);
         const diffSummary = diff ? summarizeDiff(diff) : undefined;
         changedFiles += 1;
+        changedFileAdditions += diffSummary?.additions ?? 0;
+        changedFileRemovals += diffSummary?.removals ?? 0;
         pushActivityDetail(details, {
           id: `${itemId}-${index + 1}`,
           kind: "write",
@@ -1271,7 +1279,14 @@ function summarizeActivityItems(
     summaryParts.push(`Ran ${commandsRun} command${commandsRun === 1 ? "" : "s"}`);
   }
   if (changedFiles > 0) {
-    summaryParts.push(`Edited ${changedFiles} file${changedFiles === 1 ? "" : "s"}`);
+    summaryParts.push(
+      [
+        `Edited ${changedFiles} file${changedFiles === 1 ? "" : "s"}`,
+        changedFileAdditions > 0 || changedFileRemovals > 0
+          ? `+${changedFileAdditions.toLocaleString()}, -${changedFileRemovals.toLocaleString()}`
+          : "",
+      ].filter(Boolean).join(", ")
+    );
   }
   if (toolCalls > 0) {
     summaryParts.push(`Used ${toolCalls} tool${toolCalls === 1 ? "" : "s"}`);
@@ -2347,16 +2362,10 @@ export class CodexAppServerClient {
       }
 
       for (const listener of this.notificationListeners) {
-        const wireNotification = isKnownCodexMethod
-          ? ({
-              method,
-              params: params ?? {},
-            } as CodexServerNotification)
-          : undefined;
         await listener(
           normalizeServerNotification(
-            wireNotification?.method ?? method,
-            wireNotification?.params ?? params,
+            method,
+            params,
           )
         );
       }

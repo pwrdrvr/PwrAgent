@@ -1612,7 +1612,7 @@ describe("ThreadView", () => {
       });
     });
 
-    const toggle = screen.getByRole("button", { name: /Edited 1 file/i });
+    const toggle = screen.getByRole("button", { name: /Edited 1 file, \+1, -2/i });
     expect(toggle).toBeInTheDocument();
 
     fireEvent.click(toggle);
@@ -1705,6 +1705,318 @@ describe("ThreadView", () => {
     );
 
     expect(screen.getAllByRole("button", { name: /Edited 1 file/i })).toHaveLength(1);
+  });
+
+  it("renders Codex warning notifications inline", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Too many skills",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Start with many skills."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "warning",
+          params: {
+            threadId: "thread-2",
+            message:
+              "Warning: Exceeded skills context budget of 2%. Loaded skill descriptions were truncated."
+          },
+        } as AppServerNotification,
+      });
+    });
+
+    expect(
+      screen.getByText(
+        "Warning: Exceeded skills context budget of 2%. Loaded skill descriptions were truncated."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("renders Codex file change output as live file activity", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Update PR description",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Create the PR description."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/fileChange/outputDelta",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-1",
+            itemId: "call-file-change",
+            delta:
+              "Success. Updated the following files:\nA /Users/huntharo/github/PwrAgnt/.local/PR.md\nD /Users/huntharo/github/PwrAgnt/.local/PR.md\n"
+          },
+        } as AppServerNotification,
+      });
+    });
+
+    expect(screen.getByText("Changed 1 file")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Changed 1 file/ }));
+    expect(screen.getByText("Recreated PR.md")).toBeInTheDocument();
+  });
+
+  it("renders modified files from Codex file change output", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Update transcript list",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Update the transcript list."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/fileChange/outputDelta",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-1",
+            itemId: "call-file-change",
+            delta:
+              "Success. Updated the following files:\nM apps/desktop/src/renderer/src/features/thread-detail/TranscriptList.tsx\n"
+          },
+        } as AppServerNotification,
+      });
+    });
+
+    expect(screen.getByText("Changed 1 file")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Changed 1 file/ }));
+    expect(screen.getByText("Modified TranscriptList.tsx")).toBeInTheDocument();
   });
 
   it("maps command approval actions to native decision values and dismisses the approval card", async () => {
