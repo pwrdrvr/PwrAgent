@@ -476,6 +476,9 @@ function isEligibleForGeneratedTitle(
   if (thread.titleSource === "explicit") {
     return false;
   }
+  if (isInjectedContextPlaceholderTitle(thread.title)) {
+    return true;
+  }
   if (thread.titleSource === "fallback" || thread.title === "Untitled thread") {
     return true;
   }
@@ -496,6 +499,37 @@ function isPromptPlaceholderTitle(title: string, prompt: string): boolean {
     normalizedTitle === normalizedPrompt ||
     normalizedTitle === normalizeTitleForComparison(derivedTitle)
   );
+}
+
+function isInjectedContextPlaceholderTitle(title: string): boolean {
+  const normalizedTitle = normalizeTitleForComparison(title);
+  return (
+    normalizedTitle.startsWith("# agents.md instructions") ||
+    normalizedTitle.startsWith("agents.md instructions for")
+  );
+}
+
+function truncateLogValue(value: string | undefined): string | null {
+  const normalized = value?.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
+}
+
+function buildTitleEligibilityLogDetails(
+  thread: AppServerThreadSummary | undefined,
+  prompt: string,
+): Record<string, unknown> {
+  return {
+    currentTitle: truncateLogValue(thread?.title),
+    currentTitleSource: thread?.titleSource ?? null,
+    promptTitle: truncateLogValue(shortenDerivedThreadTitle(prompt) ?? prompt),
+    promptMatchesCurrentTitle: thread ? isPromptPlaceholderTitle(thread.title, prompt) : null,
+    injectedContextPlaceholderTitle: thread
+      ? isInjectedContextPlaceholderTitle(thread.title)
+      : null,
+  };
 }
 
 function getDefaultModelOption(
@@ -1737,7 +1771,12 @@ export class DesktopBackendRegistry {
         threadId: params.threadId,
       });
       if (!isEligibleForGeneratedTitle(currentThread, params.prompt)) {
-        this.logThreadTitleGeneration("skipped", params, "current_title_not_eligible");
+        this.logThreadTitleGeneration(
+          "skipped",
+          params,
+          "current_title_not_eligible",
+          buildTitleEligibilityLogDetails(currentThread, params.prompt)
+        );
         return;
       }
 
@@ -1765,7 +1804,12 @@ export class DesktopBackendRegistry {
         threadId: params.threadId,
       });
       if (!latestThread || !isEligibleForGeneratedTitle(latestThread, params.prompt)) {
-        this.logThreadTitleGeneration("skipped", params, "latest_title_not_eligible");
+        this.logThreadTitleGeneration(
+          "skipped",
+          params,
+          "latest_title_not_eligible",
+          buildTitleEligibilityLogDetails(latestThread, params.prompt)
+        );
         return;
       }
 
@@ -1809,12 +1853,14 @@ export class DesktopBackendRegistry {
       threadId: string;
     },
     reason?: string,
+    details?: Record<string, unknown>,
   ): void {
     logDebug("threadTitleGeneration", {
       backend: params.backend,
       threadId: params.threadId,
       status,
       reason: reason ?? null,
+      ...details,
     });
   }
 
