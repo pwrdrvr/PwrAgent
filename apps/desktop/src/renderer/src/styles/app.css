@@ -1052,12 +1052,12 @@ textarea {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  padding-right: 48px;
+  padding-right: calc(48px + 24px);
   transition: padding-right 160ms ease;
 }
 
 .thread-view__layout.has-pinned-context-rail {
-  padding-right: min(var(--context-rail-width, 380px), 42vw);
+  padding-right: calc(min(var(--context-rail-width, 380px), 42vw) + 24px);
 }
 
 .thread-view__layout.is-resizing-context-rail {
