@@ -279,6 +279,16 @@ function buildHelperTurnKey(threadId: string, turnId: string): string {
   return `${threadId}:${turnId}`;
 }
 
+function extractTurnIdFromNotificationParams(params: unknown): string | undefined {
+  const directTurnId = readStringFromRecord(params, "turnId");
+  if (directTurnId) {
+    return directTurnId;
+  }
+
+  const turn = asRecord(params)?.turn;
+  return readStringFromRecord(turn, "id");
+}
+
 function extractThreadIdFromNotification(
   notification: AppServerNotification,
   rawParams: unknown
@@ -2701,6 +2711,7 @@ export class CodexAppServerClient {
     }
   >();
   private readonly completedHelperTurnResults = new Map<string, HelperTurnResult>();
+  private readonly helperTurnTitleObjects = new Map<string, unknown>();
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.connection = new JsonRpcConnection(
@@ -2796,6 +2807,7 @@ export class CodexAppServerClient {
     this.rejectHelperTurnWaiters(new Error("codex app server client closed"));
     this.helperThreadIds.clear();
     this.completedHelperTurnResults.clear();
+    this.helperTurnTitleObjects.clear();
     await this.connection.close();
   }
 
@@ -2885,20 +2897,33 @@ export class CodexAppServerClient {
     method: string,
     notification: AppServerNotification
   ): void {
-    if (method !== "turn/completed" && method !== "turn/failed") {
+    if (
+      method !== "item/completed" &&
+      method !== "turn/completed" &&
+      method !== "turn/failed"
+    ) {
       return;
     }
 
     const threadId = readStringFromRecord(notification.params, "threadId");
-    const turnId = readStringFromRecord(notification.params, "turnId");
+    const turnId = extractTurnIdFromNotificationParams(notification.params);
     if (!threadId || !turnId) {
       return;
     }
 
     const key = buildHelperTurnKey(threadId, turnId);
+    if (method === "item/completed") {
+      const object = extractGeneratedTitleObject(notification.params);
+      if (object) {
+        this.helperTurnTitleObjects.set(key, object);
+      }
+      return;
+    }
+
     const waiter = this.helperTurnWaiters.get(key);
     if (method === "turn/failed") {
       const error = new Error("codex_title_turn_failed");
+      this.helperTurnTitleObjects.delete(key);
       if (!waiter) {
         this.completedHelperTurnResults.set(key, {
           status: "failed",
@@ -2912,7 +2937,10 @@ export class CodexAppServerClient {
       return;
     }
 
-    const object = extractGeneratedTitleObject(notification.params);
+    const object =
+      extractGeneratedTitleObject(notification.params) ??
+      this.helperTurnTitleObjects.get(key);
+    this.helperTurnTitleObjects.delete(key);
     if (!object) {
       const error = new Error("codex_title_turn_completed_without_title");
       if (!waiter) {

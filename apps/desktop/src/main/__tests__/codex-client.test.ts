@@ -2780,6 +2780,84 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("uses helper title item completions when turn completion omits items", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "thread-title-helper",
+      },
+    };
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-title-helper",
+      },
+      turn: {
+        id: "turn-title-helper",
+      },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const titlePromise = client.generateTitle({
+      prompt: "Name the thread from this prompt",
+      promptVersion: "thread-title-v1",
+      schema: {
+        type: "object",
+        required: ["title"],
+        properties: {
+          title: { type: "string" },
+        },
+      },
+      schemaName: "thread_title",
+      timeoutMs: 5_000,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "item/completed",
+      params: {
+        threadId: "thread-title-helper",
+        turnId: "turn-title-helper",
+        item: {
+          type: "agentMessage",
+          id: "message-title-helper",
+          text: JSON.stringify({
+            title: "Animated jaguar tea button",
+          }),
+          phase: "final_answer",
+        },
+      },
+    });
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: {
+        threadId: "thread-title-helper",
+        turn: {
+          id: "turn-title-helper",
+          items: [],
+          status: "completed",
+        },
+      },
+    });
+
+    await expect(titlePromise).resolves.toEqual({
+      status: "ok",
+      object: {
+        title: "Animated jaguar tea button",
+      },
+    });
+
+    await client.close();
+  });
+
   it("uses helper title notifications that arrive before the turn/start response", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadStartResult = {
