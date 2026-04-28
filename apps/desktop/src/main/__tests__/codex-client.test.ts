@@ -2182,6 +2182,7 @@ describe("CodexAppServerClient", () => {
       expect(indexLines).toEqual([
         {
           id: "019dd225-74fb-7a83-b4e4-5970680d9382",
+          source: "pwragnt",
           thread_name: "Untitled thread",
           updated_at: "2026-04-28T03:32:43.000Z",
         },

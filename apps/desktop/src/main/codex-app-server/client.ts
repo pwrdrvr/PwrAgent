@@ -113,6 +113,7 @@ type SkillCatalogEntry = {
 
 type CodexSessionIndexEntry = {
   id: string;
+  source: "pwragnt";
   thread_name: string;
   updated_at: string;
 };
@@ -1486,6 +1487,7 @@ function extractThreadIndexEntryFromValue(
 
   return {
     id: threadId,
+    source: "pwragnt",
     thread_name: rawName?.trim() || "Untitled thread",
     updated_at: new Date(updatedAt).toISOString(),
   };
