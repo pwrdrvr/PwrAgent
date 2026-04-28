@@ -82,6 +82,7 @@ function threadSummariesEqual(
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
     left.gitBranch === right.gitBranch &&
+    left.observedGitBranch === right.observedGitBranch &&
     left.executionMode === right.executionMode &&
     left.model === right.model &&
     left.reasoningEffort === right.reasoningEffort &&
@@ -506,8 +507,9 @@ function buildOptimisticThreadFromLaunchpad(params: {
       : [],
     gitBranch:
       params.workMode === "worktree"
-        ? params.launchpad.branchName
+        ? "HEAD"
         : params.directory?.gitStatus?.currentBranch ?? params.launchpad.branchName,
+    observedGitBranch: params.workMode === "worktree" ? "HEAD" : undefined,
     updatedAt: Date.now(),
     inbox: {
       inInbox: true,

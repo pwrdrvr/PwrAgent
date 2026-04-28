@@ -1523,6 +1523,35 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
   return sortCodexModels(models);
 }
 
+function summarizeRawModelList(value: unknown): Array<Record<string, unknown>> {
+  const record = asRecord(value);
+  const data = Array.isArray(record?.data)
+    ? record.data
+    : Array.isArray(value)
+      ? value
+      : [];
+
+  return data.flatMap((entry) => {
+    const modelRecord = asRecord(entry);
+    if (!modelRecord) {
+      return [];
+    }
+
+    return [
+      {
+        id: pickString(modelRecord, ["id", "name", "model"]) ?? null,
+        displayName:
+          pickString(modelRecord, ["displayName", "display_name", "label"]) ?? null,
+        current: pickBoolean(modelRecord, ["current", "default"]) ?? null,
+        hidden: pickBoolean(modelRecord, ["hidden"]) ?? null,
+        supportsReasoning:
+          pickBoolean(modelRecord, ["supportsReasoning", "supports_reasoning"]) ?? null,
+        supportsFast: pickBoolean(modelRecord, ["supportsFast", "supports_fast"]) ?? null,
+      },
+    ];
+  });
+}
+
 function shouldHideCodexModel(
   id: string,
   modelRecord: Record<string, unknown>,
@@ -1843,6 +1872,17 @@ function normalizeGitOriginUrl(value?: string): string | undefined {
 type EnrichedCodexThread = AppServerThreadSummary & {
   gitOriginUrl?: string;
 };
+
+function resolveDisplayGitBranch(params: {
+  gitBranch?: string;
+  observedGitBranch?: string;
+}): string | undefined {
+  if (params.observedGitBranch === "HEAD") {
+    return "HEAD";
+  }
+
+  return params.gitBranch ?? params.observedGitBranch;
+}
 
 function hydrateMissingLinkedDirectoriesFromSiblingRepos(
   threads: EnrichedCodexThread[]
@@ -2368,6 +2408,10 @@ export class CodexAppServerClient {
         return {
           ...thread,
           projectKey,
+          gitBranch: resolveDisplayGitBranch({
+            gitBranch: thread.gitBranch,
+            observedGitBranch: enrichment.observedGitBranch,
+          }),
           linkedDirectories: enrichment.linkedDirectories,
           observedGitBranch: enrichment.observedGitBranch,
           source: "codex" as const
@@ -2413,7 +2457,13 @@ export class CodexAppServerClient {
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     });
 
-    return extractModelOptions(result);
+    const models = extractModelOptions(result);
+    codexClientLog.info("model/list", {
+      rawModels: summarizeRawModelList(result),
+      normalizedModelIds: models.map((model) => model.id),
+    });
+
+    return models;
   }
 
   async readThread(params: {

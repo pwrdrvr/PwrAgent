@@ -1078,12 +1078,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
   ): Promise<BackendLaunchpadOptions | undefined> {
     if (backend === "codex") {
-      const models = (
-        await Promise.allSettled([
-          readClientModels(this.codexDefaultClient),
-          readClientModels(this.codexFullAccessClient),
-        ])
-      ).flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+      const models = await readClientModels(this.codexDefaultClient).catch(() => []);
       return buildLaunchpadOptions(backend, models);
     }
 
@@ -1147,18 +1142,17 @@ export class DesktopBackendRegistry {
   }
 
   private async describeCodexBackend(): Promise<BackendSummary> {
-    const [defaultResult, fullAccessResult, defaultModelsResult, fullAccessModelsResult] = await Promise.allSettled([
+    const [defaultResult, fullAccessResult, defaultModelsResult] = await Promise.allSettled([
       this.codexDefaultClient.getInitializeResult(),
       this.codexFullAccessClient.getInitializeResult(),
       readClientModels(this.codexDefaultClient),
-      readClientModels(this.codexFullAccessClient),
     ]);
     const successful = [defaultResult, fullAccessResult].flatMap((result) =>
       result.status === "fulfilled" ? [result.value] : [],
     );
     const methods = mergeMethods(successful);
     const available = successful.length > 0;
-    const discoveredModels = [defaultModelsResult, fullAccessModelsResult].flatMap((result) =>
+    const discoveredModels = [defaultModelsResult].flatMap((result) =>
       result.status === "fulfilled" ? result.value : [],
     );
     const unavailableReason = [defaultResult, fullAccessResult]

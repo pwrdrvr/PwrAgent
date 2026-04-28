@@ -106,6 +106,31 @@ describe("refresh reconciliation", () => {
     expect(snapshot.unchanged).toBe(false);
   });
 
+  it("treats observed branch changes as material snapshot changes", async () => {
+    const store = await createStore();
+
+    await store.reconcileNavigationSnapshot({
+      backend: "codex",
+      fetchedAt: 1000,
+      threads: [buildThread({ gitBranch: "HEAD", observedGitBranch: "HEAD" })],
+    });
+
+    const snapshot = await store.reconcileNavigationSnapshot({
+      backend: "codex",
+      fetchedAt: 2000,
+      threads: [
+        buildThread({
+          gitBranch: "fix/testing-detached-head",
+          observedGitBranch: "fix/testing-detached-head",
+        }),
+      ],
+    });
+
+    expect(snapshot.unchanged).toBe(false);
+    expect(snapshot.threads[0]?.gitBranch).toBe("fix/testing-detached-head");
+    expect(snapshot.threads[0]?.observedGitBranch).toBe("fix/testing-detached-head");
+  });
+
   it("tracks mixed-backend threads with duplicate ids independently in aggregate snapshots", async () => {
     const store = await createStore();
 
