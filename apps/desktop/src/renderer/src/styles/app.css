@@ -2752,6 +2752,11 @@ textarea {
   background: var(--bg-panel-elevated);
 }
 
+.composer__queued--steer {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent-soft) 48%, var(--bg-panel-elevated));
+}
+
 .composer__queued-copy {
   display: flex;
   min-width: 0;

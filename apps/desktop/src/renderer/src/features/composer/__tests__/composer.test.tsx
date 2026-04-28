@@ -317,6 +317,15 @@ describe("Composer", () => {
   });
 
   it("steers Command Enter during an active turn when supported", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
     const steerTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
@@ -347,7 +356,10 @@ describe("Composer", () => {
           },
         ]}
         desktopApi={{
-          onAgentEvent: () => () => undefined,
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
           startTurn,
           steerTurn,
         }}
@@ -369,6 +381,27 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "Change direction" } });
     fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
 
+    expect(steerTurn).not.toHaveBeenCalled();
+    expect(screen.getByText("Pending steer")).toBeInTheDocument();
+    expect(screen.getByText("Change direction")).toBeInTheDocument();
+    expect(textarea).toHaveValue("");
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            item: {
+              type: "tool_call",
+              output: "ready for another instruction",
+            },
+          },
+        },
+      });
+    });
+
     await waitFor(() => {
       expect(steerTurn).toHaveBeenCalledWith({
         backend: "codex",
@@ -377,7 +410,86 @@ describe("Composer", () => {
         input: [{ type: "text", text: "Change direction" }],
       });
     });
+    expect(screen.getByText("Steering now")).toBeInTheDocument();
     expect(startTurn).not.toHaveBeenCalled();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            item: {
+              type: "message",
+              role: "user",
+              text: "Change direction",
+            },
+          },
+        },
+      });
+    });
+
+    expect(screen.queryByText("Steering now")).not.toBeInTheDocument();
+  });
+
+  it("lets pending steers be edited before they are injected", async () => {
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex", {
+              models: [
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  current: true,
+                  supportsReasoning: true,
+                  supportsSteering: true,
+                },
+              ],
+            }),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          steerTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Editable steer",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Revise the plan" } });
+    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+
+    expect(screen.getByText("Pending steer")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(textarea).toHaveValue("Revise the plan");
+    expect(screen.queryByText("Pending steer")).not.toBeInTheDocument();
+    expect(steerTurn).not.toHaveBeenCalled();
   });
 
   it("updates model settings without crashing when fast-mode support changes", async () => {
