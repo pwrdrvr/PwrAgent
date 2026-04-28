@@ -1,7 +1,7 @@
 ---
 title: feat: Add desktop-owned out-of-band thread naming
 type: feat
-status: active
+status: completed
 date: 2026-04-28
 ---
 
@@ -131,7 +131,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Characterize and extract the ephemeral object-call pattern**
+- [x] **Unit 1: Characterize and extract the ephemeral object-call pattern**
 
 **Goal:** Make the focused-diff out-of-band call pattern reusable enough for title generation without breaking focused diff.
 
@@ -168,7 +168,7 @@ flowchart TB
 **Verification:**
 - Focused diff tests still pass, and the new helper has direct tests proving the reusable call boundary.
 
-- [ ] **Unit 2: Add a desktop thread-title generation service**
+- [x] **Unit 2: Add a desktop thread-title generation service**
 
 **Goal:** Centralize prompt construction, model selection, structured-output validation, and title cleanup behind one desktop-owned service.
 
@@ -206,7 +206,7 @@ flowchart TB
 **Verification:**
 - Title prompt constraints are tested at the service boundary, not only by checking prompt file contents.
 
-- [ ] **Unit 3: Implement Codex app-server ephemeral title generation**
+- [x] **Unit 3: Implement Codex app-server ephemeral title generation**
 
 **Goal:** Use Codex/OpenAI for Codex-backed thread naming without adding a direct OpenAI dependency or new app-server protocol method.
 
@@ -244,7 +244,7 @@ flowchart TB
 **Verification:**
 - Codex-backed title generation uses the Codex app server and never requires separate OpenAI credentials.
 
-- [ ] **Unit 4: Implement Grok fast-model title generation**
+- [x] **Unit 4: Implement Grok fast-model title generation**
 
 **Goal:** Use a lightweight Grok model for Grok-backed thread naming through the reusable desktop xAI object-call path.
 
@@ -281,7 +281,7 @@ flowchart TB
 **Verification:**
 - Grok-backed title generation uses an xAI fast model and does not create transcript items or app-server turns.
 
-- [ ] **Unit 5: Schedule generation after first turn and apply names safely**
+- [x] **Unit 5: Schedule generation after first turn and apply names safely**
 
 **Goal:** Trigger provider-specific title generation from the desktop start-turn flow and apply valid names without races or user-name clobbering.
 
@@ -320,7 +320,7 @@ flowchart TB
 **Verification:**
 - Automatic naming improves thread titles after the first prompt while preserving normal turn latency and explicit user rename behavior.
 
-- [ ] **Unit 6: Capture and replay provider-specific naming behavior**
+- [x] **Unit 6: Capture and replay provider-specific naming behavior**
 
 **Goal:** Keep protocol capture, replay fixtures, and future debugging clear about what was user-thread traffic versus desktop-owned ephemeral naming traffic.
 
