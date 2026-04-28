@@ -1384,39 +1384,66 @@ export function ThreadView(props: ThreadViewProps) {
       <ThreadHeader thread={selectedThread!} />
 
       <div className="thread-view__layout">
-        <section className="transcript-panel" aria-label="Transcript">
-          <TranscriptList
-            entries={props.transcriptEntries}
+        <div className="thread-view__primary">
+          <section className="transcript-panel" aria-label="Transcript">
+            <TranscriptList
+              entries={props.transcriptEntries}
+              activeTurnId={props.activeTurnId}
+              activeTurnStartedAt={props.activeTurnStartedAt}
+              error={props.transcriptError}
+              loading={props.loading}
+              loadingMore={props.loadingMore}
+              pagination={props.transcriptPagination}
+              pendingActivityEntry={pendingToolActivityEntry ?? pendingActivityEntry}
+              pendingAssistantMessage={props.pendingAssistantMessage}
+              pendingPlanEntry={pendingPlanEntry}
+              pendingRequest={props.pendingRequest}
+              pendingRequestBusy={pendingRequestBusy}
+              pendingUserInput={props.pendingUserInput}
+              pendingStatusText={props.pendingStatusText}
+              restoredViewport={props.transcriptViewport}
+              skills={props.skills}
+              pendingProtocolActivityEntry={pendingProtocolActivityEntry}
+              threadId={`${selectedThread!.source}:${selectedThread!.id}`}
+              onLoadOlder={props.onLoadOlder}
+              onOpenImage={setExpandedImage}
+              onRespondToPendingRequest={respondToPendingRequest}
+              onPendingUserInputChange={(state) => {
+                props.onUpdatePendingUserInput?.(state.requestId, () => state);
+              }}
+              onSubmitPendingUserInput={submitPendingUserInput}
+              onViewportChange={props.onTranscriptViewportChange}
+            />
+            {pendingRequestError ? (
+              <p className="transcript-error">{pendingRequestError}</p>
+            ) : null}
+          </section>
+
+          <Composer
             activeTurnId={props.activeTurnId}
-            activeTurnStartedAt={props.activeTurnStartedAt}
-            error={props.transcriptError}
-            loading={props.loading}
-            loadingMore={props.loadingMore}
-            pagination={props.transcriptPagination}
-            pendingActivityEntry={pendingToolActivityEntry ?? pendingActivityEntry}
-            pendingAssistantMessage={props.pendingAssistantMessage}
-            pendingPlanEntry={pendingPlanEntry}
-            pendingRequest={props.pendingRequest}
-            pendingRequestBusy={pendingRequestBusy}
-            pendingUserInput={props.pendingUserInput}
-            pendingStatusText={props.pendingStatusText}
-            restoredViewport={props.transcriptViewport}
+            addOptimisticReviewEntry={props.addOptimisticReviewEntry}
+            addOptimisticUserMessage={props.addOptimisticUserMessage}
+            backends={props.backends}
+            desktopApi={props.desktopApi}
+            directory={props.selectedDirectory}
+            disabled={props.composerDisabled}
+            onActiveTurnIdChange={props.onActiveTurnIdChange}
+            onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
+            onPendingStatusChange={props.onPendingStatusChange}
+            onSetExecutionMode={props.onSetExecutionMode}
+            onSetThreadModelSettings={props.onSetThreadModelSettings}
+            pendingRequestActive={Boolean(props.pendingRequest)}
+            pendingUserInputActive={Boolean(props.pendingUserInput)}
+            removeOptimisticMessage={props.removeOptimisticMessage}
+            setExecutionModeError={props.setExecutionModeError}
+            threadModelSettingsError={props.setThreadModelSettingsError}
+            skillError={props.skillError}
+            skillLoading={props.skillLoading}
             skills={props.skills}
-            pendingProtocolActivityEntry={pendingProtocolActivityEntry}
-            threadId={`${selectedThread!.source}:${selectedThread!.id}`}
-            onLoadOlder={props.onLoadOlder}
-            onOpenImage={setExpandedImage}
-            onRespondToPendingRequest={respondToPendingRequest}
-            onPendingUserInputChange={(state) => {
-              props.onUpdatePendingUserInput?.(state.requestId, () => state);
-            }}
-            onSubmitPendingUserInput={submitPendingUserInput}
-            onViewportChange={props.onTranscriptViewportChange}
+            thread={selectedThread!}
+            updatingExecutionMode={props.updatingExecutionMode}
           />
-          {pendingRequestError ? (
-            <p className="transcript-error">{pendingRequestError}</p>
-          ) : null}
-        </section>
+        </div>
 
         <ThreadContextPanel
           backendError={props.backendError}
@@ -1438,30 +1465,6 @@ export function ThreadView(props: ThreadViewProps) {
         />
       ) : null}
 
-      <Composer
-        activeTurnId={props.activeTurnId}
-        addOptimisticReviewEntry={props.addOptimisticReviewEntry}
-        addOptimisticUserMessage={props.addOptimisticUserMessage}
-        backends={props.backends}
-        desktopApi={props.desktopApi}
-        directory={props.selectedDirectory}
-        disabled={props.composerDisabled}
-        onActiveTurnIdChange={props.onActiveTurnIdChange}
-        onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
-        onPendingStatusChange={props.onPendingStatusChange}
-        onSetExecutionMode={props.onSetExecutionMode}
-        onSetThreadModelSettings={props.onSetThreadModelSettings}
-        pendingRequestActive={Boolean(props.pendingRequest)}
-        pendingUserInputActive={Boolean(props.pendingUserInput)}
-        removeOptimisticMessage={props.removeOptimisticMessage}
-        setExecutionModeError={props.setExecutionModeError}
-        threadModelSettingsError={props.setThreadModelSettingsError}
-        skillError={props.skillError}
-        skillLoading={props.skillLoading}
-        skills={props.skills}
-        thread={selectedThread!}
-        updatingExecutionMode={props.updatingExecutionMode}
-      />
     </section>
   );
 }

@@ -58,7 +58,7 @@ textarea {
 
 .app-shell {
   display: grid;
-  grid-template-columns: minmax(320px, 408px) minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width, 408px) minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
   background: var(--bg-app);
@@ -67,12 +67,56 @@ textarea {
 
 .sidebar {
   display: flex;
+  position: relative;
   flex-direction: column;
   min-height: 0;
   padding: 16px;
   overflow: hidden;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-subtle);
+}
+
+.sidebar__resize-handle,
+.context-rail__resize-handle {
+  position: absolute;
+  z-index: 12;
+  width: 11px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sidebar__resize-handle {
+  top: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.sidebar__resize-handle::after,
+.context-rail__resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 5px;
+  width: 1px;
+  border-radius: 999px;
+  background: transparent;
+  transition:
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.sidebar__resize-handle:hover::after,
+.sidebar__resize-handle:focus-visible::after,
+.context-rail__resize-handle:hover::after,
+.context-rail__resize-handle:focus-visible::after {
+  background: var(--accent);
+  box-shadow: 0 0 0 1px rgba(255, 138, 31, 0.16);
+}
+
+.sidebar__resize-handle:focus-visible,
+.context-rail__resize-handle:focus-visible {
+  outline: none;
 }
 
 .sidebar__masthead,
@@ -949,7 +993,7 @@ textarea {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 24px;
+  gap: 18px;
   min-height: 0;
   overflow: hidden;
 }
@@ -992,9 +1036,20 @@ textarea {
 
 .thread-view__layout {
   display: flex;
+  position: relative;
   flex: 1;
-  gap: 24px;
   align-items: stretch;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.thread-view__primary {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -2164,8 +2219,12 @@ textarea {
 
 .context-rail {
   display: flex;
-  align-self: stretch;
-  flex: 0 0 48px;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  flex: 0 0 auto;
   width: 48px;
   min-width: 48px;
   min-height: 0;
@@ -2181,8 +2240,20 @@ textarea {
 }
 
 .context-rail.is-open {
-  flex-basis: min(380px, 34vw);
-  width: min(380px, 34vw);
+  width: min(var(--context-rail-width, 380px), calc(100% - 32px));
+  box-shadow: var(--shadow-popover);
+}
+
+.context-rail.is-pinned {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  z-index: 1;
+  flex: 0 0 min(var(--context-rail-width, 380px), 42vw);
+  width: min(var(--context-rail-width, 380px), 42vw);
+  margin-left: 24px;
+  box-shadow: none;
 }
 
 .context-rail:hover,
@@ -2201,6 +2272,12 @@ textarea {
   padding: 8px 0;
   border-right: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
+}
+
+.context-rail__resize-handle {
+  top: 0;
+  bottom: 0;
+  left: 0;
 }
 
 .context-rail__menu-button {
@@ -2248,7 +2325,8 @@ textarea {
   flex: 1;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -2907,7 +2985,7 @@ textarea {
 
 @media (max-width: 1100px) {
   .app-shell {
-    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    grid-template-columns: minmax(280px, min(var(--sidebar-width, 360px), 360px)) minmax(0, 1fr);
   }
 
   .thread-view__layout {
@@ -2929,6 +3007,8 @@ textarea {
     width: 100%;
     min-width: 0;
     flex-basis: auto;
+    margin-left: 0;
+    box-shadow: none;
   }
 
   .context-rail__spine {

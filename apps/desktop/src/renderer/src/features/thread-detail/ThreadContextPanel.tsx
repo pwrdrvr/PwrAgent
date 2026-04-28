@@ -1,4 +1,10 @@
-import { useState, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+} from "react";
 import type {
   BackendSummary,
   LinkedDirectorySummary,
@@ -28,7 +34,34 @@ type ThreadContextPanelProps = {
 export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const [pinned, setPinned] = useState(false);
   const [revealed, setRevealed] = useState(false);
+  const [railWidth, setRailWidth] = useState(380);
   const open = pinned || revealed;
+  const resizeRail = (nextWidth: number): void => {
+    setRailWidth(Math.min(560, Math.max(300, nextWidth)));
+  };
+  const startRailResize = (event: PointerEvent<HTMLElement>): void => {
+    if (!pinned) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = railWidth;
+
+    const move = (moveEvent: globalThis.PointerEvent): void => {
+      resizeRail(startWidth + startX - moveEvent.clientX);
+    };
+    const stop = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  };
 
   return (
     <aside
@@ -36,6 +69,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       className={`context-rail${open ? " is-open" : " is-collapsed"}${
         pinned ? " is-pinned" : ""
       }`}
+      style={{ "--context-rail-width": `${railWidth}px` } as CSSProperties}
       onMouseEnter={() => {
         if (!pinned) {
           setRevealed(true);
@@ -57,6 +91,25 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         }
       }}
     >
+      {pinned ? (
+        <div
+          aria-label="Resize context rail"
+          aria-orientation="vertical"
+          className="context-rail__resize-handle"
+          role="separator"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") {
+              event.preventDefault();
+              resizeRail(railWidth + 16);
+            } else if (event.key === "ArrowRight") {
+              event.preventDefault();
+              resizeRail(railWidth - 16);
+            }
+          }}
+          onPointerDown={startRailResize}
+        />
+      ) : null}
       <div className="context-rail__spine">
         <button
           aria-label={pinned ? "Unpin context rail" : "Open context rail"}

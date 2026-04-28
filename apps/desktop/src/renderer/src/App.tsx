@@ -1,3 +1,4 @@
+import { useState, type CSSProperties, type PointerEvent } from "react";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { ThreadView } from "./features/thread-detail/ThreadView";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
@@ -7,6 +8,7 @@ import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { useThreadSkills } from "./lib/useThreadSkills";
 
 export function App() {
+  const [sidebarWidth, setSidebarWidth] = useState(408);
   const desktopApi = useDesktopApi();
   const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);
@@ -20,8 +22,34 @@ export function App() {
     thread: navigation.selectedThread,
   });
 
+  const resizeSidebar = (nextWidth: number): void => {
+    setSidebarWidth(Math.min(560, Math.max(280, nextWidth)));
+  };
+
+  const startSidebarResize = (event: PointerEvent<HTMLElement>): void => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+
+    const move = (moveEvent: globalThis.PointerEvent): void => {
+      resizeSidebar(startWidth + moveEvent.clientX - startX);
+    };
+    const stop = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  };
+
   return (
-    <div className="app-shell">
+    <div
+      className="app-shell"
+      style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+    >
       <Sidebar
         backends={backendSummaries.backends}
         browseMode={navigation.browseMode}
@@ -43,6 +71,8 @@ export function App() {
         onSelectThread={navigation.selectThread}
         onArchiveThread={navigation.archiveThread}
         onRenameThread={navigation.renameThread}
+        onResizeStart={startSidebarResize}
+        onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidth + delta)}
       />
 
       <main className="app-main">
