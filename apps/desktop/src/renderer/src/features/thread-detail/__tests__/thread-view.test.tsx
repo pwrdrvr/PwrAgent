@@ -185,7 +185,7 @@ describe("ThreadView", () => {
     expect(screen.queryByRole("link", { name: "desktop docs" })).not.toBeInTheDocument();
     expect(screen.getByText("Explored 2 files")).toBeInTheDocument();
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 3, name: "Thread details" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Execution context" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pin context rail" })).toBeInTheDocument();
     expect(screen.getByText("Codex app server")).toBeInTheDocument();
     expect(screen.getByText("Grok app server")).toBeInTheDocument();

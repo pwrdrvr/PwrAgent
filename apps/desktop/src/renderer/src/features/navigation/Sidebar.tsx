@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent } from "react";
 import type {
   AppServerBackendKind,
   BackendSummary,
@@ -38,6 +39,8 @@ type SidebarProps = {
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRenameThread?: (thread: NavigationThreadSummary, name: string) => Promise<void>;
+  onResizeStart?: (event: PointerEvent<HTMLElement>) => void;
+  onResizeByKeyboard?: (delta: number) => void;
 };
 
 export function Sidebar(props: SidebarProps) {
@@ -157,6 +160,23 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <aside className="sidebar" aria-label="Threads">
+      <div
+        aria-label="Resize thread sidebar"
+        aria-orientation="vertical"
+        className="sidebar__resize-handle"
+        role="separator"
+        tabIndex={0}
+        onKeyDown={(event: ReactKeyboardEvent<HTMLElement>) => {
+          if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            props.onResizeByKeyboard?.(-16);
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            props.onResizeByKeyboard?.(16);
+          }
+        }}
+        onPointerDown={props.onResizeStart}
+      />
       <header className="sidebar__masthead">
         <p className="eyebrow sidebar__brand">PwrAgnt</p>
 

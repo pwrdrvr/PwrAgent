@@ -300,7 +300,7 @@ describe("App", () => {
     const openContextButton = screen.getByRole("button", { name: "Open context rail" });
     openContextButton.click();
     expect(
-      await screen.findByRole("heading", { level: 3, name: "Thread details" })
+      await screen.findByRole("heading", { level: 3, name: "Linked directories" })
     ).toBeInTheDocument();
     const context = screen.getByLabelText("Thread context");
     fireEvent.click(

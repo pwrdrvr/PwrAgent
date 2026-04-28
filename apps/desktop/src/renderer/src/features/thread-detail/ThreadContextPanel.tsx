@@ -1,7 +1,15 @@
-import { useState, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FocusEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+} from "react";
 import type {
   BackendSummary,
-  LinkedDirectorySummary,
   NavigationThreadSummary,
   WorktreeSnapshotSummary,
 } from "@pwragnt/shared";
@@ -11,13 +19,13 @@ import { formatExecutionModeLabel } from "../../lib/execution-mode";
 type ThreadContextPanelProps = {
   backendError?: string;
   backends: BackendSummary[];
+  onPinnedChange?: (pinned: boolean) => void;
+  onResizingChange?: (resizing: boolean) => void;
+  onWidthChange?: (width: number) => void;
+  pinned: boolean;
   platform?: string;
   thread: NavigationThreadSummary;
   worktreeArchiveError?: string;
-  onArchiveWorktree?: (
-    thread: NavigationThreadSummary,
-    directory: LinkedDirectorySummary
-  ) => Promise<void>;
   onRestoreWorktree?: (
     thread: NavigationThreadSummary,
     snapshotRef: string,
@@ -26,16 +34,93 @@ type ThreadContextPanelProps = {
 };
 
 export function ThreadContextPanel(props: ThreadContextPanelProps) {
-  const [pinned, setPinned] = useState(false);
+  const tooltipRef = useRef<HTMLDivElement>(null);
   const [revealed, setRevealed] = useState(false);
+  const [railWidth, setRailWidth] = useState(380);
+  const [resizing, setResizing] = useState(false);
+  const [tooltip, setTooltip] = useState<{
+    left?: number;
+    text: string;
+    targetBottom: number;
+    targetCenter: number;
+    targetTop: number;
+    top?: number;
+  }>();
+  const pinned = props.pinned;
   const open = pinned || revealed;
+
+  useLayoutEffect(() => {
+    if (!tooltip || tooltip.left !== undefined) {
+      return;
+    }
+
+    const tooltipElement = tooltipRef.current;
+    if (!tooltipElement) {
+      return;
+    }
+
+    const tooltipRect = tooltipElement.getBoundingClientRect();
+    const viewportPadding = 12;
+    const left = Math.min(
+      window.innerWidth - tooltipRect.width - viewportPadding,
+      Math.max(viewportPadding, tooltip.targetCenter - tooltipRect.width / 2)
+    );
+    const top =
+      tooltip.targetTop - tooltipRect.height - 10 >= viewportPadding
+        ? tooltip.targetTop - 10
+        : tooltip.targetBottom + tooltipRect.height + 10;
+
+    setTooltip({
+      ...tooltip,
+      left,
+      top,
+    });
+  }, [tooltip]);
+
+  const updatePinned = (nextPinned: boolean): void => {
+    props.onPinnedChange?.(nextPinned);
+  };
+
+  const resizeRail = (nextWidth: number): void => {
+    const clampedWidth = Math.min(560, Math.max(300, nextWidth));
+    setRailWidth(clampedWidth);
+    props.onWidthChange?.(clampedWidth);
+  };
+  const startRailResize = (event: PointerEvent<HTMLElement>): void => {
+    if (!pinned) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    setResizing(true);
+    props.onResizingChange?.(true);
+    const startX = event.clientX;
+    const startWidth = railWidth;
+
+    const move = (moveEvent: globalThis.PointerEvent): void => {
+      resizeRail(startWidth + startX - moveEvent.clientX);
+    };
+    const stop = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      setResizing(false);
+      props.onResizingChange?.(false);
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  };
 
   return (
     <aside
       aria-label="Thread context"
       className={`context-rail${open ? " is-open" : " is-collapsed"}${
         pinned ? " is-pinned" : ""
-      }`}
+      }${resizing ? " is-resizing" : ""}`}
+      style={{ "--context-rail-width": `${railWidth}px` } as CSSProperties}
       onMouseEnter={() => {
         if (!pinned) {
           setRevealed(true);
@@ -57,6 +142,25 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         }
       }}
     >
+      {pinned ? (
+        <div
+          aria-label="Resize context rail"
+          aria-orientation="vertical"
+          className="context-rail__resize-handle"
+          role="separator"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") {
+              event.preventDefault();
+              resizeRail(railWidth + 16);
+            } else if (event.key === "ArrowRight") {
+              event.preventDefault();
+              resizeRail(railWidth - 16);
+            }
+          }}
+          onPointerDown={startRailResize}
+        />
+      ) : null}
       <div className="context-rail__spine">
         <button
           aria-label={pinned ? "Unpin context rail" : "Open context rail"}
@@ -64,7 +168,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           type="button"
           onClick={() => {
             if (pinned) {
-              setPinned(false);
+              updatePinned(false);
               setRevealed(false);
               return;
             }
@@ -85,7 +189,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <div className="context-panel__rail-header">
             <div>
               <p className="eyebrow">Context</p>
-              <h3 className="context-panel__title">Thread details</h3>
             </div>
 
             <div className="context-panel__rail-actions">
@@ -97,7 +200,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                 className="button button--ghost context-panel__pin-button"
                 type="button"
                 onClick={() => {
-                  setPinned((current) => !current);
+                  updatePinned(!pinned);
                   setRevealed(true);
                 }}
               >
@@ -116,10 +219,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                     props.thread.worktreeSnapshots,
                     worktreePath
                   );
-                  const canArchive =
-                    directory.kind === "worktree" &&
-                    snapshot?.state !== "archived" &&
-                    Boolean(props.onArchiveWorktree);
                   const canRestore =
                     directory.kind === "worktree" &&
                     snapshot?.state === "archived" &&
@@ -127,32 +226,21 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
 
                   return (
                     <li key={directory.id} className="context-list__item">
-                      <button
-                        aria-label={`Copy path for ${directory.label}`}
-                        className="context-list__label path-copy-target tooltip-target"
-                        data-tooltip={formatCopyTooltip(directory.path)}
-                        type="button"
-                        onClick={(event) => {
-                          void handleCopyPath(event, directory.path);
-                        }}
-                      >
+                      <div className="context-list__label">
+                        <CopyValueButton
+                          label={`Copy path for ${directory.label}`}
+                          value={directory.path}
+                          onBlur={hideRailTooltip}
+                          onCopy={handleCopyPath}
+                          onShowTooltip={showRailTooltip}
+                        />
                         <span aria-hidden="true" className="context-list__icon">
                           {directory.kind === "worktree" ? "🔀" : "📁"}
                         </span>
                         {directory.label}
-                      </button>
+                      </div>
                       <div className="context-list__actions">
-                        {canArchive ? (
-                          <button
-                            className="context-list__action"
-                            type="button"
-                            onClick={() => {
-                              void props.onArchiveWorktree?.(props.thread, directory);
-                            }}
-                          >
-                            Archive
-                          </button>
-                        ) : canRestore && snapshot ? (
+                        {canRestore && snapshot ? (
                           <button
                             className="context-list__action"
                             type="button"
@@ -167,17 +255,16 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                             Restore
                           </button>
                         ) : null}
-                        <button
-                          aria-label={`Copy path for ${directory.kind} ${directory.label}`}
-                          className="context-list__meta path-copy-target tooltip-target"
-                          data-tooltip={formatCopyTooltip(worktreePath)}
-                          type="button"
-                          onClick={(event) => {
-                            void handleCopyPath(event, worktreePath);
-                          }}
-                        >
+                        <span className="context-list__meta">
+                          <CopyValueButton
+                            label={`Copy path for ${directory.kind} ${directory.label}`}
+                            value={worktreePath}
+                            onBlur={hideRailTooltip}
+                            onCopy={handleCopyPath}
+                            onShowTooltip={showRailTooltip}
+                          />
                           {snapshot?.state === "archived" ? "archived" : directory.kind}
-                        </button>
+                        </span>
                       </div>
                     </li>
                   );
@@ -187,31 +274,29 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               <>
                 <ul className="context-list">
                   <li className="context-list__item">
-                    <button
-                      aria-label="Copy recorded working directory"
-                      className="context-list__label path-copy-target tooltip-target"
-                      data-tooltip={formatCopyTooltip(props.thread.projectKey)}
-                      type="button"
-                      onClick={(event) => {
-                        void handleCopyPath(event, props.thread.projectKey!);
-                      }}
-                    >
+                    <div className="context-list__label">
+                      <CopyValueButton
+                        label="Copy recorded working directory"
+                        value={props.thread.projectKey!}
+                        onBlur={hideRailTooltip}
+                        onCopy={handleCopyPath}
+                        onShowTooltip={showRailTooltip}
+                      />
                       <span aria-hidden="true" className="context-list__icon">
                         📁
                       </span>
                       {pathBaseName(props.thread.projectKey)}
-                    </button>
-                    <button
-                      aria-label="Copy missing working directory path"
-                      className="context-list__meta path-copy-target tooltip-target"
-                      data-tooltip={formatCopyTooltip(props.thread.projectKey)}
-                      type="button"
-                      onClick={(event) => {
-                        void handleCopyPath(event, props.thread.projectKey!);
-                      }}
-                    >
+                    </div>
+                    <span className="context-list__meta">
+                      <CopyValueButton
+                        label="Copy missing working directory path"
+                        value={props.thread.projectKey!}
+                        onBlur={hideRailTooltip}
+                        onCopy={handleCopyPath}
+                        onShowTooltip={showRailTooltip}
+                      />
                       missing
-                    </button>
+                    </span>
                   </li>
                 </ul>
                 <p className="context-empty">Recorded working directory is no longer available.</p>
@@ -238,12 +323,15 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                     <li key={snapshot.id} className="context-list__item">
                       <button
                         aria-label={`Copy snapshot ref ${snapshot.snapshotRef}`}
-                        className="context-list__label path-copy-target tooltip-target"
-                        data-tooltip={formatCopyTooltip(snapshot.snapshotRef)}
+                        className="context-list__label path-copy-target"
                         type="button"
+                        onBlur={hideRailTooltip}
                         onClick={(event) => {
                           void handleCopyPath(event, snapshot.snapshotRef);
                         }}
+                        onFocus={(event) => showRailTooltip(event, snapshot.snapshotRef)}
+                        onMouseEnter={(event) => showRailTooltip(event, snapshot.snapshotRef)}
+                        onMouseLeave={hideRailTooltip}
                       >
                         <span aria-hidden="true" className="context-list__icon">
                           🔀
@@ -285,18 +373,19 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               </div>
               <div>
                 <dt>Thread ID</dt>
-                <dd>
-                  <button
+                <dd className="context-value-row">
+                  <CopyValueButton
                     aria-label="Copy thread id"
-                    className="context-grid__copy context-grid__mono path-copy-target tooltip-target"
-                    data-tooltip={formatCopyTooltip(props.thread.id, 48)}
-                    type="button"
-                    onClick={(event) => {
-                      void handleCopyPath(event, props.thread.id);
-                    }}
-                  >
+                    label="Copy thread id"
+                    maxTooltipLength={48}
+                    value={props.thread.id}
+                    onBlur={hideRailTooltip}
+                    onCopy={handleCopyPath}
+                    onShowTooltip={showRailTooltip}
+                  />
+                  <span className="context-grid__mono">
                     {props.thread.id}
-                  </button>
+                  </span>
                 </dd>
               </div>
               <div>
@@ -305,8 +394,19 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               </div>
               <div>
                 <dt>Branch</dt>
-                <dd className="context-grid__mono">
-                  {props.thread.gitBranch ?? "Not attached"}
+                <dd className="context-value-row">
+                  {props.thread.gitBranch ? (
+                    <CopyValueButton
+                      label="Copy branch name"
+                      value={props.thread.gitBranch}
+                      onBlur={hideRailTooltip}
+                      onCopy={handleCopyPath}
+                      onShowTooltip={showRailTooltip}
+                    />
+                  ) : null}
+                  <span className="context-grid__mono">
+                    {props.thread.gitBranch ?? "Not attached"}
+                  </span>
                 </dd>
               </div>
               <div>
@@ -352,7 +452,78 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           </section>
         </div>
       ) : null}
+
+      {tooltip ? (
+        <div
+          ref={tooltipRef}
+          className="context-rail__tooltip"
+          role="tooltip"
+          style={{
+            left: tooltip.left,
+            top: tooltip.top,
+            visibility: tooltip.left === undefined ? "hidden" : undefined,
+          }}
+        >
+          {tooltip.text}
+        </div>
+      ) : null}
     </aside>
+  );
+
+  function showRailTooltip(
+    event: FocusEvent<HTMLElement> | MouseEvent<HTMLElement>,
+    path: string,
+    maxLength?: number
+  ): void {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setTooltip({
+      text: formatCopyTooltip(path, maxLength),
+      targetBottom: rect.bottom,
+      targetCenter: rect.left + rect.width / 2,
+      targetTop: rect.top,
+    });
+  }
+
+  function hideRailTooltip(): void {
+    setTooltip(undefined);
+  }
+}
+
+function CopyValueButton(props: {
+  label?: string;
+  "aria-label"?: string;
+  maxTooltipLength?: number;
+  onBlur: () => void;
+  onCopy: (
+    event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
+    value: string
+  ) => Promise<void>;
+  onShowTooltip: (
+    event: FocusEvent<HTMLElement> | MouseEvent<HTMLElement>,
+    value: string,
+    maxLength?: number
+  ) => void;
+  value: string;
+}) {
+  const label = props["aria-label"] ?? props.label ?? "Copy to clipboard";
+
+  return (
+    <button
+      aria-label={label}
+      className="context-copy-button path-copy-target"
+      type="button"
+      onBlur={props.onBlur}
+      onClick={(event) => {
+        void props.onCopy(event, props.value);
+      }}
+      onFocus={(event) => props.onShowTooltip(event, props.value, props.maxTooltipLength)}
+      onMouseEnter={(event) =>
+        props.onShowTooltip(event, props.value, props.maxTooltipLength)
+      }
+      onMouseLeave={props.onBlur}
+    >
+      <span aria-hidden="true">📋</span>
+    </button>
   );
 }
 
