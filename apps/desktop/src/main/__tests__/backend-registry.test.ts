@@ -10,9 +10,10 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   ThreadOverlayState,
+  WorktreeSnapshotSummary,
 } from "@pwragnt/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
-import type { GitDirectoryService } from "../app-server/git-directory-service";
+import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 
 function createOverlayStoreMock(params?: {
   executionMode?: "default" | "full-access";
@@ -100,6 +101,34 @@ function createOverlayStoreMock(params?: {
     },
     resetDirectoryLaunchpad: async ({ directoryKey }: { directoryKey: string }) => {
       launchpads.delete(directoryKey);
+    },
+    upsertWorktreeSnapshot: async ({
+      backend,
+      threadId,
+      snapshot,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      snapshot: WorktreeSnapshotSummary;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        worktreeSnapshots: [
+          ...(current.worktreeSnapshots ?? []).filter(
+            (candidate) => candidate.id !== snapshot.id
+          ),
+          snapshot,
+        ],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
     },
   } as unknown as InstanceType<typeof import("@pwragnt/agent-core").OverlayStore>;
 }
@@ -861,7 +890,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("archives a thread without cleaning up linked worktrees", async () => {
+  it("snapshots and removes linked worktrees when archiving a thread", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",
       title: "Archive me",
@@ -883,14 +912,21 @@ describe("DesktopBackendRegistry", () => {
       initializeResult: { methods: ["thread/list", "thread/archive"] },
       threads: [thread],
     });
-    const cleanupThreadWorktrees = vi.fn(async () => [
-      {
-        worktreePath: "/repo/.worktrees/archive-me",
-        branch: "codex/archive-me",
-        removedWorktree: true,
-        deletedBranch: true,
-      },
-    ]);
+    const archiveWorktree = vi.fn(async () => ({
+      id: "snapshot-1",
+      backend: "codex" as const,
+      threadId: "thread-1",
+      worktreePath: "/repo/.worktrees/archive-me",
+      repositoryPath: "/repo/app",
+      snapshotRef: "refs/codex/snapshots/snapshot-1",
+      snapshotCommit: "abc123",
+      sourceBranch: "codex/archive-me",
+      sourceHead: "def456",
+      createdAt: 1000,
+      archivedAt: 1000,
+      state: "archived" as const,
+      ignoredFilesExcluded: true,
+    }));
     const registry = new DesktopBackendRegistry({
       codexClient,
       codexFullAccessClient: new MockBackendClient({
@@ -901,10 +937,9 @@ describe("DesktopBackendRegistry", () => {
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore: createOverlayStoreMock(),
-      gitDirectoryService: {
-        cleanupThreadWorktrees,
-        readDirectoryStatuses: async () => ({}),
-      } as unknown as GitDirectoryService,
+      worktreeArchiveService: {
+        archive: archiveWorktree,
+      } as unknown as WorktreeArchiveService,
     });
 
     const response = await registry.archiveThread({
@@ -913,12 +948,24 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(codexClient.lastArchiveThreadParams).toEqual({ threadId: "thread-1" });
-    expect(cleanupThreadWorktrees).not.toHaveBeenCalled();
+    expect(archiveWorktree).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath: "/repo/.worktrees/archive-me",
+      repositoryPath: "/repo/app",
+    });
     expect(response).toEqual({
       backend: "codex",
       threadId: "thread-1",
       archivedAt: expect.any(Number),
-      cleanup: [],
+      cleanup: [
+        {
+          worktreePath: "/repo/.worktrees/archive-me",
+          branch: "codex/archive-me",
+          removedWorktree: true,
+          deletedBranch: false,
+        },
+      ],
     });
 
     await registry.close();

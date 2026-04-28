@@ -5,6 +5,7 @@ import type {
   ArchiveWorktreeRequest,
   ArchiveWorktreeResponse,
   ArchiveThreadRequest,
+  ArchiveThreadCleanupResult,
   ArchiveThreadResponse,
   AppServerListSkillsResponse,
   AppServerNotification,
@@ -139,6 +140,11 @@ type BackendClient = {
 type PendingServerRequest = {
   resolve: (response: SubmitServerRequestRequest["response"]) => void;
   reject: (error: Error) => void;
+};
+
+type WorktreeArchiveCandidate = {
+  repositoryPath: string;
+  worktreePath: string;
 };
 
 const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
@@ -625,18 +631,28 @@ export class DesktopBackendRegistry {
     request: ArchiveThreadRequest,
   ): Promise<ArchiveThreadResponse> {
     const backend = request.backend ?? "codex";
+    const thread = await this.findThreadForArchiveCleanup({
+      backend,
+      threadId: request.threadId,
+    });
     const result =
       backend === "codex"
         ? await this.withCodexThreadClient(request.threadId, async (client) =>
             await this.archiveWithClient(client, request.threadId),
           )
         : await this.archiveWithClient(this.grokClient, request.threadId);
+    const cleanup = thread
+      ? await this.archiveThreadWorktrees({
+          backend,
+          thread,
+        })
+      : [];
 
     return {
       backend,
       threadId: result.threadId,
       archivedAt: Date.now(),
-      cleanup: [],
+      cleanup,
     };
   }
 
@@ -1410,6 +1426,88 @@ export class DesktopBackendRegistry {
     }
 
     return await client.archiveThread({ threadId });
+  }
+
+  private async findThreadForArchiveCleanup(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<AppServerThreadSummary | undefined> {
+    const activeThreads = await this.listThreads({
+      backend: params.backend,
+      archived: false,
+    }).catch(() => []);
+    const archivedThreads = activeThreads.some((thread) => thread.id === params.threadId)
+      ? []
+      : await this.listThreads({
+          backend: params.backend,
+          archived: true,
+        }).catch(() => []);
+
+    return [...activeThreads, ...archivedThreads].find(
+      (thread) => thread.id === params.threadId,
+    );
+  }
+
+  private async archiveThreadWorktrees(params: {
+    backend: AppServerBackendKind;
+    thread: AppServerThreadSummary;
+  }): Promise<ArchiveThreadCleanupResult[]> {
+    const candidates: WorktreeArchiveCandidate[] =
+      params.thread.linkedDirectories.flatMap((directory) => {
+        const worktreePath =
+          directory.worktreePath ?? (directory.kind === "worktree" ? directory.path : undefined);
+        if (!worktreePath?.trim()) {
+          return [];
+        }
+
+        return [
+          {
+            repositoryPath: directory.path,
+            worktreePath,
+          },
+        ];
+      });
+    const uniqueCandidates: WorktreeArchiveCandidate[] = [
+      ...new Map(
+        candidates.map((candidate) => [
+          `${candidate.repositoryPath}:${candidate.worktreePath}`,
+          candidate,
+        ]),
+      ).values(),
+    ];
+
+    return await Promise.all(
+      uniqueCandidates.map(async (candidate): Promise<ArchiveThreadCleanupResult> => {
+        try {
+          const snapshot = await this.worktreeArchiveService.archive({
+            backend: params.backend,
+            threadId: params.thread.id,
+            worktreePath: candidate.worktreePath,
+            repositoryPath: candidate.repositoryPath,
+          });
+          await this.overlayStore.upsertWorktreeSnapshot({
+            backend: params.backend,
+            threadId: params.thread.id,
+            snapshot,
+          });
+
+          return {
+            worktreePath: snapshot.worktreePath,
+            branch: snapshot.sourceBranch,
+            removedWorktree: true,
+            deletedBranch: false,
+          };
+        } catch (error) {
+          return {
+            worktreePath: candidate.worktreePath,
+            branch: params.thread.observedGitBranch ?? params.thread.gitBranch,
+            removedWorktree: false,
+            deletedBranch: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }),
+    );
   }
 
   private async restoreWithClient(
