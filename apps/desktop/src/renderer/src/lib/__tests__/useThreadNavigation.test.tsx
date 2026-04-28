@@ -317,6 +317,77 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("shows a newly materialized directory thread under its directory before the backend snapshot catches up", async () => {
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: "directory:/Users/huntharo/github/PwrAgnt",
+          kind: "directory" as const,
+          label: "PwrAgnt",
+          path: "/Users/huntharo/github/PwrAgnt",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+            directoryKind: "directory" as const,
+            directoryLabel: "PwrAgnt",
+            directoryPath: "/Users/huntharo/github/PwrAgnt",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt: "",
+            workMode: "local" as const,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-new",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.directories[0]?.launchpad?.directoryKey).toBe(
+        "directory:/Users/huntharo/github/PwrAgnt"
+      );
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(
+        "directory:/Users/huntharo/github/PwrAgnt"
+      );
+    });
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+      input: undefined,
+      collaborationMode: undefined,
+    });
+    expect(result.current.selectedThread?.id).toBe("thread-new");
+    expect(result.current.directories[0]?.threadKeys).toEqual(["codex:thread-new"]);
+    expect(result.current.directories[0]?.needsAttentionCount).toBe(1);
+  });
+
   it("restores backend state and surfaces errors when rename fails", async () => {
     const renameThread = vi.fn(async () => {
       throw new Error("rename failed");
