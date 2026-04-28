@@ -672,8 +672,8 @@ describe("Sidebar", () => {
       />
     );
 
-    expect(screen.getByText(".worktrees/pwragnt-fix...moioth2352")).toBeInTheDocument();
-    expect(screen.getByText("codex/fix-th...g-ephemeral")).toBeInTheDocument();
+    expect(screen.getByText(".worktrees/pwragnt-fix-th...ng-moioth2352")).toBeInTheDocument();
+    expect(screen.getByText("codex/fix-thread-naming-ephemeral")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy working directory" }));
     fireEvent.click(screen.getByRole("button", { name: "Copy branch name" }));
@@ -684,6 +684,44 @@ describe("Sidebar", () => {
     );
     expect(copyText).toHaveBeenNthCalledWith(2, "codex/fix-thread-naming-ephemeral");
     expect(await screen.findAllByText("PwrAgnt")).not.toHaveLength(0);
+  });
+
+  it("labels detached HEAD and copies the full commit SHA", () => {
+    const copyText = vi.fn(async () => undefined);
+    Object.defineProperty(window, "pwragnt", {
+      configurable: true,
+      value: {
+        copyText,
+      },
+    });
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        runtimeIdentity={{
+          commitSha: "ab12cd3344556677889900aabbccddeeff001122",
+          cwd: "/Users/huntharo/.codex/worktrees/5d4b/PwrAgnt",
+          detachedHead: true,
+        }}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    expect(screen.getByText("HEAD")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy commit SHA" }));
+    expect(copyText).toHaveBeenCalledWith("ab12cd3344556677889900aabbccddeeff001122");
   });
 
   it("shows when the local branch diverged from the codex thread branch", () => {

@@ -41,7 +41,7 @@ export function formatRuntimePath(cwd: string): string {
   const worktreesIndex = segments.lastIndexOf(".worktrees");
 
   if (worktreesIndex >= 0 && segments[worktreesIndex + 1]) {
-    return `.worktrees/${elideMiddle(segments[worktreesIndex + 1], 24)}`;
+    return `.worktrees/${elideMiddle(segments[worktreesIndex + 1], 30)}`;
   }
 
   const codexWorktreesIndex = segments.lastIndexOf("worktrees");
@@ -58,7 +58,23 @@ export function formatRuntimePath(cwd: string): string {
 }
 
 export function formatRuntimeBranch(branch: string): string {
-  return elideMiddle(branch, 26);
+  return elideMiddle(branch, 34);
+}
+
+export function formatRuntimeGitRef(identity: RuntimeIdentity): string | undefined {
+  if (identity.detachedHead && identity.commitSha) {
+    return "HEAD";
+  }
+
+  return identity.branch ? formatRuntimeBranch(identity.branch) : undefined;
+}
+
+export function runtimeGitRefCopyValue(identity: RuntimeIdentity): string | undefined {
+  if (identity.detachedHead && identity.commitSha) {
+    return identity.commitSha;
+  }
+
+  return identity.branch;
 }
 
 function elideMiddle(text: string, maxLength: number): string {

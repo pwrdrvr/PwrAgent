@@ -48,12 +48,13 @@ describe("runtime identity ipc", () => {
       .mockImplementationOnce(() => {
         throw new Error("not symbolic");
       })
-      .mockReturnValueOnce("ab12cd3\n");
+      .mockReturnValueOnce("ab12cd3344556677889900aabbccddeeff001122\n");
     const { resolveRuntimeIdentity } = await import("../ipc/runtime-identity");
 
     expect(resolveRuntimeIdentity("/repo/PwrAgnt")).toEqual({
-      branch: "ab12cd3",
+      commitSha: "ab12cd3344556677889900aabbccddeeff001122",
       cwd: "/repo/PwrAgnt",
+      detachedHead: true,
     });
   });
 

@@ -289,8 +289,8 @@ describe("App", () => {
       })
     ).toBeInTheDocument();
     expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
-    expect(await screen.findByText(".worktrees/pwragnt-fix...moioth2352")).toBeInTheDocument();
-    expect(screen.getByText("codex/fix-th...g-ephemeral")).toBeInTheDocument();
+    expect(await screen.findByText(".worktrees/pwragnt-fix-th...ng-moioth2352")).toBeInTheDocument();
+    expect(screen.getByText("codex/fix-thread-naming-ephemeral")).toBeInTheDocument();
     expect(screen.getAllByText("codex/build-codex-client").length).toBeGreaterThan(0);
     expect(screen.queryByRole("heading", { level: 3, name: "Transcript" })).not.toBeInTheDocument();
     const transcript = screen.getByRole("region", { name: "Transcript" });

@@ -222,7 +222,7 @@ textarea {
 
 .runtime-identity {
   display: flex;
-  max-width: min(252px, calc(var(--sidebar-width, 408px) - 156px));
+  max-width: min(320px, calc(var(--sidebar-width, 408px) - 136px));
   min-width: 0;
   align-items: center;
   gap: 6px;
@@ -230,8 +230,9 @@ textarea {
 
 .runtime-identity__button {
   display: inline-flex;
+  flex: 1 1 0;
   min-width: 0;
-  max-width: 138px;
+  max-width: 170px;
   height: 22px;
   align-items: center;
   appearance: none;

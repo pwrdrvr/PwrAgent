@@ -11,8 +11,9 @@ import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
 import type { BrowseMode } from "../../lib/useThreadNavigation";
 import {
-  formatRuntimeBranch,
+  formatRuntimeGitRef,
   formatRuntimePath,
+  runtimeGitRefCopyValue,
 } from "../../lib/runtime-identity";
 import { DirectoriesList } from "./DirectoriesList";
 import { InboxList } from "./InboxList";
@@ -75,6 +76,12 @@ export function Sidebar(props: SidebarProps) {
   const onArchiveThread = props.onArchiveThread ?? (async () => undefined);
   const onRenameThread = props.onRenameThread ?? (async () => undefined);
   const [copiedRuntimeValue, setCopiedRuntimeValue] = useState<"branch" | "cwd">();
+  const runtimeGitRefLabel = props.runtimeIdentity
+    ? formatRuntimeGitRef(props.runtimeIdentity)
+    : undefined;
+  const runtimeGitRefValue = props.runtimeIdentity
+    ? runtimeGitRefCopyValue(props.runtimeIdentity)
+    : undefined;
 
   useEffect(() => {
     if (!copiedRuntimeValue) {
@@ -210,11 +217,14 @@ export function Sidebar(props: SidebarProps) {
                 valueKind="cwd"
                 onCopied={setCopiedRuntimeValue}
               />
-              {props.runtimeIdentity.branch ? (
+              {runtimeGitRefLabel && runtimeGitRefValue ? (
                 <RuntimeIdentityButton
                   copied={copiedRuntimeValue === "branch"}
-                  label={formatRuntimeBranch(props.runtimeIdentity.branch)}
-                  value={props.runtimeIdentity.branch}
+                  copyLabel={
+                    props.runtimeIdentity.detachedHead ? "commit SHA" : "branch name"
+                  }
+                  label={runtimeGitRefLabel}
+                  value={runtimeGitRefValue}
                   valueKind="branch"
                   onCopied={setCopiedRuntimeValue}
                 />
@@ -407,6 +417,7 @@ export function Sidebar(props: SidebarProps) {
 
 function RuntimeIdentityButton(props: {
   copied: boolean;
+  copyLabel?: string;
   label: string;
   value: string;
   valueKind: "branch" | "cwd";
@@ -414,7 +425,9 @@ function RuntimeIdentityButton(props: {
 }) {
   return (
     <button
-      aria-label={`Copy ${props.valueKind === "cwd" ? "working directory" : "branch name"}`}
+      aria-label={`Copy ${
+        props.copyLabel ?? (props.valueKind === "cwd" ? "working directory" : "branch name")
+      }`}
       className="runtime-identity__button path-copy-target tooltip-target"
       data-tooltip={
         props.copied
