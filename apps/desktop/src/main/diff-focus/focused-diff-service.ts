@@ -1,9 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-  resolveGrokAppServerRuntimeConfig,
-  XaiAiSdkObjectClient,
-  type XaiAiSdkObjectResult
-} from "@pwragnt/agent-core";
+import type { XaiAiSdkObjectResult } from "@pwragnt/agent-core";
 import type {
   FocusedDiffAnalysisRequest,
   FocusedDiffAnalysisResponse,
@@ -16,6 +12,10 @@ import {
   parseUnifiedDiff,
   summarizeHunksForFocus
 } from "../../shared/diff-focus";
+import {
+  XaiEphemeralObjectCaller,
+  type XaiObjectClientLike,
+} from "../app-server/ephemeral-object-call";
 
 const FOCUSED_DIFF_PROMPT_VERSION = "focused-diff-v1";
 const FOCUSED_DIFF_MODEL = "grok-4-1-fast-reasoning";
@@ -71,12 +71,10 @@ const FOCUSED_DIFF_SYSTEM_PROMPT = [
   "Return JSON that matches the schema exactly."
 ].join("\n");
 
-type XaiClientLike = Pick<XaiAiSdkObjectClient, "generateObject">;
-
 type FocusedDiffServiceOptions = {
   apiKey?: string;
   baseUrl?: string;
-  client?: XaiClientLike;
+  client?: XaiObjectClientLike;
   model?: string;
   promptVersion?: string;
   timeoutMs?: number;
@@ -84,24 +82,21 @@ type FocusedDiffServiceOptions = {
 
 export class FocusedDiffService {
   private readonly cache = new Map<string, FocusedDiffAnalysisResponse>();
-  private readonly configuredClient?: XaiClientLike;
-  private readonly configuredApiKey?: string;
-  private readonly configuredBaseUrl?: string;
+  private readonly objectCaller: XaiEphemeralObjectCaller;
   private readonly configuredModel?: string;
   private readonly promptVersion: string;
   private readonly timeoutMs: number;
-  private runtimeConfig:
-    | ReturnType<typeof resolveGrokAppServerRuntimeConfig>
-    | undefined;
-  private envClient: XaiClientLike | null | undefined;
 
   constructor(options: FocusedDiffServiceOptions = {}) {
-    this.configuredClient = options.client;
-    this.configuredApiKey = options.apiKey?.trim() || undefined;
-    this.configuredBaseUrl = options.baseUrl?.trim() || undefined;
     this.configuredModel = options.model?.trim() || undefined;
     this.promptVersion = options.promptVersion?.trim() || FOCUSED_DIFF_PROMPT_VERSION;
     this.timeoutMs = options.timeoutMs ?? FOCUSED_DIFF_TIMEOUT_MS;
+    this.objectCaller = new XaiEphemeralObjectCaller({
+      apiKey: options.apiKey,
+      baseUrl: options.baseUrl,
+      client: options.client,
+      model: this.getModel(),
+    });
   }
 
   async analyze(
@@ -146,13 +141,8 @@ export class FocusedDiffService {
       return testOverride;
     }
 
-    const client = this.getClient();
-    if (!client) {
-      return this.buildFallbackResponse(decisions, "grok_unavailable");
-    }
-
     try {
-      const response = await this.requestFocusedDiffDecision(client, request.filePath, hunks);
+      const response = await this.requestFocusedDiffDecision(request.filePath, hunks);
       const result = normalizeFocusedDiffResult(response, parsed.hunks.length);
       const analysis: FocusedDiffAnalysisResponse = {
         mode: result.hiddenHunkIndices.length > 0 ? "focused" : "fallback",
@@ -187,73 +177,35 @@ export class FocusedDiffService {
     };
   }
 
-  private getClient(): XaiClientLike | null {
-    if (this.configuredClient) {
-      return this.configuredClient;
-    }
-
-    if (this.envClient !== undefined) {
-      return this.envClient;
-    }
-
-    const runtimeConfig = this.getRuntimeConfig();
-    const apiKey = this.configuredApiKey ?? runtimeConfig.apiKey;
-    if (!apiKey) {
-      this.envClient = null;
-      return this.envClient;
-    }
-
-    this.envClient = new XaiAiSdkObjectClient({
-      apiKey,
-      baseUrl: this.configuredBaseUrl ?? runtimeConfig.baseUrl,
-      model: this.getModel()
-    });
-
-    return this.envClient;
-  }
-
-  private getRuntimeConfig(): ReturnType<typeof resolveGrokAppServerRuntimeConfig> {
-    if (this.runtimeConfig) {
-      return this.runtimeConfig;
-    }
-
-    this.runtimeConfig = resolveGrokAppServerRuntimeConfig();
-    return this.runtimeConfig;
-  }
-
   private getModel(): string {
     return this.configuredModel ?? FOCUSED_DIFF_MODEL;
   }
 
   private async requestFocusedDiffDecision(
-    client: XaiClientLike,
     filePath: string | undefined,
     hunks: FocusedDiffHunkSummary[]
   ): Promise<XaiAiSdkObjectResult> {
-    const controller = new AbortController();
-    const timeoutHandle = setTimeout(() => {
-      controller.abort();
-    }, this.timeoutMs);
+    const result = await this.objectCaller.generateObject({
+      model: this.getModel(),
+      promptCacheKey: this.promptVersion,
+      headers: {
+        "x-grok-conv-id": this.promptVersion
+      },
+      timeoutMs: this.timeoutMs,
+      schema: FOCUSED_DIFF_RESPONSE_SCHEMA,
+      schemaName: "focused_diff_hunk_decisions",
+      system: FOCUSED_DIFF_SYSTEM_PROMPT,
+      prompt: JSON.stringify({
+        filePath,
+        hunks
+      })
+    });
 
-    try {
-      return await client.generateObject({
-        model: this.getModel(),
-        promptCacheKey: this.promptVersion,
-        headers: {
-          "x-grok-conv-id": this.promptVersion
-        },
-        signal: controller.signal,
-        schema: FOCUSED_DIFF_RESPONSE_SCHEMA,
-        schemaName: "focused_diff_hunk_decisions",
-        system: FOCUSED_DIFF_SYSTEM_PROMPT,
-        prompt: JSON.stringify({
-          filePath,
-          hunks
-        })
-      });
-    } finally {
-      clearTimeout(timeoutHandle);
+    if (result.status === "ok") {
+      return result.response;
     }
+
+    throw new Error(result.status === "unavailable" ? "grok_unavailable" : result.reason);
   }
 }
 
