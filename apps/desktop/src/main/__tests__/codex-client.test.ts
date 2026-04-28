@@ -28,6 +28,7 @@ class MockTransport implements JsonRpcTransport {
       id: "turn-1"
     }
   };
+  static turnStartPreResponseNotification: unknown | null = null;
   static turnInterruptResult: unknown = {
     thread: {
       id: "thread-2"
@@ -229,6 +230,30 @@ class MockTransport implements JsonRpcTransport {
         return;
       }
 
+      if (searchTerm === "prompt-placeholder-title") {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data: params.params?.archived
+                ? []
+                : [
+                    {
+                      id: "thread-prompt-placeholder-title",
+                      name: "Let's make a button with an animated jaguar sipping tea. Just for grins.",
+                      preview:
+                        "Let's make a button with an animated jaguar sipping tea. Just for grins.",
+                      updatedAt: 1_777_401_256,
+                      cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                    },
+                  ],
+            },
+          }),
+        );
+        return;
+      }
+
       if (searchTerm === "search-product-parity") {
         const matchesCodexWindow =
           params.params?.limit === 50 &&
@@ -394,6 +419,15 @@ class MockTransport implements JsonRpcTransport {
                 preview:
                   "Name this thread something funny and spunky. Something about potatoes.",
                 updatedAt: 1_763_500_100,
+                session: {
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgnt"
+                }
+              },
+              {
+                id: "thread-placeholder",
+                name: "Untitled thread",
+                preview: "Investigate why new Codex threads keep showing as untitled",
+                updatedAt: 1_763_500_050,
                 session: {
                   cwd: "/Users/huntharo/pwrdrvr/PwrAgnt"
                 }
@@ -637,6 +671,9 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "turn/start") {
+      if (MockTransport.turnStartPreResponseNotification) {
+        this.messageHandler(JSON.stringify(MockTransport.turnStartPreResponseNotification));
+      }
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -751,6 +788,7 @@ describe("CodexAppServerClient", () => {
         id: "turn-1"
       }
     };
+    MockTransport.turnStartPreResponseNotification = null;
     MockTransport.reviewStartResult = {
       reviewThreadId: "thread-2",
       turn: {
@@ -804,10 +842,11 @@ describe("CodexAppServerClient", () => {
     const threads = await client.listThreads();
     const primaryThread = threads.find((thread) => thread.id === "thread-2");
     const derivedThread = threads.find((thread) => thread.id === "thread-1");
+    const placeholderThread = threads.find((thread) => thread.id === "thread-placeholder");
     const renamedThread = threads.find((thread) => thread.id === "thread-renamed");
     const archivedThread = threads.find((thread) => thread.id === "thread-archive");
 
-    expect(threads).toHaveLength(3);
+    expect(threads).toHaveLength(4);
     expect(primaryThread).toMatchObject({
       id: "thread-2",
       title: "Ship desktop shell",
@@ -828,6 +867,11 @@ describe("CodexAppServerClient", () => {
     );
     expect(derivedThread?.titleSource).toBe("derived");
     expect(derivedThread?.summary).toBeUndefined();
+    expect(placeholderThread).toMatchObject({
+      id: "thread-placeholder",
+      title: "Investigate why new Codex threads keep showing as untitled",
+      titleSource: "derived",
+    });
     expect(renamedThread).toMatchObject({
       id: "thread-renamed",
       title: "Spud up the thread",
@@ -880,6 +924,27 @@ describe("CodexAppServerClient", () => {
       expect.objectContaining({
         id: "thread-placeholder-title",
         title: "Why do all the worktree-hashes start with `moi`?",
+        titleSource: "derived",
+      }),
+    ]);
+
+    await client.close();
+  });
+
+  it("treats Codex prompt titles as derived placeholders", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const threads = await client.listThreads({ filter: "prompt-placeholder-title" });
+
+    expect(threads).toEqual([
+      expect.objectContaining({
+        id: "thread-prompt-placeholder-title",
+        title: "Make a button with an animated jaguar sipping tea. Just for grins",
         titleSource: "derived",
       }),
     ]);
@@ -2461,7 +2526,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("adds materialized app-created Codex threads to the Codex session index", async () => {
+  it("updates placeholder session index names after the first turn starts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-session-index-"));
     const sessionIndexPath = path.join(tempDir, "session_index.jsonl");
     MockTransport.threadStartResult = {
@@ -2491,6 +2556,15 @@ describe("CodexAppServerClient", () => {
       await client.startThread({
         cwd: "/Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moi2lzw4",
       });
+      await client.startTurn({
+        threadId: "019dd225-74fb-7a83-b4e4-5970680d9382",
+        input: [
+          {
+            type: "text",
+            text: "Figure out why new Codex threads keep showing as untitled in PwrAgnt",
+          },
+        ],
+      });
       await client.close();
 
       const indexLines = (await fs.readFile(sessionIndexPath, "utf8"))
@@ -2504,6 +2578,12 @@ describe("CodexAppServerClient", () => {
           source: "pwragnt",
           thread_name: "Untitled thread",
           updated_at: "2026-04-28T03:32:43.000Z",
+        },
+        {
+          id: "019dd225-74fb-7a83-b4e4-5970680d9382",
+          source: "pwragnt",
+          thread_name: "Figure out why new Codex threads keep showing as untitled in PwrAgnt",
+          updated_at: expect.any(String),
         },
       ]);
     } finally {
@@ -2638,6 +2718,249 @@ describe("CodexAppServerClient", () => {
       params: {
         threadId: "thread-2",
         name: "Renamed desktop shell",
+      },
+    });
+
+    await client.close();
+  });
+
+  it("generates thread titles through an ephemeral Codex helper turn", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "thread-title-helper",
+      },
+    };
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-title-helper",
+      },
+      turn: {
+        id: "turn-title-helper",
+      },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+    const forwardedNotifications: string[] = [];
+    client.onNotification((notification) => {
+      forwardedNotifications.push(notification.method);
+    });
+
+    const titlePromise = client.generateTitle({
+      prompt: "Name the thread from this prompt",
+      promptVersion: "thread-title-v1",
+      schema: {
+        type: "object",
+        required: ["title"],
+        properties: {
+          title: { type: "string" },
+        },
+      },
+      schemaName: "thread_title",
+      timeoutMs: 5_000,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: {
+        threadId: "thread-title-helper",
+        turn: {
+          id: "turn-title-helper",
+          output: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                title: "Add animated leopard tea button",
+              }),
+            },
+          ],
+        },
+      },
+    });
+
+    await expect(titlePromise).resolves.toEqual({
+      status: "ok",
+      object: {
+        title: "Add animated leopard tea button",
+      },
+    });
+    expect(forwardedNotifications).toEqual([]);
+
+    const requests = transport!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> }
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/start",
+        params: expect.objectContaining({
+          ephemeral: true,
+          model: "gpt-5.4-mini",
+          serviceTier: "fast",
+          config: {
+            web_search: "disabled",
+          },
+        }),
+      })
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "turn/start",
+        params: expect.objectContaining({
+          threadId: "thread-title-helper",
+          model: "gpt-5.4-mini",
+          serviceTier: "fast",
+          effort: "low",
+          outputSchema: expect.objectContaining({
+            type: "object",
+          }),
+        }),
+      })
+    );
+
+    await client.close();
+  });
+
+  it("uses helper title item completions when turn completion omits items", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "thread-title-helper",
+      },
+    };
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-title-helper",
+      },
+      turn: {
+        id: "turn-title-helper",
+      },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const titlePromise = client.generateTitle({
+      prompt: "Name the thread from this prompt",
+      promptVersion: "thread-title-v1",
+      schema: {
+        type: "object",
+        required: ["title"],
+        properties: {
+          title: { type: "string" },
+        },
+      },
+      schemaName: "thread_title",
+      timeoutMs: 5_000,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "item/completed",
+      params: {
+        threadId: "thread-title-helper",
+        turnId: "turn-title-helper",
+        item: {
+          type: "agentMessage",
+          id: "message-title-helper",
+          text: JSON.stringify({
+            title: "Animated jaguar tea button",
+          }),
+          phase: "final_answer",
+        },
+      },
+    });
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: {
+        threadId: "thread-title-helper",
+        turn: {
+          id: "turn-title-helper",
+          items: [],
+          status: "completed",
+        },
+      },
+    });
+
+    await expect(titlePromise).resolves.toEqual({
+      status: "ok",
+      object: {
+        title: "Animated jaguar tea button",
+      },
+    });
+
+    await client.close();
+  });
+
+  it("uses helper title notifications that arrive before the turn/start response", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "thread-title-helper",
+      },
+    };
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-title-helper",
+      },
+      turn: {
+        id: "turn-title-helper",
+      },
+    };
+    MockTransport.turnStartPreResponseNotification = {
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: {
+        threadId: "thread-title-helper",
+        turnId: "turn-title-helper",
+        output: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              title: "Early helper title",
+            }),
+          },
+        ],
+      },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await expect(
+      client.generateTitle({
+        prompt: "Name the thread from this prompt",
+        promptVersion: "thread-title-v1",
+        schema: {
+          type: "object",
+          required: ["title"],
+          properties: {
+            title: { type: "string" },
+          },
+        },
+        schemaName: "thread_title",
+        timeoutMs: 5_000,
+      })
+    ).resolves.toEqual({
+      status: "ok",
+      object: {
+        title: "Early helper title",
       },
     });
 

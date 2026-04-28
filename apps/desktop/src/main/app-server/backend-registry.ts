@@ -1,55 +1,56 @@
 import { app } from "electron";
 import { OverlayStore } from "@pwragnt/agent-core";
-import type {
-  AgentEvent,
-  ArchiveWorktreeRequest,
-  ArchiveWorktreeResponse,
-  ArchiveThreadRequest,
-  ArchiveThreadCleanupResult,
-  ArchiveThreadResponse,
-  AppServerListSkillsResponse,
-  AppServerNotification,
-  AppServerPendingRequestNotification,
-  AppServerReadThreadRequest,
-  AppServerReadThreadResponse,
-  AppServerThreadSummary,
-  AppServerTurnInputItem,
-  AppServerBackendKind,
-  AppServerCollaborationModeRequest,
-  BackendCapabilities,
-  BackendLaunchpadOptions,
-  BackendModelOption,
-  BackendSummary,
-  ListBackendsRequest,
-  ListBackendsResponse,
-  MaterializeDirectoryLaunchpadRequest,
-  MaterializeDirectoryLaunchpadResponse,
-  NavigationDirectoryGitStatus,
-  NavigationDirectorySummary,
-  NavigationLaunchpadDraft,
-  NavigationLaunchpadDefaults,
-  ResetDirectoryLaunchpadRequest,
-  ResetDirectoryLaunchpadResponse,
-  RenameThreadRequest,
-  RenameThreadResponse,
-  RestoreWorktreeRequest,
-  RestoreWorktreeResponse,
-  RestoreThreadRequest,
-  RestoreThreadResponse,
-  SetThreadExecutionModeRequest,
-  SetThreadExecutionModeResponse,
-  SetThreadModelSettingsRequest,
-  SetThreadModelSettingsResponse,
-  StartReviewRequest,
-  StartReviewResponse,
-  StartThreadResponse,
-  SubmitServerRequestRequest,
-  SubmitServerRequestResponse,
-  ThreadExecutionMode,
-  UpdateDirectoryLaunchpadRequest,
-  UpdateDirectoryLaunchpadResponse,
-  EnsureDirectoryLaunchpadRequest,
-  EnsureDirectoryLaunchpadResponse,
+import {
+  shortenDerivedThreadTitle,
+  type AgentEvent,
+  type ArchiveWorktreeRequest,
+  type ArchiveWorktreeResponse,
+  type ArchiveThreadRequest,
+  type ArchiveThreadCleanupResult,
+  type ArchiveThreadResponse,
+  type AppServerListSkillsResponse,
+  type AppServerNotification,
+  type AppServerPendingRequestNotification,
+  type AppServerReadThreadRequest,
+  type AppServerReadThreadResponse,
+  type AppServerThreadSummary,
+  type AppServerTurnInputItem,
+  type AppServerBackendKind,
+  type AppServerCollaborationModeRequest,
+  type BackendCapabilities,
+  type BackendLaunchpadOptions,
+  type BackendModelOption,
+  type BackendSummary,
+  type ListBackendsRequest,
+  type ListBackendsResponse,
+  type MaterializeDirectoryLaunchpadRequest,
+  type MaterializeDirectoryLaunchpadResponse,
+  type NavigationDirectoryGitStatus,
+  type NavigationDirectorySummary,
+  type NavigationLaunchpadDraft,
+  type NavigationLaunchpadDefaults,
+  type ResetDirectoryLaunchpadRequest,
+  type ResetDirectoryLaunchpadResponse,
+  type RenameThreadRequest,
+  type RenameThreadResponse,
+  type RestoreWorktreeRequest,
+  type RestoreWorktreeResponse,
+  type RestoreThreadRequest,
+  type RestoreThreadResponse,
+  type SetThreadExecutionModeRequest,
+  type SetThreadExecutionModeResponse,
+  type SetThreadModelSettingsRequest,
+  type SetThreadModelSettingsResponse,
+  type StartReviewRequest,
+  type StartReviewResponse,
+  type StartThreadResponse,
+  type SubmitServerRequestRequest,
+  type SubmitServerRequestResponse,
+  type ThreadExecutionMode,
+  type UpdateDirectoryLaunchpadRequest,
+  type UpdateDirectoryLaunchpadResponse,
+  type EnsureDirectoryLaunchpadRequest,
+  type EnsureDirectoryLaunchpadResponse,
 } from "@pwragnt/shared";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { GrokAppServerClient } from "../grok-app-server/client";
@@ -64,6 +65,12 @@ import {
   createCompositeJsonRpcObserver,
   createProtocolLogObserverFromEnv,
 } from "./protocol-log-observer";
+import {
+  ThreadTitleGenerationService,
+  type ThreadTitleGenerator,
+  type ThreadTitleGenerationResult,
+} from "./thread-title-generation-service";
+import { getMainLogger } from "../log";
 
 type InitializeResult = {
   serverInfo?: {
@@ -73,6 +80,17 @@ type InitializeResult = {
   methods?: string[];
 };
 
+const isDevelopment = process.env.NODE_ENV !== "production";
+const backendRegistryLog = getMainLogger("pwragnt:backend-registry");
+
+function logDebug(event: string, payload: Record<string, unknown>): void {
+  if (!isDevelopment) {
+    return;
+  }
+
+  backendRegistryLog.info(event, payload);
+}
+
 type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
@@ -80,6 +98,7 @@ type BackendClient = {
   archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   restoreThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   renameThread?(params: { threadId: string; name: string }): Promise<{ threadId: string }>;
+  generateTitle?: ThreadTitleGenerator["generateTitle"];
   listSkills(params?: {
     cwd?: string;
     cwds?: string[];
@@ -141,6 +160,14 @@ type PendingServerRequest = {
   resolve: (response: SubmitServerRequestRequest["response"]) => void;
   reject: (error: Error) => void;
 };
+
+type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle">;
+
+type ThreadTitleGenerationLogStatus =
+  | ThreadTitleGenerationResult["status"]
+  | "applied"
+  | "requesting"
+  | "skipped";
 
 type WorktreeArchiveCandidate = {
   repositoryPath: string;
@@ -422,6 +449,95 @@ function isEmptyDirectoryLaunchpadDraft(launchpad: NavigationLaunchpadDraft): bo
   );
 }
 
+function extractFirstMeaningfulTextInput(input: AppServerTurnInputItem[]): string | undefined {
+  const text = input
+    .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")
+    .map((item) => item.text.trim())
+    .filter(Boolean)
+    .join("\n");
+  return text || undefined;
+}
+
+function buildTitleGenerationKey(
+  backend: AppServerBackendKind,
+  threadId: string,
+): string {
+  return `${backend}:${threadId}`;
+}
+
+function buildPromptHash(prompt: string): string {
+  return prompt.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function isEligibleForGeneratedTitle(
+  thread: AppServerThreadSummary | undefined,
+  prompt: string,
+): boolean {
+  if (!thread) {
+    return true;
+  }
+  if (isPromptPlaceholderTitle(thread.title, prompt)) {
+    return true;
+  }
+  if (thread.titleSource === "explicit") {
+    return false;
+  }
+  if (isInjectedContextPlaceholderTitle(thread.title)) {
+    return true;
+  }
+  if (thread.titleSource === "fallback" || thread.title === "Untitled thread") {
+    return true;
+  }
+
+  const derivedTitle = shortenDerivedThreadTitle(prompt) ?? prompt;
+  return normalizeTitleForComparison(thread.title) === normalizeTitleForComparison(derivedTitle);
+}
+
+function normalizeTitleForComparison(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function isPromptPlaceholderTitle(title: string, prompt: string): boolean {
+  const normalizedTitle = normalizeTitleForComparison(title);
+  const normalizedPrompt = normalizeTitleForComparison(prompt);
+  const derivedTitle = shortenDerivedThreadTitle(prompt) ?? prompt;
+  return (
+    normalizedTitle === normalizedPrompt ||
+    normalizedTitle === normalizeTitleForComparison(derivedTitle)
+  );
+}
+
+function isInjectedContextPlaceholderTitle(title: string): boolean {
+  const normalizedTitle = normalizeTitleForComparison(title);
+  return (
+    normalizedTitle.startsWith("# agents.md instructions") ||
+    normalizedTitle.startsWith("agents.md instructions for")
+  );
+}
+
+function truncateLogValue(value: string | undefined): string | null {
+  const normalized = value?.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
+}
+
+function buildTitleEligibilityLogDetails(
+  thread: AppServerThreadSummary | undefined,
+  prompt: string,
+): Record<string, unknown> {
+  return {
+    currentTitle: truncateLogValue(thread?.title),
+    currentTitleSource: thread?.titleSource ?? null,
+    promptTitle: truncateLogValue(shortenDerivedThreadTitle(prompt) ?? prompt),
+    promptMatchesCurrentTitle: thread ? isPromptPlaceholderTitle(thread.title, prompt) : null,
+    injectedContextPlaceholderTitle: thread
+      ? isInjectedContextPlaceholderTitle(thread.title)
+      : null,
+  };
+}
+
 function getDefaultModelOption(
   backend: AppServerBackendKind,
   options?: BackendLaunchpadOptions,
@@ -481,12 +597,21 @@ export class DesktopBackendRegistry {
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly createScratchProjectDirectory: () => Promise<string>;
+  private readonly threadTitleGenerationService?: ThreadTitleService;
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
   >();
   private readonly unsubscribers: Array<() => void> = [];
   private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
+  private readonly pendingTitleGenerations = new Map<
+    string,
+    {
+      promptHash: string;
+      token: number;
+    }
+  >();
+  private titleGenerationSequence = 0;
 
   constructor(options?: {
     codexClient?: BackendClient;
@@ -496,6 +621,7 @@ export class DesktopBackendRegistry {
     gitDirectoryService?: GitDirectoryService;
     worktreeArchiveService?: WorktreeArchiveService;
     createScratchProjectDirectory?: () => Promise<string>;
+    threadTitleGenerationService?: ThreadTitleService | null;
   }) {
     const replayClients = createReplayClientsFromEnv();
     const codexDefaultCapture = options?.codexClient
@@ -575,6 +701,22 @@ export class DesktopBackendRegistry {
       options?.worktreeArchiveService ?? new WorktreeArchiveService();
     this.createScratchProjectDirectory =
       options?.createScratchProjectDirectory ?? createScratchProjectDirectory;
+    this.threadTitleGenerationService =
+      options?.threadTitleGenerationService === null
+        ? undefined
+        : options?.threadTitleGenerationService ??
+          (replayClients
+            ? undefined
+            : new ThreadTitleGenerationService({
+                generators: {
+                  codex: this.codexDefaultClient.generateTitle
+                    ? {
+                        generateTitle: (params) =>
+                          this.codexDefaultClient.generateTitle!(params),
+                      }
+                    : undefined,
+                },
+              }));
 
     this.subscribeClient("codex", this.codexDefaultClient);
     this.subscribeClient("codex", this.codexFullAccessClient);
@@ -921,11 +1063,18 @@ export class DesktopBackendRegistry {
       });
     }
 
-    return {
+    const response = {
       backend: params.backend,
       threadId: result.threadId,
       turnId: result.turnId,
     };
+    this.scheduleThreadTitleGeneration({
+      backend: params.backend,
+      threadId: result.threadId,
+      input: params.input,
+    });
+
+    return response;
   }
 
   async startReview(params: StartReviewRequest): Promise<StartReviewResponse> {
@@ -1577,6 +1726,159 @@ export class DesktopBackendRegistry {
     }
 
     return await client.renameThread({ threadId, name });
+  }
+
+  private scheduleThreadTitleGeneration(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+  }): void {
+    if (!this.threadTitleGenerationService) {
+      return;
+    }
+
+    const prompt = extractFirstMeaningfulTextInput(params.input);
+    if (!prompt) {
+      return;
+    }
+
+    const key = buildTitleGenerationKey(params.backend, params.threadId);
+    const promptHash = buildPromptHash(prompt);
+    const current = this.pendingTitleGenerations.get(key);
+    if (current?.promptHash === promptHash) {
+      return;
+    }
+
+    const token = ++this.titleGenerationSequence;
+    this.pendingTitleGenerations.set(key, {
+      promptHash,
+      token,
+    });
+
+    void this.generateAndApplyThreadTitle({
+      backend: params.backend,
+      threadId: params.threadId,
+      prompt,
+      key,
+      token,
+    });
+  }
+
+  private async generateAndApplyThreadTitle(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prompt: string;
+    key: string;
+    token: number;
+  }): Promise<void> {
+    try {
+      const currentThread = await this.findThreadForTitleGeneration({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      if (!isEligibleForGeneratedTitle(currentThread, params.prompt)) {
+        this.logThreadTitleGeneration(
+          "skipped",
+          params,
+          "current_title_not_eligible",
+          buildTitleEligibilityLogDetails(currentThread, params.prompt)
+        );
+        return;
+      }
+
+      this.logThreadTitleGeneration("requesting", params, undefined, {
+        promptTitle: truncateLogValue(shortenDerivedThreadTitle(params.prompt) ?? params.prompt),
+      });
+      const result = await this.threadTitleGenerationService?.generateTitle({
+        backend: params.backend,
+        userPrompt: params.prompt,
+      });
+      if (!result || result.status !== "generated") {
+        this.logThreadTitleGeneration(
+          result?.status ?? "unavailable",
+          params,
+          result?.reason ?? "title_generation_unavailable"
+        );
+        return;
+      }
+      this.logThreadTitleGeneration("generated", params, undefined, {
+        generatedTitle: truncateLogValue(result.title),
+        cachedTokens: result.cachedTokens ?? null,
+      });
+
+      const pending = this.pendingTitleGenerations.get(params.key);
+      if (!pending || pending.token !== params.token) {
+        this.logThreadTitleGeneration("skipped", params, "stale_generation", {
+          generatedTitle: truncateLogValue(result.title),
+        });
+        return;
+      }
+
+      const latestThread = await this.findThreadForTitleGeneration({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      if (!latestThread || !isEligibleForGeneratedTitle(latestThread, params.prompt)) {
+        this.logThreadTitleGeneration(
+          "skipped",
+          params,
+          "latest_title_not_eligible",
+          buildTitleEligibilityLogDetails(latestThread, params.prompt)
+        );
+        return;
+      }
+
+      if (params.backend === "codex") {
+        await this.withCodexThreadClient(params.threadId, async (client) =>
+          await this.renameWithClient(client, params.threadId, result.title)
+        );
+      } else {
+        await this.renameWithClient(this.grokClient, params.threadId, result.title);
+      }
+      this.logThreadTitleGeneration("applied", params, undefined, {
+        generatedTitle: truncateLogValue(result.title),
+      });
+    } catch (error) {
+      this.logThreadTitleGeneration(
+        "failed",
+        params,
+        error instanceof Error ? error.message : String(error)
+      );
+    } finally {
+      const pending = this.pendingTitleGenerations.get(params.key);
+      if (pending?.token === params.token) {
+        this.pendingTitleGenerations.delete(params.key);
+      }
+    }
+  }
+
+  private async findThreadForTitleGeneration(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<AppServerThreadSummary | undefined> {
+    const activeThreads = await this.listThreads({
+      backend: params.backend,
+      archived: false,
+    }).catch(() => []);
+    return activeThreads.find((thread) => thread.id === params.threadId);
+  }
+
+  private logThreadTitleGeneration(
+    status: ThreadTitleGenerationLogStatus,
+    params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+    },
+    reason?: string,
+    details?: Record<string, unknown>,
+  ): void {
+    logDebug("threadTitleGeneration", {
+      backend: params.backend,
+      threadId: params.threadId,
+      status,
+      reason: reason ?? null,
+      ...details,
+    });
   }
 
   private async handleServerRequest(

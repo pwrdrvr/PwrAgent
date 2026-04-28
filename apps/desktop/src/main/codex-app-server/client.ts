@@ -65,9 +65,18 @@ import {
   type ThreadDirectoryEnrichment,
 } from "./thread-directory-enricher";
 import { StdioJsonRpcTransport } from "./stdio-transport";
+import type {
+  ThreadTitleAdapterParams,
+  ThreadTitleAdapterResult,
+} from "../app-server/thread-title-generation-service";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
+const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.4-mini";
+const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
+const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
+  web_search: "disabled",
+};
 const SUPPORTED_CODEX_MODEL_ORDER = [
   "gpt-5.5",
   "gpt-5.4",
@@ -262,6 +271,85 @@ function pickString(
     }
   }
   return undefined;
+}
+
+function readStringFromRecord(value: unknown, key: string): string | undefined {
+  const record = asRecord(value);
+  return record ? pickString(record, [key]) : undefined;
+}
+
+function buildHelperTurnKey(threadId: string, turnId: string): string {
+  return `${threadId}:${turnId}`;
+}
+
+function extractTurnIdFromNotificationParams(params: unknown): string | undefined {
+  const directTurnId = readStringFromRecord(params, "turnId");
+  if (directTurnId) {
+    return directTurnId;
+  }
+
+  const turn = asRecord(params)?.turn;
+  return readStringFromRecord(turn, "id");
+}
+
+function extractThreadIdFromNotification(
+  notification: AppServerNotification,
+  rawParams: unknown
+): string | undefined {
+  return (
+    readStringFromRecord(notification.params, "threadId") ??
+    extractThreadIdFromValue(rawParams)
+  );
+}
+
+function extractGeneratedTitleObject(value: unknown): unknown | undefined {
+  if (typeof value === "string") {
+    const parsed = parseStructuredValue(value);
+    return isThreadTitleObject(parsed) ? parsed : undefined;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const object = extractGeneratedTitleObject(entry);
+      if (object) {
+        return object;
+      }
+    }
+    return undefined;
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  if (isThreadTitleObject(record)) {
+    return { title: record.title };
+  }
+
+  for (const key of [
+    "output",
+    "content",
+    "message",
+    "text",
+    "item",
+    "items",
+    "turn",
+    "response",
+    "result",
+    "data",
+  ]) {
+    const object = extractGeneratedTitleObject(record[key]);
+    if (object) {
+      return object;
+    }
+  }
+
+  return undefined;
+}
+
+function isThreadTitleObject(value: unknown): value is { title: string } {
+  const record = asRecord(value);
+  return typeof record?.title === "string" && record.title.trim().length > 0;
 }
 
 function pickRawString(
@@ -464,22 +552,19 @@ function isPlaceholderThreadTitle(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === "untitled thread";
 }
 
+function normalizeTitleForComparison(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 function getThreadTitleInfo(record: Record<string, unknown>): {
   title: string;
   titleSource: AppServerThreadTitleSource;
 } {
   const sessionRecord = asRecord(record.session);
-  const explicitTitle =
+  const explicitTitle = normalizeExplicitThreadName(
     pickString(record, ["title", "name", "headline"]) ??
-    pickString(sessionRecord ?? {}, ["title", "name", "headline"]);
-
-  if (explicitTitle && !isPlaceholderThreadTitle(explicitTitle)) {
-    return {
-      title: explicitTitle,
-      titleSource: "explicit",
-    };
-  }
-
+      pickString(sessionRecord ?? {}, ["title", "name", "headline"])
+  );
   const derivedTitle =
     pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
     pickString(sessionRecord ?? {}, [
@@ -488,10 +573,31 @@ function getThreadTitleInfo(record: Record<string, unknown>): {
       "firstUserMessage",
       "first_user_message",
     ]);
+  const shortenedDerivedTitle = shortenDerivedThreadTitle(derivedTitle) ?? derivedTitle;
+
+  if (explicitTitle && !isPlaceholderThreadTitle(explicitTitle)) {
+    if (
+      derivedTitle &&
+      (normalizeTitleForComparison(explicitTitle) === normalizeTitleForComparison(derivedTitle) ||
+        (shortenedDerivedTitle &&
+          normalizeTitleForComparison(explicitTitle) ===
+            normalizeTitleForComparison(shortenedDerivedTitle)))
+    ) {
+      return {
+        title: shortenedDerivedTitle ?? explicitTitle,
+        titleSource: "derived",
+      };
+    }
+
+    return {
+      title: explicitTitle,
+      titleSource: "explicit",
+    };
+  }
 
   if (derivedTitle) {
     return {
-      title: shortenDerivedThreadTitle(derivedTitle) ?? derivedTitle,
+      title: shortenedDerivedTitle ?? derivedTitle,
       titleSource: "derived",
     };
   }
@@ -500,6 +606,28 @@ function getThreadTitleInfo(record: Record<string, unknown>): {
     title: "Untitled thread",
     titleSource: "fallback",
   };
+}
+
+function normalizeExplicitThreadName(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || isPlaceholderThreadTitle(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function isPlaceholderThreadName(value: string | undefined): boolean {
+  return isPlaceholderThreadTitle(value);
+}
+
+function deriveThreadNameFromInput(input: AppServerTurnInputItem[]): string | undefined {
+  const text = input
+    .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")
+    .map((item) => item.text.trim())
+    .filter(Boolean)
+    .join("\n");
+
+  return (shortenDerivedThreadTitle(text) ?? text) || undefined;
 }
 
 async function resolveThreadProjectKey(
@@ -1713,14 +1841,12 @@ function extractThreadIndexEntryFromValue(
       "first_user_message",
     ]);
   const rawName =
-    pickString(record, ["threadName", "thread_name", "name", "title"]) ??
-    pickString(threadRecord ?? {}, ["threadName", "thread_name", "name", "title"]);
+    normalizeExplicitThreadName(
+      pickString(record, ["threadName", "thread_name", "name", "title"]) ??
+        pickString(threadRecord ?? {}, ["threadName", "thread_name", "name", "title"])
+    );
   const indexName =
-    rawName && !isPlaceholderThreadTitle(rawName)
-      ? rawName
-      : preview
-        ? shortenDerivedThreadTitle(preview) ?? preview
-        : rawName;
+    rawName ?? (preview ? shortenDerivedThreadTitle(preview) ?? preview : undefined);
   const updatedAt =
     normalizeEpochTimestamp(
       pickNumber(record, ["updatedAt", "updated_at", "lastActivityAt", "createdAt"]) ??
@@ -2318,6 +2444,8 @@ function buildThreadStartPayload(params: {
   approvalPolicy?: string;
   sandbox?: string;
   serviceTier?: string;
+  ephemeral?: boolean;
+  config?: CodexThreadStartParams["config"];
 }): CodexThreadStartParams {
   const base: CodexThreadStartParams = {
     experimentalRawEvents: false,
@@ -2344,6 +2472,12 @@ function buildThreadStartPayload(params: {
   const serviceTier = normalizeCodexServiceTier(params.serviceTier);
   if (serviceTier) {
     base.serviceTier = serviceTier;
+  }
+  if (params.ephemeral !== undefined) {
+    base.ephemeral = params.ephemeral;
+  }
+  if (params.config) {
+    base.config = params.config;
   }
 
   return base;
@@ -2462,6 +2596,8 @@ function buildTurnStartPayload(params: {
   input: AppServerTurnInputItem[];
   model?: string;
   reasoningEffort?: string;
+  serviceTier?: string;
+  outputSchema?: CodexTurnStartParams["outputSchema"];
   collaborationMode?: AppServerCollaborationModeRequest;
   collaborationFallbackModel?: string;
   collaborationFallbackReasoningEffort?: string;
@@ -2478,6 +2614,13 @@ function buildTurnStartPayload(params: {
   const reasoningEffort = normalizeCodexReasoningEffort(params.reasoningEffort);
   if (reasoningEffort) {
     base.effort = reasoningEffort;
+  }
+  const serviceTier = normalizeCodexServiceTier(params.serviceTier);
+  if (serviceTier) {
+    base.serviceTier = serviceTier;
+  }
+  if (params.outputSchema) {
+    base.outputSchema = params.outputSchema;
   }
 
   const collaborationMode = buildCollaborationModePayload({
@@ -2555,6 +2698,16 @@ async function requestWithFallbacks(params: {
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+type HelperTurnResult =
+  | {
+      status: "ok";
+      object: unknown;
+    }
+  | {
+      status: "failed";
+      error: Error;
+    };
+
 export class CodexAppServerClient {
   private readonly connection: JsonRpcConnection;
   private readonly threadDirectoryEnricher: (
@@ -2566,12 +2719,23 @@ export class CodexAppServerClient {
   private readonly notificationListeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
   >();
-  private readonly indexedThreadIds = new Set<string>();
+  private readonly indexedThreads = new Map<string, CodexSessionIndexEntry>();
   private readonly requestListeners = new Set<
     (
       request: AppServerPendingRequestNotification
     ) => Promise<unknown> | unknown
   >();
+  private readonly helperThreadIds = new Set<string>();
+  private readonly helperTurnWaiters = new Map<
+    string,
+    {
+      resolve: (object: unknown) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private readonly completedHelperTurnResults = new Map<string, HelperTurnResult>();
+  private readonly helperTurnTitleObjects = new Map<string, unknown>();
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.connection = new JsonRpcConnection(
@@ -2606,13 +2770,18 @@ export class CodexAppServerClient {
         await this.recordThreadInSessionIndex(params);
       }
 
+      const normalized = normalizeServerNotification(
+        method,
+        params,
+      );
+      const helperThreadId = extractThreadIdFromNotification(normalized, params);
+      if (helperThreadId && this.helperThreadIds.has(helperThreadId)) {
+        this.handleHelperThreadNotification(method, normalized);
+        return;
+      }
+
       for (const listener of this.notificationListeners) {
-        await listener(
-          normalizeServerNotification(
-            method,
-            params,
-          )
-        );
+        await listener(normalized);
       }
     });
     this.connection.setRequestHandler(async (method, params, rpcId) => {
@@ -2659,6 +2828,10 @@ export class CodexAppServerClient {
     this.initialized = false;
     this.initializationPromise = null;
     this.initializeResult = null;
+    this.rejectHelperTurnWaiters(new Error("codex app server client closed"));
+    this.helperThreadIds.clear();
+    this.completedHelperTurnResults.clear();
+    this.helperTurnTitleObjects.clear();
     await this.connection.close();
   }
 
@@ -2696,18 +2869,163 @@ export class CodexAppServerClient {
 
   private async recordThreadInSessionIndex(value: unknown): Promise<void> {
     const entry = extractThreadIndexEntryFromValue(value);
-    if (!entry || this.indexedThreadIds.has(entry.id)) {
+    const previous = entry ? this.indexedThreads.get(entry.id) : undefined;
+    if (
+      !entry ||
+      (previous &&
+        (previous.thread_name === entry.thread_name ||
+          !isPlaceholderThreadName(previous.thread_name)))
+    ) {
       return;
     }
 
     try {
       await appendCodexSessionIndexEntry(this.getSessionIndexPath(), entry);
-      this.indexedThreadIds.add(entry.id);
+      this.indexedThreads.set(entry.id, entry);
     } catch (error) {
       codexClientLog.warn("failed to append codex session index", {
         threadId: entry.id,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  private async recordDerivedThreadNameInSessionIndex(params: {
+    threadId: string;
+    input: AppServerTurnInputItem[];
+  }): Promise<void> {
+    const previous = this.indexedThreads.get(params.threadId);
+    const threadName = deriveThreadNameFromInput(params.input);
+    if (!previous || !threadName || !isPlaceholderThreadName(previous.thread_name)) {
+      return;
+    }
+
+    const entry: CodexSessionIndexEntry = {
+      ...previous,
+      thread_name: threadName,
+      updated_at: new Date().toISOString(),
+    };
+
+    try {
+      await appendCodexSessionIndexEntry(this.getSessionIndexPath(), entry);
+      this.indexedThreads.set(entry.id, entry);
+    } catch (error) {
+      codexClientLog.warn("failed to append derived codex session index title", {
+        threadId: entry.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private handleHelperThreadNotification(
+    method: string,
+    notification: AppServerNotification
+  ): void {
+    if (
+      method !== "item/completed" &&
+      method !== "turn/completed" &&
+      method !== "turn/failed"
+    ) {
+      return;
+    }
+
+    const threadId = readStringFromRecord(notification.params, "threadId");
+    const turnId = extractTurnIdFromNotificationParams(notification.params);
+    if (!threadId || !turnId) {
+      return;
+    }
+
+    const key = buildHelperTurnKey(threadId, turnId);
+    if (method === "item/completed") {
+      const object = extractGeneratedTitleObject(notification.params);
+      if (object) {
+        this.helperTurnTitleObjects.set(key, object);
+      }
+      return;
+    }
+
+    const waiter = this.helperTurnWaiters.get(key);
+    if (method === "turn/failed") {
+      const error = new Error("codex_title_turn_failed");
+      this.helperTurnTitleObjects.delete(key);
+      if (!waiter) {
+        this.completedHelperTurnResults.set(key, {
+          status: "failed",
+          error,
+        });
+        return;
+      }
+      clearTimeout(waiter.timer);
+      this.helperTurnWaiters.delete(key);
+      waiter.reject(error);
+      return;
+    }
+
+    const object =
+      extractGeneratedTitleObject(notification.params) ??
+      this.helperTurnTitleObjects.get(key);
+    this.helperTurnTitleObjects.delete(key);
+    if (!object) {
+      const error = new Error("codex_title_turn_completed_without_title");
+      if (!waiter) {
+        this.completedHelperTurnResults.set(key, {
+          status: "failed",
+          error,
+        });
+        return;
+      }
+      clearTimeout(waiter.timer);
+      this.helperTurnWaiters.delete(key);
+      waiter.reject(error);
+      return;
+    }
+
+    if (!waiter) {
+      this.completedHelperTurnResults.set(key, {
+        status: "ok",
+        object,
+      });
+      return;
+    }
+
+    clearTimeout(waiter.timer);
+    this.helperTurnWaiters.delete(key);
+    waiter.resolve(object);
+  }
+
+  private waitForHelperTurnTitle(params: {
+    threadId: string;
+    turnId: string;
+    timeoutMs: number;
+  }): Promise<unknown> {
+    const key = buildHelperTurnKey(params.threadId, params.turnId);
+    const completed = this.completedHelperTurnResults.get(key);
+    if (completed) {
+      this.completedHelperTurnResults.delete(key);
+      if (completed.status === "failed") {
+        return Promise.reject(completed.error);
+      }
+      return Promise.resolve(completed.object);
+    }
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.helperTurnWaiters.delete(key);
+        reject(new Error("codex_title_turn_timeout"));
+      }, Math.max(100, params.timeoutMs));
+      this.helperTurnWaiters.set(key, {
+        resolve,
+        reject,
+        timer,
+      });
+    });
+  }
+
+  private rejectHelperTurnWaiters(error: Error): void {
+    for (const [key, waiter] of this.helperTurnWaiters) {
+      clearTimeout(waiter.timer);
+      this.helperTurnWaiters.delete(key);
+      waiter.reject(error);
     }
   }
 
@@ -2926,8 +3244,99 @@ export class CodexAppServerClient {
 
     const threadId = extractThreadIdFromValue(result) ?? params.threadId;
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
+    await this.recordDerivedThreadNameInSessionIndex({
+      threadId: params.threadId,
+      input: params.input,
+    });
 
     return { threadId, turnId };
+  }
+
+  async generateTitle(params: ThreadTitleAdapterParams): Promise<ThreadTitleAdapterResult> {
+    await this.ensureInitialized();
+
+    let helperThreadId: string | undefined;
+    const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
+    try {
+      const threadStartResult = await requestWithFallbacks({
+        client: this.connection,
+        methods: ["thread/start"],
+        payloads: [
+          buildThreadStartPayload({
+            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            serviceTier: "fast",
+            ephemeral: true,
+            config: CODEX_THREAD_TITLE_CONFIG,
+          }),
+          buildThreadStartPayload({
+            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            ephemeral: true,
+            config: CODEX_THREAD_TITLE_CONFIG,
+          }),
+        ],
+        timeoutMs,
+      });
+      helperThreadId = extractThreadIdFromValue(threadStartResult);
+      if (!helperThreadId) {
+        return {
+          status: "failed",
+          reason: "codex_title_thread_start_missing_thread_id",
+        };
+      }
+      this.helperThreadIds.add(helperThreadId);
+
+      const turnStartResult = await requestWithFallbacks({
+        client: this.connection,
+        methods: ["turn/start"],
+        payloads: [
+          buildTurnStartPayload({
+            threadId: helperThreadId,
+            input: [{ type: "text", text: params.prompt }],
+            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            serviceTier: "fast",
+            reasoningEffort: "low",
+            outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
+          }),
+          buildTurnStartPayload({
+            threadId: helperThreadId,
+            input: [{ type: "text", text: params.prompt }],
+            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            reasoningEffort: "low",
+            outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
+          }),
+        ],
+        timeoutMs,
+      });
+      const immediateObject = extractGeneratedTitleObject(turnStartResult);
+      if (immediateObject) {
+        return {
+          status: "ok",
+          object: immediateObject,
+        };
+      }
+
+      const turnId = extractTurnIdFromValue(turnStartResult);
+      if (!turnId) {
+        return {
+          status: "failed",
+          reason: "codex_title_turn_start_missing_turn_id",
+        };
+      }
+
+      return {
+        status: "ok",
+        object: await this.waitForHelperTurnTitle({
+          threadId: helperThreadId,
+          turnId,
+          timeoutMs,
+        }),
+      };
+    } catch (error) {
+      return {
+        status: "failed",
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   async startReview(params: {
