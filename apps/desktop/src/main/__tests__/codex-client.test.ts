@@ -206,6 +206,29 @@ class MockTransport implements JsonRpcTransport {
         return;
       }
 
+      if (searchTerm === "placeholder-title") {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data: params.params?.archived
+                ? []
+                : [
+                    {
+                      id: "thread-placeholder-title",
+                      name: "Untitled thread",
+                      preview: "Why do all the worktree-hashes start with `moi`?",
+                      updatedAt: 1_777_401_255,
+                      cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                    },
+                  ],
+            },
+          }),
+        );
+        return;
+      }
+
       if (searchTerm === "search-product-parity") {
         const matchesCodexWindow =
           params.params?.limit === 50 &&
@@ -839,6 +862,27 @@ describe("CodexAppServerClient", () => {
         })
       ])
     );
+
+    await client.close();
+  });
+
+  it("derives a title from preview when Codex returns the placeholder name", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const threads = await client.listThreads({ filter: "placeholder-title" });
+
+    expect(threads).toEqual([
+      expect.objectContaining({
+        id: "thread-placeholder-title",
+        title: "Why do all the worktree-hashes start with `moi`?",
+        titleSource: "derived",
+      }),
+    ]);
 
     await client.close();
   });
@@ -2461,6 +2505,52 @@ describe("CodexAppServerClient", () => {
           thread_name: "Untitled thread",
           updated_at: "2026-04-28T03:32:43.000Z",
         },
+      ]);
+    } finally {
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("records a derived session-index name when Codex returns the placeholder name", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-session-index-"));
+    const sessionIndexPath = path.join(tempDir, "session_index.jsonl");
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "thread-placeholder-title",
+        path: path.join(tempDir, "sessions/thread-placeholder-title.jsonl"),
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        preview: "Why do all the worktree-hashes start with `moi`?",
+        name: "Untitled thread",
+        updatedAt: 1_777_401_255,
+      },
+      model: "gpt-5.5",
+    };
+
+    try {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+        sessionIndexPath,
+      });
+
+      await client.startThread({
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+      });
+      await client.close();
+
+      const indexLines = (await fs.readFile(sessionIndexPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+      expect(indexLines).toEqual([
+        expect.objectContaining({
+          id: "thread-placeholder-title",
+          source: "pwragnt",
+          thread_name: "Why do all the worktree-hashes start with `moi`?",
+        }),
       ]);
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
