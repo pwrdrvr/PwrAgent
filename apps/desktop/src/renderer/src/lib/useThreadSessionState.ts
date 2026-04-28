@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerPendingRequestNotification,
   AppServerReadThreadResponse,
+  AppServerReviewOutput,
   AppServerToolRequestUserInputNotification,
   AppServerThreadEntry,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
+  AppServerThreadReviewEntry,
   AppServerThreadTurnMetadata,
   AppServerThreadImagePart,
   NavigationThreadSummary,
@@ -326,6 +328,25 @@ function appendMessageEntries(
   };
 }
 
+function appendThreadEntries(
+  response: AppServerReadThreadResponse | undefined,
+  params: {
+    backend: NavigationThreadSummary["source"];
+    threadId: NavigationThreadSummary["id"];
+  },
+  entries: AppServerThreadEntry[]
+): AppServerReadThreadResponse {
+  const baseResponse = response ?? buildEmptyResponse(params);
+  return {
+    ...baseResponse,
+    fetchedAt: Date.now(),
+    replay: {
+      ...baseResponse.replay,
+      entries: mergeItems(baseResponse.replay.entries, entries),
+    },
+  };
+}
+
 function appendPendingAssistantMessage(
   response: AppServerReadThreadResponse | undefined,
   params: {
@@ -343,6 +364,96 @@ function appendPendingAssistantMessage(
     ...optimisticEntries,
     pendingAssistantMessage,
   ]);
+}
+
+function normalizeReviewOutput(value: unknown): AppServerReviewOutput | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const findings = Array.isArray(record.findings) ? record.findings : undefined;
+  if (
+    !findings ||
+    (record.overall_correctness !== "patch is correct" &&
+      record.overall_correctness !== "patch is incorrect") ||
+    typeof record.overall_explanation !== "string" ||
+    typeof record.overall_confidence_score !== "number"
+  ) {
+    return undefined;
+  }
+
+  return {
+    findings: findings as AppServerReviewOutput["findings"],
+    overall_correctness: record.overall_correctness,
+    overall_explanation: record.overall_explanation,
+    overall_confidence_score: record.overall_confidence_score,
+  };
+}
+
+function reviewEntryFromCompletedItem(params: {
+  turnId?: string;
+  item?: {
+    id: string;
+    type: string;
+    review?: string;
+    text?: string;
+    data?: Record<string, unknown>;
+  };
+}): AppServerThreadReviewEntry | undefined {
+  const item = params.item;
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return undefined;
+  }
+
+  const record = item as {
+    id?: unknown;
+    type?: unknown;
+    review?: unknown;
+    text?: unknown;
+    data?: Record<string, unknown>;
+  };
+  if (record.type !== "enteredReviewMode" && record.type !== "exitedReviewMode") {
+    return undefined;
+  }
+
+  const review =
+    typeof record.review === "string"
+      ? record.review
+      : typeof record.text === "string"
+        ? record.text
+        : "";
+  const output = normalizeReviewOutput(record.data?.reviewOutput);
+  const turn = buildTurnMetadata({
+    fallbackId: typeof params.turnId === "string" ? params.turnId : undefined,
+    fallbackStatus:
+      record.type === "enteredReviewMode" ? "in_progress" : "completed",
+  });
+
+  return {
+    type: "review",
+    id: typeof record.id === "string" ? record.id : `review-${record.type}`,
+    review,
+    ...(record.type === "enteredReviewMode"
+      ? { displayText: review || "Code review started" }
+      : {}),
+    ...(output ? { output } : {}),
+    ...(turn ? { turn } : {}),
+    createdAt: Date.now(),
+  };
+}
+
+function hasReviewEntryForTurn(
+  response: AppServerReadThreadResponse | undefined,
+  turnId: string | undefined
+): boolean {
+  if (!response || !turnId) {
+    return false;
+  }
+
+  return response.replay.entries.some(
+    (entry) => entry.type === "review" && entry.turn?.id === turnId
+  );
 }
 
 function retainSessionCache(
@@ -838,6 +949,33 @@ export function useThreadSessionState(params: {
           };
         }
 
+        if (event.notification.method === "item/completed") {
+          const reviewEntry = reviewEntryFromCompletedItem(event.notification.params);
+          if (reviewEntry) {
+            const nextResponse = appendThreadEntries(
+              current.response,
+              {
+                backend: event.backend,
+                threadId: notificationThreadId,
+              },
+              [reviewEntry]
+            );
+
+            return {
+              ...current,
+              expectOwnUpdate: true,
+              interacted: true,
+              lastTouchedAt: nextLastTouchedAt,
+              optimisticEntries: current.optimisticEntries.filter(
+                (entry) =>
+                  entry.type !== "review" ||
+                  entry.displayText !== reviewEntry.displayText
+              ),
+              response: nextResponse,
+            };
+          }
+        }
+
         if (event.notification.method === "turn/completed") {
           const completedTurn = buildTurnMetadata({
             fallbackId: event.notification.params.turnId ?? current.activeTurnId,
@@ -845,9 +983,15 @@ export function useThreadSessionState(params: {
             fallbackStatus: "completed",
             turn: event.notification.params.turn,
           });
+          const completedTurnHasReview = hasReviewEntryForTurn(
+            current.response,
+            completedTurn?.id
+          );
           const completedTurnText = readCompletedTurnText(event.notification.params);
           const completedText =
-            completedTurnText ?? current.pendingAssistantMessage?.text;
+            completedTurnHasReview
+              ? undefined
+              : completedTurnText ?? current.pendingAssistantMessage?.text;
           const shouldAppendFinalMessage = Boolean(
             completedText &&
               current.pendingAssistantMessage?.text !== completedText
