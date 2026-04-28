@@ -875,6 +875,7 @@ export function ThreadView(props: ThreadViewProps) {
   const [pendingRequestError, setPendingRequestError] = useState<string>();
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
   const [contextRailPinned, setContextRailPinned] = useState(false);
+  const [contextRailResizing, setContextRailResizing] = useState(false);
   const [contextRailWidth, setContextRailWidth] = useState(380);
 
   useEffect(() => {
@@ -1388,7 +1389,7 @@ export function ThreadView(props: ThreadViewProps) {
       <div
         className={`thread-view__layout${
           contextRailPinned ? " has-pinned-context-rail" : ""
-        }`}
+        }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
         style={
           {
             "--context-rail-width": `${contextRailWidth}px`,
@@ -1460,11 +1461,11 @@ export function ThreadView(props: ThreadViewProps) {
           backendError={props.backendError}
           backends={props.backends}
           onPinnedChange={setContextRailPinned}
+          onResizingChange={setContextRailResizing}
           onWidthChange={setContextRailWidth}
           platform={props.platform}
           thread={selectedThread!}
           worktreeArchiveError={props.worktreeArchiveError}
-          onArchiveWorktree={props.onArchiveWorktree}
           onRestoreWorktree={props.onRestoreWorktree}
         />
       </div>

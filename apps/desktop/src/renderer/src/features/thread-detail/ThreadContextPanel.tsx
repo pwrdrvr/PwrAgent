@@ -7,7 +7,6 @@ import {
 } from "react";
 import type {
   BackendSummary,
-  LinkedDirectorySummary,
   NavigationThreadSummary,
   WorktreeSnapshotSummary,
 } from "@pwragnt/shared";
@@ -18,14 +17,11 @@ type ThreadContextPanelProps = {
   backendError?: string;
   backends: BackendSummary[];
   onPinnedChange?: (pinned: boolean) => void;
+  onResizingChange?: (resizing: boolean) => void;
   onWidthChange?: (width: number) => void;
   platform?: string;
   thread: NavigationThreadSummary;
   worktreeArchiveError?: string;
-  onArchiveWorktree?: (
-    thread: NavigationThreadSummary,
-    directory: LinkedDirectorySummary
-  ) => Promise<void>;
   onRestoreWorktree?: (
     thread: NavigationThreadSummary,
     snapshotRef: string,
@@ -37,6 +33,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const [pinned, setPinned] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [railWidth, setRailWidth] = useState(380);
+  const [resizing, setResizing] = useState(false);
   const open = pinned || revealed;
 
   const updatePinned = (nextPinned: boolean): void => {
@@ -56,6 +53,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
 
     event.preventDefault();
     event.stopPropagation();
+    setResizing(true);
+    props.onResizingChange?.(true);
     const startX = event.clientX;
     const startWidth = railWidth;
 
@@ -66,6 +65,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
       window.removeEventListener("pointercancel", stop);
+      setResizing(false);
+      props.onResizingChange?.(false);
     };
 
     window.addEventListener("pointermove", move);
@@ -78,7 +79,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       aria-label="Thread context"
       className={`context-rail${open ? " is-open" : " is-collapsed"}${
         pinned ? " is-pinned" : ""
-      }`}
+      }${resizing ? " is-resizing" : ""}`}
       style={{ "--context-rail-width": `${railWidth}px` } as CSSProperties}
       onMouseEnter={() => {
         if (!pinned) {
@@ -179,10 +180,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                     props.thread.worktreeSnapshots,
                     worktreePath
                   );
-                  const canArchive =
-                    directory.kind === "worktree" &&
-                    snapshot?.state !== "archived" &&
-                    Boolean(props.onArchiveWorktree);
                   const canRestore =
                     directory.kind === "worktree" &&
                     snapshot?.state === "archived" &&
@@ -205,17 +202,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                         {directory.label}
                       </button>
                       <div className="context-list__actions">
-                        {canArchive ? (
-                          <button
-                            className="context-list__action"
-                            type="button"
-                            onClick={() => {
-                              void props.onArchiveWorktree?.(props.thread, directory);
-                            }}
-                          >
-                            Archive
-                          </button>
-                        ) : canRestore && snapshot ? (
+                        {canRestore && snapshot ? (
                           <button
                             className="context-list__action"
                             type="button"
