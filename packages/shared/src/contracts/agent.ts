@@ -115,6 +115,7 @@ export type UpdateDirectoryLaunchpadRequest = {
   patch: Partial<
     Pick<
       NavigationLaunchpadDraft,
+      | "imageAttachments"
       | "prompt"
       | "backend"
       | "executionMode"

@@ -7,6 +7,7 @@ import type {
   BackendSummary,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
+  NavigationLaunchpadImageAttachment,
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragnt/shared";
@@ -60,6 +61,7 @@ type ComposerProps = {
         | "branchName"
         | "directoryLabel"
         | "directoryPath"
+        | "imageAttachments"
       >
     >
   ) => Promise<void>;
@@ -82,15 +84,7 @@ type ComposerProps = {
   threadModelSettingsError?: string;
 };
 
-type ComposerImageAttachment = {
-  id: string;
-  height?: number;
-  name: string;
-  size: number;
-  type: string;
-  url: string;
-  width?: number;
-};
+type ComposerImageAttachment = NavigationLaunchpadImageAttachment;
 
 type PastedImageFile = {
   file: File;
@@ -203,15 +197,12 @@ export function Composer(props: ComposerProps) {
     }
 
     setDraft(props.launchpad?.prompt ?? "");
+    setImageAttachments(props.launchpad?.imageAttachments ?? []);
     setSending(false);
     setInterrupting(false);
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
   }, [isLaunchpad, props.launchpad?.directoryKey, props.launchpad?.updatedAt]);
-
-  useEffect(() => {
-    setImageAttachments([]);
-  }, [props.launchpad?.directoryKey]);
 
   useEffect(() => {
     if (!props.thread) {
@@ -487,9 +478,23 @@ export function Composer(props: ComposerProps) {
   };
 
   const removeImageAttachment = (id: string): void => {
-    setImageAttachments((current) =>
-      current.filter((attachment) => attachment.id !== id)
-    );
+    setImageAttachments((current) => {
+      const nextAttachments = current.filter((attachment) => attachment.id !== id);
+      persistLaunchpadImageAttachments(nextAttachments);
+      return nextAttachments;
+    });
+  };
+
+  const persistLaunchpadImageAttachments = (
+    attachments: ComposerImageAttachment[],
+  ): void => {
+    if (!props.launchpad || !props.onUpdateLaunchpad) {
+      return;
+    }
+
+    void props.onUpdateLaunchpad(props.launchpad.directoryKey, {
+      imageAttachments: attachments.length > 0 ? attachments : undefined,
+    });
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
@@ -541,7 +546,11 @@ export function Composer(props: ComposerProps) {
         })
       );
 
-      setImageAttachments((current) => [...current, ...nextAttachments]);
+      setImageAttachments((current) => {
+        const mergedAttachments = [...current, ...nextAttachments];
+        persistLaunchpadImageAttachments(mergedAttachments);
+        return mergedAttachments;
+      });
     } catch (error) {
       setSendError(
         error instanceof Error ? error.message : "The pasted image could not be read."

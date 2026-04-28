@@ -1,6 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { BackendSummary, StartTurnRequest } from "@pwragnt/shared";
+import type {
+  BackendSummary,
+  NavigationLaunchpadDraft,
+  StartTurnRequest,
+} from "@pwragnt/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Composer } from "../Composer";
 
@@ -430,6 +434,138 @@ describe("Composer", () => {
         { workMode: "worktree" }
       );
     });
+  });
+
+  it("restores pasted launchpad images after switching away and back before starting the thread", async () => {
+    const launchpads = new Map<string, NavigationLaunchpadDraft>([
+      [
+        "directory:/repo-a",
+        {
+          directoryKey: "directory:/repo-a",
+          directoryKind: "directory" as const,
+          directoryLabel: "Repo A",
+          directoryPath: "/repo-a",
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          prompt: "",
+          workMode: "local" as const,
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+      [
+        "directory:/repo-b",
+        {
+          directoryKey: "directory:/repo-b",
+          directoryKind: "directory" as const,
+          directoryLabel: "Repo B",
+          directoryPath: "/repo-b",
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          prompt: "",
+          workMode: "local" as const,
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    ]);
+    const onUpdateLaunchpad = vi.fn(async (directoryKey, patch) => {
+      const current = launchpads.get(directoryKey);
+      if (!current) {
+        throw new Error(`Unknown launchpad ${directoryKey}`);
+      }
+      launchpads.set(directoryKey, {
+        ...current,
+        ...patch,
+        updatedAt: current.updatedAt + 1,
+      });
+    });
+    const imageFile = new File([new Uint8Array([1, 2, 3])], "mockup.png", {
+      type: "image/png",
+    });
+
+    const { rerender } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo-a",
+          kind: "directory",
+          label: "Repo A",
+          path: "/repo-a",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={launchpads.get("directory:/repo-a")!}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("New thread"), {
+      target: { value: "Review the pasted mockup" },
+    });
+    fireEvent.paste(screen.getByLabelText("New thread"), {
+      clipboardData: {
+        files: [],
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => imageFile,
+          },
+        ],
+      },
+    });
+
+    expect(await screen.findByAltText("mockup.png")).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(launchpads.get("directory:/repo-a")?.prompt).toBe(
+        "Review the pasted mockup"
+      );
+    });
+
+    rerender(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo-b",
+          kind: "directory",
+          label: "Repo B",
+          path: "/repo-b",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={launchpads.get("directory:/repo-b")!}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+    expect(screen.queryByAltText("mockup.png")).not.toBeInTheDocument();
+
+    rerender(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo-a",
+          kind: "directory",
+          label: "Repo A",
+          path: "/repo-a",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={launchpads.get("directory:/repo-a")!}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByLabelText("New thread")).toHaveValue(
+      "Review the pasted mockup"
+    );
+    expect(screen.getByAltText("mockup.png")).toBeInTheDocument();
   });
 
   it("inserts skill markdown from autocomplete and sends it through startTurn", async () => {
