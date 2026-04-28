@@ -103,6 +103,7 @@ describe("ProtocolCaptureStore", () => {
     expect(
       createProtocolCaptureFromEnv({
         backend: "codex",
+        backendInstance: "default",
         userDataPath: rootDir
       })
     ).toBeUndefined();
@@ -112,6 +113,7 @@ describe("ProtocolCaptureStore", () => {
 
     const capture = createProtocolCaptureFromEnv({
       backend: "codex",
+      backendInstance: "default",
       userDataPath: "/unused"
     });
 
@@ -129,9 +131,10 @@ describe("ProtocolCaptureStore", () => {
 
     const index = JSON.parse(
       await fs.readFile(path.join(rootDir, "index.json"), "utf8")
-    ) as Record<string, { backend: string }>;
+    ) as Record<string, { backend: string; backendInstance?: string }>;
     expect(Object.values(index)).toHaveLength(1);
     expect(Object.values(index)[0]?.backend).toBe("codex");
+    expect(Object.values(index)[0]?.backendInstance).toBe("default");
   });
 
   it("serializes index writes shared by concurrent backend captures", async () => {

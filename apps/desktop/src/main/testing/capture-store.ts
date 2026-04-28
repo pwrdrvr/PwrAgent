@@ -3,6 +3,7 @@ import path from "node:path";
 
 export type ProtocolCaptureEventRecord = {
   backend: "codex" | "grok";
+  backendInstance?: string;
   captureId: string;
   direction: "inbound" | "outbound";
   kind: "request" | "response" | "notification";
@@ -39,6 +40,7 @@ export type CapturedProtocolEnvelopeRecord = {
 
 type CaptureIndexEntry = {
   backend: "codex" | "grok";
+  backendInstance?: string;
   captureId: string;
   createdAt: number;
   path: string;
@@ -93,6 +95,7 @@ export class ProtocolCaptureStore {
   constructor(
     private readonly params: {
       backend: "codex" | "grok";
+      backendInstance?: string;
       captureId: string;
       rootDir: string;
     }
@@ -121,6 +124,7 @@ export class ProtocolCaptureStore {
   }): Promise<ProtocolCaptureEventRecord> {
     const record: ProtocolCaptureEventRecord = {
       backend: this.params.backend,
+      backendInstance: this.params.backendInstance,
       captureId: this.params.captureId,
       direction: params.direction,
       kind: getEnvelopeKind(params.envelope),
@@ -184,6 +188,7 @@ export class ProtocolCaptureStore {
     const current = await readIndex(this.indexFilePath);
     const nextEntry: CaptureIndexEntry = {
       backend: this.params.backend,
+      backendInstance: this.params.backendInstance,
       captureId: this.params.captureId,
       createdAt: this.createdAt,
       path: this.captureFilePath,

@@ -24,6 +24,7 @@ export function createProtocolCaptureObserver(params: {
 
 export function createProtocolCaptureFromEnv(params: {
   backend: "codex" | "grok";
+  backendInstance: string;
   userDataPath: string;
 }): {
   store: ProtocolCaptureStore;
@@ -36,14 +37,16 @@ export function createProtocolCaptureFromEnv(params: {
   const rootDir =
     process.env[CAPTURE_ROOT_ENV]?.trim() ||
     path.join(params.userDataPath, "test-artifacts", "protocol-captures");
-  const captureId = buildCaptureId(params.backend);
+  const captureId = buildCaptureId(params.backend, params.backendInstance);
   const store = new ProtocolCaptureStore({
     backend: params.backend,
+    backendInstance: params.backendInstance,
     captureId,
     rootDir
   });
   protocolCaptureLog.info("capture enabled", {
     backend: params.backend,
+    backendInstance: params.backendInstance,
     captureId,
     path: store.captureFilePath,
     indexPath: store.indexFilePath,
@@ -58,9 +61,14 @@ export function createProtocolCaptureFromEnv(params: {
   };
 }
 
-function buildCaptureId(backend: "codex" | "grok"): string {
+function buildCaptureId(backend: "codex" | "grok", backendInstance: string): string {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return `${timestamp}-${backend}`;
+  return `${timestamp}-${backend}-${sanitizeCapturePart(backendInstance)}`;
+}
+
+function sanitizeCapturePart(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  return normalized || "default";
 }
 
 function isCaptureEnabled(value: string | undefined): boolean {
