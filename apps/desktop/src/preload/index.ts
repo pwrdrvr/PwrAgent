@@ -106,13 +106,19 @@ recordPreloadLog("info", "start", {
   electron: process.versions.electron
 });
 
+const isDevelopment = process.env.NODE_ENV !== "production";
+
 const desktopApi = Object.freeze({
   ping: () => "pong",
   copyText: async (text: string): Promise<void> => {
     clipboard.writeText(text);
   },
-  getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
-    await ipcRenderer.invoke(RUNTIME_IDENTITY_CHANNEL),
+  ...(isDevelopment
+    ? {
+        getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
+          await ipcRenderer.invoke(RUNTIME_IDENTITY_CHANNEL),
+      }
+    : {}),
   listThreads: async (
     request?: AppServerListThreadsRequest
   ): Promise<AppServerListThreadsResponse> =>

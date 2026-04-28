@@ -126,6 +126,7 @@ describe("bootstrapApp", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("awaits startup CPU profiling before creating the first window", async () => {
@@ -179,5 +180,18 @@ describe("bootstrapApp", () => {
     expect(createMainWindowMock).toHaveBeenNthCalledWith(2, {
       startupCpuProfiler: startupProfilerInstance,
     });
+  });
+
+  it("does not register runtime identity IPC in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(registerRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
+
+    appEventHandlers.get("before-quit")?.();
+    expect(disposeRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
   });
 });

@@ -20,6 +20,7 @@ import { createMainWindow } from "./window";
 
 const APP_NAME = "PwrAgnt";
 const isMac = process.platform === "darwin";
+const isDevelopment = process.env.NODE_ENV !== "production";
 
 function installApplicationMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -57,7 +58,9 @@ export function bootstrapApp(): void {
     registerImageNormalizationIpcHandlers();
     registerPreloadLogIpcHandlers();
     registerRendererErrorIpcHandlers();
-    registerRuntimeIdentityIpcHandlers();
+    if (isDevelopment) {
+      registerRuntimeIdentityIpcHandlers();
+    }
     createMainWindow({
       startupCpuProfiler,
     });
@@ -81,7 +84,9 @@ export function bootstrapApp(): void {
     disposeAgentIpcHandlers();
     disposeImageNormalizationIpcHandlers();
     disposePreloadLogIpcHandlers();
-    disposeRuntimeIdentityIpcHandlers();
+    if (isDevelopment) {
+      disposeRuntimeIdentityIpcHandlers();
+    }
     void disposeAppServerIpcHandlers();
   });
 }
