@@ -264,6 +264,7 @@ textarea {
   top: calc(100% + 8px);
   bottom: auto;
   left: 0;
+  width: min(360px, calc(var(--sidebar-width, 408px) - 64px));
   max-width: min(360px, calc(var(--sidebar-width, 408px) - 32px));
   transform: translateY(-4px);
 }
@@ -728,6 +729,7 @@ textarea {
   font-size: 12px;
   font-weight: 500;
   line-height: 1.45;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   text-align: left;
   opacity: 0;
