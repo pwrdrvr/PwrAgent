@@ -50,6 +50,7 @@ describe("XaiEphemeralObjectCaller", () => {
         apiKey: undefined,
         baseUrl: undefined,
         model: "grok-4.20-reasoning",
+        configPath: "/tmp/grok-config.toml",
         stateRoot: "/tmp/grok-state",
       }),
     });
