@@ -217,6 +217,7 @@ describe("OverlayStore", () => {
     expect(await store.getLaunchpadDefaults()).toEqual({
       backend: "grok",
       executionMode: "full-access",
+      workMode: "local",
       reasoningEffort: "high",
       fastMode: true,
     });
@@ -272,6 +273,7 @@ describe("OverlayStore", () => {
     await expect(reloaded.getLaunchpadDefaults()).resolves.toEqual({
       backend: "grok",
       executionMode: "default",
+      workMode: "local",
       model: "grok-4",
       reasoningEffort: "medium",
       fastMode: true,

@@ -299,6 +299,7 @@ export function Composer(props: ComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
@@ -418,9 +419,15 @@ export function Composer(props: ComposerProps) {
 
   useEffect(() => {
     if (!isLaunchpad) {
+      hydratedLaunchpadKeyRef.current = undefined;
       return;
     }
 
+    if (hydratedLaunchpadKeyRef.current === props.launchpad?.directoryKey) {
+      return;
+    }
+
+    hydratedLaunchpadKeyRef.current = props.launchpad?.directoryKey;
     setDraft(props.launchpad?.prompt ?? "");
     setImageAttachments(props.launchpad?.imageAttachments ?? []);
     setSending(false);
@@ -428,7 +435,7 @@ export function Composer(props: ComposerProps) {
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
-  }, [isLaunchpad, props.launchpad?.directoryKey, props.launchpad?.updatedAt]);
+  }, [isLaunchpad, props.launchpad?.directoryKey]);
 
   useEffect(() => {
     if (!props.thread) {
@@ -548,6 +555,7 @@ export function Composer(props: ComposerProps) {
 
     const timeout = window.setTimeout(() => {
       void props.onUpdateLaunchpad?.(launchpad.directoryKey, {
+        imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
         prompt: draft,
       });
     }, 250);
@@ -555,7 +563,7 @@ export function Composer(props: ComposerProps) {
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [draft, launchpad, props.onUpdateLaunchpad]);
+  }, [draft, imageAttachments, launchpad, props.onUpdateLaunchpad]);
 
   const submitReviewCommand = async (reviewCommand: {
     displayText: string;
@@ -840,6 +848,7 @@ export function Composer(props: ComposerProps) {
 
     void props.onUpdateLaunchpad(props.launchpad.directoryKey, {
       imageAttachments: attachments.length > 0 ? attachments : undefined,
+      prompt: draft,
     });
   };
 

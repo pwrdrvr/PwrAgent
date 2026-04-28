@@ -67,6 +67,7 @@ const EMPTY_OVERLAY_STORE_DATA: OverlayStoreData = {
   launchpadDefaults: {
     backend: "codex",
     executionMode: "default",
+    workMode: "local",
   },
   directoryLaunchpads: {},
   threads: {},
@@ -147,6 +148,7 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
           ? (launchpadDefaultsRecord.backend as AppServerBackendKind)
           : "codex",
       executionMode: normalizeExecutionMode(launchpadDefaultsRecord.executionMode),
+      workMode: launchpadDefaultsRecord.workMode === "worktree" ? "worktree" : "local",
       model:
         typeof launchpadDefaultsRecord.model === "string"
           ? launchpadDefaultsRecord.model

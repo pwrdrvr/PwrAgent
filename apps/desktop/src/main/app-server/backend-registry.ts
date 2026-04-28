@@ -1028,7 +1028,7 @@ export class DesktopBackendRegistry {
       serviceTier: defaults.serviceTier,
       fastMode: defaults.fastMode,
       prompt: "",
-      workMode: "local",
+      workMode: defaults.workMode ?? "local",
       branchName: request.currentBranch,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -1079,6 +1079,9 @@ export class DesktopBackendRegistry {
     }
     if ("fastMode" in request.patch) {
       stickyPatch.fastMode = request.patch.fastMode;
+    }
+    if (request.patch.workMode) {
+      stickyPatch.workMode = request.patch.workMode;
     }
 
     const defaults =

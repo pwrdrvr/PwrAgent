@@ -257,6 +257,15 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "item/fileChange/outputDelta";
+      params: {
+        threadId: string;
+        turnId?: string;
+        itemId: string;
+        delta: string;
+      };
+    }
+  | {
       method: "thread/archived";
       params: {
         threadId: string;

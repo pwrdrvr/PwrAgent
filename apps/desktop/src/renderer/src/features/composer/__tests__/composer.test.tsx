@@ -741,6 +741,18 @@ describe("Composer", () => {
     expect(await screen.findByAltText("mockup.png")).toBeInTheDocument();
 
     await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo-a",
+        expect.objectContaining({
+          imageAttachments: expect.arrayContaining([
+            expect.objectContaining({ name: "mockup.png" }),
+          ]),
+          prompt: "Review the pasted mockup",
+        })
+      );
+    });
+
+    await waitFor(() => {
       expect(launchpads.get("directory:/repo-a")?.prompt).toBe(
         "Review the pasted mockup"
       );
@@ -785,6 +797,64 @@ describe("Composer", () => {
       "Review the pasted mockup"
     );
     expect(screen.getByAltText("mockup.png")).toBeInTheDocument();
+  });
+
+  it("keeps active launchpad edits stable when an autosave rerenders the same draft", () => {
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "Line one\nLine two",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const { rerender } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={launchpad}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+    const textarea = screen.getByLabelText("New thread") as HTMLTextAreaElement;
+
+    fireEvent.change(textarea, { target: { value: "Line one edited\nLine two" } });
+    textarea.setSelectionRange(8, 8);
+    rerender(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          ...launchpad,
+          updatedAt: 2,
+        }}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    expect(textarea).toHaveValue("Line one edited\nLine two");
+    expect(textarea.selectionStart).toBe(8);
   });
 
   it("inserts skill markdown from autocomplete and sends it through startTurn", async () => {
