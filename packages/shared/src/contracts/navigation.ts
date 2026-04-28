@@ -33,6 +33,7 @@ export type LaunchpadWorkMode = "local" | "worktree";
 export type NavigationLaunchpadDefaults = {
   backend: AppServerBackendKind;
   executionMode: ThreadExecutionMode;
+  workMode?: LaunchpadWorkMode;
   model?: string;
   reasoningEffort?: string;
   serviceTier?: string;

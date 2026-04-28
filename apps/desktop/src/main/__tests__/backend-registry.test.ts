@@ -7,6 +7,8 @@ import type {
   AppServerThreadSummary,
   AppServerReviewTarget,
   AppServerTurnInputItem,
+  NavigationLaunchpadDefaults,
+  NavigationLaunchpadDraft,
   ThreadOverlayState,
 } from "@pwragnt/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -27,6 +29,12 @@ function createOverlayStoreMock(params?: {
   const overlays = new Map<string, ThreadOverlayState>(
     Object.entries(params?.overlays ?? {})
   );
+  let launchpadDefaults: NavigationLaunchpadDefaults = {
+    backend: "codex",
+    executionMode: "default",
+    workMode: "local",
+  };
+  const launchpads = new Map<string, NavigationLaunchpadDraft>();
   if (initialOverlay) {
     overlays.set("codex:thread-1", initialOverlay);
   }
@@ -71,6 +79,27 @@ function createOverlayStoreMock(params?: {
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
+    },
+    getLaunchpadDefaults: async () => launchpadDefaults,
+    setLaunchpadDefaults: async (patch: Partial<NavigationLaunchpadDefaults>) => {
+      launchpadDefaults = {
+        ...launchpadDefaults,
+        ...patch,
+      };
+      return launchpadDefaults;
+    },
+    getDirectoryLaunchpad: async ({ directoryKey }: { directoryKey: string }) =>
+      launchpads.get(directoryKey),
+    upsertDirectoryLaunchpad: async (launchpad: NavigationLaunchpadDraft) => {
+      const nextLaunchpad = {
+        ...launchpads.get(launchpad.directoryKey),
+        ...launchpad,
+      };
+      launchpads.set(launchpad.directoryKey, nextLaunchpad);
+      return nextLaunchpad;
+    },
+    resetDirectoryLaunchpad: async ({ directoryKey }: { directoryKey: string }) => {
+      launchpads.delete(directoryKey);
     },
   } as unknown as InstanceType<typeof import("@pwragnt/agent-core").OverlayStore>;
 }
@@ -457,6 +486,43 @@ describe("DesktopBackendRegistry", () => {
         startTurn: true,
       },
     });
+
+    await registry.close();
+  });
+
+  it("remembers launchpad work mode for future directory drafts", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+    const updated = await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: { workMode: "worktree" },
+    });
+    const next = await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-b",
+      directoryKind: "directory",
+      directoryLabel: "Repo B",
+      directoryPath: "/repo-b",
+    });
+
+    expect(updated.defaults.workMode).toBe("worktree");
+    expect(next.launchpad.workMode).toBe("worktree");
 
     await registry.close();
   });
