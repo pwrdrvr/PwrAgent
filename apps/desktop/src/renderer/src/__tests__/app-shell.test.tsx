@@ -579,6 +579,17 @@ describe("App", () => {
         }
       })
     );
+    let launchpadState = {
+      directoryKey: "unlinked:new-thread",
+      directoryKind: "unlinked" as const,
+      directoryLabel: "New thread",
+      backend: "grok" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "local" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
     let navigationCallCount = 0;
 
     Object.defineProperty(window, "pwragnt", {
@@ -805,17 +816,7 @@ describe("App", () => {
           };
         },
         ensureDirectoryLaunchpad: async () => ({
-          launchpad: {
-            directoryKey: "unlinked:new-thread",
-            directoryKind: "unlinked" as const,
-            directoryLabel: "New thread",
-            backend: "grok" as const,
-            executionMode: "default" as const,
-            prompt: "",
-            workMode: "local" as const,
-            createdAt: 1,
-            updatedAt: 1,
-          },
+          launchpad: launchpadState,
           defaults: {
             backend: "grok" as const,
             executionMode: "default" as const,
@@ -827,23 +828,22 @@ describe("App", () => {
         }: {
           directoryKey: string;
           patch: Record<string, unknown>;
-        }) => ({
-          launchpad: {
+        }) => {
+          launchpadState = {
+            ...launchpadState,
+            ...patch,
             directoryKey,
-            directoryKind: "unlinked" as const,
-            directoryLabel: "New thread",
-            backend: "grok" as const,
-            executionMode: "default" as const,
-            prompt: typeof patch.prompt === "string" ? patch.prompt : "",
-            workMode: "local" as const,
-            createdAt: 1,
-            updatedAt: 2,
-          },
-          defaults: {
-            backend: "grok" as const,
-            executionMode: "default" as const,
-          },
-        }),
+            updatedAt: launchpadState.updatedAt + 1,
+          };
+
+          return {
+            launchpad: launchpadState,
+            defaults: {
+              backend: "grok" as const,
+              executionMode: "default" as const,
+            },
+          };
+        },
         materializeDirectoryLaunchpad,
         startTurn,
         platform: "darwin",
