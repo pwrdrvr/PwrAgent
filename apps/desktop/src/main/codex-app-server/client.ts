@@ -552,6 +552,10 @@ function isPlaceholderThreadTitle(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === "untitled thread";
 }
 
+function normalizeTitleForComparison(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 function getThreadTitleInfo(record: Record<string, unknown>): {
   title: string;
   titleSource: AppServerThreadTitleSource;
@@ -561,14 +565,6 @@ function getThreadTitleInfo(record: Record<string, unknown>): {
     pickString(record, ["title", "name", "headline"]) ??
       pickString(sessionRecord ?? {}, ["title", "name", "headline"])
   );
-
-  if (explicitTitle && !isPlaceholderThreadTitle(explicitTitle)) {
-    return {
-      title: explicitTitle,
-      titleSource: "explicit",
-    };
-  }
-
   const derivedTitle =
     pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
     pickString(sessionRecord ?? {}, [
@@ -577,10 +573,31 @@ function getThreadTitleInfo(record: Record<string, unknown>): {
       "firstUserMessage",
       "first_user_message",
     ]);
+  const shortenedDerivedTitle = shortenDerivedThreadTitle(derivedTitle) ?? derivedTitle;
+
+  if (explicitTitle && !isPlaceholderThreadTitle(explicitTitle)) {
+    if (
+      derivedTitle &&
+      (normalizeTitleForComparison(explicitTitle) === normalizeTitleForComparison(derivedTitle) ||
+        (shortenedDerivedTitle &&
+          normalizeTitleForComparison(explicitTitle) ===
+            normalizeTitleForComparison(shortenedDerivedTitle)))
+    ) {
+      return {
+        title: shortenedDerivedTitle ?? explicitTitle,
+        titleSource: "derived",
+      };
+    }
+
+    return {
+      title: explicitTitle,
+      titleSource: "explicit",
+    };
+  }
 
   if (derivedTitle) {
     return {
-      title: shortenDerivedThreadTitle(derivedTitle) ?? derivedTitle,
+      title: shortenedDerivedTitle ?? derivedTitle,
       titleSource: "derived",
     };
   }

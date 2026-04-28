@@ -779,6 +779,58 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("applies generated titles when Codex exposes the prompt as an explicit title", async () => {
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Jaguar tea button",
+      })),
+    };
+    const prompt =
+      "Let's make a button with an animated jaguar sipping tea. Just for grins.";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: [
+        {
+          id: "thread-title",
+          title: prompt,
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-title",
+      input: [{ type: "text", text: prompt }],
+    });
+    await waitForCondition(() => codexClient.lastRenameThreadParams !== undefined);
+
+    expect(titleService.generateTitle).toHaveBeenCalledWith({
+      backend: "codex",
+      userPrompt: prompt,
+    });
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-title",
+      name: "Jaguar tea button",
+    });
+
+    await registry.close();
+  });
+
   it("applies generated Grok thread titles after starting turns", async () => {
     const titleService = {
       generateTitle: vi.fn(async () => ({

@@ -230,6 +230,30 @@ class MockTransport implements JsonRpcTransport {
         return;
       }
 
+      if (searchTerm === "prompt-placeholder-title") {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data: params.params?.archived
+                ? []
+                : [
+                    {
+                      id: "thread-prompt-placeholder-title",
+                      name: "Let's make a button with an animated jaguar sipping tea. Just for grins.",
+                      preview:
+                        "Let's make a button with an animated jaguar sipping tea. Just for grins.",
+                      updatedAt: 1_777_401_256,
+                      cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                    },
+                  ],
+            },
+          }),
+        );
+        return;
+      }
+
       if (searchTerm === "search-product-parity") {
         const matchesCodexWindow =
           params.params?.limit === 50 &&
@@ -900,6 +924,27 @@ describe("CodexAppServerClient", () => {
       expect.objectContaining({
         id: "thread-placeholder-title",
         title: "Why do all the worktree-hashes start with `moi`?",
+        titleSource: "derived",
+      }),
+    ]);
+
+    await client.close();
+  });
+
+  it("treats Codex prompt titles as derived placeholders", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const threads = await client.listThreads({ filter: "prompt-placeholder-title" });
+
+    expect(threads).toEqual([
+      expect.objectContaining({
+        id: "thread-prompt-placeholder-title",
+        title: "Make a button with an animated jaguar sipping tea. Just for grins",
         titleSource: "derived",
       }),
     ]);

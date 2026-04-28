@@ -470,6 +470,9 @@ function isEligibleForGeneratedTitle(
   if (!thread) {
     return true;
   }
+  if (isPromptPlaceholderTitle(thread.title, prompt)) {
+    return true;
+  }
   if (thread.titleSource === "explicit") {
     return false;
   }
@@ -483,6 +486,16 @@ function isEligibleForGeneratedTitle(
 
 function normalizeTitleForComparison(value: string): string {
   return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function isPromptPlaceholderTitle(title: string, prompt: string): boolean {
+  const normalizedTitle = normalizeTitleForComparison(title);
+  const normalizedPrompt = normalizeTitleForComparison(prompt);
+  const derivedTitle = shortenDerivedThreadTitle(prompt) ?? prompt;
+  return (
+    normalizedTitle === normalizedPrompt ||
+    normalizedTitle === normalizeTitleForComparison(derivedTitle)
+  );
 }
 
 function getDefaultModelOption(
