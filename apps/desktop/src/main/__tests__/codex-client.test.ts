@@ -874,42 +874,36 @@ describe("CodexAppServerClient", () => {
         label: "GPT-5.5",
         current: true,
         supportsReasoning: true,
-        supportsFast: true,
       },
       {
         id: "gpt-5.4",
         label: "GPT-5.4",
         current: undefined,
         supportsReasoning: true,
-        supportsFast: true,
       },
       {
         id: "gpt-5.4-mini",
         label: "GPT-5.4-Mini",
         current: undefined,
         supportsReasoning: true,
-        supportsFast: false,
       },
       {
         id: "gpt-5.3-codex",
         label: "GPT-5.3-Codex",
         current: undefined,
         supportsReasoning: true,
-        supportsFast: false,
       },
       {
         id: "gpt-5.3-codex-spark",
         label: "GPT-5.3-Codex-Spark",
         current: undefined,
         supportsReasoning: true,
-        supportsFast: false,
       },
       {
         id: "gpt-5.2",
         label: "GPT-5.2",
         current: undefined,
         supportsReasoning: true,
-        supportsFast: false,
       },
     ]);
   });
