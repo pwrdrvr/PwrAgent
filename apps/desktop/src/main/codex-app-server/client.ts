@@ -1264,11 +1264,46 @@ function isActivityItemType(itemType: string | undefined): boolean {
   return (
     normalized === "commandexecution" ||
     normalized === "filechange" ||
+    normalized === "functioncall" ||
     normalized === "mcptoolcall" ||
     normalized === "dynamictoolcall" ||
     normalized === "websearch" ||
     normalized === "imageview" ||
     normalized === "imagegeneration"
+  );
+}
+
+function extractActivityItemFromReplayItem(
+  item: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  if (isActivityItemType(pickString(item, ["type"]))) {
+    return item;
+  }
+
+  for (const key of ["payload", "item", "responseItem", "response_item"]) {
+    const nestedItem = asRecord(item[key]);
+    if (!nestedItem || !isActivityItemType(pickString(nestedItem, ["type"]))) {
+      continue;
+    }
+
+    return {
+      ...nestedItem,
+      id:
+        pickString(item, ["id", "itemId", "item_id"]) ??
+        pickString(nestedItem, ["id", "itemId", "item_id", "call_id"])
+    };
+  }
+
+  return undefined;
+}
+
+function parseToolArguments(item: Record<string, unknown>): Record<string, unknown> | undefined {
+  return (
+    asRecord(parseStructuredValue(item.arguments)) ??
+    asRecord(parseStructuredValue(item.input)) ??
+    asRecord(item.arguments) ??
+    asRecord(item.input) ??
+    undefined
   );
 }
 
@@ -1407,6 +1442,21 @@ function summarizeActivityItems(
             : {})
         });
       }
+      continue;
+    }
+
+    if (normalizedItemType === "functioncall") {
+      toolCalls += 1;
+      const functionName =
+        pickString(item, ["name", "toolName", "tool_name", "tool", "text"]) ?? "Used tool";
+      const args = parseToolArguments(item);
+      const command = args ? pickString(args, ["cmd", "command", "displayCommand"]) : undefined;
+      pushActivityDetail(details, {
+        id: itemId,
+        kind: "command",
+        label: functionName === "exec_command" ? formatCommandLabel(command) : functionName,
+        status: itemStatus
+      });
       continue;
     }
 
@@ -1558,8 +1608,9 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
         continue;
       }
 
-      if (isActivityItemType(itemType)) {
-        pendingActivityItems.push(item);
+      const activityItem = extractActivityItemFromReplayItem(item);
+      if (activityItem) {
+        pendingActivityItems.push(activityItem);
       }
     }
 

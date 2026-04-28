@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptList } from "../TranscriptList";
 
@@ -523,6 +523,62 @@ describe("TranscriptList", () => {
     expect(screen.getAllByText("-2")[0]).toBeInTheDocument();
     expect(screen.getAllByText("+1")[0]).toBeInTheDocument();
     expect(screen.getByText("function messageMatchesOptimisticEntry(")).toBeInTheDocument();
+  });
+
+  it("keeps just-finished live tool activity visible when the final message arrives", async () => {
+    const completedTurn = {
+      id: "turn-1",
+      status: "completed" as const,
+      startedAt: 1_000,
+      completedAt: 72_000,
+      durationMs: 71_000,
+    };
+
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Fix the transcript activity."
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "Fixed.",
+            turn: completedTurn,
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingActivityEntry={{
+          type: "activity",
+          id: "tool-usage-1",
+          summary: "Used 2 tools",
+          details: [
+            {
+              id: "tool-detail-1",
+              kind: "command",
+              label: "rg -n transcript activity"
+            },
+            {
+              id: "tool-detail-2",
+              kind: "read",
+              label: "Read TranscriptList.tsx"
+            }
+          ],
+          turn: completedTurn,
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Used 2 tools/i })).toBeVisible();
+    });
   });
 
   it("anchors a freshly loaded transcript to the newest entry", () => {

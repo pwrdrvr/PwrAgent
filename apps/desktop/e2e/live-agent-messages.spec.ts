@@ -108,11 +108,11 @@ test("preserves live assistant commentary messages, tool usage, and final answer
       name: /Worked for 8m/
     });
     await expect(workedForToggle).toBeVisible();
-    await expect(workedForToggle).toHaveAttribute("aria-expanded", "false");
-    await expect(transcript.getByText("Using ce:brainstorm for this.")).toBeHidden();
-    await expect(transcript.getByText("The broad search was too noisy")).toBeHidden();
-    await expect(transcript.getByText("The existing product direction is thread-first")).toBeHidden();
-    await expect(transcript.getByRole("button", { name: /Used 2 tools/i })).toBeHidden();
+    await expect(workedForToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(transcript.getByText("Using ce:brainstorm for this.")).toBeVisible();
+    await expect(transcript.getByText("The broad search was too noisy")).toBeVisible();
+    await expect(transcript.getByText("The existing product direction is thread-first")).toBeVisible();
+    await expect(transcript.getByRole("button", { name: /Used 2 tools/i })).toBeVisible();
     await expect(transcript).toContainText(
       "From the repo scan: Telegram support is probably not another model provider."
     );
@@ -125,14 +125,11 @@ test("preserves live assistant commentary messages, tool usage, and final answer
     );
 
     await workedForToggle.click();
-    await expect(workedForToggle).toHaveAttribute("aria-expanded", "true");
-    await expect(transcript.getByText("Using ce:brainstorm for this.")).toBeVisible();
-    await expect(transcript.getByText("The broad search was too noisy")).toBeVisible();
-    await expect(transcript.getByText("The existing product direction is thread-first")).toBeVisible();
-    await expect(transcript.getByText("From the repo scan, Telegram should probably")).toBeVisible();
-    await expect(transcript.getByText("The v1 shape should probably focus")).toBeVisible();
-    await expect(transcript.getByText("I’m ready to turn that into requirements")).toBeVisible();
-    await expect(transcript.getByRole("button", { name: /Used 2 tools/i })).toBeVisible();
+    await expect(workedForToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(transcript.getByText("Using ce:brainstorm for this.")).toBeHidden();
+    await expect(transcript.getByText("The broad search was too noisy")).toBeHidden();
+    await expect(transcript.getByText("The existing product direction is thread-first")).toBeHidden();
+    await expect(transcript.getByRole("button", { name: /Used 2 tools/i })).toBeHidden();
   } finally {
     await app.close();
   }
