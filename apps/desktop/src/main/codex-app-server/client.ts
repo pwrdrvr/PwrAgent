@@ -2664,6 +2664,16 @@ async function requestWithFallbacks(params: {
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+type HelperTurnResult =
+  | {
+      status: "ok";
+      object: unknown;
+    }
+  | {
+      status: "failed";
+      error: Error;
+    };
+
 export class CodexAppServerClient {
   private readonly connection: JsonRpcConnection;
   private readonly threadDirectoryEnricher: (
@@ -2690,6 +2700,7 @@ export class CodexAppServerClient {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+  private readonly completedHelperTurnResults = new Map<string, HelperTurnResult>();
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.connection = new JsonRpcConnection(
@@ -2784,6 +2795,7 @@ export class CodexAppServerClient {
     this.initializeResult = null;
     this.rejectHelperTurnWaiters(new Error("codex app server client closed"));
     this.helperThreadIds.clear();
+    this.completedHelperTurnResults.clear();
     await this.connection.close();
   }
 
@@ -2885,24 +2897,47 @@ export class CodexAppServerClient {
 
     const key = buildHelperTurnKey(threadId, turnId);
     const waiter = this.helperTurnWaiters.get(key);
-    if (!waiter) {
-      return;
-    }
-
-    clearTimeout(waiter.timer);
-    this.helperTurnWaiters.delete(key);
-
     if (method === "turn/failed") {
-      waiter.reject(new Error("codex_title_turn_failed"));
+      const error = new Error("codex_title_turn_failed");
+      if (!waiter) {
+        this.completedHelperTurnResults.set(key, {
+          status: "failed",
+          error,
+        });
+        return;
+      }
+      clearTimeout(waiter.timer);
+      this.helperTurnWaiters.delete(key);
+      waiter.reject(error);
       return;
     }
 
     const object = extractGeneratedTitleObject(notification.params);
     if (!object) {
-      waiter.reject(new Error("codex_title_turn_completed_without_title"));
+      const error = new Error("codex_title_turn_completed_without_title");
+      if (!waiter) {
+        this.completedHelperTurnResults.set(key, {
+          status: "failed",
+          error,
+        });
+        return;
+      }
+      clearTimeout(waiter.timer);
+      this.helperTurnWaiters.delete(key);
+      waiter.reject(error);
       return;
     }
 
+    if (!waiter) {
+      this.completedHelperTurnResults.set(key, {
+        status: "ok",
+        object,
+      });
+      return;
+    }
+
+    clearTimeout(waiter.timer);
+    this.helperTurnWaiters.delete(key);
     waiter.resolve(object);
   }
 
@@ -2912,6 +2947,15 @@ export class CodexAppServerClient {
     timeoutMs: number;
   }): Promise<unknown> {
     const key = buildHelperTurnKey(params.threadId, params.turnId);
+    const completed = this.completedHelperTurnResults.get(key);
+    if (completed) {
+      this.completedHelperTurnResults.delete(key);
+      if (completed.status === "failed") {
+        return Promise.reject(completed.error);
+      }
+      return Promise.resolve(completed.object);
+    }
+
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.helperTurnWaiters.delete(key);

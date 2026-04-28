@@ -28,6 +28,7 @@ class MockTransport implements JsonRpcTransport {
       id: "turn-1"
     }
   };
+  static turnStartPreResponseNotification: unknown | null = null;
   static turnInterruptResult: unknown = {
     thread: {
       id: "thread-2"
@@ -646,6 +647,9 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "turn/start") {
+      if (MockTransport.turnStartPreResponseNotification) {
+        this.messageHandler(JSON.stringify(MockTransport.turnStartPreResponseNotification));
+      }
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -760,6 +764,7 @@ describe("CodexAppServerClient", () => {
         id: "turn-1"
       }
     };
+    MockTransport.turnStartPreResponseNotification = null;
     MockTransport.reviewStartResult = {
       reviewThreadId: "thread-2",
       turn: {
@@ -2771,6 +2776,67 @@ describe("CodexAppServerClient", () => {
         }),
       })
     );
+
+    await client.close();
+  });
+
+  it("uses helper title notifications that arrive before the turn/start response", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "thread-title-helper",
+      },
+    };
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-title-helper",
+      },
+      turn: {
+        id: "turn-title-helper",
+      },
+    };
+    MockTransport.turnStartPreResponseNotification = {
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: {
+        threadId: "thread-title-helper",
+        turnId: "turn-title-helper",
+        output: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              title: "Early helper title",
+            }),
+          },
+        ],
+      },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await expect(
+      client.generateTitle({
+        prompt: "Name the thread from this prompt",
+        promptVersion: "thread-title-v1",
+        schema: {
+          type: "object",
+          required: ["title"],
+          properties: {
+            title: { type: "string" },
+          },
+        },
+        schemaName: "thread_title",
+        timeoutMs: 5_000,
+      })
+    ).resolves.toEqual({
+      status: "ok",
+      object: {
+        title: "Early helper title",
+      },
+    });
 
     await client.close();
   });

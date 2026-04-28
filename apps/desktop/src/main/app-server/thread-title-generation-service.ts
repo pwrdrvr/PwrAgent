@@ -245,7 +245,7 @@ function preservesTicketReferences(userPrompt: string, title: string): boolean {
   }
 
   const normalizedTitle = normalizeReferenceText(title);
-  return promptRefs.some((reference) =>
+  return promptRefs.every((reference) =>
     normalizedTitle.includes(normalizeReferenceText(reference))
   );
 }

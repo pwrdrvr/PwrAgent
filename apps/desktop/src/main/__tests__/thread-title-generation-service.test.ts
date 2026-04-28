@@ -90,6 +90,24 @@ describe("ThreadTitleGenerationService", () => {
     });
   });
 
+  it("rejects titles that preserve only one of multiple references", async () => {
+    const service = new ThreadTitleGenerationService({
+      generators: {
+        codex: makeGenerator({ title: "Issue 123 rename followup" }),
+      },
+    });
+
+    await expect(
+      service.generateTitle({
+        backend: "codex",
+        userPrompt: "In issue 123 and PR 456, why does rename fail?",
+      })
+    ).resolves.toEqual({
+      status: "invalid",
+      reason: "ticket_reference_missing",
+    });
+  });
+
   it("cleans wrapper quotes and trailing punctuation", async () => {
     const service = new ThreadTitleGenerationService({
       generators: {
