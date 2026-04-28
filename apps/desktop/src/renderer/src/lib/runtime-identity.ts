@@ -37,7 +37,7 @@ export function useRuntimeIdentity(desktopApi?: DesktopApi): RuntimeIdentity | u
 }
 
 export function formatRuntimePath(cwd: string): string {
-  const segments = cwd.split("/").filter(Boolean);
+  const segments = workspaceDisplaySegments(cwd);
   const worktreesIndex = segments.lastIndexOf(".worktrees");
 
   if (worktreesIndex >= 0 && segments[worktreesIndex + 1]) {
@@ -55,6 +55,23 @@ export function formatRuntimePath(cwd: string): string {
   }
 
   return segments.slice(-2).join("/") || cwd;
+}
+
+function workspaceDisplaySegments(cwd: string): string[] {
+  const segments = cwd.split("/").filter(Boolean);
+  const desktopAppSuffix = ["apps", "desktop"];
+
+  if (
+    segments.length > desktopAppSuffix.length &&
+    desktopAppSuffix.every(
+      (segment, index) =>
+        segments[segments.length - desktopAppSuffix.length + index] === segment
+    )
+  ) {
+    return segments.slice(0, -desktopAppSuffix.length);
+  }
+
+  return segments;
 }
 
 export function formatRuntimeBranch(branch: string): string {
