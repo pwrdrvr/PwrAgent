@@ -903,6 +903,65 @@ describe("GrokAppServerClient", () => {
     }
   });
 
+  it("fails missing API key before recording a synthetic outbound initialize", async () => {
+    const originalHome = process.env.HOME;
+    const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+    const originalXaiApiKey = process.env.XAI_API_KEY;
+    const originalGrokModel = process.env.GROK_MODEL;
+    const originalXaiBaseUrl = process.env.XAI_BASE_URL;
+    delete process.env.XAI_API_KEY;
+    delete process.env.GROK_MODEL;
+    delete process.env.XAI_BASE_URL;
+    delete process.env.XDG_CONFIG_HOME;
+
+    const temp = await createTemporaryTestDirectory();
+    const observed: unknown[] = [];
+    process.env.HOME = temp.path;
+
+    try {
+      const client = new GrokAppServerClient({
+        connectionObserver: {
+          onMessage: (event) => {
+            observed.push(event);
+          },
+        },
+      });
+
+      await expect(client.getInitializeResult()).rejects.toThrow(
+        "grok app server unavailable: XAI_API_KEY is not set",
+      );
+      expect(observed).toEqual([]);
+      await client.close();
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalXdgConfigHome === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+      }
+      if (originalXaiApiKey === undefined) {
+        delete process.env.XAI_API_KEY;
+      } else {
+        process.env.XAI_API_KEY = originalXaiApiKey;
+      }
+      if (originalGrokModel === undefined) {
+        delete process.env.GROK_MODEL;
+      } else {
+        process.env.GROK_MODEL = originalGrokModel;
+      }
+      if (originalXaiBaseUrl === undefined) {
+        delete process.env.XAI_BASE_URL;
+      } else {
+        process.env.XAI_BASE_URL = originalXaiBaseUrl;
+      }
+      await temp.cleanup();
+    }
+  });
+
   it("reloads persisted Grok thread metadata after client recreation", async () => {
     const temp = await createTemporaryTestDirectory();
     const stateRoot = path.join(temp.path, "state");

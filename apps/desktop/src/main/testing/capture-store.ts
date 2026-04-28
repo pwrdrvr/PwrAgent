@@ -46,6 +46,8 @@ type CaptureIndexEntry = {
   updatedAt: number;
 };
 
+const indexWriteQueues = new Map<string, Promise<void>>();
+
 export async function readProtocolCaptureFile(
   filePath: string,
   redactions: ProtocolCaptureStringReplacement[] = [],
@@ -140,7 +142,7 @@ export class ProtocolCaptureStore {
     const nextWrite = this.writeQueue.then(async () => {
       await this.ensureInitialized();
       await fs.appendFile(this.captureFilePath, `${JSON.stringify(record)}\n`, "utf8");
-      await this.writeIndex();
+      await this.writeIndexQueued();
     });
     this.writeQueue = nextWrite;
     await nextWrite;
@@ -158,8 +160,24 @@ export class ProtocolCaptureStore {
     }
 
     await fs.mkdir(this.params.rootDir, { recursive: true });
-    await this.writeIndex();
+    await this.writeIndexQueued();
     this.initialized = true;
+  }
+
+  private async writeIndexQueued(): Promise<void> {
+    const previousWrite = indexWriteQueues.get(this.indexFilePath) ?? Promise.resolve();
+    const nextWrite = previousWrite
+      .catch(() => undefined)
+      .then(() => this.writeIndex());
+    indexWriteQueues.set(this.indexFilePath, nextWrite);
+
+    try {
+      await nextWrite;
+    } finally {
+      if (indexWriteQueues.get(this.indexFilePath) === nextWrite) {
+        indexWriteQueues.delete(this.indexFilePath);
+      }
+    }
   }
 
   private async writeIndex(): Promise<void> {

@@ -2572,7 +2572,8 @@ export class CodexAppServerClient {
         env: options.env
       }),
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      options.connectionObserver
+      options.connectionObserver,
+      { logContext: { backend: "codex" } },
     );
     const directoryResolver = options.directoryResolver;
     this.threadDirectoryEnricher =

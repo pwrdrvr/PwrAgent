@@ -1,9 +1,11 @@
 import path from "node:path";
 import type { JsonRpcObserver } from "../codex-app-server/json-rpc";
+import { getMainLogger } from "../log";
 import { ProtocolCaptureStore } from "./capture-store";
 
 const CAPTURE_ENABLED_ENV = "PWRAGNT_PROTOCOL_CAPTURE";
 const CAPTURE_ROOT_ENV = "PWRAGNT_PROTOCOL_CAPTURE_ROOT";
+const protocolCaptureLog = getMainLogger("pwragnt:protocol-capture");
 
 export function createProtocolCaptureObserver(params: {
   backend: "codex" | "grok";
@@ -39,6 +41,12 @@ export function createProtocolCaptureFromEnv(params: {
     backend: params.backend,
     captureId,
     rootDir
+  });
+  protocolCaptureLog.info("capture enabled", {
+    backend: params.backend,
+    captureId,
+    path: store.captureFilePath,
+    indexPath: store.indexFilePath,
   });
 
   return {

@@ -1002,14 +1002,15 @@ export class GrokAppServerClient {
       ),
     });
 
-    this.server = new CodexAppServer({
+    const server = new CodexAppServer({
       provider,
       sessionState,
       threadIdGenerator: this.options.threadIdGenerator,
       turnIdGenerator: this.options.turnIdGenerator,
     });
-    this.subscribeToServerNotifications(this.server);
-    return this.server;
+    this.server = server;
+    this.subscribeToServerNotifications(server);
+    return server;
   }
 
   private subscribeToServerNotifications(server: GrokServerLike): void {
@@ -1086,6 +1087,8 @@ export class GrokAppServerClient {
 
   private async request(method: string, params?: unknown): Promise<unknown> {
     const id = `rpc-${++this.requestCounter}`;
+    const server = this.getServer();
+
     await this.observe({
       direction: "outbound",
       envelope: {
@@ -1097,7 +1100,7 @@ export class GrokAppServerClient {
     });
 
     try {
-      const result = await this.getServer().request(method, params);
+      const result = await server.request(method, params);
       await this.observe({
         direction: "inbound",
         envelope: {
@@ -1124,6 +1127,8 @@ export class GrokAppServerClient {
   }
 
   private async notify(method: string, params?: unknown): Promise<void> {
+    const server = this.getServer();
+
     await this.observe({
       direction: "outbound",
       envelope: {
@@ -1132,7 +1137,7 @@ export class GrokAppServerClient {
         params: params ?? {},
       },
     });
-    await this.getServer().notify?.(method, params);
+    await server.notify?.(method, params);
   }
 
   private async observe(params: {
@@ -1161,6 +1166,7 @@ export class GrokAppServerClient {
       });
     } catch (error) {
       grokClientLog.error("observer failed", {
+        backend: "grok",
         direction: params.direction,
         message: params.envelope.method ?? params.envelope.id ?? "message",
         error: error instanceof Error ? error.message : String(error),
