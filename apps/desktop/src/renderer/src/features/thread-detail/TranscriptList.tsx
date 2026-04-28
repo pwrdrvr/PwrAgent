@@ -227,10 +227,58 @@ export function TranscriptList(props: TranscriptListProps) {
       transcriptEntries,
     ]
   );
+  const livePendingWorkEntryIds = useMemo(
+    () =>
+      new Set(
+        [
+          props.pendingActivityEntry?.id,
+          props.pendingProtocolActivityEntry?.id,
+          props.pendingPlanEntry?.id,
+        ].filter((id): id is string => typeof id === "string")
+      ),
+    [
+      props.pendingActivityEntry?.id,
+      props.pendingPlanEntry?.id,
+      props.pendingProtocolActivityEntry?.id,
+    ]
+  );
 
   useEffect(() => {
     setExpandedCommentaryGroupIds(new Set());
   }, [props.threadId]);
+
+  useEffect(() => {
+    if (livePendingWorkEntryIds.size === 0) {
+      return;
+    }
+
+    const liveWorkGroupIds = transcriptRenderItems.flatMap((item) => {
+      if (
+        item.type !== "workPhaseGroup" ||
+        !item.collapsible ||
+        !item.entries.some((entry) => livePendingWorkEntryIds.has(entry.id))
+      ) {
+        return [];
+      }
+
+      return [item.id];
+    });
+    if (liveWorkGroupIds.length === 0) {
+      return;
+    }
+
+    setExpandedCommentaryGroupIds((current) => {
+      const next = new Set(current);
+      let changed = false;
+      for (const groupId of liveWorkGroupIds) {
+        if (!next.has(groupId)) {
+          next.add(groupId);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [livePendingWorkEntryIds, transcriptRenderItems]);
 
   useEffect(() => {
     if (!props.activeTurnId) {
