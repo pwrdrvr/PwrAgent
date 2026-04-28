@@ -260,6 +260,19 @@ textarea {
   outline-offset: 2px;
 }
 
+.runtime-identity__button.tooltip-target[data-tooltip]::after {
+  top: calc(100% + 8px);
+  bottom: auto;
+  left: 0;
+  max-width: min(360px, calc(var(--sidebar-width, 408px) - 32px));
+  transform: translateY(-4px);
+}
+
+.runtime-identity__button.tooltip-target[data-tooltip]:hover::after,
+.runtime-identity__button.tooltip-target[data-tooltip]:focus-visible::after {
+  transform: translateY(0);
+}
+
 .runtime-identity__icon {
   flex: 0 0 auto;
   color: var(--accent-bright);
