@@ -1880,6 +1880,133 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("hydrates persisted OpenAI function calls as transcript activity", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-openai-function-calls", {
+      thread: {
+        turns: [
+          {
+            id: "turn-tools",
+            status: "completed",
+            startedAt: 1_763_500_220,
+            completedAt: 1_763_500_250,
+            items: [
+              {
+                type: "assistantMessage",
+                id: "message-1",
+                phase: "commentary",
+                content: [{ type: "text", text: "I am checking CI." }]
+              },
+              {
+                type: "response_item",
+                id: "call-1",
+                payload: {
+                  type: "function_call",
+                  name: "exec_command",
+                  arguments: JSON.stringify({
+                    cmd: "gh pr checks 62 --watch --interval 10"
+                  })
+                }
+              },
+              {
+                type: "response_item",
+                id: "call-1-output",
+                payload: {
+                  type: "function_call_output",
+                  call_id: "call-1",
+                  output: "Build pass"
+                }
+              },
+              {
+                type: "response_item",
+                id: "call-2",
+                payload: {
+                  type: "function_call",
+                  name: "exec_command",
+                  arguments: JSON.stringify({
+                    cmd: "git status --short --branch"
+                  })
+                }
+              },
+              {
+                type: "assistantMessage",
+                id: "message-2",
+                content: [{ type: "text", text: "CI is green." }]
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-openai-function-calls"
+    });
+
+    expect(replay.entries).toEqual([
+      {
+        type: "message",
+        id: "message-1",
+        role: "assistant",
+        text: "I am checking CI.",
+        createdAt: 1_763_500_220_000,
+        parts: [{ type: "text", text: "I am checking CI." }],
+        phase: "commentary",
+        turn: {
+          id: "turn-tools",
+          status: "completed",
+          startedAt: 1_763_500_220_000,
+          completedAt: 1_763_500_250_000
+        }
+      },
+      {
+        type: "activity",
+        id: "activity-call-1",
+        summary: "Used 2 tools",
+        createdAt: 1_763_500_220_000,
+        details: [
+          {
+            id: "call-1",
+            kind: "command",
+            label: "gh pr checks 62 --watch --interval 10"
+          },
+          {
+            id: "call-2",
+            kind: "command",
+            label: "git status --short --branch"
+          }
+        ],
+        turn: {
+          id: "turn-tools",
+          status: "completed",
+          startedAt: 1_763_500_220_000,
+          completedAt: 1_763_500_250_000
+        }
+      },
+      {
+        type: "message",
+        id: "message-2",
+        role: "assistant",
+        text: "CI is green.",
+        createdAt: 1_763_500_220_000,
+        parts: [{ type: "text", text: "CI is green." }],
+        turn: {
+          id: "turn-tools",
+          status: "completed",
+          startedAt: 1_763_500_220_000,
+          completedAt: 1_763_500_250_000
+        }
+      }
+    ]);
+
+    await client.close();
+  });
+
   it("normalizes request_user_input requests from rpc envelope ids", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
