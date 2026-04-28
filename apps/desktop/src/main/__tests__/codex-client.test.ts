@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonRpcTransport } from "../codex-app-server/json-rpc";
 
@@ -2137,6 +2140,56 @@ describe("CodexAppServerClient", () => {
     });
 
     await client.close();
+  });
+
+  it("adds materialized app-created Codex threads to the Codex session index", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-session-index-"));
+    const sessionIndexPath = path.join(tempDir, "session_index.jsonl");
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "019dd225-74fb-7a83-b4e4-5970680d9382",
+        path: path.join(
+          tempDir,
+          "sessions/2026/04/27/rollout-2026-04-27T23-32-43-019dd225-74fb-7a83-b4e4-5970680d9382.jsonl"
+        ),
+        cwd: "/Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moi2lzw4",
+        preview: "",
+        name: null,
+        updatedAt: 1_777_347_163,
+      },
+      model: "gpt-5.5",
+    };
+
+    try {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+        sessionIndexPath,
+      });
+
+      await client.startThread({
+        cwd: "/Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moi2lzw4",
+      });
+      await client.close();
+
+      const indexLines = (await fs.readFile(sessionIndexPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+      expect(indexLines).toEqual([
+        {
+          id: "019dd225-74fb-7a83-b4e4-5970680d9382",
+          source: "pwragnt",
+          thread_name: "Untitled thread",
+          updated_at: "2026-04-28T03:32:43.000Z",
+        },
+      ]);
+    } finally {
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("archives threads through the Codex app server", async () => {

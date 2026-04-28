@@ -1,3 +1,5 @@
+import { appendFile, mkdir } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import {
   shortenDerivedThreadTitle,
@@ -85,6 +87,7 @@ type CodexClientOptions = {
   ) => Promise<ThreadDirectoryEnrichment>;
   connectionObserver?: JsonRpcObserver;
   requestTimeoutMs?: number;
+  sessionIndexPath?: string;
 };
 
 type InitializeResult = {
@@ -108,11 +111,19 @@ type SkillCatalogEntry = {
   skills: AppServerSkillSummary[];
 };
 
+type CodexSessionIndexEntry = {
+  id: string;
+  source: "pwragnt";
+  thread_name: string;
+  updated_at: string;
+};
+
 type CodexClientRequestMethod = CodexClientRequest["method"];
 type CodexServerNotificationMethod = CodexServerNotification["method"];
 type CodexServerRequestMethod = CodexServerRequest["method"];
 
 const KNOWN_NOTIFICATION_METHODS = new Set<string>([
+  "thread/started",
   "turn/started",
   "turn/completed",
   "turn/failed",
@@ -136,6 +147,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "mcpServer/startupStatus/updated",
 ]);
 const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<CodexServerNotificationMethod>([
+  "thread/started",
   "turn/started",
   "turn/completed",
   "item/agentMessage/delta",
@@ -1434,6 +1446,61 @@ function extractThreadIdFromValue(value: unknown): string | undefined {
   );
 }
 
+function extractThreadIndexEntryFromValue(
+  value: unknown,
+): CodexSessionIndexEntry | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
+  const threadPath =
+    pickString(record, ["path"]) ?? pickString(threadRecord ?? {}, ["path"]);
+  const threadId = extractThreadIdFromValue(value);
+  if (!threadId || !threadPath) {
+    return undefined;
+  }
+
+  const preview =
+    pickString(record, ["preview", "snippet", "firstUserMessage", "first_user_message"]) ??
+    pickString(threadRecord ?? {}, [
+      "preview",
+      "snippet",
+      "firstUserMessage",
+      "first_user_message",
+    ]);
+  const rawName =
+    pickString(record, ["threadName", "thread_name", "name", "title"]) ??
+    pickString(threadRecord ?? {}, ["threadName", "thread_name", "name", "title"]) ??
+    (preview ? shortenDerivedThreadTitle(preview) ?? preview : undefined);
+  const updatedAt =
+    normalizeEpochTimestamp(
+      pickNumber(record, ["updatedAt", "updated_at", "lastActivityAt", "createdAt"]) ??
+        pickNumber(threadRecord ?? {}, [
+          "updatedAt",
+          "updated_at",
+          "lastActivityAt",
+          "createdAt",
+        ])
+    ) ?? Date.now();
+
+  return {
+    id: threadId,
+    source: "pwragnt",
+    thread_name: rawName?.trim() || "Untitled thread",
+    updated_at: new Date(updatedAt).toISOString(),
+  };
+}
+
+async function appendCodexSessionIndexEntry(
+  sessionIndexPath: string,
+  entry: CodexSessionIndexEntry,
+): Promise<void> {
+  await mkdir(path.dirname(sessionIndexPath), { recursive: true });
+  await appendFile(sessionIndexPath, `${JSON.stringify(entry)}\n`, "utf8");
+}
+
 function extractSkillSummary(value: unknown): AppServerSkillSummary | undefined {
   const record = asRecord(value);
   if (!record) {
@@ -2240,6 +2307,7 @@ export class CodexAppServerClient {
   private readonly notificationListeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
   >();
+  private readonly indexedThreadIds = new Set<string>();
   private readonly requestListeners = new Set<
     (
       request: AppServerPendingRequestNotification
@@ -2272,6 +2340,10 @@ export class CodexAppServerClient {
           method,
           payload: params,
         });
+      }
+
+      if (method === "thread/started") {
+        await this.recordThreadInSessionIndex(params);
       }
 
       for (const listener of this.notificationListeners) {
@@ -2359,6 +2431,30 @@ export class CodexAppServerClient {
   async getInitializeResult(): Promise<InitializeResult> {
     await this.ensureInitialized();
     return this.initializeResult ?? {};
+  }
+
+  private getSessionIndexPath(): string {
+    return (
+      this.options.sessionIndexPath?.trim() ||
+      path.join(os.homedir(), ".codex", "session_index.jsonl")
+    );
+  }
+
+  private async recordThreadInSessionIndex(value: unknown): Promise<void> {
+    const entry = extractThreadIndexEntryFromValue(value);
+    if (!entry || this.indexedThreadIds.has(entry.id)) {
+      return;
+    }
+
+    try {
+      await appendCodexSessionIndexEntry(this.getSessionIndexPath(), entry);
+      this.indexedThreadIds.add(entry.id);
+    } catch (error) {
+      codexClientLog.warn("failed to append codex session index", {
+        threadId: entry.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async listThreads(params?: {
@@ -2522,6 +2618,8 @@ export class CodexAppServerClient {
     if (!threadId) {
       throw new Error("codex app server thread/start did not return threadId");
     }
+
+    await this.recordThreadInSessionIndex(result);
 
     return { threadId };
   }
