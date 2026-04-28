@@ -556,6 +556,47 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("refreshes empty saved directory drafts from current launchpad work mode defaults", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+      currentBranch: "main",
+    });
+    await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-b",
+      patch: { workMode: "worktree" },
+    });
+
+    const reopened = await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+      currentBranch: "main",
+    });
+
+    expect(reopened.defaults.workMode).toBe("worktree");
+    expect(reopened.launchpad.workMode).toBe("worktree");
+    expect(reopened.launchpad.branchName).toBe("main");
+
+    await registry.close();
+  });
+
   it("creates a scratch workspace for Codex thread creation when cwd is omitted", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },

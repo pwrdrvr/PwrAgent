@@ -415,6 +415,13 @@ type ModelSettings = {
   fastMode?: boolean;
 };
 
+function isEmptyDirectoryLaunchpadDraft(launchpad: NavigationLaunchpadDraft): boolean {
+  return (
+    launchpad.prompt.trim().length === 0 &&
+    (launchpad.imageAttachments?.length ?? 0) === 0
+  );
+}
+
 function getDefaultModelOption(
   backend: AppServerBackendKind,
   options?: BackendLaunchpadOptions,
@@ -1026,6 +1033,26 @@ export class DesktopBackendRegistry {
     });
     const defaults = await this.overlayStore.getLaunchpadDefaults();
     if (existing) {
+      if (isEmptyDirectoryLaunchpadDraft(existing)) {
+        const refreshed: NavigationLaunchpadDraft = {
+          ...existing,
+          backend: request.preferredBackend ?? defaults.backend,
+          executionMode: defaults.executionMode,
+          model: defaults.model,
+          reasoningEffort: defaults.reasoningEffort,
+          serviceTier: defaults.serviceTier,
+          fastMode: defaults.fastMode,
+          workMode: defaults.workMode ?? "local",
+          branchName: existing.branchName ?? request.currentBranch,
+          updatedAt: Date.now(),
+        };
+        const persisted = await this.overlayStore.upsertDirectoryLaunchpad(refreshed);
+        return {
+          launchpad: persisted,
+          defaults,
+        };
+      }
+
       return {
         launchpad: existing,
         defaults,
