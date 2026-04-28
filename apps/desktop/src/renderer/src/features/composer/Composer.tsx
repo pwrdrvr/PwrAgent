@@ -1098,6 +1098,7 @@ export function Composer(props: ComposerProps) {
 function getPastedImageFiles(clipboardData: DataTransfer): PastedImageFile[] {
   const files: PastedImageFile[] = [];
   const seenFiles = new Set<string>();
+  let foundImageItem = false;
 
   for (const item of Array.from(clipboardData.items)) {
     if (item.kind !== "file" || !item.type.startsWith("image/")) {
@@ -1109,11 +1110,16 @@ function getPastedImageFiles(clipboardData: DataTransfer): PastedImageFile[] {
       continue;
     }
 
+    foundImageItem = true;
     const key = buildFileKey(file);
     if (!seenFiles.has(key)) {
       files.push({ file, type: item.type });
       seenFiles.add(key);
     }
+  }
+
+  if (foundImageItem) {
+    return files;
   }
 
   for (const file of Array.from(clipboardData.files)) {

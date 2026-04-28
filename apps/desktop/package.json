@@ -13,6 +13,7 @@
     "dev": "electron-vite dev",
     "derive:replay-fixture": "tsx ./scripts/derive-replay-fixture.ts",
     "export:session-capture": "tsx ./scripts/export-session-capture.ts",
+    "pretest:e2e": "pnpm build",
     "preview": "electron-vite preview",
     "test:e2e": "playwright test -c playwright.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"

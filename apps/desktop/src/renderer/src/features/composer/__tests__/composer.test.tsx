@@ -623,6 +623,73 @@ describe("Composer", () => {
     });
   });
 
+  it("does not duplicate a pasted image when clipboard items and files both expose it", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    const itemImageFile = new File([new Uint8Array([1, 2, 3])], "clipboard-item.png", {
+      type: "image/png",
+      lastModified: 111,
+    });
+    const filesImageFile = new File([new Uint8Array([1, 2, 3])], "clipboard-files.png", {
+      type: "image/png",
+      lastModified: 222,
+    });
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [filesImageFile],
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => itemImageFile,
+          },
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("img")).toHaveLength(1);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "image",
+            url: expect.stringMatching(/^data:image\/png;base64,/),
+          },
+        ],
+      });
+    });
+  });
+
   it("keeps Shift+Enter available for a newline", () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
