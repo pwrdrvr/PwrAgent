@@ -37,11 +37,22 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   directoryKind: DirectorySummaryKind;
   directoryLabel: string;
   directoryPath?: string;
+  imageAttachments?: NavigationLaunchpadImageAttachment[];
   prompt: string;
   workMode: LaunchpadWorkMode;
   branchName?: string;
   createdAt: number;
   updatedAt: number;
+};
+
+export type NavigationLaunchpadImageAttachment = {
+  id: string;
+  height?: number;
+  name: string;
+  size: number;
+  type: string;
+  url: string;
+  width?: number;
 };
 
 export type NavigationDirectoryGitStatus = {

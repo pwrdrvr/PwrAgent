@@ -84,6 +84,42 @@ function normalizeExecutionMode(value: unknown): ThreadExecutionMode {
   return value === "full-access" ? "full-access" : "default";
 }
 
+function migrateLaunchpadImageAttachments(
+  value: unknown,
+): DirectoryLaunchpadOverlayState["imageAttachments"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const attachments = value.flatMap((item) => {
+    const record = asRecord(item);
+    if (
+      !record ||
+      typeof record.id !== "string" ||
+      typeof record.name !== "string" ||
+      typeof record.size !== "number" ||
+      typeof record.type !== "string" ||
+      typeof record.url !== "string"
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        id: record.id,
+        height: typeof record.height === "number" ? record.height : undefined,
+        name: record.name,
+        size: record.size,
+        type: record.type,
+        url: record.url,
+        width: typeof record.width === "number" ? record.width : undefined,
+      },
+    ];
+  });
+
+  return attachments.length > 0 ? attachments : undefined;
+}
+
 export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
   const record = asRecord(raw);
   if (!record) {
@@ -156,6 +192,9 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
             executionMode: normalizeExecutionMode(launchpadRecord.executionMode),
             prompt:
               typeof launchpadRecord.prompt === "string" ? launchpadRecord.prompt : "",
+            imageAttachments: migrateLaunchpadImageAttachments(
+              launchpadRecord.imageAttachments,
+            ),
             workMode:
               launchpadRecord.workMode === "worktree" ? "worktree" : "local",
             branchName:
