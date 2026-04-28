@@ -340,16 +340,41 @@ function normalizeServerNotification(
 ): AppServerNotification {
   const record = asRecord(params) ?? {};
   const metadata = extractRequestMetadata(params);
+  const itemRecord = asRecord(record.item);
+  const normalizedItem =
+    itemRecord && (method === "item/started" || method === "item/completed")
+      ? normalizeLiveNotificationItem(itemRecord)
+      : undefined;
 
   return {
     method: method as AppServerNotification["method"],
     params: {
       ...record,
+      ...(normalizedItem ? { item: normalizedItem } : {}),
       ...(metadata.threadId ? { threadId: metadata.threadId } : {}),
       ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
       ...(metadata.requestId ? { requestId: metadata.requestId } : {}),
     } as AppServerNotification["params"],
   } as AppServerNotification;
+}
+
+function normalizeLiveNotificationItem(
+  item: Record<string, unknown>
+): Record<string, unknown> {
+  const normalized = { ...item };
+  const functionName =
+    pickString(item, ["toolName", "tool_name", "name"]) ??
+    undefined;
+  if (functionName && typeof normalized.toolName !== "string") {
+    normalized.toolName = functionName;
+  }
+
+  const parsedArguments = parseStructuredValue(item.arguments);
+  if (parsedArguments && typeof parsedArguments === "object" && !Array.isArray(parsedArguments)) {
+    normalized.arguments = parsedArguments;
+  }
+
+  return normalized;
 }
 
 function normalizeEpochTimestamp(value: number | undefined): number | undefined {
