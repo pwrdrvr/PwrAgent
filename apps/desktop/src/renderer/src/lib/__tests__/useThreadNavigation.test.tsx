@@ -248,6 +248,98 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("does not move selection to another thread when refresh temporarily drops the selected thread", async () => {
+    const listeners = new Set<(event: any) => void>();
+    let includeSelectedThread = true;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          summary: "First thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 1_000,
+        },
+        ...(includeSelectedThread
+          ? [
+              {
+                id: "thread-2",
+                title: "Clicked thread",
+                titleSource: "explicit" as const,
+                summary: "Clicked thread summary",
+                source: "codex" as const,
+                linkedDirectories: [],
+                inbox: {
+                  inInbox: false,
+                },
+                updatedAt: 2_000,
+              },
+            ]
+          : []),
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+
+    act(() => {
+      result.current.selectThread(result.current.threads[1]!);
+    });
+
+    expect(result.current.selectedThread?.id).toBe("thread-2");
+
+    includeSelectedThread = false;
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+    });
+
+    expect(result.current.selectedItemKey).toBe("codex:thread-2");
+    expect(result.current.selectedThread?.id).not.toBe("thread-1");
+  });
+
   it("renames a thread and refreshes navigation with the explicit title", async () => {
     let threadTitle = "First thread";
     const renameThread = vi.fn(async ({ name }: { name: string }) => {

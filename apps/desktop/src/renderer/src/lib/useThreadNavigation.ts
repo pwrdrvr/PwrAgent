@@ -799,6 +799,10 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
             return candidate;
           }
 
+          if (candidate) {
+            return candidate;
+          }
+
           return getFallbackSelectionKey(response, optimisticThreadKey);
         });
       } catch (error) {
