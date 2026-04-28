@@ -2664,6 +2664,61 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("forwards Codex archive lifecycle notifications", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    client.onNotification((notification) => {
+      notifications.push(
+        notification as { method: string; params: Record<string, unknown> }
+      );
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "thread/archived",
+      params: {
+        threadId: "thread-2",
+      },
+    });
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "thread/unarchived",
+      params: {
+        threadId: "thread-2",
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(notifications).toEqual([
+      {
+        method: "thread/archived",
+        params: {
+          threadId: "thread-2",
+        },
+      },
+      {
+        method: "thread/unarchived",
+        params: {
+          threadId: "thread-2",
+        },
+      },
+    ]);
+
+    await client.close();
+  });
+
   it("restores threads through the Codex app server", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

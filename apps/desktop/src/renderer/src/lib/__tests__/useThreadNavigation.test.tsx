@@ -340,6 +340,102 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread?.id).not.toBe("thread-1");
   });
 
+  it("keeps an archived thread hidden when the post-archive refresh is stale", async () => {
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-archived"],
+      threads: [
+        {
+          id: "thread-archived",
+          title: "Archived thread",
+          titleSource: "explicit" as const,
+          summary: "This thread is archived before the backend list catches up",
+          source: "codex" as const,
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/github/PwrAgnt",
+              kind: "local" as const,
+            },
+          ],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread" as const,
+          },
+          updatedAt: 2_000,
+        },
+        {
+          id: "thread-remaining",
+          title: "Remaining thread",
+          titleSource: "explicit" as const,
+          summary: "This thread stays in navigation",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [
+        {
+          key: "directory:/Users/huntharo/github/PwrAgnt",
+          kind: "directory" as const,
+          label: "PwrAgnt",
+          path: "/Users/huntharo/github/PwrAgnt",
+          threadKeys: ["codex:thread-archived"],
+          needsAttentionCount: 1,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const archiveThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-archived",
+      archivedAt: 3_000,
+      cleanup: [],
+    }));
+
+    const desktopApi: DesktopApi = {
+      archiveThread,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads.map((thread) => thread.id)).toEqual([
+        "thread-archived",
+        "thread-remaining",
+      ]);
+    });
+
+    await act(async () => {
+      await result.current.archiveThread(result.current.threads[0]!);
+    });
+
+    expect(archiveThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-archived",
+    });
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+    });
+    expect(result.current.threads.map((thread) => thread.id)).toEqual([
+      "thread-remaining",
+    ]);
+    expect(result.current.inboxThreads).toHaveLength(0);
+    expect(result.current.directories[0]?.threadKeys).toEqual([]);
+    expect(result.current.directories[0]?.needsAttentionCount).toBe(0);
+  });
+
   it("renames a thread and refreshes navigation with the explicit title", async () => {
     let threadTitle = "First thread";
     const renameThread = vi.fn(async ({ name }: { name: string }) => {
