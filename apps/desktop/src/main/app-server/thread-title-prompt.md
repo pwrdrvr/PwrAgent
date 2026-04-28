@@ -18,7 +18,7 @@ Requirements:
 - Capture the main task, question, bug, artifact, or decision.
 - Prefer specific nouns from the prompt over generic wording.
 - Preserve code identifiers, filenames, product names, and proper nouns when they are central to the request.
-- Preserve ticket and work item references when present, including JIRA-style keys such as `PROJECT-123`, GitHub-style references such as `#123`, bare numeric issue or PR references such as `456`, and textual references such as `issue 123`, `Issue #123`, `PR 456`, or `pull request #456`.
+- Preserve ticket and work item references when present, including JIRA-style keys such as `PROJECT-123`, GitHub-style references such as `#123`, and textual references such as `issue 123`, `Issue #123`, `PR 456`, or `pull request #456`.
 - If the user explicitly provides a title, use it unless it conflicts with the length limits.
 - Do not answer the prompt or explain the title.
 - Do not include markdown, quotes, labels, or trailing punctuation in the title.
