@@ -640,6 +640,52 @@ describe("Sidebar", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows compact runtime identity chips that copy full values", async () => {
+    const copyText = vi.fn(async () => undefined);
+    Object.defineProperty(window, "pwragnt", {
+      configurable: true,
+      value: {
+        copyText,
+      },
+    });
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        runtimeIdentity={{
+          branch: "codex/fix-thread-naming-ephemeral",
+          cwd: "/Users/huntharo/pwrdrvr/PwrAgnt/.worktrees/pwragnt-fix-thread-naming-moioth2352",
+        }}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    expect(screen.getByText(".worktrees/pwragnt-fix...moioth2352")).toBeInTheDocument();
+    expect(screen.getByText("codex/fix-th...g-ephemeral")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy working directory" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy branch name" }));
+
+    expect(copyText).toHaveBeenNthCalledWith(
+      1,
+      "/Users/huntharo/pwrdrvr/PwrAgnt/.worktrees/pwragnt-fix-thread-naming-moioth2352"
+    );
+    expect(copyText).toHaveBeenNthCalledWith(2, "codex/fix-thread-naming-ephemeral");
+    expect(await screen.findAllByText("PwrAgnt")).not.toHaveLength(0);
+  });
+
   it("shows when the local branch diverged from the codex thread branch", () => {
     render(
       <Sidebar

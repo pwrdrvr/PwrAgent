@@ -53,9 +53,11 @@ import type {
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragnt/shared";
+import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 
 export type DesktopApi = {
   copyText?: (text: string) => Promise<void>;
+  getRuntimeIdentity?: () => Promise<RuntimeIdentity>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest
