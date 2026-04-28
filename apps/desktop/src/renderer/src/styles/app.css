@@ -1313,9 +1313,16 @@ textarea {
 }
 
 .transcript-message__image-button {
-  display: block;
-  width: 100%;
-  padding: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
@@ -1330,9 +1337,11 @@ textarea {
 
 .transcript-message__image-preview {
   display: block;
-  width: 100%;
-  aspect-ratio: 4 / 3;
-  object-fit: cover;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: min(70vh, 560px);
+  object-fit: contain;
 }
 
 .thread-header__summary .transcript-message__paragraph,
