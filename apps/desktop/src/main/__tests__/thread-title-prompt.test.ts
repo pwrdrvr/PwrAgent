@@ -13,9 +13,9 @@ describe("thread title prompt", () => {
     expect(prompt).toContain("6 words or fewer");
     expect(prompt).toContain("PROJECT-123");
     expect(prompt).toContain("#123");
-    expect(prompt).toContain("456");
     expect(prompt).toContain("issue 123");
     expect(prompt).toContain("PR 456");
+    expect(prompt).not.toContain("bare numeric");
     expect(prompt).not.toMatch(/\bfix\b/i);
     expect(prompt).not.toMatch(/\badd\b/i);
     expect(prompt).not.toMatch(/\bimperative\b/i);

@@ -75,10 +75,10 @@ describe("ThreadTitleGenerationService", () => {
     });
   });
 
-  it("preserves bare numeric references", async () => {
+  it("allows bare numbers to be omitted from generated titles", async () => {
     const service = new ThreadTitleGenerationService({
       generators: {
-        codex: makeGenerator({ title: "456 rename followup" }),
+        codex: makeGenerator({ title: "Rename behavior" }),
       },
     });
 
@@ -89,7 +89,26 @@ describe("ThreadTitleGenerationService", () => {
       })
     ).resolves.toMatchObject({
       status: "generated",
-      title: "456 rename followup",
+      title: "Rename behavior",
+    });
+  });
+
+  it("does not treat arbitrary prompt numbers as ticket references", async () => {
+    const service = new ThreadTitleGenerationService({
+      generators: {
+        codex: makeGenerator({ title: "Thread rename rejection" }),
+      },
+    });
+
+    await expect(
+      service.generateTitle({
+        backend: "codex",
+        userPrompt:
+          "At 19:36:47.622 thread title generation rejected a rename for thread 019dd673-a098-7021-a344-a09e4d8ec850.",
+      })
+    ).resolves.toMatchObject({
+      status: "generated",
+      title: "Thread rename rejection",
     });
   });
 

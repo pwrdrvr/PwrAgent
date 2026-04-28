@@ -255,7 +255,6 @@ function extractTicketReferences(value: string): string[] {
   const patterns = [
     /\b[A-Z][A-Z0-9]+-\d+\b/g,
     /#\d+\b/g,
-    /\b\d{2,}\b/g,
     /\b(?:issue|pr|pull request)\s+#?\d+\b/gi,
   ];
 
