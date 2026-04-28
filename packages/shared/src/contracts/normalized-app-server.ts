@@ -680,8 +680,10 @@ export type AppServerNotification =
   | {
       method: "mcpServer/startupStatus/updated";
       params: {
+        name?: string;
         serverName?: string;
-        status?: unknown;
+        status?: "starting" | "ready" | "failed" | "cancelled";
+        error?: string | null;
         [key: string]: unknown;
       };
     }
@@ -690,6 +692,8 @@ export type AppServerNotification =
       params: {
         name?: string;
         serverName?: string;
+        success?: boolean;
+        error?: string;
         [key: string]: unknown;
       };
     }

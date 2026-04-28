@@ -1258,6 +1258,256 @@ describe("ThreadView", () => {
     );
   });
 
+  it("renders MCP tool-call item and progress activity", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Browser task",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: true,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Use Playwright."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-1",
+            item: {
+              id: "call-mcp-browser-tabs",
+              type: "mcpToolCall",
+              server: "playwright",
+              tool: "browser_tabs",
+              status: "in_progress",
+              arguments: { action: "list" },
+              result: null,
+              error: null,
+            },
+          },
+        } as AppServerNotification,
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/mcpToolCall/progress",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-1",
+            itemId: "call-mcp-browser-tabs",
+            message: "Listing browser tabs",
+          },
+        },
+      });
+    });
+
+    expect(screen.getAllByText("MCP Listing browser tabs").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: /MCP Listing browser tabs/ }));
+    expect(screen.getAllByText("MCP Listing browser tabs").length).toBeGreaterThan(0);
+  });
+
+  it("renders global MCP startup and OAuth status for the selected backend", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Browser task",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: true,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Use Playwright."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "grok",
+        notification: {
+          method: "mcpServer/startupStatus/updated",
+          params: {
+            name: "ignored",
+            status: "ready",
+            error: null,
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "mcpServer/startupStatus/updated",
+          params: {
+            name: "playwright",
+            status: "starting",
+            error: null,
+          },
+        },
+      });
+    });
+
+    expect(screen.getByText("MCP playwright starting")).toBeInTheDocument();
+    expect(screen.queryByText("MCP ignored ready")).not.toBeInTheDocument();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "mcpServer/oauthLogin/completed",
+          params: {
+            name: "playwright",
+            success: true,
+          },
+        },
+      });
+    });
+
+    expect(screen.getByText("MCP playwright login completed")).toBeInTheDocument();
+  });
+
   it("renders live Codex command execution activity without falling back to tool", async () => {
     const selectedThread = {
       id: "thread-2",

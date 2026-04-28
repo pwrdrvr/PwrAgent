@@ -318,7 +318,7 @@ flowchart TB
 **Verification:**
 - Renderer tests prove MCP UI renders and submits protocol-correct responses without affecting existing approvals or questionnaires.
 
-- [ ] **Unit 5: Render MCP tool progress, startup status, OAuth completion, and metadata**
+- [x] **Unit 5: Render MCP tool progress, startup status, OAuth completion, and metadata**
 
 **Goal:** Make MCP activity visible and understandable during live turns, even when no elicitation is pending.
 
