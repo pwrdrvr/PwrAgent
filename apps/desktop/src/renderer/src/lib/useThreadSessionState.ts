@@ -570,6 +570,56 @@ export function useThreadSessionState(params: {
       return;
     }
 
+    const optimisticUserMessage = thread.optimisticUserMessage;
+    if (optimisticUserMessage) {
+      const optimisticEntry: AppServerThreadMessageEntry = {
+        type: "message",
+        id: `optimistic-launchpad-${threadKey}`,
+        role: "user",
+        text: optimisticUserMessage.text,
+        parts: [
+          ...(optimisticUserMessage.text
+            ? [{ type: "text" as const, text: optimisticUserMessage.text }]
+            : []),
+          ...(optimisticUserMessage.imageParts ?? []),
+        ],
+        createdAt: optimisticUserMessage.createdAt ?? Date.now(),
+      };
+
+      updateSession(threadKey, (current) => {
+        const persistedMessageExists = current.response?.replay.messages.some((message) =>
+          messageMatchesOptimisticEntry(message, optimisticEntry)
+        );
+        const optimisticMessageExists = current.optimisticEntries.some((entry) =>
+          messageMatchesOptimisticEntry(
+            {
+              id: entry.id,
+              role: entry.role,
+              text: entry.text,
+              parts: entry.parts,
+              createdAt: entry.createdAt,
+            },
+            optimisticEntry
+          )
+        );
+
+        if (persistedMessageExists || optimisticMessageExists) {
+          return current;
+        }
+
+        return {
+          ...current,
+          expectOwnUpdate: true,
+          interacted: true,
+          lastTouchedAt: Date.now(),
+          optimisticEntries: [
+            ...current.optimisticEntries,
+            optimisticEntry,
+          ],
+        };
+      });
+    }
+
     const session = sessions[threadKey];
     const hydrationVersion = getThreadHydrationVersion(thread);
     if (!session?.response) {

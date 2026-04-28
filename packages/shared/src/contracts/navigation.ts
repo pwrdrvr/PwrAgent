@@ -1,6 +1,7 @@
 import type {
   AppServerBackendScope,
   AppServerBackendKind,
+  AppServerThreadImagePart,
   AppServerThreadSummary,
   LinkedDirectorySummary,
   ThreadExecutionMode,
@@ -18,6 +19,11 @@ export type ThreadInboxState = {
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
+  optimisticUserMessage?: {
+    text: string;
+    imageParts?: AppServerThreadImagePart[];
+    createdAt?: number;
+  };
 };
 
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";

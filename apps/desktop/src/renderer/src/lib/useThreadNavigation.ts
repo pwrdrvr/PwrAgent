@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
   AppServerCollaborationModeRequest,
+  AppServerThreadImagePart,
   AppServerTurnInputItem,
   NavigationDirectorySummary,
   NavigationLaunchpadDefaults,
@@ -482,6 +483,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
   threadId: string;
   executionMode: ThreadExecutionMode;
   workMode: NavigationLaunchpadDraft["workMode"];
+  optimisticUserMessage?: NavigationThreadSummary["optimisticUserMessage"];
 }): NavigationThreadSummary {
   return {
     id: params.threadId,
@@ -495,6 +497,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
     reasoningEffort: params.launchpad.reasoningEffort,
     serviceTier: params.launchpad.serviceTier,
     fastMode: params.launchpad.fastMode,
+    optimisticUserMessage: params.optimisticUserMessage,
     linkedDirectories: params.launchpad.directoryPath
       ? [
           {
@@ -515,6 +518,40 @@ function buildOptimisticThreadFromLaunchpad(params: {
       inInbox: true,
       reason: "new-thread",
     },
+  };
+}
+
+function buildOptimisticUserMessage(
+  input: AppServerTurnInputItem[] | undefined
+): NavigationThreadSummary["optimisticUserMessage"] {
+  if (!input?.length) {
+    return undefined;
+  }
+
+  const text = input
+    .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> =>
+      item.type === "text" && typeof item.text === "string"
+    )
+    .map((item) => item.text.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  const imageParts: AppServerThreadImagePart[] = input
+    .filter((item): item is Extract<AppServerTurnInputItem, { type: "image" }> =>
+      item.type === "image" && typeof item.url === "string"
+    )
+    .map((item) => ({
+      type: "image",
+      url: item.url,
+    }));
+
+  if (!text && imageParts.length === 0) {
+    return undefined;
+  }
+
+  return {
+    text,
+    ...(imageParts.length > 0 ? { imageParts } : {}),
+    createdAt: Date.now(),
   };
 }
 
@@ -705,7 +742,9 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
             (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
           )
         ) {
-          setOptimisticThread(undefined);
+          setOptimisticThread((current) =>
+            current?.optimisticUserMessage ? current : undefined
+          );
         }
 
         setSelectedItemKey((current) => {
@@ -906,12 +945,23 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       optimisticThread.id
     );
 
-    if (
-      currentThreads.some(
-        (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
-      )
-    ) {
-      return currentThreads;
+    const hasHydratedThread = currentThreads.some(
+      (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+    );
+    if (hasHydratedThread) {
+      if (!optimisticThread.optimisticUserMessage) {
+        return currentThreads;
+      }
+
+      return currentThreads.map((thread) =>
+        buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+          ? {
+              ...thread,
+              optimisticUserMessage:
+                thread.optimisticUserMessage ?? optimisticThread.optimisticUserMessage,
+            }
+          : thread
+      );
     }
 
     return [optimisticThread, ...currentThreads];
@@ -1258,6 +1308,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           threadId: response.threadId,
           executionMode: response.executionMode,
           workMode: response.workMode,
+          optimisticUserMessage: buildOptimisticUserMessage(input),
         });
         const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
         setOptimisticThread(optimisticMaterializedThread);
