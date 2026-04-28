@@ -300,6 +300,12 @@ export function Composer(props: ComposerProps) {
   const activeTurnIdRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
+  const composerScopeKey = props.launchpad
+    ? `launchpad:${props.launchpad.directoryKey}`
+    : props.thread
+      ? `thread:${props.thread.source}:${props.thread.id}`
+      : "empty";
+  const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
@@ -390,6 +396,18 @@ export function Composer(props: ComposerProps) {
     [props.directory, props.thread]
   );
   const isBareReviewCommand = draft.trim() === "/review";
+
+  useEffect(() => {
+    const current = pasteScopeRef.current;
+    if (current.key === composerScopeKey) {
+      return;
+    }
+
+    pasteScopeRef.current = {
+      key: composerScopeKey,
+      version: current.version + 1,
+    };
+  }, [composerScopeKey]);
 
   useEffect(() => {
     setActiveSkillIndex(0);
@@ -864,6 +882,8 @@ export function Composer(props: ComposerProps) {
   };
 
   const attachPastedImages = async (files: PastedImageFile[]): Promise<void> => {
+    const pasteScope = pasteScopeRef.current;
+
     try {
       const nextAttachments = await Promise.all(
         files.map(async ({ file, type }, index) => {
@@ -901,12 +921,26 @@ export function Composer(props: ComposerProps) {
         })
       );
 
+      if (
+        pasteScopeRef.current.key !== pasteScope.key ||
+        pasteScopeRef.current.version !== pasteScope.version
+      ) {
+        return;
+      }
+
       setImageAttachments((current) => {
         const mergedAttachments = [...current, ...nextAttachments];
         persistLaunchpadImageAttachments(mergedAttachments);
         return mergedAttachments;
       });
     } catch (error) {
+      if (
+        pasteScopeRef.current.key !== pasteScope.key ||
+        pasteScopeRef.current.version !== pasteScope.version
+      ) {
+        return;
+      }
+
       setSendError(
         error instanceof Error ? error.message : "The pasted image could not be read."
       );
