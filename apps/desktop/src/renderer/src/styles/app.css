@@ -59,7 +59,9 @@ textarea {
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width, 408px) minmax(0, 1fr);
+  align-items: stretch;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   background: var(--bg-app);
   color: var(--text-primary);
@@ -68,9 +70,11 @@ textarea {
 .sidebar {
   display: flex;
   position: relative;
+  align-self: stretch;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
-  padding: 16px;
+  padding: 16px 16px 0;
   overflow: hidden;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-subtle);
@@ -202,6 +206,11 @@ textarea {
 
 .sidebar__brand {
   margin: 0;
+  color: var(--accent-bright);
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: none;
 }
 
 .thread-header__title,
