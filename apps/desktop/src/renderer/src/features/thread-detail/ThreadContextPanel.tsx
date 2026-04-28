@@ -17,6 +17,8 @@ import { formatExecutionModeLabel } from "../../lib/execution-mode";
 type ThreadContextPanelProps = {
   backendError?: string;
   backends: BackendSummary[];
+  onPinnedChange?: (pinned: boolean) => void;
+  onWidthChange?: (width: number) => void;
   platform?: string;
   thread: NavigationThreadSummary;
   worktreeArchiveError?: string;
@@ -36,8 +38,16 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const [revealed, setRevealed] = useState(false);
   const [railWidth, setRailWidth] = useState(380);
   const open = pinned || revealed;
+
+  const updatePinned = (nextPinned: boolean): void => {
+    setPinned(nextPinned);
+    props.onPinnedChange?.(nextPinned);
+  };
+
   const resizeRail = (nextWidth: number): void => {
-    setRailWidth(Math.min(560, Math.max(300, nextWidth)));
+    const clampedWidth = Math.min(560, Math.max(300, nextWidth));
+    setRailWidth(clampedWidth);
+    props.onWidthChange?.(clampedWidth);
   };
   const startRailResize = (event: PointerEvent<HTMLElement>): void => {
     if (!pinned) {
@@ -117,7 +127,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           type="button"
           onClick={() => {
             if (pinned) {
-              setPinned(false);
+              updatePinned(false);
               setRevealed(false);
               return;
             }
@@ -150,7 +160,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                 className="button button--ghost context-panel__pin-button"
                 type="button"
                 onClick={() => {
-                  setPinned((current) => !current);
+                  updatePinned(!pinned);
                   setRevealed(true);
                 }}
               >

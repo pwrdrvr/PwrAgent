@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import type {
   AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification,
@@ -874,6 +874,8 @@ export function ThreadView(props: ThreadViewProps) {
   const [pendingRequestBusy, setPendingRequestBusy] = useState(false);
   const [pendingRequestError, setPendingRequestError] = useState<string>();
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
+  const [contextRailPinned, setContextRailPinned] = useState(false);
+  const [contextRailWidth, setContextRailWidth] = useState(380);
 
   useEffect(() => {
     setPendingActivityEntry(undefined);
@@ -1383,7 +1385,16 @@ export function ThreadView(props: ThreadViewProps) {
     <section className="thread-view">
       <ThreadHeader thread={selectedThread!} />
 
-      <div className="thread-view__layout">
+      <div
+        className={`thread-view__layout${
+          contextRailPinned ? " has-pinned-context-rail" : ""
+        }`}
+        style={
+          {
+            "--context-rail-width": `${contextRailWidth}px`,
+          } as CSSProperties
+        }
+      >
         <div className="thread-view__primary">
           <section className="transcript-panel" aria-label="Transcript">
             <TranscriptList
@@ -1448,6 +1459,8 @@ export function ThreadView(props: ThreadViewProps) {
         <ThreadContextPanel
           backendError={props.backendError}
           backends={props.backends}
+          onPinnedChange={setContextRailPinned}
+          onWidthChange={setContextRailWidth}
           platform={props.platform}
           thread={selectedThread!}
           worktreeArchiveError={props.worktreeArchiveError}
