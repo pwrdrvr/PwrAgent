@@ -25,7 +25,7 @@ const THREAD_TITLE_RESPONSE_SCHEMA = {
   },
 } as const;
 
-type ThreadTitleAdapterParams = {
+export type ThreadTitleAdapterParams = {
   prompt: string;
   promptVersion: string;
   schema: Record<string, unknown>;
@@ -33,7 +33,7 @@ type ThreadTitleAdapterParams = {
   timeoutMs: number;
 };
 
-type ThreadTitleAdapterResult =
+export type ThreadTitleAdapterResult =
   | {
       status: "ok";
       object: unknown;

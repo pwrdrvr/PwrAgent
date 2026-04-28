@@ -2674,6 +2674,107 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("generates thread titles through an ephemeral Codex helper turn", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "thread-title-helper",
+      },
+    };
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-title-helper",
+      },
+      turn: {
+        id: "turn-title-helper",
+      },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+    const forwardedNotifications: string[] = [];
+    client.onNotification((notification) => {
+      forwardedNotifications.push(notification.method);
+    });
+
+    const titlePromise = client.generateTitle({
+      prompt: "Name the thread from this prompt",
+      promptVersion: "thread-title-v1",
+      schema: {
+        type: "object",
+        required: ["title"],
+        properties: {
+          title: { type: "string" },
+        },
+      },
+      schemaName: "thread_title",
+      timeoutMs: 5_000,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: {
+        threadId: "thread-title-helper",
+        turn: {
+          id: "turn-title-helper",
+          output: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                title: "Add animated leopard tea button",
+              }),
+            },
+          ],
+        },
+      },
+    });
+
+    await expect(titlePromise).resolves.toEqual({
+      status: "ok",
+      object: {
+        title: "Add animated leopard tea button",
+      },
+    });
+    expect(forwardedNotifications).toEqual([]);
+
+    const requests = transport!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> }
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/start",
+        params: expect.objectContaining({
+          ephemeral: true,
+          model: "gpt-5.4-mini",
+          serviceTier: "fast",
+        }),
+      })
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "turn/start",
+        params: expect.objectContaining({
+          threadId: "thread-title-helper",
+          model: "gpt-5.4-mini",
+          serviceTier: "fast",
+          effort: "low",
+          outputSchema: expect.objectContaining({
+            type: "object",
+          }),
+        }),
+      })
+    );
+
+    await client.close();
+  });
+
   it("treats unmaterialized new threads as empty transcripts", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadErrorByThreadId.set("thread-empty", {

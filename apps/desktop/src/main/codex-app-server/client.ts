@@ -65,9 +65,15 @@ import {
   type ThreadDirectoryEnrichment,
 } from "./thread-directory-enricher";
 import { StdioJsonRpcTransport } from "./stdio-transport";
+import type {
+  ThreadTitleAdapterParams,
+  ThreadTitleAdapterResult,
+} from "../app-server/thread-title-generation-service";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
+const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.4-mini";
+const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 10_000;
 const SUPPORTED_CODEX_MODEL_ORDER = [
   "gpt-5.5",
   "gpt-5.4",
@@ -262,6 +268,75 @@ function pickString(
     }
   }
   return undefined;
+}
+
+function readStringFromRecord(value: unknown, key: string): string | undefined {
+  const record = asRecord(value);
+  return record ? pickString(record, [key]) : undefined;
+}
+
+function buildHelperTurnKey(threadId: string, turnId: string): string {
+  return `${threadId}:${turnId}`;
+}
+
+function extractThreadIdFromNotification(
+  notification: AppServerNotification,
+  rawParams: unknown
+): string | undefined {
+  return (
+    readStringFromRecord(notification.params, "threadId") ??
+    extractThreadIdFromValue(rawParams)
+  );
+}
+
+function extractGeneratedTitleObject(value: unknown): unknown | undefined {
+  if (typeof value === "string") {
+    const parsed = parseStructuredValue(value);
+    return isThreadTitleObject(parsed) ? parsed : undefined;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const object = extractGeneratedTitleObject(entry);
+      if (object) {
+        return object;
+      }
+    }
+    return undefined;
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  if (isThreadTitleObject(record)) {
+    return { title: record.title };
+  }
+
+  for (const key of [
+    "output",
+    "content",
+    "message",
+    "text",
+    "item",
+    "items",
+    "turn",
+    "response",
+    "result",
+    "data",
+  ]) {
+    const object = extractGeneratedTitleObject(record[key]);
+    if (object) {
+      return object;
+    }
+  }
+
+  return undefined;
+}
+
+function isThreadTitleObject(value: unknown): value is { title: string } {
+  const record = asRecord(value);
+  return typeof record?.title === "string" && record.title.trim().length > 0;
 }
 
 function pickRawString(
@@ -2339,6 +2414,7 @@ function buildThreadStartPayload(params: {
   approvalPolicy?: string;
   sandbox?: string;
   serviceTier?: string;
+  ephemeral?: boolean;
 }): CodexThreadStartParams {
   const base: CodexThreadStartParams = {
     experimentalRawEvents: false,
@@ -2365,6 +2441,9 @@ function buildThreadStartPayload(params: {
   const serviceTier = normalizeCodexServiceTier(params.serviceTier);
   if (serviceTier) {
     base.serviceTier = serviceTier;
+  }
+  if (params.ephemeral !== undefined) {
+    base.ephemeral = params.ephemeral;
   }
 
   return base;
@@ -2483,6 +2562,8 @@ function buildTurnStartPayload(params: {
   input: AppServerTurnInputItem[];
   model?: string;
   reasoningEffort?: string;
+  serviceTier?: string;
+  outputSchema?: CodexTurnStartParams["outputSchema"];
   collaborationMode?: AppServerCollaborationModeRequest;
   collaborationFallbackModel?: string;
   collaborationFallbackReasoningEffort?: string;
@@ -2499,6 +2580,13 @@ function buildTurnStartPayload(params: {
   const reasoningEffort = normalizeCodexReasoningEffort(params.reasoningEffort);
   if (reasoningEffort) {
     base.effort = reasoningEffort;
+  }
+  const serviceTier = normalizeCodexServiceTier(params.serviceTier);
+  if (serviceTier) {
+    base.serviceTier = serviceTier;
+  }
+  if (params.outputSchema) {
+    base.outputSchema = params.outputSchema;
   }
 
   const collaborationMode = buildCollaborationModePayload({
@@ -2593,6 +2681,15 @@ export class CodexAppServerClient {
       request: AppServerPendingRequestNotification
     ) => Promise<unknown> | unknown
   >();
+  private readonly helperThreadIds = new Set<string>();
+  private readonly helperTurnWaiters = new Map<
+    string,
+    {
+      resolve: (object: unknown) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.connection = new JsonRpcConnection(
@@ -2627,13 +2724,18 @@ export class CodexAppServerClient {
         await this.recordThreadInSessionIndex(params);
       }
 
+      const normalized = normalizeServerNotification(
+        method,
+        params,
+      );
+      const helperThreadId = extractThreadIdFromNotification(normalized, params);
+      if (helperThreadId && this.helperThreadIds.has(helperThreadId)) {
+        this.handleHelperThreadNotification(method, normalized);
+        return;
+      }
+
       for (const listener of this.notificationListeners) {
-        await listener(
-          normalizeServerNotification(
-            method,
-            params,
-          )
-        );
+        await listener(normalized);
       }
     });
     this.connection.setRequestHandler(async (method, params, rpcId) => {
@@ -2680,6 +2782,8 @@ export class CodexAppServerClient {
     this.initialized = false;
     this.initializationPromise = null;
     this.initializeResult = null;
+    this.rejectHelperTurnWaiters(new Error("codex app server client closed"));
+    this.helperThreadIds.clear();
     await this.connection.close();
   }
 
@@ -2762,6 +2866,70 @@ export class CodexAppServerClient {
         threadId: entry.id,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  private handleHelperThreadNotification(
+    method: string,
+    notification: AppServerNotification
+  ): void {
+    if (method !== "turn/completed" && method !== "turn/failed") {
+      return;
+    }
+
+    const threadId = readStringFromRecord(notification.params, "threadId");
+    const turnId = readStringFromRecord(notification.params, "turnId");
+    if (!threadId || !turnId) {
+      return;
+    }
+
+    const key = buildHelperTurnKey(threadId, turnId);
+    const waiter = this.helperTurnWaiters.get(key);
+    if (!waiter) {
+      return;
+    }
+
+    clearTimeout(waiter.timer);
+    this.helperTurnWaiters.delete(key);
+
+    if (method === "turn/failed") {
+      waiter.reject(new Error("codex_title_turn_failed"));
+      return;
+    }
+
+    const object = extractGeneratedTitleObject(notification.params);
+    if (!object) {
+      waiter.reject(new Error("codex_title_turn_completed_without_title"));
+      return;
+    }
+
+    waiter.resolve(object);
+  }
+
+  private waitForHelperTurnTitle(params: {
+    threadId: string;
+    turnId: string;
+    timeoutMs: number;
+  }): Promise<unknown> {
+    const key = buildHelperTurnKey(params.threadId, params.turnId);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.helperTurnWaiters.delete(key);
+        reject(new Error("codex_title_turn_timeout"));
+      }, Math.max(100, params.timeoutMs));
+      this.helperTurnWaiters.set(key, {
+        resolve,
+        reject,
+        timer,
+      });
+    });
+  }
+
+  private rejectHelperTurnWaiters(error: Error): void {
+    for (const [key, waiter] of this.helperTurnWaiters) {
+      clearTimeout(waiter.timer);
+      this.helperTurnWaiters.delete(key);
+      waiter.reject(error);
     }
   }
 
@@ -2986,6 +3154,91 @@ export class CodexAppServerClient {
     });
 
     return { threadId, turnId };
+  }
+
+  async generateTitle(params: ThreadTitleAdapterParams): Promise<ThreadTitleAdapterResult> {
+    await this.ensureInitialized();
+
+    let helperThreadId: string | undefined;
+    const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
+    try {
+      const threadStartResult = await requestWithFallbacks({
+        client: this.connection,
+        methods: ["thread/start"],
+        payloads: [
+          buildThreadStartPayload({
+            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            serviceTier: "fast",
+            ephemeral: true,
+          }),
+          buildThreadStartPayload({
+            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            ephemeral: true,
+          }),
+        ],
+        timeoutMs,
+      });
+      helperThreadId = extractThreadIdFromValue(threadStartResult);
+      if (!helperThreadId) {
+        return {
+          status: "failed",
+          reason: "codex_title_thread_start_missing_thread_id",
+        };
+      }
+      this.helperThreadIds.add(helperThreadId);
+
+      const turnStartResult = await requestWithFallbacks({
+        client: this.connection,
+        methods: ["turn/start"],
+        payloads: [
+          buildTurnStartPayload({
+            threadId: helperThreadId,
+            input: [{ type: "text", text: params.prompt }],
+            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            serviceTier: "fast",
+            reasoningEffort: "low",
+            outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
+          }),
+          buildTurnStartPayload({
+            threadId: helperThreadId,
+            input: [{ type: "text", text: params.prompt }],
+            model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+            reasoningEffort: "low",
+            outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
+          }),
+        ],
+        timeoutMs,
+      });
+      const immediateObject = extractGeneratedTitleObject(turnStartResult);
+      if (immediateObject) {
+        return {
+          status: "ok",
+          object: immediateObject,
+        };
+      }
+
+      const turnId = extractTurnIdFromValue(turnStartResult);
+      if (!turnId) {
+        return {
+          status: "failed",
+          reason: "codex_title_turn_start_missing_turn_id",
+        };
+      }
+
+      return {
+        status: "ok",
+        object: await this.waitForHelperTurnTitle({
+          threadId: helperThreadId,
+          turnId,
+          timeoutMs,
+        }),
+      };
+    } catch (error) {
+      return {
+        status: "failed",
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   async startReview(params: {
