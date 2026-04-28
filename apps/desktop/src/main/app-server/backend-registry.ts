@@ -313,7 +313,7 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
     startReview: supported.has("review/start") || assumeCodexAppServerSurface,
     interruptTurn: supported.has("turn/interrupt"),
-    steerTurn: supported.has("turn/steer"),
+    steerTurn: backend === "codex" || supported.has("turn/steer"),
     transcriptPagination: false,
     toolUse: false,
     approvalRequests: true,
