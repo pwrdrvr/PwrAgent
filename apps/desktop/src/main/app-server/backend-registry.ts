@@ -136,14 +136,31 @@ const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
 
 const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
   {
+    id: "gpt-5.5",
+    label: "GPT-5.5",
+    current: true,
+    supportsReasoning: true,
+    supportsFast: true,
+  },
+  {
     id: "gpt-5.4",
     label: "GPT-5.4",
-    current: true,
+    supportsReasoning: true,
+    supportsFast: true,
+  },
+  {
+    id: "gpt-5.4-mini",
+    label: "GPT-5.4-Mini",
     supportsReasoning: true,
   },
   {
-    id: "gpt-5.4-pro",
-    label: "GPT-5.4 Pro",
+    id: "gpt-5.3-codex",
+    label: "GPT-5.3-Codex",
+    supportsReasoning: true,
+  },
+  {
+    id: "gpt-5.2",
+    label: "GPT-5.2",
     supportsReasoning: true,
   },
 ];
@@ -287,7 +304,8 @@ function inferSupportsFast(
     return model.supportsFast;
   }
 
-  return backend === "codex" && model.id.toLowerCase() === "gpt-5.4";
+  const id = model.id.toLowerCase();
+  return backend === "codex" && (id === "gpt-5.5" || id === "gpt-5.4");
 }
 
 function getBackendFallbackModels(backend: AppServerBackendKind): BackendModelOption[] {
@@ -295,7 +313,7 @@ function getBackendFallbackModels(backend: AppServerBackendKind): BackendModelOp
 }
 
 function getPreferredModelId(backend: AppServerBackendKind): string {
-  return backend === "codex" ? "gpt-5.4" : "grok-4.20-reasoning";
+  return backend === "codex" ? "gpt-5.5" : "grok-4.20-reasoning";
 }
 
 function dedupeModelOptions(
