@@ -376,6 +376,66 @@ function applyLaunchpadReset(
   };
 }
 
+function projectOptimisticThreadIntoDirectories(
+  directories: NavigationSnapshot["directories"],
+  optimisticThread?: NavigationThreadSummary
+): NavigationSnapshot["directories"] {
+  if (!optimisticThread) {
+    return directories;
+  }
+
+  const threadKey = buildThreadIdentityKey(optimisticThread.source, optimisticThread.id);
+  let changed = false;
+  const nextDirectories = [...directories];
+
+  for (const linkedDirectory of optimisticThread.linkedDirectories) {
+    const directoryKey = linkedDirectory.id.startsWith("launchpad:")
+      ? linkedDirectory.id.slice("launchpad:".length)
+      : linkedDirectory.path
+        ? `directory:${linkedDirectory.path}`
+        : undefined;
+    if (!directoryKey) {
+      continue;
+    }
+
+    const existingIndex = nextDirectories.findIndex(
+      (directory) => directory.key === directoryKey
+    );
+    if (existingIndex >= 0) {
+      const existing = nextDirectories[existingIndex]!;
+      if (existing.threadKeys.includes(threadKey)) {
+        continue;
+      }
+
+      nextDirectories[existingIndex] = {
+        ...existing,
+        threadKeys: [threadKey, ...existing.threadKeys],
+        needsAttentionCount:
+          existing.needsAttentionCount + (optimisticThread.inbox.inInbox ? 1 : 0),
+        latestUpdatedAt: Math.max(
+          existing.latestUpdatedAt ?? 0,
+          optimisticThread.updatedAt ?? 0
+        ),
+      };
+      changed = true;
+      continue;
+    }
+
+    nextDirectories.push({
+      key: directoryKey,
+      kind: "directory",
+      label: linkedDirectory.label,
+      path: linkedDirectory.path,
+      threadKeys: [threadKey],
+      needsAttentionCount: optimisticThread.inbox.inInbox ? 1 : 0,
+      latestUpdatedAt: optimisticThread.updatedAt,
+    });
+    changed = true;
+  }
+
+  return changed ? nextDirectories : directories;
+}
+
 function hasSelectionKey(
   response: NavigationSnapshot,
   selectionKey: string,
@@ -855,7 +915,14 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     return [optimisticThread, ...currentThreads];
   }, [optimisticThread, state.response?.threads]);
 
-  const directories = state.response?.directories ?? [];
+  const directories = useMemo(
+    () =>
+      projectOptimisticThreadIntoDirectories(
+        state.response?.directories ?? [],
+        optimisticThread
+      ),
+    [optimisticThread, state.response?.directories]
+  );
 
   const inboxThreads = useMemo(() => {
     const unreadThreads = threads.filter(
