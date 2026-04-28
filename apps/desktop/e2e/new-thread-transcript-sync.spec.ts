@@ -272,10 +272,20 @@ test("top-level new thread rereads the created thread until the assistant reply 
     await app.window.getByRole("button", { name: "Start thread" }).click();
 
     await expect(
-      app.window.getByRole("region", { name: "Transcript" }).getByText("No thread history yet."),
+      app.window
+        .getByRole("region", { name: "Transcript" })
+        .getByText("Let's test creating a new thread again"),
     ).toBeVisible();
+    await expect(
+      app.window.getByRole("region", { name: "Transcript" }).getByText("No thread history yet."),
+    ).toBeHidden();
 
     await app.advance({ stepId: "turn-started-1" });
+    await expect(
+      app.window
+        .getByRole("region", { name: "Transcript" })
+        .getByText("Let's test creating a new thread again"),
+    ).toBeVisible();
     await app.advance({ stepId: "turn-completed-1" });
 
     await expect(

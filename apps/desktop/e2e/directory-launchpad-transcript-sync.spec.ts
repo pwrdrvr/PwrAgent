@@ -281,10 +281,16 @@ test("directory launchpad rereads the created thread after completion when the f
       app.window.getByRole("heading", { level: 2, name: "hello from launchpad" }),
     ).toBeVisible();
     await expect(
-      app.window.getByRole("region", { name: "Transcript" }).getByText("No thread history yet."),
+      app.window.getByRole("region", { name: "Transcript" }).getByText("hello from launchpad"),
     ).toBeVisible();
+    await expect(
+      app.window.getByRole("region", { name: "Transcript" }).getByText("No thread history yet."),
+    ).toBeHidden();
 
     await app.advance({ stepId: "turn-started-1" });
+    await expect(
+      app.window.getByRole("region", { name: "Transcript" }).getByText("hello from launchpad"),
+    ).toBeVisible();
     await app.advance({ stepId: "turn-completed-1" });
 
     await expect(
