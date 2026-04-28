@@ -22,6 +22,7 @@ type ThreadContextPanelProps = {
   onPinnedChange?: (pinned: boolean) => void;
   onResizingChange?: (resizing: boolean) => void;
   onWidthChange?: (width: number) => void;
+  pinned: boolean;
   platform?: string;
   thread: NavigationThreadSummary;
   worktreeArchiveError?: string;
@@ -34,7 +35,6 @@ type ThreadContextPanelProps = {
 
 export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const tooltipRef = useRef<HTMLDivElement>(null);
-  const [pinned, setPinned] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [railWidth, setRailWidth] = useState(380);
   const [resizing, setResizing] = useState(false);
@@ -46,6 +46,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     targetTop: number;
     top?: number;
   }>();
+  const pinned = props.pinned;
   const open = pinned || revealed;
 
   useLayoutEffect(() => {
@@ -77,7 +78,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   }, [tooltip]);
 
   const updatePinned = (nextPinned: boolean): void => {
-    setPinned(nextPinned);
     props.onPinnedChange?.(nextPinned);
   };
 

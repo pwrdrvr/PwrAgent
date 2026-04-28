@@ -885,6 +885,8 @@ export function ThreadView(props: ThreadViewProps) {
     setPendingPlanEntry(undefined);
     setPendingRequestBusy(false);
     setPendingRequestError(undefined);
+    setContextRailPinned(false);
+    setContextRailResizing(false);
     setExpandedImage(undefined);
   }, [
     props.selectedLaunchpad?.directoryKey,
@@ -1463,6 +1465,7 @@ export function ThreadView(props: ThreadViewProps) {
           onPinnedChange={setContextRailPinned}
           onResizingChange={setContextRailResizing}
           onWidthChange={setContextRailWidth}
+          pinned={contextRailPinned}
           platform={props.platform}
           thread={selectedThread!}
           worktreeArchiveError={props.worktreeArchiveError}
