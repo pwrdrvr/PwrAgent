@@ -11,6 +11,7 @@ import type {
 } from "@pwragnt/shared";
 import { ThinkingScanner } from "./ThinkingScanner";
 import { PendingQuestionnaire } from "./PendingQuestionnaire";
+import { PendingMcpInteraction } from "./PendingMcpInteraction";
 import { TranscriptActivity } from "./TranscriptActivity";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptMessage } from "./TranscriptMessage";
@@ -18,6 +19,7 @@ import { TranscriptPlan } from "./TranscriptPlan";
 import { TranscriptReview } from "./TranscriptReview";
 import { TranscriptWorkPhaseGroup } from "./TranscriptWorkPhaseGroup";
 import type { PendingQuestionnaireState } from "./questionnaire";
+import type { PendingMcpInteractionState } from "./mcp-elicitation";
 import { buildTranscriptRenderItems } from "./transcript-render-items";
 
 type TranscriptListProps = {
@@ -33,6 +35,7 @@ type TranscriptListProps = {
   pendingPlanEntry?: AppServerThreadPlanEntry;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingRequestBusy?: boolean;
+  pendingMcpInteraction?: PendingMcpInteractionState;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
   pagination?: AppServerThreadReplayPagination;
@@ -48,6 +51,11 @@ type TranscriptListProps = {
     scrollTop: number;
   }) => void;
   onRespondToPendingRequest?: (decision: "approve" | "decline" | "cancel") => Promise<void>;
+  onPendingMcpInteractionChange?: (state: PendingMcpInteractionState) => void;
+  onSubmitPendingMcpInteraction?: (
+    state: PendingMcpInteractionState,
+    action: "accept" | "decline" | "cancel"
+  ) => Promise<void>;
   onPendingUserInputChange?: (state: PendingQuestionnaireState) => void;
   onSubmitPendingUserInput?: (state: PendingQuestionnaireState) => Promise<void>;
   onLoadOlder: () => Promise<void>;
@@ -185,6 +193,7 @@ export function TranscriptList(props: TranscriptListProps) {
       props.pendingAssistantMessage ||
       props.pendingPlanEntry ||
       props.pendingRequest ||
+      props.pendingMcpInteraction ||
       props.pendingUserInput ||
       props.pendingStatusText
   );
@@ -321,6 +330,7 @@ export function TranscriptList(props: TranscriptListProps) {
       (props.pendingPlanEntry ? 1 : 0) +
       (props.pendingStatusText ? 1 : 0) +
       (props.pendingRequest ? 1 : 0) +
+      (props.pendingMcpInteraction ? 1 : 0) +
       (props.pendingUserInput ? 1 : 0);
     const distanceFromBottom = Math.max(
       container.scrollHeight - container.clientHeight - container.scrollTop,
@@ -345,6 +355,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
     props.pendingRequest,
+    props.pendingMcpInteraction,
     props.pendingUserInput,
     props.pendingStatusText,
     props.threadId
@@ -437,6 +448,7 @@ export function TranscriptList(props: TranscriptListProps) {
               (props.pendingPlanEntry ? 1 : 0) +
               (props.pendingStatusText ? 1 : 0) +
               (props.pendingRequest ? 1 : 0) +
+              (props.pendingMcpInteraction ? 1 : 0) +
               (props.pendingUserInput ? 1 : 0))
     );
     const hasGrownWhileFollowingBottom = Boolean(
@@ -492,6 +504,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingAssistantMessage,
     props.pendingPlanEntry,
     props.pendingRequest,
+    props.pendingMcpInteraction,
     props.pendingUserInput,
     props.pendingStatusText,
     props.restoredViewport,
@@ -583,6 +596,18 @@ export function TranscriptList(props: TranscriptListProps) {
             }}
             onSubmit={async (state) => {
               await props.onSubmitPendingUserInput?.(state);
+            }}
+          />
+        ) : null}
+        {props.pendingMcpInteraction ? (
+          <PendingMcpInteraction
+            busy={props.pendingRequestBusy}
+            state={props.pendingMcpInteraction}
+            onChange={(state) => {
+              props.onPendingMcpInteractionChange?.(state);
+            }}
+            onSubmit={async (state, action) => {
+              await props.onSubmitPendingMcpInteraction?.(state, action);
             }}
           />
         ) : null}

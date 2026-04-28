@@ -33,6 +33,10 @@ import {
   buildQuestionnaireResponse,
   type PendingQuestionnaireState,
 } from "./questionnaire";
+import {
+  buildMcpElicitationResponse,
+  type PendingMcpInteractionState,
+} from "./mcp-elicitation";
 
 function arePlanEntriesEquivalent(
   left: AppServerThreadPlanEntry,
@@ -783,6 +787,7 @@ type ThreadViewProps = {
   loadingMore: boolean;
   messageCount: number;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
+  pendingMcpInteraction?: PendingMcpInteractionState;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
@@ -813,6 +818,10 @@ type ThreadViewProps = {
   onUpdatePendingUserInput?: (
     requestId: string,
     updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
+  ) => void;
+  onUpdatePendingMcpInteraction?: (
+    requestId: string,
+    updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
   ) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
   onSetThreadModelSettings?: (
@@ -1276,6 +1285,40 @@ export function ThreadView(props: ThreadViewProps) {
     }
   }
 
+  async function submitPendingMcpInteraction(
+    pendingMcpInteraction: PendingMcpInteractionState,
+    action: "accept" | "decline" | "cancel"
+  ): Promise<void> {
+    if (!props.desktopApi?.submitServerRequest || !selectedThread) {
+      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
+      return;
+    }
+
+    setPendingRequestBusy(true);
+    setPendingRequestError(undefined);
+
+    try {
+      await props.desktopApi.submitServerRequest({
+        backend: selectedThread.source,
+        threadId: selectedThread.id,
+        turnId:
+          typeof pendingMcpInteraction.turnId === "string"
+            ? pendingMcpInteraction.turnId
+            : undefined,
+        requestId: pendingMcpInteraction.requestId,
+        response: buildMcpElicitationResponse(pendingMcpInteraction, action),
+      });
+      props.clearPendingRequest(
+        pendingMcpInteraction.requestId,
+        action === "accept" ? "Thinking" : undefined
+      );
+    } catch (error) {
+      setPendingRequestError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPendingRequestBusy(false);
+    }
+  }
+
   if (!selectedThread && !selectedLaunchpad) {
     return (
       <section className="thread-empty-state">
@@ -1411,6 +1454,7 @@ export function ThreadView(props: ThreadViewProps) {
               pendingActivityEntry={pendingToolActivityEntry ?? pendingActivityEntry}
               pendingAssistantMessage={props.pendingAssistantMessage}
               pendingPlanEntry={pendingPlanEntry}
+              pendingMcpInteraction={props.pendingMcpInteraction}
               pendingRequest={props.pendingRequest}
               pendingRequestBusy={pendingRequestBusy}
               pendingUserInput={props.pendingUserInput}
@@ -1422,6 +1466,10 @@ export function ThreadView(props: ThreadViewProps) {
               onLoadOlder={props.onLoadOlder}
               onOpenImage={setExpandedImage}
               onRespondToPendingRequest={respondToPendingRequest}
+              onPendingMcpInteractionChange={(state) => {
+                props.onUpdatePendingMcpInteraction?.(state.requestId, () => state);
+              }}
+              onSubmitPendingMcpInteraction={submitPendingMcpInteraction}
               onPendingUserInputChange={(state) => {
                 props.onUpdatePendingUserInput?.(state.requestId, () => state);
               }}
@@ -1447,7 +1495,9 @@ export function ThreadView(props: ThreadViewProps) {
             onSetExecutionMode={props.onSetExecutionMode}
             onSetThreadModelSettings={props.onSetThreadModelSettings}
             pendingRequestActive={Boolean(props.pendingRequest)}
-            pendingUserInputActive={Boolean(props.pendingUserInput)}
+            pendingUserInputActive={Boolean(
+              props.pendingUserInput || props.pendingMcpInteraction
+            )}
             removeOptimisticMessage={props.removeOptimisticMessage}
             setExecutionModeError={props.setExecutionModeError}
             threadModelSettingsError={props.setThreadModelSettingsError}

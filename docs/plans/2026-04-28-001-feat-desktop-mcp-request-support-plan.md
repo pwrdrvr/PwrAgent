@@ -269,7 +269,7 @@ flowchart TB
 **Verification:**
 - Hook tests prove MCP pending lifecycle is isolated from approval and questionnaire lifecycle.
 
-- [ ] **Unit 4: Add MCP pending interaction UI and submit path**
+- [x] **Unit 4: Add MCP pending interaction UI and submit path**
 
 **Goal:** Render MCP elicitations in the thread view and submit MCP-shaped responses through `submitServerRequest`.
 
