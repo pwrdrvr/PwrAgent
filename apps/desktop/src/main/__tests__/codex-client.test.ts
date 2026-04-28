@@ -1890,22 +1890,62 @@ describe("CodexAppServerClient", () => {
         output: reviewOutput,
         turn,
       },
-      {
-        type: "message",
-        id: "review-answer",
-        role: "assistant",
-        text: reviewOutput.overall_explanation,
-        createdAt: 1_763_509_850_000,
-        turn,
+    ]);
+    expect(replay.messages).toEqual([]);
+
+    await client.close();
+  });
+
+  it("suppresses review prompts without legacy image metadata", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-review-prompt", {
+      thread: {
+        turns: [
+          {
+            id: "turn-review",
+            status: "inProgress",
+            startedAt: 1_763_509_850,
+            items: [
+              {
+                type: "userMessage",
+                id: "hidden-review-prompt",
+                message:
+                  "Review the code changes against the base branch 'main'. Run git diff 329990027959f8a4d07fbce1ff7a804ba798fcb0 to inspect the changes relative to main. Provide prioritized, actionable findings.",
+              },
+              {
+                type: "userMessage",
+                id: "visible-user-message",
+                message: "This should still render.",
+              },
+            ],
+          },
+        ],
       },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-review-prompt",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        id: "visible-user-message",
+        role: "user",
+        text: "This should still render.",
+      }),
     ]);
     expect(replay.messages).toEqual([
-      {
-        id: "review-answer",
-        role: "assistant",
-        text: reviewOutput.overall_explanation,
-        createdAt: undefined,
-      },
+      expect.objectContaining({
+        id: "visible-user-message",
+        role: "user",
+        text: "This should still render.",
+      }),
     ]);
 
     await client.close();

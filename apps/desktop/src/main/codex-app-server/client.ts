@@ -690,17 +690,78 @@ function isCodexInternalReviewPrompt(
   text: string
 ): boolean {
   const normalizedType = normalizeItemType(pickString(record, ["type"]));
+  const normalizedText = text.trim().toLowerCase();
   return (
     normalizedType === "usermessage" &&
-    ("images" in record || "local_images" in record || "text_elements" in record) &&
-    text.startsWith("Review ") &&
-    text.includes("provide prioritized findings")
+    normalizedText.startsWith("review ") &&
+    normalizedText.includes("code changes") &&
+    normalizedText.includes("base branch") &&
+    normalizedText.includes("prioritized") &&
+    normalizedText.includes("findings")
   );
 }
 
-function shouldSuppressConversationMessage(record: Record<string, unknown>): boolean {
+function normalizeSuppressionText(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function collectReviewOutputExplanations(value: unknown): Set<string> {
+  const output = new Set<string>();
+
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach((entry) => visit(entry));
+      return;
+    }
+
+    const record = asRecord(node);
+    if (!record) {
+      return;
+    }
+
+    const reviewOutput = normalizeReviewOutput(record);
+    if (reviewOutput?.overall_explanation) {
+      output.add(normalizeSuppressionText(reviewOutput.overall_explanation));
+    }
+
+    for (const key of [
+      "items",
+      "messages",
+      "content",
+      "parts",
+      "entries",
+      "data",
+      "results",
+      "turns",
+      "events",
+      "payload",
+      "item",
+      "message",
+      "thread",
+      "response",
+      "result"
+    ]) {
+      visit(record[key]);
+    }
+  };
+
+  visit(value);
+  return output;
+}
+
+function shouldSuppressConversationMessage(
+  record: Record<string, unknown>,
+  suppressedAssistantTexts = new Set<string>()
+): boolean {
   const text = collectLegacyMessageText(record);
-  return isReviewActionText(text) || isCodexInternalReviewPrompt(record, text);
+  const role = normalizeConversationRole(
+    pickString(record, ["role", "author", "speaker", "source", "type"])
+  );
+  return (
+    isReviewActionText(text) ||
+    isCodexInternalReviewPrompt(record, text) ||
+    (role === "assistant" && suppressedAssistantTexts.has(normalizeSuppressionText(text)))
+  );
 }
 
 function normalizeRenderableImageUrl(value: string | undefined): string | undefined {
@@ -814,10 +875,9 @@ function buildMessageContent(record: Record<string, unknown>): {
   return { text };
 }
 
-function extractConversationMessages(
-  value: unknown
-): AppServerThreadReplay["messages"] {
+function extractConversationMessages(value: unknown): AppServerThreadReplay["messages"] {
   const output: AppServerThreadReplay["messages"] = [];
+  const suppressedAssistantTexts = collectReviewOutputExplanations(value);
 
   const visit = (node: unknown): void => {
     if (Array.isArray(node)) {
@@ -837,7 +897,7 @@ function extractConversationMessages(
     if (
       role &&
       (content.text || content.parts?.length) &&
-      !shouldSuppressConversationMessage(record)
+      !shouldSuppressConversationMessage(record, suppressedAssistantTexts)
     ) {
       output.push({
         id:
@@ -1684,6 +1744,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
           .map((entry) => asRecord(entry))
           .filter((entry): entry is Record<string, unknown> => entry !== null)
       : [];
+    const suppressedAssistantTexts = collectReviewOutputExplanations(rawItems);
     const pendingActivityItems: Record<string, unknown>[] = [];
 
     const flushActivityItems = (): void => {
@@ -1703,7 +1764,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
       const role = normalizeConversationRole(itemType);
       if (role) {
         flushActivityItems();
-        if (shouldSuppressConversationMessage(item)) {
+        if (shouldSuppressConversationMessage(item, suppressedAssistantTexts)) {
           continue;
         }
         const content = buildMessageContent(item);
