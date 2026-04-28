@@ -7,7 +7,14 @@ import type {
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragnt/shared";
+import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
+import { copyText } from "../../lib/copy-text";
 import type { BrowseMode } from "../../lib/useThreadNavigation";
+import {
+  formatRuntimeGitRef,
+  formatRuntimePath,
+  runtimeGitRefCopyValue,
+} from "../../lib/runtime-identity";
 import { DirectoriesList } from "./DirectoriesList";
 import { InboxList } from "./InboxList";
 import { RecentsList } from "./RecentsList";
@@ -27,6 +34,7 @@ type SidebarProps = {
   launchpadError?: string;
   archiveThreadError?: string;
   renameThreadError?: string;
+  runtimeIdentity?: RuntimeIdentity;
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -67,6 +75,25 @@ export function Sidebar(props: SidebarProps) {
   );
   const onArchiveThread = props.onArchiveThread ?? (async () => undefined);
   const onRenameThread = props.onRenameThread ?? (async () => undefined);
+  const [copiedRuntimeValue, setCopiedRuntimeValue] = useState<"branch" | "cwd">();
+  const runtimeGitRefLabel = props.runtimeIdentity
+    ? formatRuntimeGitRef(props.runtimeIdentity)
+    : undefined;
+  const runtimeGitRefValue = props.runtimeIdentity
+    ? runtimeGitRefCopyValue(props.runtimeIdentity)
+    : undefined;
+
+  useEffect(() => {
+    if (!copiedRuntimeValue) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setCopiedRuntimeValue(undefined);
+    }, 1200);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [copiedRuntimeValue]);
 
   const canRenameThread = (thread: NavigationThreadSummary): boolean =>
     props.backends.some(
@@ -178,7 +205,33 @@ export function Sidebar(props: SidebarProps) {
         onPointerDown={props.onResizeStart}
       />
       <header className="sidebar__masthead">
-        <p className="eyebrow sidebar__brand">PwrAgnt</p>
+        <div className="sidebar__identity">
+          <p className="eyebrow sidebar__brand">PwrAgnt</p>
+
+          {props.runtimeIdentity ? (
+            <div className="runtime-identity" aria-label="Runtime identity">
+              <RuntimeIdentityButton
+                copied={copiedRuntimeValue === "cwd"}
+                label={formatRuntimePath(props.runtimeIdentity.cwd)}
+                value={props.runtimeIdentity.cwd}
+                valueKind="cwd"
+                onCopied={setCopiedRuntimeValue}
+              />
+              {runtimeGitRefLabel && runtimeGitRefValue ? (
+                <RuntimeIdentityButton
+                  copied={copiedRuntimeValue === "branch"}
+                  copyLabel={
+                    props.runtimeIdentity.detachedHead ? "commit SHA" : "branch name"
+                  }
+                  label={runtimeGitRefLabel}
+                  value={runtimeGitRefValue}
+                  valueKind="branch"
+                  onCopied={setCopiedRuntimeValue}
+                />
+              ) : null}
+            </div>
+          ) : null}
+        </div>
 
         <div className="sidebar__masthead-actions">
           <div className="sidebar__new-thread">
@@ -359,5 +412,37 @@ export function Sidebar(props: SidebarProps) {
       ) : null}
 
     </aside>
+  );
+}
+
+function RuntimeIdentityButton(props: {
+  copied: boolean;
+  copyLabel?: string;
+  label: string;
+  value: string;
+  valueKind: "branch" | "cwd";
+  onCopied: (valueKind: "branch" | "cwd") => void;
+}) {
+  return (
+    <button
+      aria-label={`Copy ${
+        props.copyLabel ?? (props.valueKind === "cwd" ? "working directory" : "branch name")
+      }`}
+      className="runtime-identity__button path-copy-target tooltip-target"
+      data-tooltip={
+        props.copied
+          ? "Copied"
+          : `${props.value}\nClick to copy to clipboard`
+      }
+      type="button"
+      onClick={() => {
+        void copyText(props.value).then(() => props.onCopied(props.valueKind));
+      }}
+    >
+      <span aria-hidden="true" className="runtime-identity__icon">
+        {props.valueKind === "cwd" ? "/" : "#"}
+      </span>
+      <span className="runtime-identity__text">{props.label}</span>
+    </button>
   );
 }

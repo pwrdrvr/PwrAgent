@@ -32,3 +32,4 @@ export const IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL =
   "image-upload:normalization-log";
 export const PRELOAD_LOG_CHANNEL = "preload:log";
 export const WINDOW_FOCUS_SYNC_CHANNEL = "window:focus-sync";
+export const RUNTIME_IDENTITY_CHANNEL = "runtime:get-identity";

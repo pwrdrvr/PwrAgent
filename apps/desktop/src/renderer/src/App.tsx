@@ -3,6 +3,7 @@ import { Sidebar } from "./features/navigation/Sidebar";
 import { ThreadView } from "./features/thread-detail/ThreadView";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi } from "./lib/desktop-api";
+import { useRuntimeIdentity } from "./lib/runtime-identity";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { useThreadSkills } from "./lib/useThreadSkills";
@@ -10,6 +11,7 @@ import { useThreadSkills } from "./lib/useThreadSkills";
 export function App() {
   const [sidebarWidth, setSidebarWidth] = useState(408);
   const desktopApi = useDesktopApi();
+  const runtimeIdentity = useRuntimeIdentity(desktopApi);
   const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);
   const session = useThreadSessionState({
@@ -60,6 +62,7 @@ export function App() {
         inboxThreads={navigation.inboxThreads}
         archiveThreadError={navigation.archiveThreadError}
         renameThreadError={navigation.renameThreadError}
+        runtimeIdentity={runtimeIdentity}
         launchpadError={navigation.launchpadError}
         loading={navigation.loading}
         selectedItemKey={navigation.selectedItemKey}

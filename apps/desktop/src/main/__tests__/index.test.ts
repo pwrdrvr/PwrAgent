@@ -11,6 +11,8 @@ const disposeImageNormalizationIpcHandlersMock = vi.fn();
 const registerPreloadLogIpcHandlersMock = vi.fn();
 const disposePreloadLogIpcHandlersMock = vi.fn();
 const registerRendererErrorIpcHandlersMock = vi.fn();
+const registerRuntimeIdentityIpcHandlersMock = vi.fn();
+const disposeRuntimeIdentityIpcHandlersMock = vi.fn();
 const initializeMainLoggerMock = vi.fn();
 const setApplicationMenuMock = vi.fn();
 const buildFromTemplateMock = vi.fn(() => ({ kind: "menu" }));
@@ -74,6 +76,11 @@ vi.mock("../ipc/renderer-error", () => ({
   registerRendererErrorIpcHandlers: registerRendererErrorIpcHandlersMock,
 }));
 
+vi.mock("../ipc/runtime-identity", () => ({
+  registerRuntimeIdentityIpcHandlers: registerRuntimeIdentityIpcHandlersMock,
+  disposeRuntimeIdentityIpcHandlers: disposeRuntimeIdentityIpcHandlersMock,
+}));
+
 vi.mock("../log", () => ({
   initializeMainLogger: initializeMainLoggerMock,
 }));
@@ -101,6 +108,8 @@ describe("bootstrapApp", () => {
     registerPreloadLogIpcHandlersMock.mockReset();
     disposePreloadLogIpcHandlersMock.mockReset();
     registerRendererErrorIpcHandlersMock.mockReset();
+    registerRuntimeIdentityIpcHandlersMock.mockReset();
+    disposeRuntimeIdentityIpcHandlersMock.mockReset();
     initializeMainLoggerMock.mockReset();
     setApplicationMenuMock.mockReset();
     buildFromTemplateMock.mockClear();
@@ -117,6 +126,7 @@ describe("bootstrapApp", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("awaits startup CPU profiling before creating the first window", async () => {
@@ -146,6 +156,7 @@ describe("bootstrapApp", () => {
     expect(registerImageNormalizationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerPreloadLogIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerRendererErrorIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(registerRuntimeIdentityIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(1);
   });
 
@@ -169,5 +180,18 @@ describe("bootstrapApp", () => {
     expect(createMainWindowMock).toHaveBeenNthCalledWith(2, {
       startupCpuProfiler: startupProfilerInstance,
     });
+  });
+
+  it("does not register runtime identity IPC in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(registerRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
+
+    appEventHandlers.get("before-quit")?.();
+    expect(disposeRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
   });
 });

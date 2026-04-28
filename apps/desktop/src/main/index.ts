@@ -10,12 +10,17 @@ import {
   registerPreloadLogIpcHandlers,
 } from "./ipc/preload-log";
 import { registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
+import {
+  disposeRuntimeIdentityIpcHandlers,
+  registerRuntimeIdentityIpcHandlers,
+} from "./ipc/runtime-identity";
 import { initializeMainLogger } from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
 import { createMainWindow } from "./window";
 
 const APP_NAME = "PwrAgnt";
 const isMac = process.platform === "darwin";
+const isDevelopment = process.env.NODE_ENV !== "production";
 
 function installApplicationMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -53,6 +58,9 @@ export function bootstrapApp(): void {
     registerImageNormalizationIpcHandlers();
     registerPreloadLogIpcHandlers();
     registerRendererErrorIpcHandlers();
+    if (isDevelopment) {
+      registerRuntimeIdentityIpcHandlers();
+    }
     createMainWindow({
       startupCpuProfiler,
     });
@@ -76,6 +84,9 @@ export function bootstrapApp(): void {
     disposeAgentIpcHandlers();
     disposeImageNormalizationIpcHandlers();
     disposePreloadLogIpcHandlers();
+    if (isDevelopment) {
+      disposeRuntimeIdentityIpcHandlers();
+    }
     void disposeAppServerIpcHandlers();
   });
 }

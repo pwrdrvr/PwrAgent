@@ -1,0 +1,42 @@
+import { describe, expect, it } from "vitest";
+import {
+  formatRuntimeBranch,
+  formatRuntimeGitRef,
+  formatRuntimePath,
+  runtimeGitRefCopyValue,
+} from "../runtime-identity";
+
+describe("runtime identity formatting", () => {
+  it("shows the distinctive worktree directory segment", () => {
+    expect(
+      formatRuntimePath(
+        "/Users/huntharo/pwrdrvr/PwrAgnt/.worktrees/pwragnt-fix-thread-naming-moioth2352"
+      )
+    ).toBe(".worktrees/pwragnt-fix-th...ng-moioth2352");
+  });
+
+  it("shows the codex worktree id and repo for codex-managed worktrees", () => {
+    expect(formatRuntimePath("/Users/huntharo/.codex/worktrees/5d4b/PwrAgnt")).toBe(
+      "5d4b/PwrAgnt"
+    );
+  });
+
+  it("middle-truncates branch names", () => {
+    expect(formatRuntimeBranch("codex/fix-thread-naming-ephemeral")).toBe(
+      "codex/fix-thread-naming-ephemeral"
+    );
+  });
+
+  it("labels a detached ref as HEAD while copying the commit SHA", () => {
+    const identity = {
+      commitSha: "ab12cd3344556677889900aabbccddeeff001122",
+      cwd: "/repo/PwrAgnt",
+      detachedHead: true,
+    };
+
+    expect(formatRuntimeGitRef(identity)).toBe("HEAD");
+    expect(runtimeGitRefCopyValue(identity)).toBe(
+      "ab12cd3344556677889900aabbccddeeff001122"
+    );
+  });
+});

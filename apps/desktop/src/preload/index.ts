@@ -83,8 +83,10 @@ import {
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
   PRELOAD_LOG_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
+  RUNTIME_IDENTITY_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
 } from "../shared/ipc";
+import type { RuntimeIdentity } from "../shared/runtime-identity";
 
 function recordPreloadLog(
   level: "info" | "warn",
@@ -104,11 +106,19 @@ recordPreloadLog("info", "start", {
   electron: process.versions.electron
 });
 
+const isDevelopment = process.env.NODE_ENV !== "production";
+
 const desktopApi = Object.freeze({
   ping: () => "pong",
   copyText: async (text: string): Promise<void> => {
     clipboard.writeText(text);
   },
+  ...(isDevelopment
+    ? {
+        getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
+          await ipcRenderer.invoke(RUNTIME_IDENTITY_CHANNEL),
+      }
+    : {}),
   listThreads: async (
     request?: AppServerListThreadsRequest
   ): Promise<AppServerListThreadsResponse> =>

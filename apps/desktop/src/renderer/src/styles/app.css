@@ -137,6 +137,13 @@ textarea {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.sidebar__identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+}
+
 .sidebar__masthead-actions {
   display: flex;
   align-items: flex-start;
@@ -211,6 +218,75 @@ textarea {
   font-weight: 800;
   line-height: 1;
   text-transform: none;
+}
+
+.runtime-identity {
+  display: flex;
+  max-width: min(320px, calc(var(--sidebar-width, 408px) - 136px));
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.runtime-identity__button {
+  display: inline-flex;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 170px;
+  height: 22px;
+  align-items: center;
+  appearance: none;
+  cursor: pointer;
+  gap: 5px;
+  padding: 0 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1;
+}
+
+.runtime-identity__button:hover,
+.runtime-identity__button:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.runtime-identity__button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.runtime-identity__button.tooltip-target[data-tooltip]::after {
+  top: calc(100% + 8px);
+  bottom: auto;
+  left: 0;
+  width: min(360px, calc(var(--sidebar-width, 408px) - 64px));
+  max-width: min(360px, calc(var(--sidebar-width, 408px) - 32px));
+  transform: translateY(-4px);
+}
+
+.runtime-identity__button.tooltip-target[data-tooltip]:hover::after,
+.runtime-identity__button.tooltip-target[data-tooltip]:focus-visible::after {
+  transform: translateY(0);
+}
+
+.runtime-identity__icon {
+  flex: 0 0 auto;
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  opacity: 0.9;
+}
+
+.runtime-identity__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
 }
 
 .thread-header__title,
@@ -653,6 +729,7 @@ textarea {
   font-size: 12px;
   font-weight: 500;
   line-height: 1.45;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   text-align: left;
   opacity: 0;
