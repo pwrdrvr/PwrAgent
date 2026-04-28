@@ -356,6 +356,118 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingAssistantMessage).toBeUndefined();
   });
 
+  it("keeps streamed assistant commentary below the optimistic user prompt", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: "history-1",
+              role: "assistant" as const,
+              text: "Earlier thread context.",
+            },
+          ],
+          messages: [
+            {
+              id: "history-1",
+              role: "assistant" as const,
+              text: "Earlier thread context.",
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.addOptimisticUserMessage("Please keep the reply under this prompt.");
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-1",
+            delta: "First commentary.",
+            phase: "commentary",
+          },
+        },
+      });
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-2",
+            delta: "Second commentary.",
+            phase: "commentary",
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.map((entry) =>
+        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+      )
+    ).toEqual([
+      "assistant:Earlier thread context.",
+      "user:Please keep the reply under this prompt.",
+      "assistant:First commentary.",
+    ]);
+    expect(result.current.pendingAssistantMessage?.text).toBe("Second commentary.");
+  });
+
   it("hydrates unphased streamed assistant text after completion", async () => {
     let agentEventHandler:
       | ((event: {

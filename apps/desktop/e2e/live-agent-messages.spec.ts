@@ -57,12 +57,23 @@ test("preserves live assistant commentary messages, tool usage, and final answer
     await app.advance({ stepId: "assistant-message-1a" });
     await app.advance({ stepId: "assistant-message-1b" });
     await expect(transcript).toContainText("Using ce:brainstorm for this.");
+    await expect(transcript).toContainText("What would it take to add Telegram support?");
 
     await app.advance({ stepId: "tool-search-completed-1" });
     await app.advance({ stepId: "tool-command-started-1" });
     await app.advance({ stepId: "assistant-message-2" });
     await expect(transcript).toContainText("Using ce:brainstorm for this.");
     await expect(transcript).toContainText("The broad search was too noisy");
+    let transcriptText = await transcript.innerText();
+    expect(transcriptText.indexOf("What would it take to add Telegram support?")).toBeGreaterThan(
+      transcriptText.indexOf("Ready to brainstorm Telegram support.")
+    );
+    expect(transcriptText.indexOf("Using ce:brainstorm for this.")).toBeGreaterThan(
+      transcriptText.indexOf("What would it take to add Telegram support?")
+    );
+    expect(transcriptText.indexOf("The broad search was too noisy")).toBeGreaterThan(
+      transcriptText.indexOf("Using ce:brainstorm for this.")
+    );
 
     await app.advance({ stepId: "tool-command-completed-1" });
     await app.advance({ stepId: "assistant-message-3" });
@@ -107,6 +118,10 @@ test("preserves live assistant commentary messages, tool usage, and final answer
     );
     await expect(transcript).toContainText(
       "Remote control: Telegram lets you start, steer, approve, and monitor agent threads from mobile."
+    );
+    transcriptText = await transcript.innerText();
+    expect(transcriptText.indexOf("What would it take to add Telegram support?")).toBeGreaterThan(
+      transcriptText.indexOf("Ready to brainstorm Telegram support.")
     );
 
     await workedForToggle.click();

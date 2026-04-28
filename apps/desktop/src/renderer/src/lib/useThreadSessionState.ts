@@ -312,13 +312,17 @@ function appendPendingAssistantMessage(
     backend: NavigationThreadSummary["source"];
     threadId: NavigationThreadSummary["id"];
   },
+  optimisticEntries: AppServerThreadMessageEntry[],
   pendingAssistantMessage: AppServerThreadMessageEntry | undefined
 ): AppServerReadThreadResponse | undefined {
   if (!pendingAssistantMessage) {
     return response;
   }
 
-  return appendMessageEntries(response, params, [pendingAssistantMessage]);
+  return appendMessageEntries(response, params, [
+    ...optimisticEntries,
+    pendingAssistantMessage,
+  ]);
 }
 
 function retainSessionCache(
@@ -687,12 +691,13 @@ export function useThreadSessionState(params: {
           const pendingText = current.pendingAssistantMessage?.text ?? "";
           const flushedResponse = isSamePendingMessage
             ? current.response
-            : appendPendingAssistantMessage(
+              : appendPendingAssistantMessage(
                 current.response,
                 {
                   backend: event.backend,
                   threadId: notificationThreadId,
                 },
+                current.optimisticEntries,
                 current.pendingAssistantMessage
               );
 
