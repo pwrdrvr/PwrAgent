@@ -2131,7 +2131,7 @@ textarea {
 .context-list__action {
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  background: var(--surface-subtle);
+  background: var(--bg-panel-elevated);
   color: var(--text-primary);
   font-size: 12px;
   padding: 3px 8px;
