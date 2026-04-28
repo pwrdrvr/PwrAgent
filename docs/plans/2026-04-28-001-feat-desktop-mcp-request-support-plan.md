@@ -1,7 +1,7 @@
 ---
 title: feat: Add desktop MCP request support
 type: feat
-status: active
+status: completed
 date: 2026-04-28
 origin: docs/brainstorms/2026-04-19-codex-desktop-protocol-parity-requirements.md
 deepened: 2026-04-28
@@ -359,7 +359,7 @@ flowchart TB
 **Verification:**
 - Live MCP activity is visible in the thread as work in progress, and MCP status notifications no longer look like mysterious protocol noise.
 
-- [ ] **Unit 6: Add replay-backed E2E coverage and capture guidance**
+- [x] **Unit 6: Add replay-backed E2E coverage and capture guidance**
 
 **Goal:** Lock the full Electron path for MCP elicitation and progress with deterministic replay fixtures, plus document how to refresh live MCP captures.
 

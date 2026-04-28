@@ -1,0 +1,239 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "mcp-elicitation",
+    "sourceCaptureId": "synthetic-mcp-elicitation-playwright-browser-tabs",
+    "threadId": "thread-mcp-elicitation"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list",
+          "turn/start",
+          "mcpServerStatus/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-mcp-elicitation",
+          "title": "MCP elicitation replay",
+          "titleSource": "explicit",
+          "summary": "Replay seeded MCP elicitation prompt",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000003000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Use the browser tabs MCP tool."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "Ready to request MCP approval."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Use the browser tabs MCP tool."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "Ready to request MCP approval."
+          }
+        ],
+        "lastUserMessage": "Use the browser tabs MCP tool.",
+        "lastAssistantMessage": "Ready to request MCP approval.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "turn-start-1",
+      "kind": "response",
+      "method": "turn/start",
+      "result": {
+        "threadId": "thread-mcp-elicitation",
+        "turnId": "turn-mcp-2"
+      }
+    },
+    {
+      "id": "status-active-1",
+      "kind": "notification",
+      "notification": {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "thread-mcp-elicitation",
+          "status": {
+            "type": "active",
+            "activeFlags": []
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-mcp-elicitation",
+          "turnId": "turn-mcp-2",
+          "turn": {
+            "id": "turn-mcp-2",
+            "status": "inProgress"
+          }
+        }
+      }
+    },
+    {
+      "id": "mcp-startup-1",
+      "kind": "notification",
+      "notification": {
+        "method": "mcpServer/startupStatus/updated",
+        "params": {
+          "name": "playwright",
+          "status": "starting",
+          "error": null
+        }
+      }
+    },
+    {
+      "id": "mcp-tool-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-mcp-elicitation",
+          "turnId": "turn-mcp-2",
+          "item": {
+            "id": "call-mcp-browser-tabs",
+            "type": "mcpToolCall",
+            "server": "playwright",
+            "tool": "browser_tabs",
+            "status": "in_progress",
+            "arguments": {
+              "action": "list"
+            },
+            "result": null,
+            "error": null
+          }
+        }
+      }
+    },
+    {
+      "id": "mcp-elicitation-1",
+      "kind": "request",
+      "request": {
+        "method": "mcpServer/elicitation/request",
+        "params": {
+          "threadId": "thread-mcp-elicitation",
+          "turnId": "turn-mcp-2",
+          "requestId": "mcp-elicitation-request-1",
+          "serverName": "playwright",
+          "mode": "form",
+          "_meta": {
+            "codex_approval_kind": "mcp_tool_call",
+            "persist": [
+              "serverName",
+              "toolName"
+            ],
+            "tool_description": "List, create, close, or select a browser tab.",
+            "tool_params": {
+              "action": "list"
+            },
+            "tool_params_display": [
+              {
+                "label": "action",
+                "value": "list"
+              }
+            ]
+          },
+          "message": "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+          "requestedSchema": {
+            "type": "object",
+            "properties": {}
+          }
+        }
+      }
+    },
+    {
+      "id": "mcp-progress-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/mcpToolCall/progress",
+        "params": {
+          "threadId": "thread-mcp-elicitation",
+          "turnId": "turn-mcp-2",
+          "itemId": "call-mcp-browser-tabs",
+          "message": "Listing browser tabs"
+        }
+      }
+    },
+    {
+      "id": "mcp-tool-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-mcp-elicitation",
+          "turnId": "turn-mcp-2",
+          "item": {
+            "id": "call-mcp-browser-tabs",
+            "type": "mcpToolCall",
+            "server": "playwright",
+            "tool": "browser_tabs",
+            "status": "completed",
+            "arguments": {
+              "action": "list"
+            },
+            "result": {
+              "tabs": [
+                {
+                  "title": "Replay tab"
+                }
+              ]
+            },
+            "error": null
+          }
+        }
+      }
+    }
+  ]
+}
