@@ -206,6 +206,11 @@ textarea {
 
 .sidebar__brand {
   margin: 0;
+  color: var(--accent-bright);
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: none;
 }
 
 .thread-header__title,
