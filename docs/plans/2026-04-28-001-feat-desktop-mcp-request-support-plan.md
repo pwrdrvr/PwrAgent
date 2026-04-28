@@ -233,7 +233,7 @@ flowchart TB
 **Verification:**
 - MCP response formatting is fully testable without React or Electron and cannot accidentally call approval or questionnaire response builders.
 
-- [ ] **Unit 3: Wire MCP pending state into thread session lifecycle**
+- [x] **Unit 3: Wire MCP pending state into thread session lifecycle**
 
 **Goal:** Store pending MCP interactions in thread session state and clear them on response, terminal turn state, or matching server resolution.
 

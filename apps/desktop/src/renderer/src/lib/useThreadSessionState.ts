@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AppServerMcpElicitationRequestNotification,
   AppServerPendingRequestNotification,
   AppServerReadThreadResponse,
   AppServerReviewOutput,
@@ -19,6 +20,10 @@ import {
   type PendingQuestionnaireState,
 } from "../features/thread-detail/questionnaire";
 import { normalizeReviewDisplayText } from "../../../shared/review-command";
+import {
+  createMcpElicitationState,
+  type PendingMcpInteractionState,
+} from "../features/thread-detail/mcp-elicitation";
 
 const MAX_VIEW_ONLY_THREADS = 10;
 const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
@@ -48,6 +53,7 @@ type ThreadSessionEntry = {
   needsHydrationAfterCompletion: boolean;
   optimisticEntries: AppServerThreadEntry[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
+  pendingMcpInteraction?: PendingMcpInteractionState;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
@@ -200,6 +206,7 @@ function hasHydratedTranscriptContent(session: ThreadSessionEntry): boolean {
     session.response?.replay.entries.length ||
       session.optimisticEntries.length ||
       session.pendingAssistantMessage ||
+      session.pendingMcpInteraction ||
       session.pendingRequest ||
       session.pendingUserInput
   );
@@ -210,6 +217,7 @@ function hasThinkingState(session: ThreadSessionEntry): boolean {
     session.activeTurnId ||
       session.pendingStatusText ||
       session.pendingAssistantMessage ||
+      session.pendingMcpInteraction ||
       session.pendingRequest ||
       session.pendingUserInput ||
       (session.expectOwnUpdate && session.optimisticEntries.length > 0)
@@ -559,6 +567,19 @@ function isRequestUserInputNotification(
   );
 }
 
+function isMcpElicitationNotification(
+  notification: { method: string; params: Record<string, unknown> }
+): notification is AppServerMcpElicitationRequestNotification {
+  return (
+    notification.method === "mcpServer/elicitation/request" &&
+    typeof notification.params.threadId === "string" &&
+    typeof notification.params.requestId === "string" &&
+    typeof notification.params.serverName === "string" &&
+    typeof notification.params.message === "string" &&
+    (notification.params.mode === "form" || notification.params.mode === "url")
+  );
+}
+
 function readCompletedTurnText(
   notification: AppServerPendingRequestNotification | AppServerReadThreadResponse["backend"] | unknown
 ): string | undefined {
@@ -615,6 +636,7 @@ export function useThreadSessionState(params: {
   loadOlder: () => Promise<void>;
   messages: AppServerThreadMessage[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
+  pendingMcpInteraction?: PendingMcpInteractionState;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
@@ -624,6 +646,10 @@ export function useThreadSessionState(params: {
   updatePendingUserInput: (
     requestId: string,
     updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
+  ) => void;
+  updatePendingMcpInteraction: (
+    requestId: string,
+    updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
   ) => void;
   setPendingStatusText: (status?: string) => void;
   thinkingThreadKeys: Record<string, boolean>;
@@ -912,6 +938,21 @@ export function useThreadSessionState(params: {
           };
         }
 
+        if (isMcpElicitationNotification(event.notification)) {
+          const pendingMcpInteraction = createMcpElicitationState(event.notification);
+          if (!pendingMcpInteraction) {
+            return current;
+          }
+
+          return {
+            ...current,
+            interacted: true,
+            lastTouchedAt: nextLastTouchedAt,
+            pendingMcpInteraction,
+            pendingStatusText: "Waiting for MCP approval",
+          };
+        }
+
         if (
           event.notification.method === "item/agentMessage/delta" &&
           typeof event.notification.params.itemId === "string" &&
@@ -1000,6 +1041,10 @@ export function useThreadSessionState(params: {
               current.pendingRequest?.params.requestId === event.notification.params.requestId
                 ? undefined
                 : current.pendingRequest,
+            pendingMcpInteraction:
+              current.pendingMcpInteraction?.requestId === event.notification.params.requestId
+                ? undefined
+                : current.pendingMcpInteraction,
             pendingUserInput:
               current.pendingUserInput?.requestId === event.notification.params.requestId
                 ? undefined
@@ -1119,6 +1164,7 @@ export function useThreadSessionState(params: {
               ...current,
               optimisticEntries: [],
               pendingAssistantMessage: undefined,
+              pendingMcpInteraction: undefined,
               pendingRequest: undefined,
               pendingUserInput: undefined,
               response: nextResponse,
@@ -1143,6 +1189,7 @@ export function useThreadSessionState(params: {
               !completedText || shouldHydrateUnknownPhaseAssistant,
             optimisticEntries: [],
             pendingAssistantMessage: undefined,
+            pendingMcpInteraction: undefined,
             pendingRequest: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
@@ -1167,6 +1214,7 @@ export function useThreadSessionState(params: {
             lastTouchedAt: nextLastTouchedAt,
             needsHydrationAfterCompletion: false,
             pendingAssistantMessage: undefined,
+            pendingMcpInteraction: undefined,
             pendingRequest: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
@@ -1184,6 +1232,7 @@ export function useThreadSessionState(params: {
             lastTouchedAt: nextLastTouchedAt,
             needsHydrationAfterCompletion: false,
             pendingAssistantMessage: undefined,
+            pendingMcpInteraction: undefined,
             pendingRequest: undefined,
             pendingUserInput: undefined,
             pendingStatusText: undefined,
@@ -1419,6 +1468,10 @@ export function useThreadSessionState(params: {
           current.pendingRequest?.params.requestId === requestId
             ? undefined
             : current.pendingRequest,
+        pendingMcpInteraction:
+          current.pendingMcpInteraction?.requestId === requestId
+            ? undefined
+            : current.pendingMcpInteraction,
         pendingUserInput:
           current.pendingUserInput?.requestId === requestId
             ? undefined
@@ -1447,6 +1500,30 @@ export function useThreadSessionState(params: {
           ...current,
           lastTouchedAt: Date.now(),
           pendingUserInput: updater(current.pendingUserInput),
+        };
+      });
+    },
+    [threadKey, updateSession]
+  );
+
+  const updatePendingMcpInteraction = useCallback(
+    (
+      requestId: string,
+      updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
+    ): void => {
+      if (!threadKey) {
+        return;
+      }
+
+      updateSession(threadKey, (current) => {
+        if (current.pendingMcpInteraction?.requestId !== requestId) {
+          return current;
+        }
+
+        return {
+          ...current,
+          lastTouchedAt: Date.now(),
+          pendingMcpInteraction: updater(current.pendingMcpInteraction),
         };
       });
     },
@@ -1552,6 +1629,7 @@ export function useThreadSessionState(params: {
     loadOlder,
     messages,
     pendingAssistantMessage: selectedSession?.pendingAssistantMessage,
+    pendingMcpInteraction: selectedSession?.pendingMcpInteraction,
     pendingRequest: selectedSession?.pendingRequest,
     pendingUserInput: selectedSession?.pendingUserInput,
     pendingStatusText,
@@ -1559,6 +1637,7 @@ export function useThreadSessionState(params: {
     response: selectedSession?.response,
     setActiveTurnId,
     updatePendingUserInput,
+    updatePendingMcpInteraction,
     setPendingStatusText,
     thinkingThreadKeys,
     setViewport,
