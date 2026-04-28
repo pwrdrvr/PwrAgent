@@ -161,6 +161,8 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "item/commandExecution/outputDelta",
   "item/commandExecution/terminalInteraction",
   "item/fileChange/outputDelta",
+  "item/mcpToolCall/progress",
+  "mcpServer/oauthLogin/completed",
   "mcpServer/startupStatus/updated",
 ]);
 const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
@@ -205,7 +207,11 @@ function isApprovalLikeMethod(method: string): boolean {
 }
 
 function isHandledServerRequestMethod(method: string): boolean {
-  return isApprovalLikeMethod(method) || method === "item/tool/requestUserInput";
+  return (
+    isApprovalLikeMethod(method) ||
+    method === "item/tool/requestUserInput" ||
+    method === "mcpServer/elicitation/request"
+  );
 }
 
 function isKnownCodexNotificationMethod(

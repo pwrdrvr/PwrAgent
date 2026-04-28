@@ -159,7 +159,7 @@ flowchart TB
     U5 --> U6
 ```
 
-- [ ] **Unit 1: Normalize MCP request and notification contracts**
+- [x] **Unit 1: Normalize MCP request and notification contracts**
 
 **Goal:** Represent MCP elicitations and progress explicitly across shared contracts and the Codex adapter.
 
@@ -196,7 +196,7 @@ flowchart TB
 **Verification:**
 - Main-process tests prove MCP elicitations are no longer logged as unhandled and can round-trip a valid MCP response through the existing request bridge.
 
-- [ ] **Unit 2: Add pure MCP elicitation model and response helpers**
+- [x] **Unit 2: Add pure MCP elicitation model and response helpers**
 
 **Goal:** Build testable helpers for turning MCP elicitation params into renderer state, validating user input, and formatting protocol-correct responses.
 

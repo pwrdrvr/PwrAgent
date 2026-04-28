@@ -285,4 +285,120 @@ describe("DesktopBackendRegistry replay integration", () => {
     expect(replayClient.getPendingRequest()).toBeUndefined();
     await registry.close();
   });
+
+  it("preserves MCP elicitation payloads through registry events", async () => {
+    const replayClient = ReplayClient.fromFixture({
+      metadata: {
+        backend: "codex",
+        scenario: "registry-mcp-elicitation-replay"
+      },
+      steps: [
+        {
+          id: "initialize-1",
+          kind: "response",
+          method: "initialize",
+          result: {
+            serverInfo: {
+              name: "Replay Codex",
+              version: "1.0.0"
+            },
+            methods: ["thread/read"]
+          }
+        },
+        {
+          id: "read-1",
+          kind: "response",
+          method: "thread/read",
+          result: {
+            entries: [],
+            messages: [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          }
+        },
+        {
+          id: "req-mcp-1",
+          kind: "request",
+          request: {
+            method: "mcpServer/elicitation/request",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              requestId: "mcp-request-1",
+              serverName: "playwright",
+              mode: "form",
+              _meta: {
+                tool_description: "List, create, close, or select a browser tab.",
+                tool_params_display: [
+                  {
+                    label: "action",
+                    value: "list"
+                  }
+                ]
+              },
+              message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+              requestedSchema: {
+                type: "object",
+                properties: {}
+              }
+            }
+          }
+        }
+      ]
+    });
+
+    const registry = new DesktopBackendRegistry({
+      codexClient: replayClient,
+      codexFullAccessClient: createPassiveClient() as any,
+      grokClient: createPassiveClient() as any,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: Array<{ method: string; params: Record<string, unknown> }> = [];
+    registry.onEvent((event) => {
+      events.push({
+        method: event.notification.method,
+        params: event.notification.params as Record<string, unknown>,
+      });
+    });
+
+    await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1"
+    });
+    await replayClient.advance({ stepId: "req-mcp-1" });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        method: "mcpServer/elicitation/request",
+        params: expect.objectContaining({
+          requestId: "mcp-request-1",
+          serverName: "playwright",
+          mode: "form",
+          message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+          requestedSchema: {
+            type: "object",
+            properties: {}
+          }
+        })
+      })
+    );
+
+    await registry.submitServerRequest({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "mcp-request-1",
+      response: {
+        action: "accept",
+        content: {},
+        _meta: null
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(replayClient.getPendingRequest()).toBeUndefined();
+    await registry.close();
+  });
 });
