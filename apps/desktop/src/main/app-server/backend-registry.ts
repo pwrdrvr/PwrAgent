@@ -163,6 +163,12 @@ type PendingServerRequest = {
 
 type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle">;
 
+type ThreadTitleGenerationLogStatus =
+  | ThreadTitleGenerationResult["status"]
+  | "applied"
+  | "requesting"
+  | "skipped";
+
 type WorktreeArchiveCandidate = {
   repositoryPath: string;
   worktreePath: string;
@@ -1780,6 +1786,9 @@ export class DesktopBackendRegistry {
         return;
       }
 
+      this.logThreadTitleGeneration("requesting", params, undefined, {
+        promptTitle: truncateLogValue(shortenDerivedThreadTitle(params.prompt) ?? params.prompt),
+      });
       const result = await this.threadTitleGenerationService?.generateTitle({
         backend: params.backend,
         userPrompt: params.prompt,
@@ -1792,10 +1801,16 @@ export class DesktopBackendRegistry {
         );
         return;
       }
+      this.logThreadTitleGeneration("generated", params, undefined, {
+        generatedTitle: truncateLogValue(result.title),
+        cachedTokens: result.cachedTokens ?? null,
+      });
 
       const pending = this.pendingTitleGenerations.get(params.key);
       if (!pending || pending.token !== params.token) {
-        this.logThreadTitleGeneration("skipped", params, "stale_generation");
+        this.logThreadTitleGeneration("skipped", params, "stale_generation", {
+          generatedTitle: truncateLogValue(result.title),
+        });
         return;
       }
 
@@ -1820,7 +1835,9 @@ export class DesktopBackendRegistry {
       } else {
         await this.renameWithClient(this.grokClient, params.threadId, result.title);
       }
-      this.logThreadTitleGeneration("applied", params);
+      this.logThreadTitleGeneration("applied", params, undefined, {
+        generatedTitle: truncateLogValue(result.title),
+      });
     } catch (error) {
       this.logThreadTitleGeneration(
         "failed",
@@ -1847,7 +1864,7 @@ export class DesktopBackendRegistry {
   }
 
   private logThreadTitleGeneration(
-    status: ThreadTitleGenerationResult["status"] | "applied" | "skipped",
+    status: ThreadTitleGenerationLogStatus,
     params: {
       backend: AppServerBackendKind;
       threadId: string;
