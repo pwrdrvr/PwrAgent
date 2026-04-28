@@ -122,6 +122,7 @@ class MockBackendClient {
     fastMode?: boolean;
   };
   listThreadsCallCount = 0;
+  listModelsCallCount = 0;
   lastListThreadsParams?: {
     filter?: string;
   };
@@ -139,6 +140,13 @@ class MockBackendClient {
       threads?: AppServerThreadSummary[];
       replay?: AppServerThreadReplay;
       skills?: Array<{ cwd?: string; skills: AppServerSkillSummary[] }>;
+      models?: Array<{
+        id: string;
+        label?: string;
+        current?: boolean;
+        supportsReasoning?: boolean;
+        supportsFast?: boolean;
+      }>;
       setThreadPermissionsError?: Error;
     }
   ) {}
@@ -181,6 +189,11 @@ class MockBackendClient {
 
   async listSkills(): Promise<Array<{ cwd?: string; skills: AppServerSkillSummary[] }>> {
     return this.options.skills ?? [];
+  }
+
+  async listModels() {
+    this.listModelsCallCount += 1;
+    return this.options.models ?? [];
   }
 
   onNotification(
@@ -264,19 +277,21 @@ class MockBackendClient {
 
 describe("DesktopBackendRegistry", () => {
   it("reports backend availability and capabilities", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+      },
+    });
+    const codexFullAccessClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
+      },
+    });
     const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({
-        initializeResult: {
-          serverInfo: { name: "Codex App Server", version: "1.0.0" },
-          methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
-        },
-      }),
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: {
-          serverInfo: { name: "Codex App Server", version: "1.0.0" },
-          methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
-        },
-      }),
+      codexClient,
+      codexFullAccessClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -284,6 +299,9 @@ describe("DesktopBackendRegistry", () => {
     });
 
     const response = await registry.listBackends({ includeUnavailable: true });
+
+    expect(codexClient.listModelsCallCount).toBe(1);
+    expect(codexFullAccessClient.listModelsCallCount).toBe(0);
 
     expect(response.backends).toMatchObject([
       {
