@@ -486,7 +486,7 @@ describe("TranscriptList", () => {
         pendingActivityEntry={{
           type: "activity",
           id: "pending-activity-1",
-          summary: "Edited 1 file",
+          summary: "Edited 1 file, +1, -2",
           details: [
             {
               id: "pending-detail-1",
@@ -514,12 +514,14 @@ describe("TranscriptList", () => {
       />
     );
 
-    const toggle = screen.getByRole("button", { name: /Edited 1 file/i });
+    const toggle = screen.getByRole("button", { name: /Edited 1 file, \+1, -2/i });
     expect(toggle).toBeInTheDocument();
 
     fireEvent.click(toggle);
 
     expect(screen.getByText("Update useThreadSessionState.ts")).toBeInTheDocument();
+    expect(screen.getAllByText("-2")[0]).toBeInTheDocument();
+    expect(screen.getAllByText("+1")[0]).toBeInTheDocument();
     expect(screen.getByText("function messageMatchesOptimisticEntry(")).toBeInTheDocument();
   });
 

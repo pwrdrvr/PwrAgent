@@ -646,7 +646,7 @@ export function useThreadSessionState(params: {
     }
 
     if (session.expectOwnUpdate) {
-      if (!hasHydratedTranscriptContent(session)) {
+      if (!hasThinkingState(session) || !hasHydratedTranscriptContent(session)) {
         void loadLatest(thread);
         return;
       }
@@ -666,11 +666,7 @@ export function useThreadSessionState(params: {
         return;
       }
 
-      updateSession(threadKey, (current) => ({
-        ...current,
-        hydratedUpdatedAt: thread.updatedAt,
-        lastTouchedAt: Date.now(),
-      }));
+      void loadLatest(thread);
       return;
     }
 

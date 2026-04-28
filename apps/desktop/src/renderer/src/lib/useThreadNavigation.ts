@@ -924,6 +924,11 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         return;
       }
 
+      if (method === "thread/started") {
+        scheduleRefresh();
+        return;
+      }
+
       if (
         method === "turn/completed" ||
         method === "turn/failed" ||
