@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
   BackendSummary,
@@ -41,6 +41,7 @@ type SidebarProps = {
 };
 
 export function Sidebar(props: SidebarProps) {
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const [contextMenu, setContextMenu] = useState<
     | {
         position: { x: number; y: number };
@@ -99,6 +100,16 @@ export function Sidebar(props: SidebarProps) {
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [contextMenu]);
+
+  useLayoutEffect(() => {
+    if (!renameThread) {
+      return;
+    }
+
+    const input = renameInputRef.current;
+    input?.focus();
+    input?.select();
+  }, [renameThread]);
 
   const openThreadContextMenu = (
     thread: NavigationThreadSummary,
@@ -275,6 +286,7 @@ export function Sidebar(props: SidebarProps) {
               <span>Name</span>
               <input
                 autoFocus
+                ref={renameInputRef}
                 value={renameDraft}
                 onChange={(event) => {
                   setRenameDraft(event.currentTarget.value);
@@ -286,6 +298,19 @@ export function Sidebar(props: SidebarProps) {
                   } else if (event.key === "Enter") {
                     event.preventDefault();
                     submitRename();
+                  } else if (
+                    (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
+                    !event.altKey &&
+                    !event.ctrlKey &&
+                    !event.metaKey &&
+                    !event.shiftKey &&
+                    event.currentTarget.selectionStart === 0 &&
+                    event.currentTarget.selectionEnd === event.currentTarget.value.length
+                  ) {
+                    event.preventDefault();
+                    const nextPosition =
+                      event.key === "ArrowLeft" ? 0 : event.currentTarget.value.length;
+                    event.currentTarget.setSelectionRange(nextPosition, nextPosition);
                   }
                 }}
               />

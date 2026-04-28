@@ -440,6 +440,77 @@ describe("Sidebar", () => {
     expect(onRenameThread).toHaveBeenCalledWith(sharedThread, "Renamed cleanup");
   });
 
+  it("focuses and selects the current name when opening the rename dialog", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onRenameThread={async () => undefined}
+      />
+    );
+
+    const threadButton = screen.getByText("Cross-project cleanup").closest("button");
+    expect(threadButton).not.toBeNull();
+    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
+    const input = within(dialog).getByLabelText("Name") as HTMLInputElement;
+
+    expect(input).toHaveFocus();
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe("Cross-project cleanup".length);
+  });
+
+  it("collapses a fully selected rename field to either end with arrow keys", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onRenameThread={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
+    const input = within(dialog).getByLabelText("Name") as HTMLInputElement;
+
+    fireEvent.keyDown(input, { key: "ArrowLeft" });
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(0);
+
+    input.select();
+    fireEvent.keyDown(input, { key: "ArrowRight" });
+    expect(input.selectionStart).toBe("Cross-project cleanup".length);
+    expect(input.selectionEnd).toBe("Cross-project cleanup".length);
+  });
+
   it("keeps the rename dialog open for blank names", () => {
     const onRenameThread = vi.fn(async () => undefined);
 
