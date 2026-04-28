@@ -506,8 +506,9 @@ function buildOptimisticThreadFromLaunchpad(params: {
       : [],
     gitBranch:
       params.workMode === "worktree"
-        ? params.launchpad.branchName
+        ? "HEAD"
         : params.directory?.gitStatus?.currentBranch ?? params.launchpad.branchName,
+    observedGitBranch: params.workMode === "worktree" ? "HEAD" : undefined,
     updatedAt: Date.now(),
     inbox: {
       inInbox: true,

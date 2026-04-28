@@ -1257,6 +1257,41 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("shows HEAD for detached worktrees even when session metadata still names a source branch", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      threadDirectoryEnricher: async (projectKey) => ({
+        linkedDirectories: projectKey
+          ? [
+              {
+                id: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                label: "PwrAgnt",
+                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                worktreePath: projectKey,
+                kind: "worktree",
+              },
+            ]
+          : [],
+        observedGitBranch: "HEAD",
+      }),
+    });
+
+    const threads = await client.listThreads({ filter: "search-product-parity" });
+    const thread = threads.find(
+      (entry) => entry.id === "019d88a2-0e0b-77f0-bfce-130ae8e37d8f"
+    );
+
+    expect(thread).toMatchObject({
+      id: "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
+      gitBranch: "HEAD",
+      observedGitBranch: "HEAD",
+    });
+
+    await client.close();
+  });
+
   it("extracts transcript messages and pagination metadata from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
