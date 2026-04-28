@@ -85,7 +85,9 @@ test("preserves live assistant commentary messages, tool usage, and final answer
     await expect(toolSummary).toBeVisible();
     await toolSummary.click();
     await expect(transcript).toContainText("Searched Web (8.4s)");
-    await expect(transcript).toContainText("Ran command (1.1s)");
+    await expect(transcript).toContainText(
+      'rg -n "Telegram|telegram|webhook" docs apps packages (1.1s)'
+    );
 
     await app.advance({ stepId: "turn-completed-1" });
 
