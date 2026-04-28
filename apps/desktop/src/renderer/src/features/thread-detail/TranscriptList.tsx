@@ -168,6 +168,7 @@ export function TranscriptList(props: TranscriptListProps) {
     new Map<string, { distanceFromBottom: number; scrollTop: number }>()
   );
   const shouldScrollToBottomRef = useRef(true);
+  const isFollowingBottomRef = useRef(true);
   const [hasContentBelow, setHasContentBelow] = useState(false);
   const [expandedCommentaryGroupIds, setExpandedCommentaryGroupIds] = useState(
     () => new Set<string>()
@@ -295,6 +296,9 @@ export function TranscriptList(props: TranscriptListProps) {
   const syncScrollState = useCallback(() => {
     const snapshot = captureSnapshot();
     snapshotRef.current = snapshot;
+    isFollowingBottomRef.current = Boolean(
+      snapshot && snapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX
+    );
     setHasContentBelow(Boolean(snapshot && snapshot.distanceFromBottom > BOTTOM_THRESHOLD_PX));
     if (snapshot?.threadId) {
       savedViewportsRef.current.set(snapshot.threadId, {
@@ -319,6 +323,7 @@ export function TranscriptList(props: TranscriptListProps) {
       container.scrollTop = container.scrollHeight;
     }
 
+    isFollowingBottomRef.current = true;
     syncScrollState();
   }, [syncScrollState]);
 
@@ -344,6 +349,7 @@ export function TranscriptList(props: TranscriptListProps) {
     const container = scrollContainerRef.current;
     if (!container || props.entries.length === 0) {
       snapshotRef.current = undefined;
+      isFollowingBottomRef.current = true;
       setHasContentBelow(false);
       return;
     }
@@ -375,6 +381,14 @@ export function TranscriptList(props: TranscriptListProps) {
               (props.pendingRequest ? 1 : 0) +
               (props.pendingUserInput ? 1 : 0))
     );
+    const hasGrownWhileFollowingBottom = Boolean(
+      previousSnapshot &&
+        previousSnapshot.threadId === props.threadId &&
+        previousSnapshot.firstMessageId === firstMessageId &&
+        !hasPrependedMessages &&
+        isFollowingBottomRef.current &&
+        container.scrollHeight > previousSnapshot.scrollHeight
+    );
 
     if (hasPrependedMessages && previousSnapshot) {
       const heightDelta = container.scrollHeight - previousSnapshot.scrollHeight;
@@ -405,8 +419,8 @@ export function TranscriptList(props: TranscriptListProps) {
       shouldScrollToBottomRef.current = false;
       return;
     } else if (
-      hasAppendedMessages &&
-      previousSnapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX
+      (hasAppendedMessages && previousSnapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX) ||
+      hasGrownWhileFollowingBottom
     ) {
       scrollToBottom("instant");
       return;
