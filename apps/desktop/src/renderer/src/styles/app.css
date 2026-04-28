@@ -2350,6 +2350,26 @@ textarea {
   background: currentColor;
 }
 
+.context-rail__tooltip {
+  position: fixed;
+  z-index: 90;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: rgba(10, 10, 10, 0.98);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  pointer-events: none;
+  text-align: left;
+  transform: translateY(-100%);
+  white-space: pre-wrap;
+}
+
 .context-panel {
   display: flex;
   flex-direction: column;
