@@ -2,6 +2,8 @@ import { app } from "electron";
 import { OverlayStore } from "@pwragnt/agent-core";
 import type {
   AgentEvent,
+  ArchiveWorktreeRequest,
+  ArchiveWorktreeResponse,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
   AppServerListSkillsResponse,
@@ -29,6 +31,8 @@ import type {
   ResetDirectoryLaunchpadResponse,
   RenameThreadRequest,
   RenameThreadResponse,
+  RestoreWorktreeRequest,
+  RestoreWorktreeResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
   SetThreadExecutionModeRequest,
@@ -52,6 +56,7 @@ import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createReplayClientsFromEnv } from "../testing/replay-runtime";
 import { GitDirectoryService } from "./git-directory-service";
+import { WorktreeArchiveService } from "./worktree-archive-service";
 import {
   createCompositeJsonRpcObserver,
   createProtocolLogObserverFromEnv,
@@ -243,6 +248,8 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     resumeThread: supported.has("thread/resume") || assumeCodexAppServerSurface,
     archiveThread: supported.has("thread/archive") || assumeCodexAppServerSurface,
     restoreThread: supported.has("thread/unarchive") || assumeCodexAppServerSurface,
+    archiveWorktree: true,
+    restoreWorktree: true,
     renameThread: supported.has("thread/name/set") || assumeCodexAppServerSurface,
     readThread: supported.has("thread/read") || assumeCodexAppServerSurface,
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
@@ -451,6 +458,7 @@ export class DesktopBackendRegistry {
   private readonly grokClient: BackendClient;
   private readonly overlayStore: OverlayStore;
   private readonly gitDirectoryService: GitDirectoryService;
+  private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
@@ -465,6 +473,7 @@ export class DesktopBackendRegistry {
     grokClient?: BackendClient;
     overlayStore?: OverlayStore;
     gitDirectoryService?: GitDirectoryService;
+    worktreeArchiveService?: WorktreeArchiveService;
     createScratchProjectDirectory?: () => Promise<string>;
   }) {
     const replayClients = createReplayClientsFromEnv();
@@ -522,6 +531,8 @@ export class DesktopBackendRegistry {
       });
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
     this.gitDirectoryService = options?.gitDirectoryService ?? new GitDirectoryService();
+    this.worktreeArchiveService =
+      options?.worktreeArchiveService ?? new WorktreeArchiveService();
     this.createScratchProjectDirectory =
       options?.createScratchProjectDirectory ?? createScratchProjectDirectory;
 
@@ -636,6 +647,71 @@ export class DesktopBackendRegistry {
       backend,
       threadId: result.threadId,
       restoredAt: Date.now(),
+    };
+  }
+
+  async archiveWorktree(
+    request: ArchiveWorktreeRequest,
+  ): Promise<ArchiveWorktreeResponse> {
+    const snapshot = await this.worktreeArchiveService.archive({
+      backend: request.backend,
+      threadId: request.threadId,
+      worktreePath: request.worktreePath,
+      repositoryPath: request.repositoryPath,
+    });
+    await this.overlayStore.upsertWorktreeSnapshot({
+      backend: request.backend,
+      threadId: request.threadId,
+      snapshot,
+    });
+
+    return {
+      backend: request.backend,
+      threadId: request.threadId,
+      archivedAt: snapshot.archivedAt ?? Date.now(),
+      snapshot,
+    };
+  }
+
+  async restoreWorktree(
+    request: RestoreWorktreeRequest,
+  ): Promise<RestoreWorktreeResponse> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
+    const snapshot = (overlay?.worktreeSnapshots ?? []).find((candidate) => {
+      if (request.snapshotRef) {
+        return candidate.snapshotRef === request.snapshotRef;
+      }
+
+      return candidate.worktreePath === request.worktreePath;
+    });
+
+    if (!snapshot) {
+      throw new Error("No archived worktree snapshot is available for this thread.");
+    }
+
+    const restoredSnapshot = await this.worktreeArchiveService.restore({
+      backend: request.backend,
+      threadId: request.threadId,
+      worktreePath: request.worktreePath,
+      repositoryPath: request.repositoryPath ?? snapshot.repositoryPath,
+      snapshotRef: request.snapshotRef ?? snapshot.snapshotRef,
+      snapshotCommit: snapshot.snapshotCommit,
+      snapshot,
+    });
+    await this.overlayStore.upsertWorktreeSnapshot({
+      backend: request.backend,
+      threadId: request.threadId,
+      snapshot: restoredSnapshot,
+    });
+
+    return {
+      backend: request.backend,
+      threadId: request.threadId,
+      restoredAt: restoredSnapshot.restoredAt ?? Date.now(),
+      snapshot: restoredSnapshot,
     };
   }
 

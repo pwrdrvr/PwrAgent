@@ -790,6 +790,7 @@ type ThreadViewProps = {
   selectedThread?: NavigationThreadSummary;
   setExecutionModeError?: string;
   setThreadModelSettingsError?: string;
+  worktreeArchiveError?: string;
   skillError?: string;
   skillLoading?: boolean;
   skills: AppServerSkillSummary[];
@@ -818,6 +819,15 @@ type ThreadViewProps = {
       "model" | "reasoningEffort" | "serviceTier" | "fastMode"
       >
     >
+  ) => Promise<void>;
+  onArchiveWorktree?: (
+    thread: NavigationThreadSummary,
+    directory: NavigationThreadSummary["linkedDirectories"][number]
+  ) => Promise<void>;
+  onRestoreWorktree?: (
+    thread: NavigationThreadSummary,
+    snapshotRef: string,
+    worktreePath: string
   ) => Promise<void>;
   onTranscriptViewportChange?: (viewport?: {
     distanceFromBottom: number;
@@ -1410,6 +1420,9 @@ export function ThreadView(props: ThreadViewProps) {
           backends={props.backends}
           platform={props.platform}
           thread={selectedThread!}
+          worktreeArchiveError={props.worktreeArchiveError}
+          onArchiveWorktree={props.onArchiveWorktree}
+          onRestoreWorktree={props.onRestoreWorktree}
         />
       </div>
 

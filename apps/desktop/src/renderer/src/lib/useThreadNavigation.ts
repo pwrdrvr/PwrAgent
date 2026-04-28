@@ -4,6 +4,7 @@ import type {
   AppServerCollaborationModeRequest,
   AppServerThreadImagePart,
   AppServerTurnInputItem,
+  LinkedDirectorySummary,
   NavigationDirectorySummary,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
@@ -57,6 +58,35 @@ function linkedDirectoriesEqual(
   });
 }
 
+function worktreeSnapshotsEqual(
+  left: NavigationThreadSummary["worktreeSnapshots"],
+  right: NavigationThreadSummary["worktreeSnapshots"]
+): boolean {
+  const leftSnapshots = left ?? [];
+  const rightSnapshots = right ?? [];
+  if (leftSnapshots.length !== rightSnapshots.length) {
+    return false;
+  }
+
+  return leftSnapshots.every((snapshot, index) => {
+    const candidate = rightSnapshots[index];
+    if (!candidate) {
+      return false;
+    }
+
+    return (
+      snapshot.id === candidate.id &&
+      snapshot.worktreePath === candidate.worktreePath &&
+      snapshot.repositoryPath === candidate.repositoryPath &&
+      snapshot.snapshotRef === candidate.snapshotRef &&
+      snapshot.snapshotCommit === candidate.snapshotCommit &&
+      snapshot.state === candidate.state &&
+      snapshot.archivedAt === candidate.archivedAt &&
+      snapshot.restoredAt === candidate.restoredAt
+    );
+  });
+}
+
 function threadInboxEqual(
   left: NavigationThreadSummary["inbox"],
   right: NavigationThreadSummary["inbox"]
@@ -90,6 +120,7 @@ function threadSummariesEqual(
     left.serviceTier === right.serviceTier &&
     left.fastMode === right.fastMode &&
     linkedDirectoriesEqual(left.linkedDirectories, right.linkedDirectories) &&
+    worktreeSnapshotsEqual(left.worktreeSnapshots, right.worktreeSnapshots) &&
     threadInboxEqual(left.inbox, right.inbox)
   );
 }
@@ -571,6 +602,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   inboxThreads: NavigationThreadSummary[];
   launchpadError?: string;
   archiveThreadError?: string;
+  worktreeArchiveError?: string;
   renameThreadError?: string;
   loading: boolean;
   refreshing: boolean;
@@ -613,12 +645,23 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
   archiveThread: (thread: NavigationThreadSummary) => Promise<void>;
+  archiveWorktree: (
+    thread: NavigationThreadSummary,
+    directory: LinkedDirectorySummary
+  ) => Promise<void>;
+  restoreWorktree: (
+    thread: NavigationThreadSummary,
+    snapshotRef: string,
+    worktreePath: string
+  ) => Promise<void>;
   renameThread: (thread: NavigationThreadSummary, name: string) => Promise<void>;
   snapshot?: NavigationSnapshot;
   threads: NavigationThreadSummary[];
 } {
   const markThreadSeen = desktopApi?.markThreadSeen;
   const archiveThreadRequest = desktopApi?.archiveThread;
+  const archiveWorktreeRequest = desktopApi?.archiveWorktree;
+  const restoreWorktreeRequest = desktopApi?.restoreWorktree;
   const renameThreadRequest = desktopApi?.renameThread;
   const setThreadExecutionMode = desktopApi?.setThreadExecutionMode;
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
@@ -635,6 +678,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const [createThreadError, setCreateThreadError] = useState<string>();
   const [launchpadError, setLaunchpadError] = useState<string>();
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
+  const [worktreeArchiveError, setWorktreeArchiveError] = useState<string>();
   const [renameThreadError, setRenameThreadError] = useState<string>();
   const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
     useState<ThreadExecutionMode>();
@@ -1391,6 +1435,64 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     [archiveThreadRequest, optimisticThread, refresh, state.response]
   );
 
+  const archiveWorktree = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      directory: LinkedDirectorySummary
+    ): Promise<void> => {
+      if (!archiveWorktreeRequest) {
+        setWorktreeArchiveError("Desktop bridge is missing archiveWorktree().");
+        return;
+      }
+
+      const worktreePath = directory.worktreePath ?? directory.path;
+      setWorktreeArchiveError(undefined);
+      setArchiveThreadError(undefined);
+
+      try {
+        await archiveWorktreeRequest({
+          backend: thread.source,
+          threadId: thread.id,
+          repositoryPath: directory.path,
+          worktreePath,
+        });
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      } catch (error) {
+        setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [archiveWorktreeRequest, refresh]
+  );
+
+  const restoreWorktree = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      snapshotRef: string,
+      worktreePath: string
+    ): Promise<void> => {
+      if (!restoreWorktreeRequest) {
+        setWorktreeArchiveError("Desktop bridge is missing restoreWorktree().");
+        return;
+      }
+
+      setWorktreeArchiveError(undefined);
+      setArchiveThreadError(undefined);
+
+      try {
+        await restoreWorktreeRequest({
+          backend: thread.source,
+          threadId: thread.id,
+          snapshotRef,
+          worktreePath,
+        });
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      } catch (error) {
+        setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [refresh, restoreWorktreeRequest]
+  );
+
   const renameThread = useCallback(
     async (thread: NavigationThreadSummary, name: string): Promise<void> => {
       const nextName = name.trim();
@@ -1579,6 +1681,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     inboxThreads,
     launchpadError,
     archiveThreadError,
+    worktreeArchiveError,
     renameThreadError,
     loading: state.loading,
     refreshing: state.refreshing,
@@ -1600,6 +1703,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     setBrowseMode,
     selectThread,
     archiveThread,
+    archiveWorktree,
+    restoreWorktree,
     renameThread,
     snapshot: state.response,
     threads,

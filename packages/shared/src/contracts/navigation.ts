@@ -6,6 +6,7 @@ import type {
   LinkedDirectorySummary,
   ThreadExecutionMode,
   ThreadIdentifier,
+  WorktreeSnapshotSummary,
 } from "./normalized-app-server";
 
 export type InboxReason = "new-thread" | "updated-since-seen";
@@ -138,6 +139,7 @@ export type ThreadOverlayState = {
   dismissedAt?: number;
   snoozedUntil?: number;
   extraLinkedDirectories: LinkedDirectorySummary[];
+  worktreeSnapshots?: WorktreeSnapshotSummary[];
 };
 
 export type DirectoryLaunchpadOverlayState = NavigationLaunchpadDraft;

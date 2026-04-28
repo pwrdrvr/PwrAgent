@@ -1,5 +1,10 @@
 import { useState, type KeyboardEvent, type MouseEvent } from "react";
-import type { BackendSummary, NavigationThreadSummary } from "@pwragnt/shared";
+import type {
+  BackendSummary,
+  LinkedDirectorySummary,
+  NavigationThreadSummary,
+  WorktreeSnapshotSummary,
+} from "@pwragnt/shared";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 
@@ -8,6 +13,16 @@ type ThreadContextPanelProps = {
   backends: BackendSummary[];
   platform?: string;
   thread: NavigationThreadSummary;
+  worktreeArchiveError?: string;
+  onArchiveWorktree?: (
+    thread: NavigationThreadSummary,
+    directory: LinkedDirectorySummary
+  ) => Promise<void>;
+  onRestoreWorktree?: (
+    thread: NavigationThreadSummary,
+    snapshotRef: string,
+    worktreePath: string
+  ) => Promise<void>;
 };
 
 export function ThreadContextPanel(props: ThreadContextPanelProps) {
@@ -95,35 +110,78 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             <h3>Linked directories</h3>
             {props.thread.linkedDirectories.length > 0 ? (
               <ul className="context-list">
-                {props.thread.linkedDirectories.map((directory) => (
-                  <li key={directory.id} className="context-list__item">
-                    <button
-                      aria-label={`Copy path for ${directory.label}`}
-                      className="context-list__label path-copy-target tooltip-target"
-                      data-tooltip={formatCopyTooltip(directory.path)}
-                      type="button"
-                      onClick={(event) => {
-                        void handleCopyPath(event, directory.path);
-                      }}
-                    >
-                      <span aria-hidden="true" className="context-list__icon">
-                        {directory.kind === "worktree" ? "🔀" : "📁"}
-                      </span>
-                      {directory.label}
-                    </button>
-                    <button
-                      aria-label={`Copy path for ${directory.kind} ${directory.label}`}
-                      className="context-list__meta path-copy-target tooltip-target"
-                      data-tooltip={formatCopyTooltip(directory.worktreePath ?? directory.path)}
-                      type="button"
-                      onClick={(event) => {
-                        void handleCopyPath(event, directory.worktreePath ?? directory.path);
-                      }}
-                    >
-                      {directory.kind}
-                    </button>
-                  </li>
-                ))}
+                {props.thread.linkedDirectories.map((directory) => {
+                  const worktreePath = directory.worktreePath ?? directory.path;
+                  const snapshot = findSnapshotForWorktree(
+                    props.thread.worktreeSnapshots,
+                    worktreePath
+                  );
+                  const canArchive =
+                    directory.kind === "worktree" &&
+                    snapshot?.state !== "archived" &&
+                    Boolean(props.onArchiveWorktree);
+                  const canRestore =
+                    directory.kind === "worktree" &&
+                    snapshot?.state === "archived" &&
+                    Boolean(props.onRestoreWorktree);
+
+                  return (
+                    <li key={directory.id} className="context-list__item">
+                      <button
+                        aria-label={`Copy path for ${directory.label}`}
+                        className="context-list__label path-copy-target tooltip-target"
+                        data-tooltip={formatCopyTooltip(directory.path)}
+                        type="button"
+                        onClick={(event) => {
+                          void handleCopyPath(event, directory.path);
+                        }}
+                      >
+                        <span aria-hidden="true" className="context-list__icon">
+                          {directory.kind === "worktree" ? "🔀" : "📁"}
+                        </span>
+                        {directory.label}
+                      </button>
+                      <div className="context-list__actions">
+                        {canArchive ? (
+                          <button
+                            className="context-list__action"
+                            type="button"
+                            onClick={() => {
+                              void props.onArchiveWorktree?.(props.thread, directory);
+                            }}
+                          >
+                            Archive
+                          </button>
+                        ) : canRestore && snapshot ? (
+                          <button
+                            className="context-list__action"
+                            type="button"
+                            onClick={() => {
+                              void props.onRestoreWorktree?.(
+                                props.thread,
+                                snapshot.snapshotRef,
+                                snapshot.worktreePath
+                              );
+                            }}
+                          >
+                            Restore
+                          </button>
+                        ) : null}
+                        <button
+                          aria-label={`Copy path for ${directory.kind} ${directory.label}`}
+                          className="context-list__meta path-copy-target tooltip-target"
+                          data-tooltip={formatCopyTooltip(worktreePath)}
+                          type="button"
+                          onClick={(event) => {
+                            void handleCopyPath(event, worktreePath);
+                          }}
+                        >
+                          {snapshot?.state === "archived" ? "archived" : directory.kind}
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             ) : props.thread.projectKey?.trim() ? (
               <>
@@ -161,7 +219,62 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             ) : (
               <p className="context-empty">No linked directory</p>
             )}
+            {props.worktreeArchiveError ? (
+              <p className="context-empty context-empty--error">
+                {props.worktreeArchiveError}
+              </p>
+            ) : null}
           </section>
+
+          {props.thread.worktreeSnapshots?.some(
+            (snapshot) => snapshot.state === "archived"
+          ) ? (
+            <section className="context-panel__section">
+              <h3>Worktree snapshots</h3>
+              <ul className="context-list">
+                {props.thread.worktreeSnapshots
+                  .filter((snapshot) => snapshot.state === "archived")
+                  .map((snapshot) => (
+                    <li key={snapshot.id} className="context-list__item">
+                      <button
+                        aria-label={`Copy snapshot ref ${snapshot.snapshotRef}`}
+                        className="context-list__label path-copy-target tooltip-target"
+                        data-tooltip={formatCopyTooltip(snapshot.snapshotRef)}
+                        type="button"
+                        onClick={(event) => {
+                          void handleCopyPath(event, snapshot.snapshotRef);
+                        }}
+                      >
+                        <span aria-hidden="true" className="context-list__icon">
+                          🔀
+                        </span>
+                        {pathBaseName(snapshot.worktreePath)}
+                      </button>
+                      <div className="context-list__actions">
+                        <button
+                          className="context-list__action"
+                          type="button"
+                          onClick={() => {
+                            void props.onRestoreWorktree?.(
+                              props.thread,
+                              snapshot.snapshotRef,
+                              snapshot.worktreePath
+                            );
+                          }}
+                        >
+                          Restore
+                        </button>
+                        <span className="context-list__meta">
+                          {snapshot.archivedAt
+                            ? formatTimestamp(snapshot.archivedAt)
+                            : "archived"}
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+              </ul>
+            </section>
+          ) : null}
 
           <section className="context-panel__section">
             <h3>Execution context</h3>
@@ -259,6 +372,13 @@ function formatTimestamp(timestamp: number): string {
     hour: "numeric",
     minute: "2-digit"
   }).format(timestamp);
+}
+
+function findSnapshotForWorktree(
+  snapshots: WorktreeSnapshotSummary[] | undefined,
+  worktreePath: string
+): WorktreeSnapshotSummary | undefined {
+  return snapshots?.find((snapshot) => snapshot.worktreePath === worktreePath);
 }
 
 function pathBaseName(pathname: string): string {

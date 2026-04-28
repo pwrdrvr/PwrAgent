@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  ArchiveWorktreeRequest,
   ArchiveThreadRequest,
   AppServerListThreadsRequest,
   GetNavigationSnapshotRequest,
   MarkThreadSeenRequest,
   RenameThreadRequest,
+  RestoreWorktreeRequest,
   RestoreThreadRequest,
 } from "@pwragnt/shared";
 
@@ -61,6 +63,43 @@ const restoreThread = vi.fn(async (request: RestoreThreadRequest) => ({
   backend: request.backend ?? "codex",
   threadId: request.threadId,
   restoredAt: 3000,
+}));
+const archiveWorktree = vi.fn(async (request: ArchiveWorktreeRequest) => ({
+  backend: request.backend,
+  threadId: request.threadId,
+  archivedAt: 3000,
+  snapshot: {
+    id: "snapshot-1",
+    backend: request.backend,
+    threadId: request.threadId,
+    worktreePath: request.worktreePath,
+    repositoryPath: request.repositoryPath ?? "/repo",
+    snapshotRef: "refs/codex/snapshots/snapshot-1",
+    snapshotCommit: "abc123",
+    createdAt: 3000,
+    archivedAt: 3000,
+    state: "archived" as const,
+    ignoredFilesExcluded: true,
+  },
+}));
+const restoreWorktree = vi.fn(async (request: RestoreWorktreeRequest) => ({
+  backend: request.backend,
+  threadId: request.threadId,
+  restoredAt: 4000,
+  snapshot: {
+    id: "snapshot-1",
+    backend: request.backend,
+    threadId: request.threadId,
+    worktreePath: request.worktreePath,
+    repositoryPath: request.repositoryPath ?? "/repo",
+    snapshotRef: request.snapshotRef ?? "refs/codex/snapshots/snapshot-1",
+    snapshotCommit: "abc123",
+    createdAt: 3000,
+    archivedAt: 3000,
+    restoredAt: 4000,
+    state: "restored" as const,
+    ignoredFilesExcluded: true,
+  },
 }));
 const renameThread = vi.fn(async (request: RenameThreadRequest) => ({
   backend: request.backend ?? "codex",
@@ -132,6 +171,8 @@ vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => ({
     archiveThread,
     restoreThread,
+    archiveWorktree,
+    restoreWorktree,
     renameThread,
     listThreads,
     readThread,
@@ -144,6 +185,8 @@ describe("app server ipc", () => {
     handlers.clear();
     archiveThread.mockClear();
     restoreThread.mockClear();
+    archiveWorktree.mockClear();
+    restoreWorktree.mockClear();
     renameThread.mockClear();
     listThreads.mockClear();
     readThread.mockClear();
@@ -270,6 +313,66 @@ describe("app server ipc", () => {
       backend: "grok",
       threadId: "thread-1",
       restoredAt: 3000,
+    });
+  });
+
+  it("archives worktrees through the app-server IPC handler", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { APP_SERVER_ARCHIVE_WORKTREE_CHANNEL } = await import("../../shared/ipc");
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(APP_SERVER_ARCHIVE_WORKTREE_CHANNEL)?.({}, {
+      backend: "codex",
+      threadId: "thread-1",
+      repositoryPath: "/repo",
+      worktreePath: "/worktrees/thread-1",
+    } satisfies ArchiveWorktreeRequest);
+
+    expect(archiveWorktree).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      repositoryPath: "/repo",
+      worktreePath: "/worktrees/thread-1",
+    });
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      archivedAt: 3000,
+      snapshot: expect.objectContaining({
+        snapshotRef: "refs/codex/snapshots/snapshot-1",
+        state: "archived",
+      }),
+    });
+  });
+
+  it("restores worktrees through the app-server IPC handler", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { APP_SERVER_RESTORE_WORKTREE_CHANNEL } = await import("../../shared/ipc");
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(APP_SERVER_RESTORE_WORKTREE_CHANNEL)?.({}, {
+      backend: "codex",
+      threadId: "thread-1",
+      snapshotRef: "refs/codex/snapshots/snapshot-1",
+      worktreePath: "/worktrees/thread-1",
+    } satisfies RestoreWorktreeRequest);
+
+    expect(restoreWorktree).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      snapshotRef: "refs/codex/snapshots/snapshot-1",
+      worktreePath: "/worktrees/thread-1",
+    });
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      restoredAt: 4000,
+      snapshot: expect.objectContaining({
+        snapshotRef: "refs/codex/snapshots/snapshot-1",
+        state: "restored",
+      }),
     });
   });
 

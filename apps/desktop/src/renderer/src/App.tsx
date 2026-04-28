@@ -83,7 +83,9 @@ export function App() {
           transcriptError={session.error}
           transcriptPagination={session.response?.replay.pagination}
           updatingExecutionMode={navigation.updatingThreadExecutionMode}
+          worktreeArchiveError={navigation.worktreeArchiveError}
           onActiveTurnIdChange={session.setActiveTurnId}
+          onArchiveWorktree={navigation.archiveWorktree}
           onEnsureSkillsLoaded={skills.ensureLoaded}
           onLoadOlder={session.loadOlder}
           onMaterializeLaunchpad={navigation.materializeDirectoryLaunchpad}
@@ -106,6 +108,7 @@ export function App() {
                   )
               : undefined
           }
+          onRestoreWorktree={navigation.restoreWorktree}
           onTranscriptViewportChange={session.setViewport}
           onUpdateLaunchpad={navigation.updateDirectoryLaunchpad}
           onUpdatePendingUserInput={session.updatePendingUserInput}

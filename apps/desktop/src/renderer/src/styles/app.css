@@ -2152,6 +2152,27 @@ textarea {
   gap: 8px;
 }
 
+.context-list__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.context-list__action {
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+.context-list__action:hover,
+.context-list__action:focus-visible {
+  border-color: var(--border-strong);
+}
+
 .context-list__label,
 .context-list__meta {
   padding: 0;

@@ -41,6 +41,30 @@ export type LinkedDirectorySummary = {
   kind: "local" | "worktree";
 };
 
+export type WorktreeSnapshotState =
+  | "present"
+  | "archived"
+  | "restored"
+  | "unavailable";
+
+export type WorktreeSnapshotSummary = {
+  id: string;
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  worktreePath: string;
+  repositoryPath: string;
+  snapshotRef: string;
+  snapshotCommit: string;
+  sourceBranch?: string;
+  sourceHead?: string;
+  createdAt: number;
+  archivedAt?: number;
+  restoredAt?: number;
+  state: WorktreeSnapshotState;
+  ignoredFilesExcluded: boolean;
+  unavailableReason?: string;
+};
+
 export type AppServerThreadTitleSource = "explicit" | "derived" | "fallback";
 
 export type AppServerThreadSummary = {
@@ -60,6 +84,7 @@ export type AppServerThreadSummary = {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  worktreeSnapshots?: WorktreeSnapshotSummary[];
 };
 
 export type AppServerThreadMessage = {
@@ -239,6 +264,35 @@ export type RestoreThreadResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   restoredAt: number;
+};
+
+export type ArchiveWorktreeRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  worktreePath: string;
+  repositoryPath?: string;
+};
+
+export type ArchiveWorktreeResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  archivedAt: number;
+  snapshot: WorktreeSnapshotSummary;
+};
+
+export type RestoreWorktreeRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  worktreePath: string;
+  repositoryPath?: string;
+  snapshotRef?: string;
+};
+
+export type RestoreWorktreeResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  restoredAt: number;
+  snapshot: WorktreeSnapshotSummary;
 };
 
 export type RenameThreadRequest = {
