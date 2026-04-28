@@ -29,7 +29,7 @@ function sanitizeBranchName(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-function buildWorktreeBranchName(params: {
+function buildWorktreeDirectoryName(params: {
   baseBranch: string;
   directoryLabel: string;
   timestamp?: number;
@@ -37,11 +37,11 @@ function buildWorktreeBranchName(params: {
   const base = sanitizeBranchName(params.baseBranch) || "main";
   const label = sanitizeBranchName(params.directoryLabel.toLowerCase()) || "launchpad";
   const suffix = (params.timestamp ?? Date.now()).toString(36);
-  return `pwragnt/${label}-${base.replace(/\//g, "-")}-${suffix}`;
+  return `launchpad-${label}-${base.replace(/\//g, "-")}-${suffix}`;
 }
 
-function buildWorktreePath(repoRoot: string, branchName: string): string {
-  return path.join(repoRoot, ".worktrees", branchName.replace(/[\\/]/g, "-"));
+function buildWorktreePath(repoRoot: string, worktreeName: string): string {
+  return path.join(repoRoot, ".worktrees", worktreeName.replace(/[\\/]/g, "-"));
 }
 
 type WorktreeEntry = {
@@ -242,13 +242,13 @@ export class GitDirectoryService {
       sanitizeBranchName(launchpad.branchName ?? "") ||
       sanitizeBranchName(await runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"])) ||
       "main";
-    const worktreeBranch = buildWorktreeBranchName({
+    const worktreeName = buildWorktreeDirectoryName({
       baseBranch,
       directoryLabel: launchpad.directoryLabel,
     });
-    const worktreePath = buildWorktreePath(repoRoot, worktreeBranch);
+    const worktreePath = buildWorktreePath(repoRoot, worktreeName);
     await mkdir(path.dirname(worktreePath), { recursive: true });
-    await runGit(repoRoot, ["worktree", "add", "-b", worktreeBranch, worktreePath, baseBranch]);
+    await runGit(repoRoot, ["worktree", "add", "--detach", worktreePath, baseBranch]);
 
     return {
       cwd: worktreePath,
