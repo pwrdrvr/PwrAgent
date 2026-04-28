@@ -5,6 +5,7 @@ import type {
   NavigationLaunchpadDraft,
   StartReviewRequest,
   StartTurnRequest,
+  StartTurnResponse,
 } from "@pwragnt/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeImageFile } from "../../../lib/image-normalization";
@@ -213,6 +214,52 @@ describe("Composer", () => {
         reasoningEffort: "medium",
       })
     );
+  });
+
+  it("keeps the reply input focusable while the send request is pending", async () => {
+    let resolveStartTurn: ((value: StartTurnResponse) => void) | undefined;
+    const startTurn = vi.fn(
+      (request: StartTurnRequest) =>
+        new Promise<StartTurnResponse>((resolve) => {
+          resolveStartTurn = resolve;
+        })
+    );
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Slow send",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Start a slow turn" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(screen.getByRole("button", { name: "Sending…" })).toBeDisabled();
+    expect(textarea).toBeEnabled();
+
+    await act(async () => {
+      resolveStartTurn?.({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      });
+    });
   });
 
   it("queues Enter during an active turn and sends it after the turn clears", async () => {
