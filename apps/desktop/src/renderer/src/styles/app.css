@@ -59,7 +59,9 @@ textarea {
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width, 408px) minmax(0, 1fr);
+  align-items: stretch;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   background: var(--bg-app);
   color: var(--text-primary);
@@ -68,7 +70,9 @@ textarea {
 .sidebar {
   display: flex;
   position: relative;
+  align-self: stretch;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
   padding: 16px;
   overflow: hidden;
