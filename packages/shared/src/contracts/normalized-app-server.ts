@@ -33,6 +33,47 @@ export type AppServerTurnInputItem =
   | AppServerImageInputItem
   | AppServerLocalImageInputItem;
 
+export type AppServerReviewTarget =
+  | {
+      type: "uncommittedChanges";
+    }
+  | {
+      type: "baseBranch";
+      branch: string;
+    }
+  | {
+      type: "commit";
+      sha: string;
+      title: string | null;
+    }
+  | {
+      type: "custom";
+      instructions: string;
+    };
+
+export type AppServerReviewDelivery = "inline" | "detached";
+
+export type AppServerReviewFinding = {
+  title: string;
+  body: string;
+  confidence_score: number;
+  priority?: number;
+  code_location: {
+    absolute_file_path: string;
+    line_range: {
+      start: number;
+      end: number;
+    };
+  };
+};
+
+export type AppServerReviewOutput = {
+  findings: AppServerReviewFinding[];
+  overall_correctness: "patch is correct" | "patch is incorrect";
+  overall_explanation: string;
+  overall_confidence_score: number;
+};
+
 export type LinkedDirectorySummary = {
   id: string;
   label: string;
@@ -203,10 +244,22 @@ export type AppServerThreadPlanEntry = {
   turn?: AppServerThreadTurnMetadata;
 };
 
+export type AppServerThreadReviewEntry = {
+  type: "review";
+  id: string;
+  createdAt?: number;
+  status?: AppServerThreadActivityStatus;
+  review: string;
+  displayText?: string;
+  output?: AppServerReviewOutput;
+  turn?: AppServerThreadTurnMetadata;
+};
+
 export type AppServerThreadEntry =
   | AppServerThreadMessageEntry
   | AppServerThreadActivityEntry
-  | AppServerThreadPlanEntry;
+  | AppServerThreadPlanEntry
+  | AppServerThreadReviewEntry;
 
 export type AppServerThreadReplayPagination = {
   supportsPagination: boolean;

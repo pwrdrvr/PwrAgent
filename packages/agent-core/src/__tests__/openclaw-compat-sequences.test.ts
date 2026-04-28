@@ -427,8 +427,13 @@ describe("OpenClaw compatibility sequences", () => {
     await flushAsync();
 
     expect(reviewResult).toEqual({
+      threadId: "thread-1",
       reviewThreadId: "thread-1",
       turnId: "turn-2",
+      turn: {
+        id: "turn-2",
+        status: "inProgress",
+      },
     });
     expect(compactionResult).toEqual({
       threadId: "thread-1",
@@ -444,9 +449,22 @@ describe("OpenClaw compatibility sequences", () => {
           threadId: "thread-1",
           turnId: "turn-2",
           item: {
+            id: "turn-2-item-entered",
+            type: "enteredReviewMode",
+            review: "Review current changes",
+          },
+        },
+      },
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-2",
+          item: {
             id: "turn-2-item",
             type: "exitedReviewMode",
             review: "Review looks good.",
+            data: undefined,
           },
         },
       },

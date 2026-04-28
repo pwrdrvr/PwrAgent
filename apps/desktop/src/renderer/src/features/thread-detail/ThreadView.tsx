@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type {
   AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification,
+  AppServerReviewTarget,
   AppServerSource,
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
@@ -770,6 +771,7 @@ function activityContainsDiff(
 type ThreadViewProps = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
+  addOptimisticReviewEntry?: (displayText: string) => string;
   addOptimisticUserMessage: (text: string) => string;
   backendError?: string;
   backends: BackendSummary[];
@@ -804,7 +806,8 @@ type ThreadViewProps = {
   onMaterializeLaunchpad?: (
     directoryKey: string,
     input?: AppServerTurnInputItem[],
-    collaborationMode?: AppServerCollaborationModeRequest
+    collaborationMode?: AppServerCollaborationModeRequest,
+    reviewTarget?: AppServerReviewTarget
   ) => Promise<void>;
   onPendingStatusChange?: (status?: string) => void;
   onUpdatePendingUserInput?: (
@@ -1437,9 +1440,11 @@ export function ThreadView(props: ThreadViewProps) {
 
       <Composer
         activeTurnId={props.activeTurnId}
+        addOptimisticReviewEntry={props.addOptimisticReviewEntry}
         addOptimisticUserMessage={props.addOptimisticUserMessage}
         backends={props.backends}
         desktopApi={props.desktopApi}
+        directory={props.selectedDirectory}
         disabled={props.composerDisabled}
         onActiveTurnIdChange={props.onActiveTurnIdChange}
         onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}

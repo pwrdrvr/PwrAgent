@@ -16,11 +16,14 @@ import type {
   AppServerThreadEntry,
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
+  AppServerThreadReviewEntry,
   AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadTitleSource,
   AppServerThreadSummary,
   AppServerTurnInputItem,
+  AppServerReviewDelivery,
+  AppServerReviewTarget,
   BackendModelOption,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
@@ -427,7 +430,7 @@ function extractReplayFromItems(
   items: Record<string, unknown>[],
   pagination: AppServerThreadReplay["pagination"],
 ): AppServerThreadReplay | undefined {
-  if (!items.some(isActivityReplayItem)) {
+  if (!items.some((item) => isActivityReplayItem(item) || isReviewReplayItem(item))) {
     return undefined;
   }
 
@@ -458,6 +461,12 @@ function extractReplayFromItems(
     messageIndex -= 1;
     if (isActivityReplayItem(item)) {
       pendingActivity.push(item);
+      continue;
+    }
+    const reviewEntry = itemToReviewEntry(item);
+    if (reviewEntry) {
+      flushActivity();
+      entries.push(reviewEntry);
     }
   }
   flushActivity();
@@ -483,6 +492,42 @@ function extractReplayFromItems(
     lastUserMessage,
     lastAssistantMessage,
     pagination,
+  };
+}
+
+function itemToReviewEntry(item: Record<string, unknown>): AppServerThreadReviewEntry | undefined {
+  const type = typeof item.type === "string" ? item.type : undefined;
+  if (type !== "enteredReviewMode" && type !== "exitedReviewMode") {
+    return undefined;
+  }
+  const review = typeof item.review === "string"
+    ? item.review
+    : typeof item.text === "string"
+      ? item.text
+      : "";
+  const data = asRecord(item.data);
+  const output = asRecord(data?.reviewOutput);
+  const findings = Array.isArray(output?.findings) ? output.findings : undefined;
+  return {
+    type: "review",
+    id: typeof item.id === "string" ? item.id : `review-${type}`,
+    review,
+    displayText: type === "enteredReviewMode" ? review || "Code review started" : undefined,
+    ...(output &&
+    findings &&
+    (output.overall_correctness === "patch is correct" ||
+      output.overall_correctness === "patch is incorrect") &&
+    typeof output.overall_explanation === "string" &&
+    typeof output.overall_confidence_score === "number"
+      ? {
+          output: {
+            findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
+            overall_correctness: output.overall_correctness,
+            overall_explanation: output.overall_explanation,
+            overall_confidence_score: output.overall_confidence_score,
+          },
+        }
+      : {}),
   };
 }
 
@@ -515,6 +560,10 @@ function isActivityReplayItem(item: Record<string, unknown>): boolean {
     type === "commandExecution" ||
     Boolean(toolName)
   );
+}
+
+function isReviewReplayItem(item: Record<string, unknown>): boolean {
+  return item.type === "enteredReviewMode" || item.type === "exitedReviewMode";
 }
 
 function extractThreadId(value: unknown): string | undefined {
@@ -806,6 +855,38 @@ export class GrokAppServerClient {
     }
 
     return { threadId, turnId };
+  }
+
+  async startReview(params: {
+    threadId: string;
+    target: AppServerReviewTarget;
+    delivery?: AppServerReviewDelivery;
+  }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    await this.ensureInitialized();
+
+    await this.request("thread/resume", {
+      threadId: params.threadId,
+    });
+
+    const result = await this.request("review/start", {
+      threadId: params.threadId,
+      target: params.target,
+      delivery: params.delivery ?? "inline",
+    });
+    const record = asRecord(result);
+    const threadId = extractThreadId(result) ?? params.threadId;
+    const reviewThreadId =
+      typeof record?.reviewThreadId === "string"
+        ? record.reviewThreadId
+        : typeof record?.review_thread_id === "string"
+          ? record.review_thread_id
+          : threadId;
+    const turnId = extractTurnId(result);
+    if (!turnId) {
+      throw new Error("grok app server review/start did not return turnId");
+    }
+
+    return { threadId, reviewThreadId, turnId };
   }
 
   async interruptTurn(params: {

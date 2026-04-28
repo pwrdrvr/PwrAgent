@@ -3,6 +3,8 @@ import type {
   AppServerListSkillsResponse,
   AppServerNotification,
   AppServerPendingRequestNotification,
+  AppServerReviewDelivery,
+  AppServerReviewTarget,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
   AppServerTurnInputItem,
@@ -44,6 +46,11 @@ export class ReplayClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+  };
+  private lastStartReviewParams?: {
+    threadId: string;
+    target: AppServerReviewTarget;
+    delivery?: AppServerReviewDelivery;
   };
 
   constructor(private readonly controller: ReplayController) {}
@@ -140,6 +147,20 @@ export class ReplayClient {
     };
   }
 
+  async startReview(params: {
+    threadId: string;
+    target: AppServerReviewTarget;
+    delivery?: AppServerReviewDelivery;
+  }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    await this.ensureInitialized();
+    this.lastStartReviewParams = params;
+    return this.controller.consumeResponse("review/start").result as {
+      threadId: string;
+      reviewThreadId: string;
+      turnId: string;
+    };
+  }
+
   async interruptTurn(_params?: {
     threadId: string;
     turnId: string;
@@ -187,6 +208,16 @@ export class ReplayClient {
       }
     | undefined {
     return this.lastStartTurnParams;
+  }
+
+  getLastStartReviewParams():
+    | {
+        threadId: string;
+        target: AppServerReviewTarget;
+        delivery?: AppServerReviewDelivery;
+      }
+    | undefined {
+    return this.lastStartReviewParams;
   }
 
   async respondToPendingRequest(requestId: string): Promise<void> {

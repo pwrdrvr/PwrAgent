@@ -15,6 +15,7 @@ import { TranscriptActivity } from "./TranscriptActivity";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
+import { TranscriptReview } from "./TranscriptReview";
 import { TranscriptWorkPhaseGroup } from "./TranscriptWorkPhaseGroup";
 import type { PendingQuestionnaireState } from "./questionnaire";
 import { buildTranscriptRenderItems } from "./transcript-render-items";
@@ -508,6 +509,8 @@ export function TranscriptList(props: TranscriptListProps) {
             <TranscriptActivity key={entry.id} entry={entry} />
           ) : entry.type === "plan" ? (
             <TranscriptPlan key={entry.id} entry={entry} />
+          ) : entry.type === "review" ? (
+            <TranscriptReview key={entry.id} entry={entry} />
           ) : (
             <TranscriptMessage
               key={entry.id}

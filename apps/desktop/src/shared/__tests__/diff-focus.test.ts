@@ -76,7 +76,9 @@ describe("diff-focus", () => {
       reason: "eligible"
     });
     expect(buildDiffView(parsed, { mode: "condensed" }).hiddenContextLineCount).toBeGreaterThan(0);
-    expect(summarizeHunksForFocus(parsed)).toMatchObject([
+    const summaries = summarizeHunksForFocus(parsed);
+    expect(summaries).toHaveLength(4);
+    expect(summaries.slice(0, 2)).toMatchObject([
       expect.objectContaining({
         index: 0,
         changedLineCount: 2

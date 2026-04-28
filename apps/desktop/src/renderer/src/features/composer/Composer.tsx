@@ -1,6 +1,7 @@
 import { type ClipboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerCollaborationModeRequest,
+  AppServerReviewTarget,
   AppServerSkillSummary,
   AppServerThreadImagePart,
   AppServerTurnInputItem,
@@ -21,10 +22,12 @@ import {
   insertSkillLabel,
   listMentionedSkills,
 } from "../../lib/skill-mentions";
+import { parseReviewCommand } from "../../../../shared/review-command";
 import { SkillChip } from "./SkillChip";
 
 type ComposerProps = {
   activeTurnId?: string;
+  addOptimisticReviewEntry?: (displayText: string) => string;
   addOptimisticUserMessage?: (
     text: string,
     imageParts?: AppServerThreadImagePart[]
@@ -42,7 +45,8 @@ type ComposerProps = {
   onMaterializeLaunchpad?: (
     directoryKey: string,
     input?: AppServerTurnInputItem[],
-    collaborationMode?: AppServerCollaborationModeRequest
+    collaborationMode?: AppServerCollaborationModeRequest,
+    reviewTarget?: AppServerReviewTarget
   ) => Promise<void>;
   onPendingStatusChange?: (status?: string) => void;
   onUpdateLaunchpad?: (
@@ -95,7 +99,60 @@ type ModelOption = NonNullable<
   NonNullable<BackendSummary["launchpadOptions"]>["models"]
 >[number];
 
+type SlashCommandSuggestion = {
+  description: string;
+  id: string;
+  insertText: string;
+  label: string;
+};
+
+type AutocompleteKind = "skills" | "slash";
+type ReviewTargetChoice = AppServerReviewTarget["type"];
+
+type ReviewConfigState = {
+  branch: string;
+  commit: string;
+  customInstructions: string;
+  target?: ReviewTargetChoice;
+};
+
 const DEFAULT_REASONING_EFFORT = "medium";
+
+const SLASH_COMMANDS: SlashCommandSuggestion[] = [
+  {
+    id: "review-current",
+    label: "/review",
+    insertText: "/review",
+    description: "Review current staged, unstaged, and untracked changes",
+  },
+];
+
+const REVIEW_TARGET_OPTIONS: Array<{
+  description: string;
+  label: string;
+  target: ReviewTargetChoice;
+}> = [
+  {
+    target: "baseBranch",
+    label: "Base branch",
+    description: "Compare this branch with a base branch",
+  },
+  {
+    target: "uncommittedChanges",
+    label: "Current changes",
+    description: "Review staged, unstaged, and untracked files",
+  },
+  {
+    target: "commit",
+    label: "Commit",
+    description: "Review one commit by SHA",
+  },
+  {
+    target: "custom",
+    label: "Custom",
+    description: "Review using custom instructions",
+  },
+];
 
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
@@ -123,9 +180,125 @@ function getReasoningEffortValue(
     : getDefaultReasoningEffort(backend);
 }
 
+function buildReviewBranchOptions(params: {
+  directory?: NavigationDirectorySummary;
+  thread?: NavigationThreadSummary;
+}): string[] {
+  const candidates = [
+    "main",
+    params.thread?.gitBranch,
+    params.thread?.observedGitBranch,
+    params.directory?.gitStatus?.currentBranch,
+    params.directory?.gitStatus?.upstreamBranch?.replace(/^origin\//, ""),
+    ...(params.directory?.gitStatus?.branches ?? []),
+  ];
+  const options = new Set<string>();
+  for (const candidate of candidates) {
+    const value = candidate?.trim();
+    if (value) {
+      options.add(value);
+    }
+  }
+  return [...options];
+}
+
+function createReviewConfig(params: {
+  directory?: NavigationDirectorySummary;
+  thread?: NavigationThreadSummary;
+}): ReviewConfigState {
+  return {
+    branch: buildReviewBranchOptions(params)[0] ?? "main",
+    commit: "",
+    customInstructions: "",
+  };
+}
+
+function buildConfiguredReviewCommand(
+  config: ReviewConfigState | undefined
+): { displayText: string; target: AppServerReviewTarget } | undefined {
+  if (!config?.target) {
+    return undefined;
+  }
+
+  if (config.target === "uncommittedChanges") {
+    return {
+      target: { type: "uncommittedChanges" },
+      displayText: "Review current changes",
+    };
+  }
+
+  if (config.target === "baseBranch") {
+    const branch = config.branch.trim();
+    return branch
+      ? {
+          target: { type: "baseBranch", branch },
+          displayText: `Review changes against ${branch}`,
+        }
+      : undefined;
+  }
+
+  if (config.target === "commit") {
+    const sha = config.commit.trim();
+    return sha
+      ? {
+          target: { type: "commit", sha, title: null },
+          displayText: `Review commit ${sha}`,
+        }
+      : undefined;
+  }
+
+  const instructions = config.customInstructions.trim();
+  return instructions
+    ? {
+        target: { type: "custom", instructions },
+        displayText: "Review custom instructions",
+      }
+    : undefined;
+}
+
+function findSlashCommandTrigger(text: string, caret: number): {
+  end: number;
+  query: string;
+  start: number;
+} | undefined {
+  const prefix = text.slice(0, caret);
+  if (/\s$/.test(prefix)) {
+    return undefined;
+  }
+  const match = /^\/([^\r\n]*)$/.exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+
+  return {
+    start: 0,
+    end: caret,
+    query: match[1] ?? "",
+  };
+}
+
+function HighlightedAutocompleteLabel(props: {
+  label: string;
+  query: string;
+}) {
+  if (!props.query || !props.label.toLowerCase().startsWith(props.query.toLowerCase())) {
+    return <span>{props.label}</span>;
+  }
+
+  return (
+    <span>
+      <span className="composer__autocomplete-match">
+        {props.label.slice(0, props.query.length)}
+      </span>
+      {props.label.slice(props.query.length)}
+    </span>
+  );
+}
+
 export function Composer(props: ComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(undefined);
+  const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
@@ -134,7 +307,9 @@ export function Composer(props: ComposerProps) {
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>([]);
   const [planModeEnabled, setPlanModeEnabled] = useState(false);
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
+  const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
+  const [reviewConfig, setReviewConfig] = useState<ReviewConfigState>();
   const isLaunchpad = Boolean(props.launchpad && props.directory);
   const launchpad = props.launchpad;
   const backend = useMemo(
@@ -151,6 +326,7 @@ export function Composer(props: ComposerProps) {
     setActiveTurnId(nextTurnId);
   };
   const trigger = findSkillTrigger(draft, selectionStart);
+  const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
   const filteredSkills = useMemo(() => {
     if (!trigger) {
       return [];
@@ -173,15 +349,64 @@ export function Composer(props: ComposerProps) {
       );
     });
   }, [props.skills, trigger]);
-  const hasAutocomplete = Boolean(trigger && filteredSkills.length > 0);
+  const filteredSlashCommands = useMemo(() => {
+    if (!slashTrigger) {
+      return [];
+    }
+
+    const typed = draft.slice(slashTrigger.start, slashTrigger.end).trim().toLowerCase();
+    return SLASH_COMMANDS.filter(
+      (command) =>
+        command.label.toLowerCase().startsWith(typed) ||
+        command.description.toLowerCase().includes(typed.slice(1))
+    );
+  }, [draft, slashTrigger]);
+  const displayedAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
+    ? "skills"
+    : slashTrigger && filteredSlashCommands.length > 0
+      ? "slash"
+      : undefined;
+  const autocompleteKind: AutocompleteKind | undefined =
+    displayedAutocompleteKind === "slash" &&
+    parseReviewCommand(draft) &&
+    draft.trim() === "/review"
+      ? undefined
+      : displayedAutocompleteKind;
+  const hasAutocomplete = Boolean(autocompleteKind);
+  const activeAutocompleteIndex =
+    displayedAutocompleteKind === "skills" ? activeSkillIndex : activeSlashIndex;
+  const autocompleteLength =
+    displayedAutocompleteKind === "skills" ? filteredSkills.length : filteredSlashCommands.length;
   const mentionedSkills = useMemo(
     () => listMentionedSkills(draft, props.skills),
     [draft, props.skills]
   );
+  const reviewBranchOptions = useMemo(
+    () => buildReviewBranchOptions({
+      directory: props.directory,
+      thread: props.thread,
+    }),
+    [props.directory, props.thread]
+  );
+  const isBareReviewCommand = draft.trim() === "/review";
 
   useEffect(() => {
     setActiveSkillIndex(0);
   }, [trigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
+
+  useEffect(() => {
+    setActiveSlashIndex(0);
+  }, [slashTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
+
+  useEffect(() => {
+    if (!displayedAutocompleteKind) {
+      return;
+    }
+
+    autocompleteOptionRefs.current[activeAutocompleteIndex]?.scrollIntoView?.({
+      block: "nearest",
+    });
+  }, [activeAutocompleteIndex, displayedAutocompleteKind]);
 
   useEffect(() => {
     if (!trigger) {
@@ -202,6 +427,7 @@ export function Composer(props: ComposerProps) {
     setInterrupting(false);
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
+    setReviewConfig(undefined);
   }, [isLaunchpad, props.launchpad?.directoryKey, props.launchpad?.updatedAt]);
 
   useEffect(() => {
@@ -214,6 +440,7 @@ export function Composer(props: ComposerProps) {
     setInterrupting(false);
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
+    setReviewConfig(undefined);
     setImageAttachments([]);
   }, [props.thread?.id, props.thread?.source]);
 
@@ -330,7 +557,100 @@ export function Composer(props: ComposerProps) {
     };
   }, [draft, launchpad, props.onUpdateLaunchpad]);
 
+  const submitReviewCommand = async (reviewCommand: {
+    displayText: string;
+    target: AppServerReviewTarget;
+  }): Promise<void> => {
+    if (props.disabled) {
+      return;
+    }
+    if (imageAttachments.length > 0) {
+      setSendError("/review does not accept image attachments.");
+      return;
+    }
+
+    setSendError(undefined);
+    setSending(true);
+    props.onPendingStatusChange?.("Reviewing");
+
+    if (props.launchpad && props.onMaterializeLaunchpad) {
+      try {
+        await props.onMaterializeLaunchpad(
+          props.launchpad.directoryKey,
+          undefined,
+          undefined,
+          reviewCommand.target
+        );
+        setDraft("");
+        setReviewConfig(undefined);
+        setImageAttachments([]);
+      } catch (error) {
+        props.onPendingStatusChange?.(undefined);
+        setSendError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
+    if (!props.thread || !props.desktopApi?.startReview) {
+      props.onPendingStatusChange?.(undefined);
+      setSending(false);
+      return;
+    }
+
+    const optimisticReviewId = props.addOptimisticReviewEntry?.(
+      reviewCommand.displayText
+    );
+    setActiveOptimisticMessageId(optimisticReviewId);
+    try {
+      const response = await props.desktopApi.startReview({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        target: reviewCommand.target,
+        delivery: "inline",
+      });
+      updateActiveTurnId(response.turnId);
+      props.onActiveTurnIdChange?.(response.turnId);
+      setDraft("");
+      setReviewConfig(undefined);
+    } catch (error) {
+      if (optimisticReviewId) {
+        props.removeOptimisticMessage?.(optimisticReviewId);
+      }
+      props.onPendingStatusChange?.(undefined);
+      setSending(false);
+      setInterrupting(false);
+      updateActiveTurnId(undefined);
+      props.onActiveTurnIdChange?.(undefined);
+      setSendError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const submitTurn = async (): Promise<void> => {
+    const reviewCommand = parseReviewCommand(draft);
+    if (reviewCommand) {
+      if (isBareReviewCommand) {
+        const nextReviewConfig =
+          reviewConfig ??
+          createReviewConfig({
+            directory: props.directory,
+            thread: props.thread,
+          });
+        const configuredReviewCommand = buildConfiguredReviewCommand(nextReviewConfig);
+        if (!configuredReviewCommand) {
+          setReviewConfig(nextReviewConfig);
+          setSendError(undefined);
+          return;
+        }
+        await submitReviewCommand(configuredReviewCommand);
+        return;
+      }
+
+      await submitReviewCommand(reviewCommand);
+      return;
+    }
+
     const text = hydrateSkillLabelsWithMarkdown(draft.trim(), mentionedSkills);
     const imageParts = imageAttachments.map((attachment, index) => ({
       type: "image" as const,
@@ -474,6 +794,32 @@ export function Composer(props: ComposerProps) {
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(inserted.nextSelection, inserted.nextSelection);
+    });
+  };
+
+  const applySlashCommand = (command: SlashCommandSuggestion): void => {
+    if (!inputRef.current) {
+      return;
+    }
+
+    const selectionStart = inputRef.current.selectionStart ?? draft.length;
+    const selectionEnd = inputRef.current.selectionEnd ?? selectionStart;
+    const trigger = findSlashCommandTrigger(draft, selectionStart);
+    if (!trigger) {
+      return;
+    }
+
+    const before = draft.slice(0, trigger.start);
+    const after = draft.slice(Math.max(trigger.end, selectionEnd));
+    const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
+    const nextDraft = `${before}${command.insertText}${needsTrailingSpace ? " " : ""}${after}`;
+    const nextSelection = before.length + command.insertText.length + (needsTrailingSpace ? 1 : 0);
+
+    setDraft(nextDraft);
+    setActiveSlashIndex(0);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -662,12 +1008,17 @@ export function Composer(props: ComposerProps) {
           }
           value={draft}
           onChange={(event) => {
-            setDraft(event.target.value);
+            const nextDraft = event.target.value;
+            setDraft(nextDraft);
+            if (nextDraft.trim() !== "/review") {
+              setReviewConfig(undefined);
+            }
             setSendError(undefined);
           }}
           onPaste={handlePaste}
           onClick={() => {
             setActiveSkillIndex(0);
+            setActiveSlashIndex(0);
           }}
           onKeyDown={(event) => {
             if (!hasAutocomplete) {
@@ -680,38 +1031,58 @@ export function Composer(props: ComposerProps) {
 
             if (event.key === "ArrowDown") {
               event.preventDefault();
-              setActiveSkillIndex((current) =>
-                Math.min(current + 1, filteredSkills.length - 1)
-              );
+              if (autocompleteKind === "skills") {
+                setActiveSkillIndex((current) =>
+                  Math.min(current + 1, autocompleteLength - 1)
+                );
+              } else {
+                setActiveSlashIndex((current) =>
+                  Math.min(current + 1, autocompleteLength - 1)
+                );
+              }
               return;
             }
 
             if (event.key === "ArrowUp") {
               event.preventDefault();
-              setActiveSkillIndex((current) => Math.max(current - 1, 0));
+              if (autocompleteKind === "skills") {
+                setActiveSkillIndex((current) => Math.max(current - 1, 0));
+              } else {
+                setActiveSlashIndex((current) => Math.max(current - 1, 0));
+              }
               return;
             }
 
             if (event.key === "Escape") {
               event.preventDefault();
               setActiveSkillIndex(0);
+              setActiveSlashIndex(0);
               return;
             }
 
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
+              if (autocompleteKind === "skills") {
+                applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
+              } else {
+                applySlashCommand(
+                  filteredSlashCommands[activeSlashIndex] ?? filteredSlashCommands[0]!
+                );
+              }
             }
           }}
         />
 
-        {hasAutocomplete ? (
+        {displayedAutocompleteKind === "skills" ? (
           <div className="composer__autocomplete" role="listbox" aria-label="Skills">
             {filteredSkills.map((skill, index) => (
               <button
                 key={skill.path ?? skill.name}
+                ref={(node) => {
+                  autocompleteOptionRefs.current[index] = node;
+                }}
                 aria-selected={index === activeSkillIndex}
-                className={`composer__skill-option${index === activeSkillIndex ? " is-active" : ""}`}
+                className={`composer__autocomplete-option${index === activeSkillIndex ? " is-active" : ""}`}
                 type="button"
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -721,18 +1092,187 @@ export function Composer(props: ComposerProps) {
                   applySkill(skill);
                 }}
               >
-                <span className="composer__skill-option-title">
+                <span className="composer__autocomplete-title">
                   <span aria-hidden="true">🧰</span>
-                  <span>{`$${skill.name}`}</span>
+                  <HighlightedAutocompleteLabel
+                    label={`$${skill.name}`}
+                    query={trigger?.query ? `$${trigger.query}` : "$"}
+                  />
                 </span>
-                <span className="composer__skill-option-meta">
+                <span className="composer__autocomplete-meta">
                   {skill.shortDescription || skill.description || skill.path}
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : displayedAutocompleteKind === "slash" ? (
+          <div className="composer__autocomplete" role="listbox" aria-label="Commands">
+            {filteredSlashCommands.map((command, index) => (
+              <button
+                key={command.id}
+                ref={(node) => {
+                  autocompleteOptionRefs.current[index] = node;
+                }}
+                aria-selected={index === activeSlashIndex}
+                className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  applySlashCommand(command);
+                }}
+                onClick={() => {
+                  applySlashCommand(command);
+                }}
+              >
+                <span className="composer__autocomplete-title">
+                  <span className="composer__autocomplete-token" aria-hidden="true">/</span>
+                  <HighlightedAutocompleteLabel
+                    label={command.label}
+                    query={slashTrigger
+                      ? draft.slice(slashTrigger.start, slashTrigger.end).trim()
+                      : "/"}
+                  />
+                </span>
+                <span className="composer__autocomplete-meta">
+                  {command.description}
                 </span>
               </button>
             ))}
           </div>
         ) : null}
       </div>
+
+      {reviewConfig && isBareReviewCommand ? (
+        <fieldset className="composer__review-config" aria-label="Review target">
+          <legend>Review target</legend>
+          <div className="composer__review-options">
+            {REVIEW_TARGET_OPTIONS.map((option) => (
+              <button
+                key={option.target}
+                type="button"
+                aria-pressed={reviewConfig.target === option.target}
+                className={`composer__review-option${reviewConfig.target === option.target ? " is-active" : ""}`}
+                onClick={() => {
+                  setReviewConfig((current) => ({
+                    ...(current ??
+                      createReviewConfig({
+                        directory: props.directory,
+                        thread: props.thread,
+                      })),
+                    target: option.target,
+                  }));
+                  setSendError(undefined);
+                }}
+              >
+                <span>{option.label}</span>
+                <small>{option.description}</small>
+              </button>
+            ))}
+          </div>
+
+          {reviewConfig.target === "baseBranch" ? (
+            <label className="composer__review-field">
+              <span>Base branch</span>
+              <input
+                className="composer__review-input"
+                list="composer-review-branches"
+                value={reviewConfig.branch}
+                onChange={(event) => {
+                  setReviewConfig((current) => ({
+                    ...(current ??
+                      createReviewConfig({
+                        directory: props.directory,
+                        thread: props.thread,
+                      })),
+                    branch: event.target.value,
+                    target: "baseBranch",
+                  }));
+                  setSendError(undefined);
+                }}
+              />
+              {reviewBranchOptions.length > 0 ? (
+                <datalist id="composer-review-branches">
+                  {reviewBranchOptions.map((branch) => (
+                    <option key={branch} value={branch} />
+                  ))}
+                </datalist>
+              ) : null}
+            </label>
+          ) : null}
+
+          {reviewConfig.target === "commit" ? (
+            <label className="composer__review-field">
+              <span>Commit SHA</span>
+              <input
+                className="composer__review-input"
+                value={reviewConfig.commit}
+                onChange={(event) => {
+                  setReviewConfig((current) => ({
+                    ...(current ??
+                      createReviewConfig({
+                        directory: props.directory,
+                        thread: props.thread,
+                      })),
+                    commit: event.target.value,
+                    target: "commit",
+                  }));
+                  setSendError(undefined);
+                }}
+              />
+            </label>
+          ) : null}
+
+          {reviewConfig.target === "custom" ? (
+            <label className="composer__review-field">
+              <span>Instructions</span>
+              <textarea
+                className="composer__review-input composer__review-input--textarea"
+                value={reviewConfig.customInstructions}
+                onChange={(event) => {
+                  setReviewConfig((current) => ({
+                    ...(current ??
+                      createReviewConfig({
+                        directory: props.directory,
+                        thread: props.thread,
+                      })),
+                    customInstructions: event.target.value,
+                    target: "custom",
+                  }));
+                  setSendError(undefined);
+                }}
+              />
+            </label>
+          ) : null}
+
+          <div className="composer__review-actions">
+            <button
+              type="button"
+              className="composer__secondary-action"
+              onClick={() => {
+                setReviewConfig(undefined);
+                setSendError(undefined);
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="composer__primary-action"
+              disabled={!buildConfiguredReviewCommand(reviewConfig)}
+              onClick={() => {
+                const configuredReviewCommand =
+                  buildConfiguredReviewCommand(reviewConfig);
+                if (!configuredReviewCommand) {
+                  return;
+                }
+                void submitReviewCommand(configuredReviewCommand);
+              }}
+            >
+              Start review
+            </button>
+          </div>
+        </fieldset>
+      ) : null}
 
       {imageAttachments.length > 0 ? (
         <div className="composer__attachments" aria-label="Pasted images">

@@ -39,6 +39,8 @@ import type {
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
+  StartReviewRequest,
+  StartReviewResponse,
   StartThreadResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
@@ -112,6 +114,11 @@ type BackendClient = {
     reasoningEffort?: string;
     fastMode?: boolean;
   }): Promise<{ threadId: string; turnId: string }>;
+  startReview?(params: {
+    threadId: string;
+    target: StartReviewRequest["target"];
+    delivery?: StartReviewRequest["delivery"];
+  }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }>;
   listModels?(): Promise<BackendModelOption[]>;
   interruptTurn(params: {
     threadId: string;
@@ -253,6 +260,7 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     renameThread: supported.has("thread/name/set") || assumeCodexAppServerSurface,
     readThread: supported.has("thread/read") || assumeCodexAppServerSurface,
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
+    startReview: supported.has("review/start") || assumeCodexAppServerSurface,
     interruptTurn: supported.has("turn/interrupt"),
     steerTurn: supported.has("turn/steer"),
     transcriptPagination: false,
@@ -878,6 +886,33 @@ export class DesktopBackendRegistry {
     };
   }
 
+  async startReview(params: StartReviewRequest): Promise<StartReviewResponse> {
+    const startWithClient = async (
+      client: BackendClient,
+    ): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> => {
+      if (!client.startReview) {
+        throw new Error("Selected backend does not support review/start");
+      }
+      return await client.startReview({
+        threadId: params.threadId,
+        target: params.target,
+        delivery: params.delivery ?? "inline",
+      });
+    };
+
+    const result =
+      params.backend === "codex"
+        ? await this.withCodexThreadClient(params.threadId, startWithClient)
+        : await startWithClient(this.grokClient);
+
+    return {
+      backend: params.backend,
+      threadId: result.threadId,
+      reviewThreadId: result.reviewThreadId,
+      turnId: result.turnId,
+    };
+  }
+
   async interruptTurn(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -1096,7 +1131,15 @@ export class DesktopBackendRegistry {
         ? [{ type: "text", text: launchpad.prompt } as const]
         : []);
     let turnId: string | undefined;
-    if (input.length > 0) {
+    if (request.reviewTarget) {
+      const reviewResponse = await this.startReview({
+        backend: launchpad.backend,
+        threadId: startThreadResponse.threadId,
+        target: request.reviewTarget,
+        delivery: "inline",
+      });
+      turnId = reviewResponse.turnId;
+    } else if (input.length > 0) {
       const turnResponse = await this.startTurn({
         backend: launchpad.backend,
         threadId: startThreadResponse.threadId,

@@ -4,6 +4,7 @@ import type {
   InterruptTurnRequest,
   ListBackendsRequest,
   MaterializeDirectoryLaunchpadRequest,
+  StartReviewRequest,
   StartThreadRequest,
   StartTurnRequest,
 } from "@pwragnt/shared";
@@ -31,6 +32,12 @@ const registry = {
     backend: request.backend,
     threadId: request.threadId,
     turnId: "turn-1",
+  })),
+  startReview: vi.fn(async (request: StartReviewRequest) => ({
+    backend: request.backend,
+    threadId: request.threadId,
+    reviewThreadId: request.threadId,
+    turnId: "turn-review-1",
   })),
   interruptTurn: vi.fn(async (request: InterruptTurnRequest) => ({
     backend: request.backend,
@@ -79,6 +86,7 @@ describe("agent ipc", () => {
     registry.onEvent.mockClear();
     registry.startThread.mockClear();
     registry.startTurn.mockClear();
+    registry.startReview.mockClear();
     registry.interruptTurn.mockClear();
     registry.materializeDirectoryLaunchpad.mockClear();
     registryListener = undefined;
@@ -94,6 +102,7 @@ describe("agent ipc", () => {
       AGENT_INTERRUPT_TURN_CHANNEL,
       AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
       AGENT_START_THREAD_CHANNEL,
+      AGENT_START_REVIEW_CHANNEL,
       AGENT_START_TURN_CHANNEL,
       BACKEND_LIST_CHANNEL,
     } = await import("../../shared/ipc");
@@ -120,6 +129,18 @@ describe("agent ipc", () => {
       backend: "grok",
       threadId: "thread-1",
       turnId: "turn-1",
+    });
+    expect(
+      await handlers.get(AGENT_START_REVIEW_CHANNEL)?.({}, {
+        backend: "grok",
+        threadId: "thread-1",
+        target: { type: "uncommittedChanges" },
+      }),
+    ).toEqual({
+      backend: "grok",
+      threadId: "thread-1",
+      reviewThreadId: "thread-1",
+      turnId: "turn-review-1",
     });
     expect(
       await handlers.get(AGENT_INTERRUPT_TURN_CHANNEL)?.({}, {

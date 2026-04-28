@@ -44,6 +44,8 @@ import type {
   SetThreadModelSettingsResponse,
   StartThreadRequest,
   StartThreadResponse,
+  StartReviewRequest,
+  StartReviewResponse,
   StartTurnRequest,
   StartTurnResponse,
   SubmitServerRequestRequest,
@@ -80,6 +82,7 @@ export type DesktopApi = {
     request: RenameThreadRequest
   ) => Promise<RenameThreadResponse>;
   startThread?: (request: StartThreadRequest) => Promise<StartThreadResponse>;
+  startReview?: (request: StartReviewRequest) => Promise<StartReviewResponse>;
   startTurn?: (request: StartTurnRequest) => Promise<StartTurnResponse>;
   interruptTurn?: (
     request: InterruptTurnRequest

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readReviewPrompt } from "../app-server/review-prompt.js";
 import { createTestHarness, FakeProvider } from "../testing/test-harness.js";
 
 async function flushAsync(): Promise<void> {
@@ -8,8 +9,47 @@ async function flushAsync(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+const reviewOutput = {
+  findings: [
+    {
+      title: "Wrong branch comparison",
+      body: "The review checks the wrong base branch when main is requested.",
+      confidence_score: 0.9,
+      priority: 2,
+      code_location: {
+        absolute_file_path: "/repo/workspace/src/review.ts",
+        line_range: {
+          start: 12,
+          end: 12,
+        },
+      },
+    },
+  ],
+  overall_correctness: "patch is incorrect",
+  overall_explanation: "The patch has one review issue.",
+  overall_confidence_score: 0.88,
+} as const;
+
 describe("Codex review start", () => {
-  it("starts an inline review run and emits the review completion notifications", async () => {
+  it("keeps the committed review prompt aligned with the Codex review schema", () => {
+    const prompt = readReviewPrompt();
+
+    expect(prompt).toContain("findings");
+    expect(prompt).toContain("title");
+    expect(prompt).toContain("body");
+    expect(prompt).toContain("confidence_score");
+    expect(prompt).toContain("priority");
+    expect(prompt).toContain("code_location");
+    expect(prompt).toContain("absolute_file_path");
+    expect(prompt).toContain("line_range");
+    expect(prompt).toContain("start");
+    expect(prompt).toContain("end");
+    expect(prompt).toContain("overall_correctness");
+    expect(prompt).toContain("overall_explanation");
+    expect(prompt).toContain("overall_confidence_score");
+  });
+
+  it("starts an inline review run and emits structured review completion notifications", async () => {
     const provider = new FakeProvider();
     const { server, notifications } = createTestHarness({ provider });
     await server.request("thread/start", {
@@ -38,21 +78,30 @@ describe("Codex review start", () => {
     });
 
     expect(started).toEqual({
+      threadId: "thread-1",
       reviewThreadId: "thread-1",
       turnId: "turn-2",
+      turn: {
+        id: "turn-2",
+        status: "inProgress",
+      },
     });
     expect(provider.runs[1]?.previousResponseId).toBe("resp_turn_1");
     expect(provider.runs[1]?.input).toEqual([
       {
         type: "text",
         text: expect.stringContaining(
-          "Review the requested target and respond with inline review feedback.",
+          "You are acting as a reviewer for a proposed code change",
         ),
       },
     ]);
     expect(provider.runs[1]?.input[0]).toEqual({
       type: "text",
-      text: expect.stringContaining('"type": "uncommittedChanges"'),
+      text: expect.stringContaining("Review the current code changes"),
+    });
+    expect(provider.runs[1]?.input[0]).toEqual({
+      type: "text",
+      text: expect.stringContaining("overall_confidence_score"),
     });
     expect(provider.runs[1]?.input[0]).toEqual({
       type: "text",
@@ -64,7 +113,7 @@ describe("Codex review start", () => {
     });
 
     provider.runs[1]?.deferred.resolve({
-      assistantText: "Looks good overall.",
+      assistantText: JSON.stringify(reviewOutput),
       providerResponseId: "resp_review_1",
     });
     await flushAsync();
@@ -81,9 +130,22 @@ describe("Codex review start", () => {
           threadId: "thread-1",
           turnId: "turn-2",
           item: {
+            id: "turn-2-item-entered",
+            type: "enteredReviewMode",
+            review: "Review current changes",
+          },
+        },
+      },
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-2",
+          item: {
             id: "turn-2-item",
             type: "exitedReviewMode",
-            review: "Looks good overall.",
+            review: expect.stringContaining("The patch has one review issue."),
+            data: { reviewOutput },
           },
         },
       },
@@ -95,7 +157,12 @@ describe("Codex review start", () => {
           turn: {
             id: "turn-2",
             status: "completed",
-            output: [{ type: "text", text: "Looks good overall." }],
+            output: [
+              {
+                type: "text",
+                text: expect.stringContaining("The patch has one review issue."),
+              },
+            ],
           },
         },
       },
@@ -109,7 +176,6 @@ describe("Codex review start", () => {
       messages: [
         { role: "user", text: "Please review the current diff." },
         { role: "assistant", text: "Ready to review." },
-        { role: "assistant", text: "Looks good overall." },
       ],
       items: [
         {
@@ -127,21 +193,21 @@ describe("Codex review start", () => {
           text: "Ready to review.",
         },
         {
+          id: "turn-2-item-entered",
+          type: "enteredReviewMode",
+          status: "completed",
+          review: "Review current changes",
+        },
+        {
           id: "turn-2-item",
           type: "exitedReviewMode",
           status: "completed",
-          review: "Looks good overall.",
-        },
-        {
-          id: expect.any(String),
-          type: "agentMessage",
-          status: "completed",
-          role: "assistant",
-          text: "Looks good overall.",
+          review: expect.stringContaining("The patch has one review issue."),
+          data: { reviewOutput },
         },
       ],
       lastUserMessage: "Please review the current diff.",
-      lastAssistantMessage: "Looks good overall.",
+      lastAssistantMessage: "Ready to review.",
     });
   });
 
@@ -178,6 +244,18 @@ describe("Codex review start", () => {
 
     expect(provider.runs[0]?.eventResponses).toEqual([{ decision: "approve" }]);
     expect(notifications).toEqual([
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "turn-1-item-entered",
+            type: "enteredReviewMode",
+            review: "Review current changes",
+          },
+        },
+      },
       {
         method: "serverRequest/resolved",
         params: {
@@ -288,10 +366,49 @@ describe("Codex review start", () => {
             success: true,
             commandAction: "search",
           }),
+          expect.objectContaining({
+            id: "turn-2-item-entered",
+            type: "enteredReviewMode",
+            review: "Review current changes",
+          }),
         ]),
         lastAssistantMessage: "I found the tool usage plan.",
       }),
     );
+  });
+
+  it("normalizes snake_case base branch targets at the protocol boundary", async () => {
+    const provider = new FakeProvider();
+    const { server, notifications } = createTestHarness({ provider });
+    await server.request("thread/start", { cwd: "/repo/workspace" });
+
+    await server.request("review/start", {
+      threadId: "thread-1",
+      target: {
+        type: "base_branch",
+        base_branch: "develop",
+      },
+      delivery: "inline",
+    });
+
+    expect(provider.runs[0]?.input).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("base branch 'develop'"),
+      },
+    ]);
+    expect(notifications[0]).toEqual({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "turn-1-item-entered",
+          type: "enteredReviewMode",
+          review: "Review changes against develop",
+        },
+      },
+    });
   });
 
   it("emits a failed turn when the provider review run rejects", async () => {
@@ -314,6 +431,18 @@ describe("Codex review start", () => {
 
     expect(notifications).toEqual([
       {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "turn-1-item-entered",
+            type: "enteredReviewMode",
+            review: "Review current changes",
+          },
+        },
+      },
+      {
         method: "turn/failed",
         params: {
           threadId: "thread-1",
@@ -335,7 +464,14 @@ describe("Codex review start", () => {
         cwd: "/repo/workspace",
       }),
       messages: [],
-      items: [],
+      items: [
+        {
+          id: "turn-1-item-entered",
+          type: "enteredReviewMode",
+          status: "completed",
+          review: "Review current changes",
+        },
+      ],
       lastUserMessage: undefined,
       lastAssistantMessage: undefined,
     });

@@ -21,6 +21,9 @@ type LaunchResult = {
   getLastStartTurn: (params?: {
     executionMode?: ThreadExecutionMode;
   }) => Promise<unknown>;
+  getLastStartReview: (params?: {
+    executionMode?: ThreadExecutionMode;
+  }) => Promise<unknown>;
   respondToPendingRequest: (params: {
     executionMode?: ThreadExecutionMode;
     requestId: string;
@@ -117,6 +120,12 @@ export async function launchElectronApp(params: {
       await electronApp.evaluate(
         (_electron, value) =>
           globalThis.__PWRAGNT_REPLAY_DRIVER__?.getLastStartTurn(value),
+        requestParams
+      ),
+    getLastStartReview: async (requestParams) =>
+      await electronApp.evaluate(
+        (_electron, value) =>
+          globalThis.__PWRAGNT_REPLAY_DRIVER__?.getLastStartReview(value),
         requestParams
       ),
     respondToPendingRequest: async (requestParams) => {

@@ -1755,4 +1755,140 @@ describe("useThreadSessionState", () => {
       text: "The new thread is live and the reply has been hydrated.",
     });
   });
+
+  it("renders live review items without synthesizing an assistant completion message", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: `${threadId}-message-1`,
+              role: "assistant" as const,
+              text: `Loaded ${threadId}`,
+            },
+          ],
+          messages: [
+            {
+              id: `${threadId}-message-1`,
+              role: "assistant" as const,
+              text: `Loaded ${threadId}`,
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.addOptimisticReviewEntry("Review changes against main");
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-review-1",
+              item: {
+                id: "turn-review-1-item-entered",
+                type: "enteredReviewMode",
+                review: "Review changes against main",
+              },
+            },
+          },
+        });
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-review-1",
+              item: {
+                id: "turn-review-1-item",
+                type: "exitedReviewMode",
+                review: "No findings. Ready to merge.",
+                data: {
+                  reviewOutput: {
+                    findings: [],
+                    overall_correctness: "patch is correct",
+                    overall_explanation: "No findings. Ready to merge.",
+                    overall_confidence_score: 0.92,
+                  },
+                },
+              },
+            },
+          },
+        });
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-review-1",
+              turn: {
+                id: "turn-review-1",
+                status: "completed",
+                output: [{ type: "text", text: "No findings. Ready to merge." }],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "message" ? `${entry.role}:${entry.text}` : `${entry.type}:${entry.id}`
+        )
+      ).toEqual([
+        "assistant:Loaded thread-1",
+        "review:turn-review-1-item-entered",
+        "review:turn-review-1-item",
+      ]);
+    });
+    expect(result.current.response?.replay.messages).toHaveLength(1);
+  });
 });

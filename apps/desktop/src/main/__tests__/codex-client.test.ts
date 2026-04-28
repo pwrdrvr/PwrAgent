@@ -36,6 +36,13 @@ class MockTransport implements JsonRpcTransport {
       id: "turn-1"
     }
   };
+  static reviewStartResult: unknown = {
+    reviewThreadId: "thread-2",
+    turn: {
+      id: "turn-review-1",
+      status: "inProgress"
+    }
+  };
   static threadArchiveResult: unknown = {
     thread: {
       id: "thread-2"
@@ -617,6 +624,17 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "review/start") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.reviewStartResult
+        })
+      );
+      return;
+    }
+
     if (payload.method === "turn/interrupt") {
       if (MockTransport.turnInterruptResponseMode === "timeout") {
         return;
@@ -708,6 +726,13 @@ describe("CodexAppServerClient", () => {
       },
       turn: {
         id: "turn-1"
+      }
+    };
+    MockTransport.reviewStartResult = {
+      reviewThreadId: "thread-2",
+      turn: {
+        id: "turn-review-1",
+        status: "inProgress"
       }
     };
     MockTransport.turnInterruptResult = {
@@ -1654,6 +1679,129 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("extracts rollout-style review events and suppresses hidden review prompts", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const reviewOutput = {
+      findings: [],
+      overall_correctness: "patch is correct",
+      overall_explanation:
+        "There are no staged, unstaged, or untracked code changes in the working tree to review.",
+      overall_confidence_score: 0.98,
+    };
+    MockTransport.readThreadResultByThreadId.set("thread-rollout-review", {
+      thread: {
+        turns: [
+          {
+            id: "turn-review",
+            status: "completed",
+            startedAt: 1_763_509_850,
+            items: [
+              {
+                type: "event_msg",
+                id: "entered-review",
+                payload: {
+                  type: "entered_review_mode",
+                  target: { type: "uncommittedChanges" },
+                  user_facing_hint: "current changes",
+                },
+              },
+              {
+                type: "event_msg",
+                id: "hidden-review-prompt",
+                payload: {
+                  type: "user_message",
+                  message:
+                    "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.",
+                  images: [],
+                  local_images: [],
+                  text_elements: [],
+                },
+              },
+              {
+                type: "response_item",
+                id: "review-action",
+                payload: {
+                  type: "message",
+                  role: "user",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: "<user_action>\n<action>review</action>\n</user_action>",
+                    },
+                  ],
+                },
+              },
+              {
+                type: "event_msg",
+                id: "exited-review",
+                payload: {
+                  type: "exited_review_mode",
+                  review_output: reviewOutput,
+                },
+              },
+              {
+                type: "agentMessage",
+                id: "review-answer",
+                text: reviewOutput.overall_explanation,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-rollout-review",
+    });
+    const turn = {
+      id: "turn-review",
+      status: "completed",
+      startedAt: 1_763_509_850_000,
+    };
+
+    expect(replay.entries).toEqual([
+      {
+        type: "review",
+        id: "entered-review",
+        review: "",
+        displayText: "Review current changes",
+        createdAt: 1_763_509_850_000,
+        turn,
+      },
+      {
+        type: "review",
+        id: "exited-review",
+        review: reviewOutput.overall_explanation,
+        createdAt: 1_763_509_850_000,
+        output: reviewOutput,
+        turn,
+      },
+      {
+        type: "message",
+        id: "review-answer",
+        role: "assistant",
+        text: reviewOutput.overall_explanation,
+        createdAt: 1_763_509_850_000,
+        turn,
+      },
+    ]);
+    expect(replay.messages).toEqual([
+      {
+        id: "review-answer",
+        role: "assistant",
+        text: reviewOutput.overall_explanation,
+        createdAt: undefined,
+      },
+    ]);
+
+    await client.close();
+  });
+
   it("normalizes generated in-progress activity statuses from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-in-progress-tools", {
@@ -2342,6 +2490,46 @@ describe("CodexAppServerClient", () => {
     const startIndex = rpcMethods.indexOf("turn/start");
     expect(resumeIndex).toBeGreaterThan(-1);
     expect(startIndex).toBeGreaterThan(resumeIndex);
+
+    await client.close();
+  });
+
+  it("best-effort resumes an existing thread before starting a review", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const result = await client.startReview({
+      threadId: "thread-2",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    expect(result).toEqual({
+      threadId: "thread-2",
+      reviewThreadId: "thread-2",
+      turnId: "turn-review-1",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const requests = transport!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: unknown }
+    );
+    expect(requests.map((request) => request.method)).toContain("thread/resume");
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "review/start",
+        params: {
+          threadId: "thread-2",
+          target: { type: "baseBranch", branch: "main" },
+          delivery: "inline",
+        },
+      })
+    );
 
     await client.close();
   });

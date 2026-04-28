@@ -314,7 +314,12 @@ export class CodexAppServer {
 
   private async startReview(
     params: Record<string, unknown>,
-  ): Promise<{ reviewThreadId: string; turnId: string }> {
+  ): Promise<{
+    threadId: string;
+    reviewThreadId: string;
+    turnId: string;
+    turn: { id: string; status: "inProgress" };
+  }> {
     const threadId = asRequiredString(params.threadId, "review/start requires threadId");
     const thread = this.state.getThread(threadId);
     if (!thread) {
@@ -322,12 +327,21 @@ export class CodexAppServer {
     }
     const turnId = this.createTurnId();
     const itemId = `${turnId}-item`;
-    return await this.reviewRunner.start({
+    const result = await this.reviewRunner.start({
       thread,
       turnId,
       itemId,
       target: params.target,
     });
+    return {
+      threadId,
+      reviewThreadId: result.reviewThreadId,
+      turnId: result.turnId,
+      turn: {
+        id: result.turnId,
+        status: "inProgress",
+      },
+    };
   }
 
   private async startTurn(params: AppServerTurnInput): Promise<AppServerTurnResult> {

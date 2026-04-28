@@ -15,6 +15,7 @@ import type {
   AppServerThreadMessagePart,
   AppServerThreadMessageEntry,
   AppServerThreadPlanEntry,
+  AppServerThreadReviewEntry,
   AppServerThreadPlanStep,
   AppServerThreadPlanStepStatus,
   AppServerThreadTurnMetadata,
@@ -26,6 +27,8 @@ import type {
   AppServerThreadSummary,
   AppServerTurnInputItem,
   AppServerCollaborationModeRequest,
+  AppServerReviewDelivery,
+  AppServerReviewTarget,
   BackendModelOption,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
@@ -42,6 +45,7 @@ import type {
   AskForApproval as CodexAskForApproval,
   ModelListParams as CodexModelListParams,
   SandboxMode as CodexSandboxMode,
+  ReviewStartParams as CodexReviewStartParams,
   SkillsListParams as CodexSkillsListParams,
   ThreadListParams as CodexThreadListParams,
   ThreadReadParams as CodexThreadReadParams,
@@ -544,6 +548,28 @@ function collectLegacyMessageText(record: Record<string, unknown>): string {
   );
 }
 
+function isReviewActionText(text: string): boolean {
+  return text.includes("<user_action>") && text.includes("<action>review</action>");
+}
+
+function isCodexInternalReviewPrompt(
+  record: Record<string, unknown>,
+  text: string
+): boolean {
+  const normalizedType = normalizeItemType(pickString(record, ["type"]));
+  return (
+    normalizedType === "usermessage" &&
+    ("images" in record || "local_images" in record || "text_elements" in record) &&
+    text.startsWith("Review ") &&
+    text.includes("provide prioritized findings")
+  );
+}
+
+function shouldSuppressConversationMessage(record: Record<string, unknown>): boolean {
+  const text = collectLegacyMessageText(record);
+  return isReviewActionText(text) || isCodexInternalReviewPrompt(record, text);
+}
+
 function normalizeRenderableImageUrl(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -675,7 +701,11 @@ function extractConversationMessages(
       pickString(record, ["role", "author", "speaker", "source", "type"])
     );
     const content = buildMessageContent(record);
-    if (role && (content.text || content.parts?.length)) {
+    if (
+      role &&
+      (content.text || content.parts?.length) &&
+      !shouldSuppressConversationMessage(record)
+    ) {
       output.push({
         id:
           pickString(record, ["id", "messageId", "message_id", "itemId", "item_id"]) ??
@@ -1005,6 +1035,138 @@ function extractPlanEntryFromItem(
     ...(normalizedPayload.markdown ? { markdown: normalizedPayload.markdown } : {}),
     steps: normalizedPayload.steps,
   };
+}
+
+function extractReviewEntryFromItem(
+  item: Record<string, unknown>,
+  createdAt?: number,
+  turn?: AppServerThreadTurnMetadata,
+): AppServerThreadReviewEntry | undefined {
+  const reviewEvent = normalizeReviewEventItem(item);
+  if (!reviewEvent) {
+    return undefined;
+  }
+
+  const { event, item: reviewItem, parent } = reviewEvent;
+  const reviewOutput = normalizeReviewOutput(reviewItem);
+  const review =
+    pickRawString(reviewItem, ["review", "text"]) ??
+    (event === "exitedreviewmode" ? reviewOutput?.overall_explanation : undefined) ??
+    "";
+
+  return {
+    type: "review",
+    id:
+      pickString(parent, ["id", "itemId", "item_id"]) ??
+      pickString(reviewItem, ["id", "itemId", "item_id"]) ??
+      `review-${event}`,
+    review,
+    displayText:
+      event === "enteredreviewmode"
+        ? reviewDisplayText(reviewItem) || "Code review started"
+        : undefined,
+    ...(createdAt ? { createdAt } : {}),
+    ...(turn ? { turn } : {}),
+    ...(reviewOutput ? { output: reviewOutput } : {}),
+  };
+}
+
+function normalizeReviewEventItem(
+  item: Record<string, unknown>
+): {
+  event: "enteredreviewmode" | "exitedreviewmode";
+  item: Record<string, unknown>;
+  parent: Record<string, unknown>;
+} | undefined {
+  if (
+    normalizeItemType(pickString(item, ["type"])) === "enteredreviewmode" ||
+    normalizeItemType(pickString(item, ["type"])) === "exitedreviewmode"
+  ) {
+    return {
+      event: normalizeItemType(pickString(item, ["type"])) as
+        | "enteredreviewmode"
+        | "exitedreviewmode",
+      item,
+      parent: item,
+    };
+  }
+
+  for (const key of ["payload", "item", "responseItem", "response_item", "data"]) {
+    const nested = asRecord(item[key]);
+    const nestedType = normalizeItemType(pickString(nested ?? {}, ["type"]));
+    if (nested && (nestedType === "enteredreviewmode" || nestedType === "exitedreviewmode")) {
+      return {
+        event: nestedType,
+        item: nested,
+        parent: item,
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeReviewOutput(
+  item: Record<string, unknown>
+): AppServerThreadReviewEntry["output"] | undefined {
+  const data = asRecord(item.data);
+  const reviewOutput =
+    asRecord(data?.reviewOutput) ??
+    asRecord(data?.review_output) ??
+    asRecord(item.reviewOutput) ??
+    asRecord(item.review_output);
+  const findings = Array.isArray(reviewOutput?.findings)
+    ? reviewOutput.findings
+    : undefined;
+
+  if (
+    !reviewOutput ||
+    !findings ||
+    (reviewOutput.overall_correctness !== "patch is correct" &&
+      reviewOutput.overall_correctness !== "patch is incorrect") ||
+    typeof reviewOutput.overall_explanation !== "string" ||
+    typeof reviewOutput.overall_confidence_score !== "number"
+  ) {
+    return undefined;
+  }
+
+  return {
+    findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
+    overall_correctness: reviewOutput.overall_correctness,
+    overall_explanation: reviewOutput.overall_explanation,
+    overall_confidence_score: reviewOutput.overall_confidence_score,
+  };
+}
+
+function reviewDisplayText(item: Record<string, unknown>): string | undefined {
+  const direct = pickRawString(item, ["review", "text"]);
+  if (direct) {
+    return direct;
+  }
+
+  const hint = pickString(item, ["user_facing_hint", "userFacingHint"]);
+  if (hint === "current changes") {
+    return "Review current changes";
+  }
+  if (hint) {
+    return `Review ${hint}`;
+  }
+
+  const target = asRecord(item.target);
+  const targetType = pickString(target ?? {}, ["type"]);
+  if (targetType === "uncommittedChanges" || targetType === "uncommitted_changes") {
+    return "Review current changes";
+  }
+  if (targetType === "baseBranch" || targetType === "base_branch") {
+    const branch = pickString(target ?? {}, ["branch", "baseBranch", "base_branch"]);
+    return branch ? `Review changes against ${branch}` : "Review changes";
+  }
+  if (targetType === "commit") {
+    const sha = pickString(target ?? {}, ["sha", "commit"]);
+    return sha ? `Review commit ${sha}` : "Review commit";
+  }
+
+  return undefined;
 }
 
 function pushActivityDetail(
@@ -1359,6 +1521,9 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
       const role = normalizeConversationRole(itemType);
       if (role) {
         flushActivityItems();
+        if (shouldSuppressConversationMessage(item)) {
+          continue;
+        }
         const content = buildMessageContent(item);
         if (!content.text && !content.parts?.length) {
           continue;
@@ -1383,6 +1548,13 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
       if (planEntry) {
         flushActivityItems();
         entries.push(planEntry);
+        continue;
+      }
+
+      const reviewEntry = extractReviewEntryFromItem(item, createdAt, turnMetadata);
+      if (reviewEntry) {
+        flushActivityItems();
+        entries.push(reviewEntry);
         continue;
       }
 
@@ -2261,6 +2433,18 @@ function buildTurnStartPayload(params: {
   return base;
 }
 
+function buildReviewStartPayload(params: {
+  threadId: string;
+  target: AppServerReviewTarget;
+  delivery?: AppServerReviewDelivery;
+}): CodexReviewStartParams {
+  return {
+    threadId: params.threadId,
+    target: params.target,
+    delivery: params.delivery ?? "inline",
+  };
+}
+
 type CodexThreadReadPayload = CodexThreadReadParams & {
   before?: string;
   limit?: number;
@@ -2683,6 +2867,44 @@ export class CodexAppServerClient {
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
 
     return { threadId, turnId };
+  }
+
+  async startReview(params: {
+    threadId: string;
+    target: AppServerReviewTarget;
+    delivery?: AppServerReviewDelivery;
+  }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    await this.ensureInitialized();
+
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads({
+        threadId: params.threadId,
+      }),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    }).catch(() => undefined);
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["review/start"],
+      payloads: [buildReviewStartPayload(params)],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    const record = asRecord(result);
+    const reviewThreadId =
+      pickString(record ?? {}, ["reviewThreadId", "review_thread_id"]) ?? params.threadId;
+    const turnRecord = asRecord(record?.turn);
+    const turnId =
+      extractTurnIdFromValue(result) ??
+      pickString(turnRecord ?? {}, ["id", "turnId", "turn_id"]) ??
+      `pending:${reviewThreadId}`;
+
+    return {
+      threadId: params.threadId,
+      reviewThreadId,
+      turnId,
+    };
   }
 
   async setThreadPermissions(params: {

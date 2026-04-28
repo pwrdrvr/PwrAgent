@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type {
   BackendSummary,
   NavigationLaunchpadDraft,
+  StartReviewRequest,
   StartTurnRequest,
 } from "@pwragnt/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -268,6 +269,224 @@ describe("Composer", () => {
         fastMode: undefined,
       });
     });
+  });
+
+  it("routes slash review to startReview instead of startTurn", async () => {
+    const startTurn = vi.fn();
+    const addOptimisticReviewEntry = vi.fn(() => "review-optimistic-1");
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        addOptimisticReviewEntry={addOptimisticReviewEntry}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review main" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+    });
+    expect(addOptimisticReviewEntry).toHaveBeenCalledWith("Review changes against main");
+    expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it("asks for a review target before submitting bare slash review commands", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "codex/feature",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/review" } });
+
+    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(startReview).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Base branch/i }));
+    fireEvent.change(screen.getByLabelText("Base branch"), {
+      target: { value: "release" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "release" },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("submits current changes when selected from the bare review target prompt", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    fireEvent.click(screen.getByRole("button", { name: /Current changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "uncommittedChanges" },
+        delivery: "inline",
+      });
+    });
+  });
+
+  it("inserts slash review commands from autocomplete", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/r" } });
+
+    expect(screen.getByRole("listbox", { name: "Commands" })).toHaveClass(
+      "composer__autocomplete"
+    );
+    fireEvent.click(screen.getByRole("button", { name: /\/review/i }));
+
+    expect(textarea).toHaveValue("/review ");
+  });
+
+  it("applies the focused slash command option from the keyboard", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/r" } });
+
+    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(textarea).toHaveValue("/review ");
   });
 
   it("shows thread access in the composer and updates it from the select", async () => {
