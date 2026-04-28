@@ -42,6 +42,8 @@ import type {
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
+  SteerTurnRequest,
+  SteerTurnResponse,
   StartThreadRequest,
   StartThreadResponse,
   StartReviewRequest,
@@ -89,6 +91,7 @@ export type DesktopApi = {
   interruptTurn?: (
     request: InterruptTurnRequest
   ) => Promise<InterruptTurnResponse>;
+  steerTurn?: (request: SteerTurnRequest) => Promise<SteerTurnResponse>;
   setThreadExecutionMode?: (
     request: SetThreadExecutionModeRequest
   ) => Promise<SetThreadExecutionModeResponse>;

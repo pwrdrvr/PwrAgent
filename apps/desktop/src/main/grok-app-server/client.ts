@@ -677,6 +677,8 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
             : undefined,
         supportsFast:
           typeof record.supportsFast === "boolean" ? record.supportsFast : undefined,
+        supportsSteering:
+          typeof record.supportsSteering === "boolean" ? record.supportsSteering : false,
       },
     ];
   });
