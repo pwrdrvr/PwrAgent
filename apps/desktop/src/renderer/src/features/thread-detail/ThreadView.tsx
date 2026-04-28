@@ -191,6 +191,70 @@ function formatElapsedMs(elapsedMs: number): string {
   return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
 }
 
+function formatCommandLabel(command: string | undefined): string {
+  if (!command) {
+    return "Ran command";
+  }
+
+  const stripped = command
+    .replace(/^\/bin\/[a-z]+ -lc /, "")
+    .replace(/^['"]|['"]$/g, "");
+  const collapsed = stripped.replace(/\s+/g, " ").trim();
+  if (!collapsed) {
+    return "Ran command";
+  }
+
+  return collapsed.length > 72 ? `${collapsed.slice(0, 69)}...` : collapsed;
+}
+
+function readCommandActionLabel(item: Record<string, unknown>): string | undefined {
+  const actions = Array.isArray(item.commandActions) ? item.commandActions : [];
+  for (const action of actions) {
+    if (typeof action !== "object" || action === null || Array.isArray(action)) {
+      continue;
+    }
+    const record = action as Record<string, unknown>;
+    const actionType = readString(record, "type");
+    const actionPath = readString(record, "path");
+    const fallbackName = readString(record, "name");
+    if (actionType === "read" && actionPath) {
+      return `Read ${actionPath.split("/").filter(Boolean).pop() ?? actionPath}`;
+    }
+    if (actionType === "search" && actionPath) {
+      return `Searched ${actionPath.split("/").filter(Boolean).pop() ?? actionPath}`;
+    }
+    if (actionType === "listFiles") {
+      return "Listed files";
+    }
+    if (actionType === "search") {
+      return "Ran search";
+    }
+    if (fallbackName) {
+      return fallbackName;
+    }
+  }
+
+  return undefined;
+}
+
+function readCommandActivityKind(
+  item: Record<string, unknown>,
+): AppServerThreadActivityDetail["kind"] {
+  const actions = Array.isArray(item.commandActions) ? item.commandActions : [];
+  for (const action of actions) {
+    if (typeof action !== "object" || action === null || Array.isArray(action)) {
+      continue;
+    }
+    const record = action as Record<string, unknown>;
+    const actionType = readString(record, "type");
+    if (actionType === "read" || actionType === "search") {
+      return "read";
+    }
+  }
+
+  return "command";
+}
+
 function readItemSources(item: Record<string, unknown>): AppServerSource[] {
   const data =
     typeof item.data === "object" && item.data !== null && !Array.isArray(item.data)
@@ -252,6 +316,24 @@ function formatLiveToolName(
   return toolName.replace(/_/g, " ");
 }
 
+function buildLiveToolLabel(
+  item: Record<string, unknown>,
+  itemType: string,
+  status: AppServerThreadActivityDetail["status"],
+  toolName: string,
+): string {
+  if (itemType === "commandexecution") {
+    const command = readString(item, "command");
+    return (
+      readCommandActionLabel(item) ??
+      (command ? formatCommandLabel(command) : undefined) ??
+      formatLiveToolName(toolName, status)
+    );
+  }
+
+  return formatLiveToolName(toolName, status);
+}
+
 function buildLiveToolDetails(
   item: Record<string, unknown>,
 ): AppServerThreadActivityDetail[] {
@@ -273,9 +355,14 @@ function buildLiveToolDetails(
   const details: AppServerThreadActivityDetail[] = [
     {
       id: itemId,
-      kind: toolName.startsWith("search_") ? "read" : "command",
+      kind:
+        itemType === "commandexecution"
+          ? readCommandActivityKind(item)
+          : toolName.startsWith("search_")
+            ? "read"
+            : "command",
       label: [
-        formatLiveToolName(toolName, status),
+        buildLiveToolLabel(item, itemType, status, toolName),
         elapsedMs ? ` (${formatElapsedMs(elapsedMs)})` : "",
         query ? `: ${query}` : "",
         preview ? ` - ${preview}` : "",

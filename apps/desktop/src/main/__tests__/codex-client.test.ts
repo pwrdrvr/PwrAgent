@@ -1801,6 +1801,67 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("preserves tool metadata on live item notifications", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+    client.onNotification((notification) => {
+      notifications.push(
+        notification as { method: string; params: Record<string, unknown> }
+      );
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "item/started",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        item: {
+          id: "item-tool-1",
+          type: "commandExecution",
+          status: "inProgress",
+          name: "write_stdin",
+          arguments: "{\"session_id\":40500,\"chars\":\"\",\"yield_time_ms\":1000}",
+        }
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(notifications).toEqual([
+      {
+        method: "item/started",
+        params: expect.objectContaining({
+          threadId: "thread-2",
+          turnId: "turn-2",
+          item: expect.objectContaining({
+            id: "item-tool-1",
+            type: "commandExecution",
+            toolName: "write_stdin",
+            arguments: {
+              session_id: 40500,
+              chars: "",
+              yield_time_ms: 1000
+            }
+          })
+        })
+      }
+    ]);
+
+    await client.close();
+  });
+
   it("extracts update_plan function calls from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-plan-call", {

@@ -1257,6 +1257,244 @@ describe("ThreadView", () => {
     );
   });
 
+  it("renders live Codex command execution activity without falling back to tool", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Response Ordering Bug",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: true,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Investigate the tool labels."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-1",
+            item: {
+              id: "cmd-1",
+              type: "commandExecution",
+              status: "in_progress",
+              command: "/bin/zsh -lc 'git status --short'",
+            },
+          },
+        } as AppServerNotification,
+      });
+    });
+
+    expect(screen.getByText("git status --short")).toBeInTheDocument();
+    expect(screen.queryByText(/^tool$/i)).not.toBeInTheDocument();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-1",
+            item: {
+              id: "cmd-1",
+              type: "commandExecution",
+              status: "completed",
+              command: "/bin/zsh -lc 'git status --short'",
+              commandActions: [
+                {
+                  type: "read",
+                  path: "/Users/huntharo/github/PwrAgnt/apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx",
+                },
+              ],
+            },
+          },
+        } as AppServerNotification,
+      });
+    });
+
+    expect(screen.getByText("Read ThreadView.tsx")).toBeInTheDocument();
+  });
+
+  it("renders live Codex tool names when command execution items lack a command string", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Response Ordering Bug",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: true,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Investigate the tool labels."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-1",
+            item: {
+              id: "cmd-2",
+              type: "commandExecution",
+              status: "in_progress",
+              toolName: "write_stdin",
+            },
+          },
+        } as AppServerNotification,
+      });
+    });
+
+    expect(screen.getByText("write stdin")).toBeInTheDocument();
+  });
+
   it("renders live diff activity from turn/diff/updated and clears it once replay catches up", async () => {
     const selectedThread = {
       id: "thread-2",
