@@ -1224,7 +1224,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("exposes the locally observed branch when directory enrichment finds drift", async () => {
+  it("surfaces the locally observed branch when protocol metadata omits the branch name", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -1250,8 +1250,41 @@ describe("CodexAppServerClient", () => {
 
     expect(thread).toMatchObject({
       id: "thread-2",
-      gitBranch: undefined,
+      gitBranch: "main",
       observedGitBranch: "main",
+    });
+
+    await client.close();
+  });
+
+  it("keeps the protocol branch when the observed branch drifts after branch creation", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      threadDirectoryEnricher: async (projectKey) => ({
+        linkedDirectories: projectKey
+          ? [
+              {
+                id: "/Users/huntharo/GIPHY/search-product",
+                label: "search-product",
+                path: "/Users/huntharo/GIPHY/search-product",
+                worktreePath: projectKey,
+                kind: "worktree",
+              },
+            ]
+          : [],
+        observedGitBranch: "fix/desktop-codex-live-tool-labels",
+      }),
+    });
+
+    const threads = await client.listThreads({ filter: "search-product-parity" });
+    const thread = threads.find((entry) => entry.id === "thread-projmgr");
+
+    expect(thread).toMatchObject({
+      id: "thread-projmgr",
+      gitBranch: "main",
+      observedGitBranch: "fix/desktop-codex-live-tool-labels",
     });
 
     await client.close();

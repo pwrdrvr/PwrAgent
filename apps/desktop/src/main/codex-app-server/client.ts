@@ -1852,7 +1852,7 @@ function resolveDisplayGitBranch(params: {
     return "HEAD";
   }
 
-  return params.gitBranch;
+  return params.gitBranch ?? params.observedGitBranch;
 }
 
 function hydrateMissingLinkedDirectoriesFromSiblingRepos(

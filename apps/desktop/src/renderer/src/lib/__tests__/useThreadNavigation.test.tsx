@@ -391,6 +391,81 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.needsAttentionCount).toBe(1);
   });
 
+  it("refreshes the selected thread when only the observed branch changes", async () => {
+    const listeners = new Set<(event: any) => void>();
+    let navigationCallCount = 0;
+    const getNavigationSnapshot = vi.fn(async () => {
+      navigationCallCount += 1;
+      return {
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [
+          {
+            id: "thread-1",
+            title: "Detached branch naming",
+            titleSource: "explicit" as const,
+            summary: "Test branch chip refresh",
+            source: "codex" as const,
+            gitBranch: navigationCallCount === 1 ? undefined : "fix/branch-pill",
+            observedGitBranch:
+              navigationCallCount === 1 ? undefined : "fix/branch-pill",
+            linkedDirectories: [],
+            inbox: {
+              inInbox: false,
+            },
+            updatedAt: 1_000,
+          },
+        ],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      };
+    });
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+    expect(result.current.selectedThread?.gitBranch).toBeUndefined();
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.gitBranch).toBe("fix/branch-pill");
+      expect(result.current.selectedThread?.observedGitBranch).toBe(
+        "fix/branch-pill"
+      );
+    });
+  });
+
   it("restores backend state and surfaces errors when rename fails", async () => {
     const renameThread = vi.fn(async () => {
       throw new Error("rename failed");

@@ -82,6 +82,7 @@ function threadSummariesEqual(
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
     left.gitBranch === right.gitBranch &&
+    left.observedGitBranch === right.observedGitBranch &&
     left.executionMode === right.executionMode &&
     left.model === right.model &&
     left.reasoningEffort === right.reasoningEffort &&
