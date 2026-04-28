@@ -1832,7 +1832,7 @@ describe("useThreadSessionState", () => {
               item: {
                 id: "turn-review-1-item-entered",
                 type: "enteredReviewMode",
-                review: "Review changes against main",
+                review: "changes against 'main'",
               },
             },
           },
@@ -1888,6 +1888,10 @@ describe("useThreadSessionState", () => {
         "review:turn-review-1-item-entered",
         "review:turn-review-1-item",
       ]);
+      expect(result.current.entries[1]).toMatchObject({
+        type: "review",
+        displayText: "Review changes against main",
+      });
     });
     expect(result.current.response?.replay.messages).toHaveLength(1);
   });

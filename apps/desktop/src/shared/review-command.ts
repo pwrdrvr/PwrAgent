@@ -5,6 +5,37 @@ export type ParsedReviewCommand = {
   displayText: string;
 };
 
+export function normalizeReviewDisplayText(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return "";
+  }
+
+  if (/^current changes$/i.test(normalized)) {
+    return "Review current changes";
+  }
+
+  const branchMatch = /^(?:review\s+)?changes\s+against\s+(.+)$/i.exec(normalized);
+  if (branchMatch) {
+    return `Review changes against ${stripWrappingQuotes(branchMatch[1])}`;
+  }
+
+  const commitMatch = /^(?:review\s+)?commit\s+(.+)$/i.exec(normalized);
+  if (commitMatch) {
+    return `Review commit ${stripWrappingQuotes(commitMatch[1])}`;
+  }
+
+  if (/^custom instructions$/i.test(normalized)) {
+    return "Review custom instructions";
+  }
+
+  if (/^(review|code review)\b/i.test(normalized)) {
+    return normalized;
+  }
+
+  return `Review ${normalized}`;
+}
+
 export function parseReviewCommand(input: string): ParsedReviewCommand | undefined {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -58,4 +89,9 @@ export function parseReviewCommand(input: string): ParsedReviewCommand | undefin
     target: { type: "baseBranch", branch: argument },
     displayText: `Review changes against ${argument}`,
   };
+}
+
+function stripWrappingQuotes(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.replace(/^(['"])(.*)\1$/, "$2").trim();
 }

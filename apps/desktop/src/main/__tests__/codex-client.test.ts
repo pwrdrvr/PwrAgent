@@ -1911,6 +1911,49 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("normalizes entered review display text from Codex hints", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-review-hint", {
+      thread: {
+        turns: [
+          {
+            id: "turn-review",
+            status: "inProgress",
+            items: [
+              {
+                type: "event_msg",
+                id: "entered-review",
+                payload: {
+                  type: "entered_review_mode",
+                  user_facing_hint: "changes against 'main'",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-review-hint",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "review",
+        id: "entered-review",
+        displayText: "Review changes against main",
+      }),
+    ]);
+
+    await client.close();
+  });
+
   it("normalizes generated in-progress activity statuses from thread/read", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-in-progress-tools", {

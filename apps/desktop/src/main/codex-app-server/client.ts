@@ -64,6 +64,7 @@ import {
   createThreadDirectoryEnricher,
   type ThreadDirectoryEnrichment,
 } from "./thread-directory-enricher";
+import { normalizeReviewDisplayText } from "../../shared/review-command";
 import { StdioJsonRpcTransport } from "./stdio-transport";
 import type {
   ThreadTitleAdapterParams,
@@ -1273,15 +1274,12 @@ function normalizeReviewOutput(
 function reviewDisplayText(item: Record<string, unknown>): string | undefined {
   const direct = pickRawString(item, ["review", "text"]);
   if (direct) {
-    return direct;
+    return normalizeReviewDisplayText(direct);
   }
 
   const hint = pickString(item, ["user_facing_hint", "userFacingHint"]);
-  if (hint === "current changes") {
-    return "Review current changes";
-  }
   if (hint) {
-    return `Review ${hint}`;
+    return normalizeReviewDisplayText(hint);
   }
 
   const target = asRecord(item.target);
@@ -1291,7 +1289,9 @@ function reviewDisplayText(item: Record<string, unknown>): string | undefined {
   }
   if (targetType === "baseBranch" || targetType === "base_branch") {
     const branch = pickString(target ?? {}, ["branch", "baseBranch", "base_branch"]);
-    return branch ? `Review changes against ${branch}` : "Review changes";
+    return branch
+      ? normalizeReviewDisplayText(`changes against ${branch}`)
+      : "Review changes";
   }
   if (targetType === "commit") {
     const sha = pickString(target ?? {}, ["sha", "commit"]);

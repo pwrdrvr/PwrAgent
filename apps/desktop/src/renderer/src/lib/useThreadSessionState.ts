@@ -18,6 +18,7 @@ import {
   createQuestionnaireState,
   type PendingQuestionnaireState,
 } from "../features/thread-detail/questionnaire";
+import { normalizeReviewDisplayText } from "../../../shared/review-command";
 
 const MAX_VIEW_ONLY_THREADS = 10;
 const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
@@ -123,13 +124,27 @@ function pruneOptimisticEntries(
       return !response.replay.entries.some(
         (candidate) =>
           candidate.type === "review" &&
-          (candidate.review === entry.review ||
-            candidate.displayText === entry.displayText)
+          reviewEntriesMatch(candidate, entry)
       );
     }
 
     return !response.replay.entries.some((candidate) => candidate.id === entry.id);
   });
+}
+
+function reviewEntriesMatch(
+  candidate: AppServerThreadReviewEntry,
+  optimisticEntry: AppServerThreadReviewEntry
+): boolean {
+  const candidateLabels = reviewEntryLabels(candidate);
+  const optimisticLabels = reviewEntryLabels(optimisticEntry);
+  return optimisticLabels.some((label) => candidateLabels.includes(label));
+}
+
+function reviewEntryLabels(entry: AppServerThreadReviewEntry): string[] {
+  return [entry.displayText, entry.review]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .map((value) => normalizeReviewDisplayText(value).toLocaleLowerCase());
 }
 
 function optimisticMessageEntries(
@@ -435,7 +450,7 @@ function reviewEntryFromCompletedItem(params: {
     id: typeof record.id === "string" ? record.id : `review-${record.type}`,
     review,
     ...(record.type === "enteredReviewMode"
-      ? { displayText: review || "Code review started" }
+      ? { displayText: review ? normalizeReviewDisplayText(review) : "Code review started" }
       : {}),
     ...(output ? { output } : {}),
     ...(turn ? { turn } : {}),
@@ -969,7 +984,7 @@ export function useThreadSessionState(params: {
               optimisticEntries: current.optimisticEntries.filter(
                 (entry) =>
                   entry.type !== "review" ||
-                  entry.displayText !== reviewEntry.displayText
+                  !reviewEntriesMatch(reviewEntry, entry)
               ),
               response: nextResponse,
             };
