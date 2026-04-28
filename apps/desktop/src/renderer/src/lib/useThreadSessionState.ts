@@ -130,6 +130,14 @@ function pruneOptimisticEntries(
   });
 }
 
+function optimisticMessageEntries(
+  optimisticEntries: AppServerThreadEntry[]
+): AppServerThreadMessageEntry[] {
+  return optimisticEntries.filter(
+    (entry): entry is AppServerThreadMessageEntry => entry.type === "message"
+  );
+}
+
 function hasHydratedTranscriptContent(session: ThreadSessionEntry): boolean {
   return Boolean(
     session.response?.replay.entries.length ||
@@ -603,7 +611,9 @@ export function useThreadSessionState(params: {
         const persistedMessageExists = current.response?.replay.messages.some((message) =>
           messageMatchesOptimisticEntry(message, optimisticEntry)
         );
-        const optimisticMessageExists = current.optimisticEntries.some((entry) =>
+        const optimisticMessageExists = optimisticMessageEntries(
+          current.optimisticEntries
+        ).some((entry) =>
           messageMatchesOptimisticEntry(
             {
               id: entry.id,
@@ -756,7 +766,7 @@ export function useThreadSessionState(params: {
                   backend: event.backend,
                   threadId: notificationThreadId,
                 },
-                current.optimisticEntries,
+                optimisticMessageEntries(current.optimisticEntries),
                 current.pendingAssistantMessage
               );
 
