@@ -2759,6 +2759,9 @@ describe("CodexAppServerClient", () => {
           ephemeral: true,
           model: "gpt-5.4-mini",
           serviceTier: "fast",
+          config: {
+            web_search: "disabled",
+          },
         }),
       })
     );

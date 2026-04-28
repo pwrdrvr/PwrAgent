@@ -36,6 +36,27 @@ describe("ThreadTitleGenerationService", () => {
     });
   });
 
+  it("allows 20 seconds for title generators by default", async () => {
+    const generateTitle = vi.fn(async () => ({
+      status: "ok",
+      object: { title: "Thread naming" },
+    } as const));
+    const service = new ThreadTitleGenerationService({
+      generators: { codex: { generateTitle } },
+    });
+
+    await service.generateTitle({
+      backend: "codex",
+      userPrompt: "Name this thread",
+    });
+
+    expect(generateTitle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 20_000,
+      })
+    );
+  });
+
   it("preserves recognized issue and PR references", async () => {
     const service = new ThreadTitleGenerationService({
       generators: {

@@ -73,7 +73,10 @@ import type {
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
 const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.4-mini";
-const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 10_000;
+const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
+const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
+  web_search: "disabled",
+};
 const SUPPORTED_CODEX_MODEL_ORDER = [
   "gpt-5.5",
   "gpt-5.4",
@@ -2425,6 +2428,7 @@ function buildThreadStartPayload(params: {
   sandbox?: string;
   serviceTier?: string;
   ephemeral?: boolean;
+  config?: CodexThreadStartParams["config"];
 }): CodexThreadStartParams {
   const base: CodexThreadStartParams = {
     experimentalRawEvents: false,
@@ -2454,6 +2458,9 @@ function buildThreadStartPayload(params: {
   }
   if (params.ephemeral !== undefined) {
     base.ephemeral = params.ephemeral;
+  }
+  if (params.config) {
+    base.config = params.config;
   }
 
   return base;
@@ -3242,10 +3249,12 @@ export class CodexAppServerClient {
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
             serviceTier: "fast",
             ephemeral: true,
+            config: CODEX_THREAD_TITLE_CONFIG,
           }),
           buildThreadStartPayload({
             model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
             ephemeral: true,
+            config: CODEX_THREAD_TITLE_CONFIG,
           }),
         ],
         timeoutMs,

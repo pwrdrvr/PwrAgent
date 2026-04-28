@@ -8,7 +8,7 @@ import { buildThreadTitlePrompt } from "./thread-title-prompt";
 export const THREAD_TITLE_PROMPT_VERSION = "thread-title-v1";
 export const DEFAULT_GROK_THREAD_TITLE_MODEL = "grok-4-1-fast-non-reasoning";
 
-const THREAD_TITLE_TIMEOUT_MS = 5_000;
+const THREAD_TITLE_TIMEOUT_MS = 20_000;
 const MAX_TITLE_CHARACTERS = 50;
 const MAX_TITLE_WORDS = 6;
 
