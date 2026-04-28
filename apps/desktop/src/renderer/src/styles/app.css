@@ -2275,7 +2275,7 @@ textarea {
   z-index: 10;
   flex: 0 0 min(var(--context-rail-width, 380px), 42vw);
   width: min(var(--context-rail-width, 380px), 42vw);
-  overflow-y: auto;
+  overflow: hidden;
   box-shadow: none;
 }
 
@@ -2376,7 +2376,8 @@ textarea {
   flex: 1;
   min-width: 0;
   min-height: 0;
-  overflow: visible;
+  overflow-y: auto;
+  overflow-x: visible;
   overscroll-behavior: contain;
   border: 0;
   border-radius: 0;
@@ -2397,17 +2398,11 @@ textarea {
 
 .context-panel__rail-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 16px;
   border-bottom: 1px solid var(--border-subtle);
-}
-
-.context-panel__title {
-  margin: 2px 0 0;
-  font-size: 14px;
-  font-weight: 600;
 }
 
 .context-panel__rail-actions {
@@ -2443,6 +2438,7 @@ textarea {
 
 .context-panel__section--status {
   margin-top: auto;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .context-list {
@@ -2464,6 +2460,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .context-list__actions {
@@ -2489,6 +2486,9 @@ textarea {
 
 .context-list__label,
 .context-list__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -2520,12 +2520,40 @@ textarea {
   font-size: 14px;
 }
 
-.context-grid__copy {
+.context-value-row {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.context-value-row .context-grid__mono {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.context-copy-button {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
   padding: 0;
-  border: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
   background: transparent;
-  color: inherit;
-  text-align: left;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.context-copy-button:hover,
+.context-copy-button:focus-visible {
+  border-color: var(--border-subtle);
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+  outline: none;
 }
 
 .context-mode-switch {

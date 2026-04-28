@@ -189,7 +189,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <div className="context-panel__rail-header">
             <div>
               <p className="eyebrow">Context</p>
-              <h3 className="context-panel__title">Thread details</h3>
             </div>
 
             <div className="context-panel__rail-actions">
@@ -227,23 +226,19 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
 
                   return (
                     <li key={directory.id} className="context-list__item">
-                      <button
-                        aria-label={`Copy path for ${directory.label}`}
-                        className="context-list__label path-copy-target"
-                        type="button"
-                        onBlur={hideRailTooltip}
-                        onClick={(event) => {
-                          void handleCopyPath(event, directory.path);
-                        }}
-                        onFocus={(event) => showRailTooltip(event, directory.path)}
-                        onMouseEnter={(event) => showRailTooltip(event, directory.path)}
-                        onMouseLeave={hideRailTooltip}
-                      >
+                      <div className="context-list__label">
+                        <CopyValueButton
+                          label={`Copy path for ${directory.label}`}
+                          value={directory.path}
+                          onBlur={hideRailTooltip}
+                          onCopy={handleCopyPath}
+                          onShowTooltip={showRailTooltip}
+                        />
                         <span aria-hidden="true" className="context-list__icon">
                           {directory.kind === "worktree" ? "🔀" : "📁"}
                         </span>
                         {directory.label}
-                      </button>
+                      </div>
                       <div className="context-list__actions">
                         {canRestore && snapshot ? (
                           <button
@@ -260,20 +255,16 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                             Restore
                           </button>
                         ) : null}
-                        <button
-                          aria-label={`Copy path for ${directory.kind} ${directory.label}`}
-                          className="context-list__meta path-copy-target"
-                          type="button"
-                          onBlur={hideRailTooltip}
-                          onClick={(event) => {
-                            void handleCopyPath(event, worktreePath);
-                          }}
-                          onFocus={(event) => showRailTooltip(event, worktreePath)}
-                          onMouseEnter={(event) => showRailTooltip(event, worktreePath)}
-                          onMouseLeave={hideRailTooltip}
-                        >
+                        <span className="context-list__meta">
+                          <CopyValueButton
+                            label={`Copy path for ${directory.kind} ${directory.label}`}
+                            value={worktreePath}
+                            onBlur={hideRailTooltip}
+                            onCopy={handleCopyPath}
+                            onShowTooltip={showRailTooltip}
+                          />
                           {snapshot?.state === "archived" ? "archived" : directory.kind}
-                        </button>
+                        </span>
                       </div>
                     </li>
                   );
@@ -283,37 +274,29 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               <>
                 <ul className="context-list">
                   <li className="context-list__item">
-                    <button
-                      aria-label="Copy recorded working directory"
-                      className="context-list__label path-copy-target"
-                      type="button"
-                      onBlur={hideRailTooltip}
-                      onClick={(event) => {
-                        void handleCopyPath(event, props.thread.projectKey!);
-                      }}
-                      onFocus={(event) => showRailTooltip(event, props.thread.projectKey!)}
-                      onMouseEnter={(event) => showRailTooltip(event, props.thread.projectKey!)}
-                      onMouseLeave={hideRailTooltip}
-                    >
+                    <div className="context-list__label">
+                      <CopyValueButton
+                        label="Copy recorded working directory"
+                        value={props.thread.projectKey!}
+                        onBlur={hideRailTooltip}
+                        onCopy={handleCopyPath}
+                        onShowTooltip={showRailTooltip}
+                      />
                       <span aria-hidden="true" className="context-list__icon">
                         📁
                       </span>
                       {pathBaseName(props.thread.projectKey)}
-                    </button>
-                    <button
-                      aria-label="Copy missing working directory path"
-                      className="context-list__meta path-copy-target"
-                      type="button"
-                      onBlur={hideRailTooltip}
-                      onClick={(event) => {
-                        void handleCopyPath(event, props.thread.projectKey!);
-                      }}
-                      onFocus={(event) => showRailTooltip(event, props.thread.projectKey!)}
-                      onMouseEnter={(event) => showRailTooltip(event, props.thread.projectKey!)}
-                      onMouseLeave={hideRailTooltip}
-                    >
+                    </div>
+                    <span className="context-list__meta">
+                      <CopyValueButton
+                        label="Copy missing working directory path"
+                        value={props.thread.projectKey!}
+                        onBlur={hideRailTooltip}
+                        onCopy={handleCopyPath}
+                        onShowTooltip={showRailTooltip}
+                      />
                       missing
-                    </button>
+                    </span>
                   </li>
                 </ul>
                 <p className="context-empty">Recorded working directory is no longer available.</p>
@@ -390,21 +373,19 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               </div>
               <div>
                 <dt>Thread ID</dt>
-                <dd>
-                  <button
+                <dd className="context-value-row">
+                  <CopyValueButton
                     aria-label="Copy thread id"
-                    className="context-grid__copy context-grid__mono path-copy-target"
-                    type="button"
+                    label="Copy thread id"
+                    maxTooltipLength={48}
+                    value={props.thread.id}
                     onBlur={hideRailTooltip}
-                    onClick={(event) => {
-                      void handleCopyPath(event, props.thread.id);
-                    }}
-                    onFocus={(event) => showRailTooltip(event, props.thread.id, 48)}
-                    onMouseEnter={(event) => showRailTooltip(event, props.thread.id, 48)}
-                    onMouseLeave={hideRailTooltip}
-                  >
+                    onCopy={handleCopyPath}
+                    onShowTooltip={showRailTooltip}
+                  />
+                  <span className="context-grid__mono">
                     {props.thread.id}
-                  </button>
+                  </span>
                 </dd>
               </div>
               <div>
@@ -413,8 +394,19 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
               </div>
               <div>
                 <dt>Branch</dt>
-                <dd className="context-grid__mono">
-                  {props.thread.gitBranch ?? "Not attached"}
+                <dd className="context-value-row">
+                  {props.thread.gitBranch ? (
+                    <CopyValueButton
+                      label="Copy branch name"
+                      value={props.thread.gitBranch}
+                      onBlur={hideRailTooltip}
+                      onCopy={handleCopyPath}
+                      onShowTooltip={showRailTooltip}
+                    />
+                  ) : null}
+                  <span className="context-grid__mono">
+                    {props.thread.gitBranch ?? "Not attached"}
+                  </span>
                 </dd>
               </div>
               <div>
@@ -495,6 +487,44 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   function hideRailTooltip(): void {
     setTooltip(undefined);
   }
+}
+
+function CopyValueButton(props: {
+  label?: string;
+  "aria-label"?: string;
+  maxTooltipLength?: number;
+  onBlur: () => void;
+  onCopy: (
+    event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
+    value: string
+  ) => Promise<void>;
+  onShowTooltip: (
+    event: FocusEvent<HTMLElement> | MouseEvent<HTMLElement>,
+    value: string,
+    maxLength?: number
+  ) => void;
+  value: string;
+}) {
+  const label = props["aria-label"] ?? props.label ?? "Copy to clipboard";
+
+  return (
+    <button
+      aria-label={label}
+      className="context-copy-button path-copy-target"
+      type="button"
+      onBlur={props.onBlur}
+      onClick={(event) => {
+        void props.onCopy(event, props.value);
+      }}
+      onFocus={(event) => props.onShowTooltip(event, props.value, props.maxTooltipLength)}
+      onMouseEnter={(event) =>
+        props.onShowTooltip(event, props.value, props.maxTooltipLength)
+      }
+      onMouseLeave={props.onBlur}
+    >
+      <span aria-hidden="true">📋</span>
+    </button>
+  );
 }
 
 async function handleCopyPath(
