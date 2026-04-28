@@ -498,18 +498,36 @@ export class DesktopBackendRegistry {
     createScratchProjectDirectory?: () => Promise<string>;
   }) {
     const replayClients = createReplayClientsFromEnv();
-    const codexCapture = options?.codexClient
+    const codexDefaultCapture = options?.codexClient
       || replayClients
       ? undefined
       : createProtocolCaptureFromEnv({
           backend: "codex",
+          backendInstance: "default",
           userDataPath: app.getPath("userData"),
         });
-    if (codexCapture) {
-      this.captureStores.push(codexCapture.store);
+    if (codexDefaultCapture) {
+      this.captureStores.push(codexDefaultCapture.store);
     }
-    const codexObserver = createCompositeJsonRpcObserver([
-      codexCapture?.observer,
+    const codexDefaultObserver = createCompositeJsonRpcObserver([
+      codexDefaultCapture?.observer,
+      createProtocolLogObserverFromEnv({
+        backend: "codex",
+      }),
+    ]);
+    const codexFullAccessCapture = options?.codexFullAccessClient
+      || replayClients
+      ? undefined
+      : createProtocolCaptureFromEnv({
+          backend: "codex",
+          backendInstance: "full-access",
+          userDataPath: app.getPath("userData"),
+        });
+    if (codexFullAccessCapture) {
+      this.captureStores.push(codexFullAccessCapture.store);
+    }
+    const codexFullAccessObserver = createCompositeJsonRpcObserver([
+      codexFullAccessCapture?.observer,
       createProtocolLogObserverFromEnv({
         backend: "codex",
       }),
@@ -519,6 +537,7 @@ export class DesktopBackendRegistry {
       ? undefined
       : createProtocolCaptureFromEnv({
           backend: "grok",
+          backendInstance: "default",
           userDataPath: app.getPath("userData"),
         });
     if (grokCapture) {
@@ -535,14 +554,14 @@ export class DesktopBackendRegistry {
       options?.codexClient ??
       replayClients?.codexDefaultClient ??
       new CodexAppServerClient({
-        connectionObserver: codexObserver,
+        connectionObserver: codexDefaultObserver,
       });
     this.codexFullAccessClient =
       options?.codexFullAccessClient ??
       replayClients?.codexFullAccessClient ??
       new CodexAppServerClient({
         args: buildCodexClientArgs("full-access"),
-        connectionObserver: codexObserver,
+        connectionObserver: codexFullAccessObserver,
       });
     this.grokClient =
       options?.grokClient ??

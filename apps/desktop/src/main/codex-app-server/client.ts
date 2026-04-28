@@ -460,6 +460,10 @@ function normalizeThreadSummary(value: string | undefined): string | undefined {
   return trimmed;
 }
 
+function isPlaceholderThreadTitle(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === "untitled thread";
+}
+
 function getThreadTitleInfo(record: Record<string, unknown>): {
   title: string;
   titleSource: AppServerThreadTitleSource;
@@ -469,7 +473,7 @@ function getThreadTitleInfo(record: Record<string, unknown>): {
     pickString(record, ["title", "name", "headline"]) ??
     pickString(sessionRecord ?? {}, ["title", "name", "headline"]);
 
-  if (explicitTitle) {
+  if (explicitTitle && !isPlaceholderThreadTitle(explicitTitle)) {
     return {
       title: explicitTitle,
       titleSource: "explicit",
@@ -1710,8 +1714,13 @@ function extractThreadIndexEntryFromValue(
     ]);
   const rawName =
     pickString(record, ["threadName", "thread_name", "name", "title"]) ??
-    pickString(threadRecord ?? {}, ["threadName", "thread_name", "name", "title"]) ??
-    (preview ? shortenDerivedThreadTitle(preview) ?? preview : undefined);
+    pickString(threadRecord ?? {}, ["threadName", "thread_name", "name", "title"]);
+  const indexName =
+    rawName && !isPlaceholderThreadTitle(rawName)
+      ? rawName
+      : preview
+        ? shortenDerivedThreadTitle(preview) ?? preview
+        : rawName;
   const updatedAt =
     normalizeEpochTimestamp(
       pickNumber(record, ["updatedAt", "updated_at", "lastActivityAt", "createdAt"]) ??
@@ -1726,7 +1735,7 @@ function extractThreadIndexEntryFromValue(
   return {
     id: threadId,
     source: "pwragnt",
-    thread_name: rawName?.trim() || "Untitled thread",
+    thread_name: indexName?.trim() || "Untitled thread",
     updated_at: new Date(updatedAt).toISOString(),
   };
 }
@@ -2572,7 +2581,8 @@ export class CodexAppServerClient {
         env: options.env
       }),
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      options.connectionObserver
+      options.connectionObserver,
+      { logContext: { backend: "codex" } },
     );
     const directoryResolver = options.directoryResolver;
     this.threadDirectoryEnricher =

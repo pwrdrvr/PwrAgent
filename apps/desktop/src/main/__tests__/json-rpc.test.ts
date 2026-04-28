@@ -47,11 +47,16 @@ describe("JsonRpcConnection", () => {
 
   it("continues outbound traffic when the observer throws", async () => {
     const transport = new MockTransport();
-    const connection = new JsonRpcConnection(transport, 1_000, {
-      onMessage: async () => {
-        throw new Error("disk full");
-      }
-    });
+    const connection = new JsonRpcConnection(
+      transport,
+      1_000,
+      {
+        onMessage: async () => {
+          throw new Error("disk full");
+        },
+      },
+      { logContext: { backend: "codex" } },
+    );
 
     await connection.connect();
 
@@ -72,7 +77,13 @@ describe("JsonRpcConnection", () => {
     );
 
     await expect(requestPromise).resolves.toEqual({ ok: true });
-    expect(jsonRpcLogError).toHaveBeenCalled();
+    expect(jsonRpcLogError).toHaveBeenCalledWith(
+      "observer failed",
+      expect.objectContaining({
+        backend: "codex",
+        error: "disk full",
+      }),
+    );
 
     await connection.close();
   });

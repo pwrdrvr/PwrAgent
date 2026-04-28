@@ -3,6 +3,7 @@ import path from "node:path";
 
 export type ProtocolCaptureEventRecord = {
   backend: "codex" | "grok";
+  backendInstance?: string;
   captureId: string;
   direction: "inbound" | "outbound";
   kind: "request" | "response" | "notification";
@@ -39,12 +40,15 @@ export type CapturedProtocolEnvelopeRecord = {
 
 type CaptureIndexEntry = {
   backend: "codex" | "grok";
+  backendInstance?: string;
   captureId: string;
   createdAt: number;
   path: string;
   threadIds: string[];
   updatedAt: number;
 };
+
+const indexWriteQueues = new Map<string, Promise<void>>();
 
 export async function readProtocolCaptureFile(
   filePath: string,
@@ -91,6 +95,7 @@ export class ProtocolCaptureStore {
   constructor(
     private readonly params: {
       backend: "codex" | "grok";
+      backendInstance?: string;
       captureId: string;
       rootDir: string;
     }
@@ -119,6 +124,7 @@ export class ProtocolCaptureStore {
   }): Promise<ProtocolCaptureEventRecord> {
     const record: ProtocolCaptureEventRecord = {
       backend: this.params.backend,
+      backendInstance: this.params.backendInstance,
       captureId: this.params.captureId,
       direction: params.direction,
       kind: getEnvelopeKind(params.envelope),
@@ -140,7 +146,7 @@ export class ProtocolCaptureStore {
     const nextWrite = this.writeQueue.then(async () => {
       await this.ensureInitialized();
       await fs.appendFile(this.captureFilePath, `${JSON.stringify(record)}\n`, "utf8");
-      await this.writeIndex();
+      await this.writeIndexQueued();
     });
     this.writeQueue = nextWrite;
     await nextWrite;
@@ -158,14 +164,31 @@ export class ProtocolCaptureStore {
     }
 
     await fs.mkdir(this.params.rootDir, { recursive: true });
-    await this.writeIndex();
+    await this.writeIndexQueued();
     this.initialized = true;
+  }
+
+  private async writeIndexQueued(): Promise<void> {
+    const previousWrite = indexWriteQueues.get(this.indexFilePath) ?? Promise.resolve();
+    const nextWrite = previousWrite
+      .catch(() => undefined)
+      .then(() => this.writeIndex());
+    indexWriteQueues.set(this.indexFilePath, nextWrite);
+
+    try {
+      await nextWrite;
+    } finally {
+      if (indexWriteQueues.get(this.indexFilePath) === nextWrite) {
+        indexWriteQueues.delete(this.indexFilePath);
+      }
+    }
   }
 
   private async writeIndex(): Promise<void> {
     const current = await readIndex(this.indexFilePath);
     const nextEntry: CaptureIndexEntry = {
       backend: this.params.backend,
+      backendInstance: this.params.backendInstance,
       captureId: this.params.captureId,
       createdAt: this.createdAt,
       path: this.captureFilePath,

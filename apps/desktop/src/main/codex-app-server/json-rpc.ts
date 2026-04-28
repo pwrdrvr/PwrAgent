@@ -52,6 +52,10 @@ export interface JsonRpcObserver {
   onMessage(event: JsonRpcObserverEvent): void | Promise<void>;
 }
 
+type JsonRpcConnectionOptions = {
+  logContext?: Record<string, string>;
+};
+
 function parseJsonRpcEnvelope(raw: string): JsonRpcEnvelope | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -74,7 +78,8 @@ export class JsonRpcConnection {
   constructor(
     private readonly transport: JsonRpcTransport,
     private readonly requestTimeoutMs: number,
-    private readonly observer?: JsonRpcObserver
+    private readonly observer?: JsonRpcObserver,
+    private readonly options: JsonRpcConnectionOptions = {},
   ) {
     this.transport.setMessageHandler((message) => {
       void this.handleMessage(message);
@@ -226,6 +231,7 @@ export class JsonRpcConnection {
       await this.observer.onMessage(event);
     } catch (error) {
       jsonRpcLog.error("observer failed", {
+        ...this.options.logContext,
         direction: event.direction,
         message: event.envelope.method ?? event.envelope.id ?? "message",
         error: error instanceof Error ? error.message : String(error),

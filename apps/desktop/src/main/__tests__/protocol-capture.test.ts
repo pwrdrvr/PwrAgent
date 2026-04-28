@@ -103,6 +103,7 @@ describe("ProtocolCaptureStore", () => {
     expect(
       createProtocolCaptureFromEnv({
         backend: "codex",
+        backendInstance: "default",
         userDataPath: rootDir
       })
     ).toBeUndefined();
@@ -112,6 +113,7 @@ describe("ProtocolCaptureStore", () => {
 
     const capture = createProtocolCaptureFromEnv({
       backend: "codex",
+      backendInstance: "default",
       userDataPath: "/unused"
     });
 
@@ -129,9 +131,59 @@ describe("ProtocolCaptureStore", () => {
 
     const index = JSON.parse(
       await fs.readFile(path.join(rootDir, "index.json"), "utf8")
-    ) as Record<string, { backend: string }>;
+    ) as Record<string, { backend: string; backendInstance?: string }>;
     expect(Object.values(index)).toHaveLength(1);
     expect(Object.values(index)[0]?.backend).toBe("codex");
+    expect(Object.values(index)[0]?.backendInstance).toBe("default");
+  });
+
+  it("serializes index writes shared by concurrent backend captures", async () => {
+    const rootDir = await createTempDir();
+    cleanupPaths.push(rootDir);
+    const codexStore = new ProtocolCaptureStore({
+      backend: "codex",
+      captureId: "codex-capture",
+      rootDir,
+    });
+    const grokStore = new ProtocolCaptureStore({
+      backend: "grok",
+      captureId: "grok-capture",
+      rootDir,
+    });
+
+    await Promise.all([
+      codexStore.append({
+        direction: "outbound",
+        raw: '{"jsonrpc":"2.0","id":"rpc-1","method":"thread/read","params":{"threadId":"codex-thread"}}',
+        envelope: {
+          id: "rpc-1",
+          method: "thread/read",
+          params: { threadId: "codex-thread" },
+        },
+      }),
+      grokStore.append({
+        direction: "outbound",
+        raw: '{"jsonrpc":"2.0","id":"rpc-1","method":"thread/read","params":{"threadId":"grok-thread"}}',
+        envelope: {
+          id: "rpc-1",
+          method: "thread/read",
+          params: { threadId: "grok-thread" },
+        },
+      }),
+    ]);
+    await Promise.all([codexStore.close(), grokStore.close()]);
+
+    const index = JSON.parse(
+      await fs.readFile(path.join(rootDir, "index.json"), "utf8"),
+    ) as Record<string, { backend: string; threadIds: string[] }>;
+    expect(index["codex-capture"]).toMatchObject({
+      backend: "codex",
+      threadIds: ["codex-thread"],
+    });
+    expect(index["grok-capture"]).toMatchObject({
+      backend: "grok",
+      threadIds: ["grok-thread"],
+    });
   });
 
   it("reads capture files with parsed envelopes and optional redactions", async () => {
