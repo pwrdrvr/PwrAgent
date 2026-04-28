@@ -75,6 +75,19 @@ async function createTempDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-codex-recording-"));
 }
 
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 500,
+): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error("timed out waiting for test condition");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe("CodexAppServerClient recording", () => {
   const cleanupPaths: string[] = [];
 
@@ -127,7 +140,15 @@ describe("CodexAppServerClient recording", () => {
       })
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitFor(() =>
+      transport?.sentMessages.some((message) => {
+        const payload = JSON.parse(message) as {
+          id?: string;
+          result?: unknown;
+        };
+        return payload.id === "request-1" && Object.hasOwn(payload, "result");
+      }) ?? false
+    );
     await store.close();
     await client.close();
 

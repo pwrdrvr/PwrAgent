@@ -106,7 +106,7 @@ test("OpenAI new-thread selector uses concrete model and reasoning defaults", as
     const modelSelect = settings.getByLabel("Model");
     const reasoningSelect = settings.getByLabel("Reasoning");
     await expect(providerSelect).toHaveValue("codex");
-    await expect(modelSelect).toHaveValue("gpt-5.4");
+    await expect(modelSelect).toHaveValue("gpt-5.5");
     await expect(reasoningSelect).toHaveValue("medium");
     await expect(settings.getByRole("option", { name: /^Default$/ })).toHaveCount(0);
     await assertTangerineFocusRing(providerSelect);

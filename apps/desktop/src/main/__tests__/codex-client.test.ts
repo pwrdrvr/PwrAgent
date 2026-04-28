@@ -48,6 +48,9 @@ class MockTransport implements JsonRpcTransport {
       id: "thread-2"
     }
   };
+  static modelListResult: unknown = {
+    data: []
+  };
   static turnInterruptResponseMode: "success" | "timeout" = "success";
 
   readonly sentMessages: string[] = [];
@@ -364,6 +367,17 @@ class MockTransport implements JsonRpcTransport {
               }
             ]
           }
+        })
+      );
+      return;
+    }
+
+    if (payload.method === "model/list") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.modelListResult,
         })
       );
       return;
@@ -711,6 +725,9 @@ describe("CodexAppServerClient", () => {
         id: "thread-2"
       }
     };
+    MockTransport.modelListResult = {
+      data: []
+    };
     MockTransport.turnInterruptResponseMode = "success";
   });
 
@@ -796,6 +813,99 @@ describe("CodexAppServerClient", () => {
     );
 
     await client.close();
+  });
+
+  it("filters Codex models to the supported picker set and orders them", async () => {
+    MockTransport.modelListResult = {
+      data: [
+        {
+          id: "gpt-5.2",
+          displayName: "gpt-5.2",
+          supportsReasoning: true,
+        },
+        {
+          id: "gpt-5.5",
+          displayName: "gpt-5.5",
+          current: true,
+          supportsReasoning: true,
+        },
+        {
+          id: "gpt-5.3-codex",
+          displayName: "gpt-5.3-codex",
+          supportsReasoning: true,
+        },
+        {
+          id: "gpt-5.5-pro",
+          displayName: "GPT-5.5-Pro",
+          supportsReasoning: true,
+        },
+        {
+          id: "gpt-5.4-mini",
+          displayName: "GPT-5.4-Mini",
+          supportsReasoning: true,
+        },
+        {
+          id: "gpt-5.3-codex-spark",
+          displayName: "GPT-5.3-Codex-Spark",
+          supportsReasoning: true,
+        },
+        {
+          id: "gpt-5.4",
+          displayName: "GPT-5.4",
+          supportsReasoning: true,
+        },
+        {
+          id: "gpt-5.1-codex-max",
+          displayName: "gpt-5.1-codex-max",
+          supportsReasoning: true,
+        },
+      ],
+    };
+
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+    });
+
+    await expect(client.listModels()).resolves.toEqual([
+      {
+        id: "gpt-5.5",
+        label: "GPT-5.5",
+        current: true,
+        supportsReasoning: true,
+      },
+      {
+        id: "gpt-5.4",
+        label: "GPT-5.4",
+        current: undefined,
+        supportsReasoning: true,
+      },
+      {
+        id: "gpt-5.4-mini",
+        label: "GPT-5.4-Mini",
+        current: undefined,
+        supportsReasoning: true,
+      },
+      {
+        id: "gpt-5.3-codex",
+        label: "GPT-5.3-Codex",
+        current: undefined,
+        supportsReasoning: true,
+      },
+      {
+        id: "gpt-5.3-codex-spark",
+        label: "GPT-5.3-Codex-Spark",
+        current: undefined,
+        supportsReasoning: true,
+      },
+      {
+        id: "gpt-5.2",
+        label: "GPT-5.2",
+        current: undefined,
+        supportsReasoning: true,
+      },
+    ]);
   });
 
   it("uses query payloads when filtering the codex thread list", async () => {

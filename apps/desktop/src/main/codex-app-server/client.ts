@@ -62,7 +62,16 @@ import {
 import { StdioJsonRpcTransport } from "./stdio-transport";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
-const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.4";
+const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
+const SUPPORTED_CODEX_MODEL_ORDER = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.3-codex",
+  "gpt-5.3-codex-spark",
+  "gpt-5.2",
+] as const;
+const SUPPORTED_CODEX_MODELS = new Set<string>(SUPPORTED_CODEX_MODEL_ORDER);
 
 type CodexClientOptions = {
   command?: string;
@@ -1462,20 +1471,20 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
       ? value
       : [];
 
-  return data.flatMap((entry): BackendModelOption[] => {
+  const models = data.flatMap((entry): BackendModelOption[] => {
     const modelRecord = asRecord(entry);
     if (!modelRecord) {
       return [];
     }
     const id = pickString(modelRecord, ["id", "name", "model"]);
-    if (!id) {
+    if (!id || shouldHideCodexModel(id, modelRecord)) {
       return [];
     }
 
     return [
       {
         id,
-        label: pickString(modelRecord, ["label", "displayName", "display_name"]),
+        label: formatCodexModelLabel(id),
         current: pickBoolean(modelRecord, ["current", "default"]),
         supportsReasoning: pickBoolean(modelRecord, [
           "supportsReasoning",
@@ -1484,6 +1493,46 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
         supportsFast: pickBoolean(modelRecord, ["supportsFast", "supports_fast"]),
       },
     ];
+  });
+
+  return sortCodexModels(models);
+}
+
+function shouldHideCodexModel(
+  id: string,
+  modelRecord: Record<string, unknown>,
+): boolean {
+  return (
+    pickBoolean(modelRecord, ["hidden"]) === true ||
+    !SUPPORTED_CODEX_MODELS.has(id.toLowerCase())
+  );
+}
+
+function formatCodexModelLabel(id: string): string {
+  const match = /^gpt-([^-]+)(?:-(.+))?$/i.exec(id.trim());
+  if (!match) {
+    return id;
+  }
+
+  const version = match[1];
+  const suffix = match[2]
+    ?.split("-")
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1).toLowerCase())
+    .join("-");
+
+  return suffix ? `GPT-${version}-${suffix}` : `GPT-${version}`;
+}
+
+function sortCodexModels(models: BackendModelOption[]): BackendModelOption[] {
+  const order = new Map<string, number>(
+    SUPPORTED_CODEX_MODEL_ORDER.map((id, index) => [id, index]),
+  );
+
+  return [...models].sort((left, right) => {
+    const leftOrder = order.get(left.id.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = order.get(right.id.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+    return leftOrder - rightOrder;
   });
 }
 

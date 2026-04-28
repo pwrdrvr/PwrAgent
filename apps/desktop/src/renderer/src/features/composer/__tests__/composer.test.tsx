@@ -69,15 +69,17 @@ describe("Composer", () => {
           backendSummary("codex", {
             models: [
               {
-                id: "gpt-5.4",
-                label: "GPT-5.4",
+                id: "gpt-5.5",
+                label: "GPT-5.5",
                 current: true,
                 supportsReasoning: true,
+                supportsFast: true,
               },
               {
-                id: "gpt-5.4-pro",
-                label: "GPT-5.4 Pro",
+                id: "gpt-5.4",
+                label: "GPT-5.4",
                 supportsReasoning: true,
+                supportsFast: true,
               },
             ],
             reasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
@@ -102,7 +104,7 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.4");
+    expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.5");
     expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
   });
@@ -163,8 +165,8 @@ describe("Composer", () => {
           backendSummary("codex", {
             models: [
               {
-                id: "gpt-5.4",
-                label: "GPT-5.4",
+                id: "gpt-5.5",
+                label: "GPT-5.5",
                 current: true,
                 supportsReasoning: true,
               },
@@ -200,10 +202,68 @@ describe("Composer", () => {
     });
     expect(startTurn).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         reasoningEffort: "medium",
       })
     );
+  });
+
+  it("updates model settings without crashing when fast-mode support changes", async () => {
+    const onSetThreadModelSettings = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[
+          backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.5",
+                label: "GPT-5.5",
+                current: true,
+                supportsReasoning: true,
+                supportsFast: true,
+              },
+              {
+                id: "gpt-5.2",
+                label: "GPT-5.2",
+                supportsReasoning: true,
+                supportsFast: false,
+              },
+            ],
+            reasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
+            supportsFastMode: true,
+          }),
+        ]}
+        onSetThreadModelSettings={onSetThreadModelSettings}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Model switch",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          model: "gpt-5.5",
+          reasoningEffort: "medium",
+          fastMode: true,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    expect(screen.getByText("Fast mode")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "gpt-5.2" },
+    });
+
+    await waitFor(() => {
+      expect(onSetThreadModelSettings).toHaveBeenCalledWith({
+        model: "gpt-5.2",
+        reasoningEffort: "medium",
+        fastMode: undefined,
+      });
+    });
   });
 
   it("shows thread access in the composer and updates it from the select", async () => {
