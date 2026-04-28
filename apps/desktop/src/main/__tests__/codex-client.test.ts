@@ -397,6 +397,15 @@ class MockTransport implements JsonRpcTransport {
                 session: {
                   cwd: "/Users/huntharo/pwrdrvr/PwrAgnt"
                 }
+              },
+              {
+                id: "thread-placeholder",
+                name: "Untitled thread",
+                preview: "Investigate why new Codex threads keep showing as untitled",
+                updatedAt: 1_763_500_050,
+                session: {
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgnt"
+                }
               }
             ]
           }
@@ -804,10 +813,11 @@ describe("CodexAppServerClient", () => {
     const threads = await client.listThreads();
     const primaryThread = threads.find((thread) => thread.id === "thread-2");
     const derivedThread = threads.find((thread) => thread.id === "thread-1");
+    const placeholderThread = threads.find((thread) => thread.id === "thread-placeholder");
     const renamedThread = threads.find((thread) => thread.id === "thread-renamed");
     const archivedThread = threads.find((thread) => thread.id === "thread-archive");
 
-    expect(threads).toHaveLength(3);
+    expect(threads).toHaveLength(4);
     expect(primaryThread).toMatchObject({
       id: "thread-2",
       title: "Ship desktop shell",
@@ -828,6 +838,11 @@ describe("CodexAppServerClient", () => {
     );
     expect(derivedThread?.titleSource).toBe("derived");
     expect(derivedThread?.summary).toBeUndefined();
+    expect(placeholderThread).toMatchObject({
+      id: "thread-placeholder",
+      title: "Investigate why new Codex threads keep showing as untitled",
+      titleSource: "derived",
+    });
     expect(renamedThread).toMatchObject({
       id: "thread-renamed",
       title: "Spud up the thread",
@@ -2461,7 +2476,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("adds materialized app-created Codex threads to the Codex session index", async () => {
+  it("updates placeholder session index names after the first turn starts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-session-index-"));
     const sessionIndexPath = path.join(tempDir, "session_index.jsonl");
     MockTransport.threadStartResult = {
@@ -2491,6 +2506,15 @@ describe("CodexAppServerClient", () => {
       await client.startThread({
         cwd: "/Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moi2lzw4",
       });
+      await client.startTurn({
+        threadId: "019dd225-74fb-7a83-b4e4-5970680d9382",
+        input: [
+          {
+            type: "text",
+            text: "Figure out why new Codex threads keep showing as untitled in PwrAgnt",
+          },
+        ],
+      });
       await client.close();
 
       const indexLines = (await fs.readFile(sessionIndexPath, "utf8"))
@@ -2504,6 +2528,12 @@ describe("CodexAppServerClient", () => {
           source: "pwragnt",
           thread_name: "Untitled thread",
           updated_at: "2026-04-28T03:32:43.000Z",
+        },
+        {
+          id: "019dd225-74fb-7a83-b4e4-5970680d9382",
+          source: "pwragnt",
+          thread_name: "Figure out why new Codex threads keep showing as untitled in PwrAgnt",
+          updated_at: expect.any(String),
         },
       ]);
     } finally {
