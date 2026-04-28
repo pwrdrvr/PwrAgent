@@ -1077,7 +1077,11 @@ textarea {
   min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
-  padding-bottom: 72px;
+  padding-bottom: 24px;
+}
+
+.transcript-list__items:has(.transcript-list__pending:last-child) {
+  padding-bottom: 4px;
 }
 
 .transcript-list__scroll-bottom {

@@ -113,4 +113,16 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toContain("184, 255, 77");
     expect(css).not.toContain("168, 255, 63");
   });
+
+  it("keeps transcript bottom reserve close to the thinking indicator height", () => {
+    expect(css).toMatch(
+      /\.transcript-list__items\s*\{[\s\S]*?padding-bottom:\s*24px;[\s\S]*?\}/
+    );
+    expect(css).toMatch(
+      /\.transcript-list__items:has\(\.transcript-list__pending:last-child\)\s*\{[\s\S]*?padding-bottom:\s*4px;[\s\S]*?\}/
+    );
+    expect(css).not.toMatch(
+      /\.transcript-list__items\s*\{[\s\S]*?padding-bottom:\s*(?:[4-9]\d|\d{3,})px;[\s\S]*?\}/
+    );
+  });
 });

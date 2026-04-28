@@ -1009,6 +1009,422 @@ describe("TranscriptList", () => {
     expect(scrollToMock).not.toHaveBeenCalled();
   });
 
+  it("keeps following the bottom while a streamed turn grows in place", () => {
+    const longEntries = Array.from({ length: 24 }, (_, index) => ({
+      type: "message" as const,
+      id: `history-message-${index + 1}`,
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      text: `History message ${index + 1}`
+    }));
+    scrollHeight = 720;
+    const { rerender } = render(
+      <TranscriptList
+        entries={longEntries}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 480;
+    fireEvent.scroll(list);
+
+    scrollHeight = 840;
+    const entriesWithUserPrompt = [
+      ...longEntries,
+      {
+        type: "message" as const,
+        id: "user-prompt-1",
+        role: "user" as const,
+        text: "Please continue from here."
+      }
+    ];
+    rerender(
+      <TranscriptList
+        entries={entriesWithUserPrompt}
+        loading={false}
+        loadingMore={false}
+        pendingStatusText="Thinking"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+    expect(list.scrollTop).toBe(840);
+
+    list.scrollTop = 600;
+    fireEvent.scroll(list);
+    scrollHeight = 980;
+    rerender(
+      <TranscriptList
+        entries={entriesWithUserPrompt}
+        loading={false}
+        loadingMore={false}
+        pendingActivityEntry={{
+          type: "activity",
+          id: "tool-usage-1",
+          summary: "Searched 12 files",
+          details: [
+            {
+              id: "tool-detail-1",
+              kind: "command",
+              label: "rg -n scroll apps/desktop/src"
+            }
+          ]
+        }}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "assistant-stream-1",
+          role: "assistant",
+          phase: "commentary",
+          text: "I found the transcript scroll handling."
+        }}
+        pendingStatusText="Thinking"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+    expect(list.scrollTop).toBe(980);
+
+    list.scrollTop = 740;
+    fireEvent.scroll(list);
+    scrollHeight = 1120;
+    rerender(
+      <TranscriptList
+        entries={entriesWithUserPrompt}
+        loading={false}
+        loadingMore={false}
+        pendingActivityEntry={{
+          type: "activity",
+          id: "tool-usage-1",
+          summary: "Searched 12 files and read 3 files",
+          details: [
+            {
+              id: "tool-detail-1",
+              kind: "command",
+              label: "rg -n scroll apps/desktop/src"
+            },
+            {
+              id: "tool-detail-2",
+              kind: "read",
+              label: "Read TranscriptList.tsx"
+            }
+          ]
+        }}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "assistant-stream-1",
+          role: "assistant",
+          phase: "commentary",
+          text: [
+            "I found the transcript scroll handling.",
+            "The pending assistant message is still streaming, so the same message id grows taller.",
+            "When the viewport was already pinned to the bottom, that growth should keep moving the viewport."
+          ].join(" ")
+        }}
+        pendingStatusText="Thinking"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(1120);
+  });
+
+  it("keeps following after a new prompt is appended to a long bottom-pinned chat", () => {
+    const entries = Array.from({ length: 32 }, (_, index) => ({
+      type: "message" as const,
+      id: `long-message-${index + 1}`,
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      text: `Long transcript message ${index + 1}`
+    }));
+    scrollHeight = 960;
+    const { rerender } = render(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 720;
+    fireEvent.scroll(list);
+
+    const entriesWithNextPrompt = [
+      ...entries,
+      {
+        type: "message" as const,
+        id: "user-prompt-2",
+        role: "user" as const,
+        text: "Add one more answer at the bottom."
+      }
+    ];
+    scrollHeight = 1080;
+    rerender(
+      <TranscriptList
+        entries={entriesWithNextPrompt}
+        loading={false}
+        loadingMore={false}
+        pendingStatusText="Thinking"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+    expect(list.scrollTop).toBe(1080);
+
+    list.scrollTop = 840;
+    fireEvent.scroll(list);
+    scrollHeight = 1200;
+    rerender(
+      <TranscriptList
+        entries={entriesWithNextPrompt}
+        loading={false}
+        loadingMore={false}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "assistant-stream-2",
+          role: "assistant",
+          phase: "final",
+          text: "Here is the beginning of the answer."
+        }}
+        pendingStatusText="Thinking"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+    expect(list.scrollTop).toBe(1200);
+
+    list.scrollTop = 960;
+    fireEvent.scroll(list);
+    scrollHeight = 1340;
+    rerender(
+      <TranscriptList
+        entries={entriesWithNextPrompt}
+        loading={false}
+        loadingMore={false}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "assistant-stream-2",
+          role: "assistant",
+          phase: "final",
+          text: [
+            "Here is the beginning of the answer.",
+            "More streamed content arrived after the prompt, and following mode should keep the latest line visible."
+          ].join(" ")
+        }}
+        pendingStatusText="Thinking"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(1340);
+  });
+
+  it("does not move the reader when new messages arrive below an older viewport", () => {
+    const entries = Array.from({ length: 16 }, (_, index) => ({
+      type: "message" as const,
+      id: `message-${index + 1}`,
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      text: `Message ${index + 1}`
+    }));
+    scrollHeight = 720;
+    const { rerender } = render(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 96;
+    fireEvent.scroll(list);
+
+    scrollHeight = 920;
+    rerender(
+      <TranscriptList
+        entries={[
+          ...entries,
+          {
+            type: "message",
+            id: "new-message-1",
+            role: "assistant",
+            text: "This arrived out of view."
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "new-message-2",
+          role: "assistant",
+          phase: "commentary",
+          text: "This is still below the reader."
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(96);
+  });
+
+  it("re-enters bottom-following mode after the jump-to-latest button is clicked", () => {
+    scrollHeight = 720;
+    const { rerender } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "First message"
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "Second message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "assistant-stream-3",
+          role: "assistant",
+          phase: "commentary",
+          text: "Streaming starts."
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 80;
+    fireEvent.scroll(list);
+    fireEvent.click(screen.getByRole("button", { name: "Jump to latest message" }));
+    expect(scrollToMock).toHaveBeenLastCalledWith({
+      behavior: "smooth",
+      top: 720
+    });
+
+    list.scrollTop = 480;
+    fireEvent.scroll(list);
+    scrollHeight = 860;
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "First message"
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "Second message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "assistant-stream-3",
+          role: "assistant",
+          phase: "commentary",
+          text: "Streaming starts. More content arrives after the jump button re-entered following mode."
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(860);
+  });
+
+  it("re-enters bottom-following mode after manually scrolling to the bottom", () => {
+    scrollHeight = 720;
+    const { rerender } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "First message"
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "Second message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "assistant-stream-4",
+          role: "assistant",
+          phase: "commentary",
+          text: "Streaming starts."
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 80;
+    fireEvent.scroll(list);
+    list.scrollTop = 480;
+    fireEvent.scroll(list);
+
+    scrollHeight = 860;
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "First message"
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            text: "Second message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "assistant-stream-4",
+          role: "assistant",
+          phase: "commentary",
+          text: "Streaming starts. Manual scrolling reached the bottom, so the next streamed chunk should stay visible."
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(860);
+  });
+
   it("shows command approval reason and command when no prompt is provided", () => {
     const { container } = render(
       <TranscriptList
