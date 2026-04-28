@@ -1902,12 +1902,18 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0;
+  padding: 4px 12px;
   border: 0;
+  border-radius: 4px;
   background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.transcript-activity__toggle:focus,
+.transcript-activity__toggle:focus-visible {
+  outline-offset: -2px;
 }
 
 .transcript-activity__label {
