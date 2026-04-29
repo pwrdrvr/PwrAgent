@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { getMainLogger } from "../log";
 
 export type ProtocolCaptureEventRecord = {
   backend: "codex" | "grok";
@@ -50,6 +51,7 @@ type CaptureIndexEntry = {
 };
 
 const indexWriteQueues = new Map<string, Promise<void>>();
+const protocolCaptureLog = getMainLogger("pwragnt:protocol-capture");
 
 export async function readProtocolCaptureFile(
   filePath: string,
@@ -213,9 +215,10 @@ async function readIndex(filePath: string): Promise<Record<string, CaptureIndexE
   }
 
   if (!contents.trim()) {
-    throw new Error(
-      `Protocol capture index ${filePath} is empty. Delete the file or replace it with {} to continue capturing.`
-    );
+    protocolCaptureLog.warn("protocol capture index was empty; resetting index", {
+      path: filePath
+    });
+    return {};
   }
 
   let parsed: unknown;
@@ -223,10 +226,17 @@ async function readIndex(filePath: string): Promise<Record<string, CaptureIndexE
     parsed = JSON.parse(contents) as unknown;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid protocol capture index JSON in ${filePath}: ${message}`);
+    protocolCaptureLog.warn("protocol capture index was invalid JSON; resetting index", {
+      path: filePath,
+      error: message
+    });
+    return {};
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    protocolCaptureLog.warn("protocol capture index had unexpected shape; resetting index", {
+      path: filePath
+    });
     return {};
   }
   return parsed as Record<string, CaptureIndexEntry>;
