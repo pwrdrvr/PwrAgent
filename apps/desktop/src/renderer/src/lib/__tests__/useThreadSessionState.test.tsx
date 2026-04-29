@@ -1281,6 +1281,84 @@ describe("useThreadSessionState", () => {
     expect(result.current.activeTurnId).toBeUndefined();
   });
 
+  it("shows a transcript status when context compaction starts", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "compact-turn-1",
+              item: {
+                id: "compact-item-1",
+                type: "contextCompaction",
+              },
+            },
+          },
+        } as any);
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBe("Compacting context");
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/compacted",
+            params: {
+              threadId: "thread-1",
+              itemId: "compact-item-1",
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.contextWindow).toBeUndefined();
+  });
+
   it("surfaces failed turn errors in the transcript state", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

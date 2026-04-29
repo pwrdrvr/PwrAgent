@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AppServerNotification,
   AppServerMcpElicitationRequestNotification,
   AppServerPendingRequestNotification,
   AppServerReadThreadResponse,
@@ -395,6 +396,22 @@ function normalizeThreadContextWindowState(
     totalTokens,
     usedPercent,
   };
+}
+
+function isContextCompactionItemNotification(
+  notification: AppServerNotification
+): notification is Extract<AppServerNotification, { method: "item/started" | "item/completed" }> {
+  if (notification.method !== "item/started" && notification.method !== "item/completed") {
+    return false;
+  }
+  const item =
+    typeof notification.params.item === "object" &&
+    notification.params.item !== null &&
+    !Array.isArray(notification.params.item)
+      ? notification.params.item as Record<string, unknown>
+      : undefined;
+  const itemType = typeof item?.type === "string" ? item.type : undefined;
+  return itemType?.replace(/[-_\s]/g, "").toLowerCase() === "contextcompaction";
 }
 
 function buildTurnMetadata(params: {
@@ -1117,6 +1134,19 @@ export function useThreadSessionState(params: {
         }
 
         if (
+          event.notification.method === "item/started" &&
+          isContextCompactionItemNotification(event.notification)
+        ) {
+          return {
+            ...current,
+            expectOwnUpdate: true,
+            interacted: true,
+            lastTouchedAt: nextLastTouchedAt,
+            pendingStatusText: "Compacting context",
+          };
+        }
+
+        if (
           event.notification.method === "item/agentMessage/delta" &&
           typeof event.notification.params.itemId === "string" &&
           typeof event.notification.params.delta === "string"
@@ -1429,10 +1459,13 @@ export function useThreadSessionState(params: {
         if (event.notification.method === "thread/compacted") {
           return {
             ...current,
+            activeTurnId: undefined,
+            activeTurnStartedAt: undefined,
             contextWindow: undefined,
             failedHydrationVersion: undefined,
             hydratedUpdatedAt: undefined,
             lastTouchedAt: nextLastTouchedAt,
+            pendingStatusText: undefined,
             response: undefined,
           };
         }
