@@ -450,6 +450,42 @@ function buildMcpProgressDetail(
   };
 }
 
+function buildMcpProtocolActivityEntry(
+  details: AppServerThreadActivityDetail[],
+  createdAt = Date.now(),
+): AppServerThreadActivityEntry {
+  return {
+    type: "activity",
+    id: "live-mcp-protocol-status",
+    createdAt,
+    summary: summarizeMcpProtocolActivity(details),
+    status: summarizeActivityStatus(details),
+    details,
+  };
+}
+
+function summarizeMcpProtocolActivity(details: AppServerThreadActivityDetail[]): string {
+  if (details.length === 1 && details[0]) {
+    return details[0].label;
+  }
+
+  return `MCP status updates (${details.length})`;
+}
+
+function mergeMcpProtocolActivityEntry(
+  current: AppServerThreadActivityEntry | undefined,
+  next: AppServerThreadActivityEntry,
+): AppServerThreadActivityEntry {
+  if (current?.id !== "live-mcp-protocol-status") {
+    return next;
+  }
+
+  return buildMcpProtocolActivityEntry(
+    mergeActivityDetails(current.details, next.details),
+    current.createdAt ?? next.createdAt
+  );
+}
+
 function buildMcpServerStatusActivityEntry(params: Record<string, unknown>): AppServerThreadActivityEntry | undefined {
   const serverName = readString(params, "name") ?? readString(params, "serverName");
   const status = readString(params, "status") ?? "updated";
@@ -470,21 +506,14 @@ function buildMcpServerStatusActivityEntry(params: Record<string, unknown>): App
     ? `MCP ${serverName} ${status}: ${error}`
     : `MCP ${serverName} ${status}`;
 
-  return {
-    type: "activity",
-    id: `live-mcp-status-${serverName}`,
-    createdAt: Date.now(),
-    summary: label,
-    status: detailStatus,
-    details: [
-      {
-        id: `live-mcp-status-${serverName}-detail`,
-        kind: "command",
-        label,
-        status: detailStatus,
-      },
-    ],
-  };
+  return buildMcpProtocolActivityEntry([
+    {
+      id: `live-mcp-status-${serverName}`,
+      kind: "command",
+      label,
+      status: detailStatus,
+    },
+  ]);
 }
 
 function buildMcpOauthActivityEntry(params: Record<string, unknown>): AppServerThreadActivityEntry | undefined {
@@ -500,21 +529,14 @@ function buildMcpOauthActivityEntry(params: Record<string, unknown>): AppServerT
     : `MCP ${serverName} login failed${error ? `: ${error}` : ""}`;
   const status: AppServerThreadActivityDetail["status"] = success ? "completed" : "failed";
 
-  return {
-    type: "activity",
-    id: `live-mcp-oauth-${serverName}`,
-    createdAt: Date.now(),
-    summary: label,
-    status,
-    details: [
-      {
-        id: `live-mcp-oauth-${serverName}-detail`,
-        kind: "command",
-        label,
-        status,
-      },
-    ],
-  };
+  return buildMcpProtocolActivityEntry([
+    {
+      id: `live-mcp-oauth-${serverName}`,
+      kind: "command",
+      label,
+      status,
+    },
+  ]);
 }
 
 function summarizeActivityStatus(
@@ -1105,7 +1127,9 @@ export function ThreadView(props: ThreadViewProps) {
           event.notification.params as Record<string, unknown>
         );
         if (entry) {
-          setPendingProtocolActivityEntry(entry);
+          setPendingProtocolActivityEntry((current) =>
+            mergeMcpProtocolActivityEntry(current, entry)
+          );
         }
         return;
       }
@@ -1115,7 +1139,9 @@ export function ThreadView(props: ThreadViewProps) {
           event.notification.params as Record<string, unknown>
         );
         if (entry) {
-          setPendingProtocolActivityEntry(entry);
+          setPendingProtocolActivityEntry((current) =>
+            mergeMcpProtocolActivityEntry(current, entry)
+          );
         }
         return;
       }

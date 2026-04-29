@@ -1535,7 +1535,113 @@ describe("ThreadView", () => {
       });
     });
 
+    fireEvent.click(screen.getByRole("button", { name: /MCP status updates \(2\)/ }));
     expect(screen.getByText("MCP playwright login completed")).toBeInTheDocument();
+  });
+
+  it("keeps multiple global MCP startup statuses visible", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Browser task",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: true,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Start a new thread."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await act(async () => {
+      for (const name of ["browser-use", "playwright", "codex_apps"]) {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "mcpServer/startupStatus/updated",
+            params: {
+              name,
+              status: "ready",
+              error: null,
+            },
+          },
+        });
+      }
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /MCP status updates \(3\)/ }));
+    expect(screen.getByText("MCP browser-use ready")).toBeInTheDocument();
+    expect(screen.getByText("MCP playwright ready")).toBeInTheDocument();
+    expect(screen.getByText("MCP codex_apps ready")).toBeInTheDocument();
   });
 
   it("renders live Codex command execution activity without falling back to tool", async () => {
