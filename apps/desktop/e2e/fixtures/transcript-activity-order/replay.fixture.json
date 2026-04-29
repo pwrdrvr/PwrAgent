@@ -1,0 +1,182 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "transcript-activity-order",
+    "sourceCaptureId": "synthetic-from-019dd5c7-protocol-shape",
+    "threadId": "thread-transcript-activity-order"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "initialize-2",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-transcript-activity-order",
+          "title": "Transcript activity ordering",
+          "titleSource": "explicit",
+          "summary": "Verify tool activity stays where protocol items occurred",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000000000
+        }
+      ]
+    },
+    {
+      "id": "thread-list-2",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-transcript-activity-order",
+          "title": "Transcript activity ordering",
+          "titleSource": "explicit",
+          "summary": "Verify tool activity stays where protocol items occurred",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000000000
+        }
+      ]
+    },
+    {
+      "id": "skills-list-1",
+      "kind": "response",
+      "method": "skills/list",
+      "result": []
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Replay the captured order."
+          },
+          {
+            "type": "activity",
+            "id": "activity-1",
+            "summary": "Explored 1 file",
+            "details": [
+              {
+                "id": "detail-1",
+                "kind": "read",
+                "label": "Read a.ts (1.2s)",
+                "path": "/repo/src/a.ts",
+                "status": "completed"
+              }
+            ],
+            "turn": {
+              "id": "turn-1",
+              "status": "completed",
+              "durationMs": 70000
+            }
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "phase": "final",
+            "text": "Interim answer after the first tool."
+          },
+          {
+            "type": "activity",
+            "id": "activity-2",
+            "summary": "Explored 1 file",
+            "details": [
+              {
+                "id": "detail-2",
+                "kind": "read",
+                "label": "Read b.ts (2.5s)",
+                "path": "/repo/src/b.ts",
+                "status": "completed"
+              }
+            ],
+            "turn": {
+              "id": "turn-1",
+              "status": "completed",
+              "durationMs": 70000
+            }
+          },
+          {
+            "type": "message",
+            "id": "message-3",
+            "role": "assistant",
+            "phase": "final",
+            "text": "Done."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Replay the captured order."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "phase": "final",
+            "text": "Interim answer after the first tool."
+          },
+          {
+            "id": "message-3",
+            "role": "assistant",
+            "phase": "final",
+            "text": "Done."
+          }
+        ],
+        "lastUserMessage": "Replay the captured order.",
+        "lastAssistantMessage": "Done.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}
