@@ -400,6 +400,7 @@ export function Composer(props: ComposerProps) {
     HandoffThreadWorkspaceRequest["direction"] | undefined
   >();
   const [leaveLocalBranch, setLeaveLocalBranch] = useState("");
+  const [handoffError, setHandoffError] = useState<string | undefined>();
   const [handoffSubmitting, setHandoffSubmitting] = useState(false);
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
@@ -1439,9 +1440,9 @@ export function Composer(props: ComposerProps) {
     : [];
   const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
   const sourceBranch =
+    props.directory?.gitStatus?.currentBranch ??
     props.thread?.observedGitBranch ??
-    props.thread?.gitBranch ??
-    props.directory?.gitStatus?.currentBranch;
+    props.thread?.gitBranch;
   const branchOptions = getLeaveLocalBranchOptions({
     currentBranch: sourceBranch,
     directory: props.directory,
@@ -1461,9 +1462,15 @@ export function Composer(props: ComposerProps) {
     direction: HandoffThreadWorkspaceRequest["direction"]
   ): void => {
     setWorkspaceMenuOpen(false);
+    setHandoffError(undefined);
     setHandoffDialog(direction);
     if (direction === "local-to-worktree") {
-      setLeaveLocalBranch(branchOptions[0] ?? "");
+      const defaultBranch = props.directory?.gitStatus?.defaultBranch;
+      setLeaveLocalBranch(
+        defaultBranch && branchOptions.includes(defaultBranch)
+          ? defaultBranch
+          : branchOptions[0] ?? ""
+      );
     }
   };
 
@@ -1473,6 +1480,7 @@ export function Composer(props: ComposerProps) {
     }
 
     setHandoffSubmitting(true);
+    setHandoffError(undefined);
     try {
       await props.onHandoffThreadWorkspace({
         direction: handoffDialog!,
@@ -1481,14 +1489,19 @@ export function Composer(props: ComposerProps) {
         sourceBranch,
         leaveLocalBranch:
           handoffDialog === "local-to-worktree" ? leaveLocalBranch || undefined : undefined,
-        allowLocalDetach:
-          handoffDialog === "local-to-worktree" && !leaveLocalBranch ? true : undefined,
       });
       setHandoffDialog(undefined);
+    } catch (error) {
+      setHandoffError(error instanceof Error ? error.message : String(error));
     } finally {
       setHandoffSubmitting(false);
     }
   };
+
+  const handoffDisabled =
+    handoffSubmitting ||
+    !sourceBranch ||
+    (handoffDialog === "local-to-worktree" && !leaveLocalBranch);
 
   return (
     <form
@@ -2215,66 +2228,81 @@ export function Composer(props: ComposerProps) {
       ) : null}
 
       {handoffDialog && threadWorkspace ? (
-        <div
-          aria-label={
-            handoffDialog === "local-to-worktree"
-              ? "Handoff to New Worktree"
-              : "Handoff to Local"
-          }
-          className="workspace-handoff-dialog"
-          role="dialog"
-        >
-          <h2>
-            {handoffDialog === "local-to-worktree"
-              ? "Handoff to New Worktree"
-              : "Handoff to Local"}
-          </h2>
-          <p>
-            {handoffDialog === "local-to-worktree"
-              ? "Move this thread's current branch into a new worktree. Dirty tracked and non-ignored files will be stashed and applied in the new worktree."
-              : "Move this worktree branch back to Local. Dirty tracked and non-ignored files will be stashed and applied in Local, then the old worktree will be archived."}
-          </p>
-          {handoffDialog === "local-to-worktree" ? (
-            <label className="workspace-handoff-dialog__field">
-              Leave Local on
-              <select
-                aria-label="Leave Local on"
-                className="composer__select"
+        <div className="workspace-handoff-modal">
+          <div
+            aria-label={
+              handoffDialog === "local-to-worktree"
+                ? "Handoff to New Worktree"
+                : "Handoff to Local"
+            }
+            className="workspace-handoff-dialog"
+            role="dialog"
+          >
+            <h2>
+              {handoffDialog === "local-to-worktree"
+                ? "Handoff to New Worktree"
+                : "Handoff to Local"}
+            </h2>
+            <p>
+              {handoffDialog === "local-to-worktree"
+                ? "Move this thread's current branch into a new worktree. Dirty tracked and non-ignored files will be stashed and applied in the new worktree."
+                : "Move this worktree branch back to Local. Dirty tracked and non-ignored files will be stashed and applied in Local, then the old worktree will be archived."}
+            </p>
+            <dl className="workspace-handoff-dialog__summary">
+              <div>
+                <dt>Branch to move</dt>
+                <dd>{sourceBranch ?? "Unknown branch"}</dd>
+              </div>
+            </dl>
+            {handoffDialog === "local-to-worktree" ? (
+              <label className="workspace-handoff-dialog__field">
+                Leave Local on
+                <select
+                  aria-label="Leave Local on"
+                  className="composer__select"
+                  disabled={handoffSubmitting || branchOptions.length === 0}
+                  value={leaveLocalBranch}
+                  onChange={(event) => setLeaveLocalBranch(event.target.value)}
+                >
+                  {branchOptions.map((branch) => (
+                    <option key={branch} value={branch}>
+                      {branch}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {handoffDialog === "local-to-worktree" && branchOptions.length === 0 ? (
+              <p className="workspace-handoff-dialog__note">
+                No available local branch can be checked out before moving this branch.
+              </p>
+            ) : null}
+            <p className="workspace-handoff-dialog__note">
+              Ignored files are not moved by handoff.
+            </p>
+            {handoffError ? (
+              <p className="workspace-handoff-dialog__error">{handoffError}</p>
+            ) : null}
+            <div className="workspace-handoff-dialog__actions">
+              <button
+                className="button button--ghost"
                 disabled={handoffSubmitting}
-                value={leaveLocalBranch}
-                onChange={(event) => setLeaveLocalBranch(event.target.value)}
+                type="button"
+                onClick={() => setHandoffDialog(undefined)}
               >
-                {branchOptions.map((branch) => (
-                  <option key={branch} value={branch}>
-                    {branch}
-                  </option>
-                ))}
-                <option value="">Detached HEAD</option>
-              </select>
-            </label>
-          ) : null}
-          <p className="workspace-handoff-dialog__note">
-            Ignored files are not moved by handoff.
-          </p>
-          <div className="workspace-handoff-dialog__actions">
-            <button
-              className="button button--ghost"
-              disabled={handoffSubmitting}
-              type="button"
-              onClick={() => setHandoffDialog(undefined)}
-            >
-              Cancel
-            </button>
-            <button
-              className="button button--primary"
-              disabled={handoffSubmitting}
-              type="button"
-              onClick={() => {
-                void submitHandoff();
-              }}
-            >
-              {handoffSubmitting ? "Handing off…" : "Handoff"}
-            </button>
+                Cancel
+              </button>
+              <button
+                className="button button--primary"
+                disabled={handoffDisabled}
+                type="button"
+                onClick={() => {
+                  void submitHandoff();
+                }}
+              >
+                {handoffSubmitting ? "Handing off…" : "Handoff"}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
@@ -2643,7 +2671,7 @@ function formatThreadWorkspaceLabel(thread?: NavigationThreadSummary): string | 
     thread.linkedDirectories.some((directory) => directory.kind === "local") ||
     thread.projectKey
   ) {
-    return thread.gitBranch ? `Local (${thread.gitBranch})` : "Local";
+    return "Local";
   }
 
   return undefined;
@@ -2694,11 +2722,16 @@ function getLeaveLocalBranchOptions(params: {
   directory?: NavigationDirectorySummary;
 }): string[] {
   const currentBranch = params.currentBranch?.trim();
-  const branches = params.directory?.gitStatus?.branches ?? [];
+  const explicitHandoffBranches = params.directory?.gitStatus?.handoffBranches;
+  const branches = explicitHandoffBranches ?? params.directory?.gitStatus?.branches ?? [];
   const candidates = branches.filter((branch) => branch && branch !== currentBranch);
-  const preferred = ["main", "master", "develop", "trunk"].find((branch) =>
-    candidates.includes(branch)
-  );
+  const defaultBranch = params.directory?.gitStatus?.defaultBranch;
+  const preferred =
+    defaultBranch && candidates.includes(defaultBranch)
+      ? defaultBranch
+      : ["main", "master", "develop", "trunk"].find((branch) =>
+          candidates.includes(branch)
+        );
   const ordered = preferred
     ? [preferred, ...candidates.filter((branch) => branch !== preferred)]
     : candidates;

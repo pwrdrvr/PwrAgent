@@ -33,7 +33,6 @@ type HandoffParams = {
   sourcePath?: string;
   sourceBranch?: string;
   leaveLocalBranch?: string;
-  allowLocalDetach?: boolean;
   now?: number;
 };
 
@@ -294,7 +293,7 @@ export class GitWorkspaceHandoffService {
     });
 
     const leaveLocalBranch = sanitizeBranchName(params.leaveLocalBranch ?? "");
-    if (!leaveLocalBranch && !params.allowLocalDetach) {
+    if (!leaveLocalBranch) {
       throw new Error("Choose a branch to leave in Local before handoff.");
     }
     if (leaveLocalBranch && leaveLocalBranch === context.branch) {
@@ -315,12 +314,7 @@ export class GitWorkspaceHandoffService {
       path: context.sourcePath,
       message: this.buildStashMessage(context, "source"),
     });
-    if (leaveLocalBranch) {
-      await runGit(context.sourcePath, ["switch", leaveLocalBranch]);
-    } else {
-      await runGit(context.sourcePath, ["switch", "--detach"]);
-      warnings.push("Local was left detached because no leave-local branch was selected.");
-    }
+    await runGit(context.sourcePath, ["switch", leaveLocalBranch]);
 
     await mkdir(path.dirname(targetPath), { recursive: true });
     await runGit(context.repositoryPath, ["worktree", "add", targetPath, context.branch]);

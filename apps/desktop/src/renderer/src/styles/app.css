@@ -3336,6 +3336,17 @@ textarea {
   background: var(--border-subtle);
 }
 
+.workspace-handoff-modal {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 58%);
+}
+
 .workspace-handoff-dialog {
   width: min(460px, 100%);
   padding: 16px;
@@ -3359,6 +3370,35 @@ textarea {
   line-height: 1.45;
 }
 
+.workspace-handoff-dialog__summary {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.workspace-handoff-dialog__summary div {
+  min-width: 0;
+}
+
+.workspace-handoff-dialog__summary dt {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.workspace-handoff-dialog__summary dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
 .workspace-handoff-dialog__field {
   display: grid;
   gap: 8px;
@@ -3370,6 +3410,10 @@ textarea {
 
 .workspace-handoff-dialog__note {
   color: var(--text-muted);
+}
+
+.workspace-handoff-dialog__error {
+  color: var(--danger-text);
 }
 
 .workspace-handoff-dialog__actions {

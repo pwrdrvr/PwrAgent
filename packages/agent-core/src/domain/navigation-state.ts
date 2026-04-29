@@ -182,10 +182,12 @@ export function buildNavigationSnapshotHash(params: {
       gitStatus: directory.gitStatus
         ? {
             currentBranch: directory.gitStatus.currentBranch ?? null,
+            defaultBranch: directory.gitStatus.defaultBranch ?? null,
             upstreamBranch: directory.gitStatus.upstreamBranch ?? null,
             ahead: directory.gitStatus.ahead ?? null,
             behind: directory.gitStatus.behind ?? null,
             branches: directory.gitStatus.branches ?? [],
+            handoffBranches: directory.gitStatus.handoffBranches ?? [],
             syncState: directory.gitStatus.syncState ?? null,
           }
         : null,

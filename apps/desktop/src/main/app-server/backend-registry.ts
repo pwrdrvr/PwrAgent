@@ -1880,7 +1880,7 @@ export class DesktopBackendRegistry {
 
     return {
       repositoryPath,
-      sourceBranch: request.sourceBranch ?? thread.observedGitBranch ?? thread.gitBranch,
+      sourceBranch: request.sourceBranch,
       sourcePath,
     };
   }

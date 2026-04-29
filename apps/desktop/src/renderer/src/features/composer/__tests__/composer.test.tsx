@@ -1072,8 +1072,10 @@ describe("Composer", () => {
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
-            currentBranch: "main",
-            branches: ["main", "release"],
+            currentBranch: "feat/thread-workspace-handoff-plan",
+            defaultBranch: "main",
+            branches: ["feat/thread-workspace-handoff-plan", "release", "main"],
+            handoffBranches: ["main", "release"],
             syncState: "untracked",
           },
         }}
@@ -1086,7 +1088,7 @@ describe("Composer", () => {
           titleSource: "explicit",
           source: "codex",
           executionMode: "default",
-          gitBranch: "main",
+          gitBranch: "fix/context-rail-slide-reflow",
           linkedDirectories: [
             {
               id: "dir-1",
@@ -1101,12 +1103,15 @@ describe("Composer", () => {
     );
 
     expect(screen.getByLabelText("Access mode")).toHaveValue("default");
-    fireEvent.click(screen.getByRole("button", { name: /Local \(main\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Local" }));
     expect(screen.getByRole("separator")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
     expect(dialog).toBeInTheDocument();
-    expect(screen.getByLabelText("Leave Local on")).toHaveValue("release");
+    expect(dialog.closest(".workspace-handoff-modal")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("feat/thread-workspace-handoff-plan");
+    expect(screen.getByLabelText("Leave Local on")).toHaveValue("main");
+    expect(screen.queryByRole("option", { name: "Detached HEAD" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
     await waitFor(() => {
@@ -1114,9 +1119,8 @@ describe("Composer", () => {
         direction: "local-to-worktree",
         repositoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
         sourcePath: "/Users/huntharo/pwrdrvr/PwrAgnt",
-        sourceBranch: "main",
-        leaveLocalBranch: "release",
-        allowLocalDetach: undefined,
+        sourceBranch: "feat/thread-workspace-handoff-plan",
+        leaveLocalBranch: "main",
       });
     });
 
@@ -1252,7 +1256,6 @@ describe("Composer", () => {
         sourcePath: "/repo/.worktrees/pwragnt-feature",
         sourceBranch: "feature/handoff",
         leaveLocalBranch: undefined,
-        allowLocalDetach: undefined,
       });
     });
   });

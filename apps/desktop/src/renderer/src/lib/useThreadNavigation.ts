@@ -1136,12 +1136,18 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
 
   const selectedDirectory = useMemo(() => {
     const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
-    if (!launchpadDirectoryKey) {
+    if (launchpadDirectoryKey) {
+      return directories.find((directory) => directory.key === launchpadDirectoryKey);
+    }
+
+    if (!selectedThreadKey) {
       return undefined;
     }
 
-    return directories.find((directory) => directory.key === launchpadDirectoryKey);
-  }, [directories, selectedItemKey]);
+    return directories.find((directory) =>
+      directory.threadKeys.includes(selectedThreadKey)
+    );
+  }, [directories, selectedItemKey, selectedThreadKey]);
 
   const selectedLaunchpad = selectedDirectory?.launchpad;
 
@@ -1570,8 +1576,9 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
     ): Promise<void> => {
       if (!handoffThreadWorkspaceRequest) {
-        setWorktreeArchiveError("Desktop bridge is missing handoffThreadWorkspace().");
-        return;
+        const error = new Error("Desktop bridge is missing handoffThreadWorkspace().");
+        setWorktreeArchiveError(error.message);
+        throw error;
       }
 
       setWorktreeArchiveError(undefined);
@@ -1585,7 +1592,9 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         });
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
       } catch (error) {
-        setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
+        const message = error instanceof Error ? error.message : String(error);
+        setWorktreeArchiveError(message);
+        throw error;
       }
     },
     [handoffThreadWorkspaceRequest, refresh]

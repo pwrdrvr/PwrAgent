@@ -1625,7 +1625,7 @@ describe("DesktopBackendRegistry", () => {
       leaveLocalBranch: "main",
       repositoryPath: "/repo/app",
       sourcePath: "/repo/app",
-      sourceBranch: "feature/handoff",
+      sourceBranch: undefined,
     });
     expect(response.workMode).toBe("worktree");
     await expect(

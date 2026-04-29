@@ -363,7 +363,6 @@ export type HandoffThreadWorkspaceRequest = {
   sourcePath?: string;
   sourceBranch?: string;
   leaveLocalBranch?: string;
-  allowLocalDetach?: boolean;
 };
 
 export type HandoffThreadWorkspaceResponse = {
