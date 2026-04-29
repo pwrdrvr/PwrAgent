@@ -16,9 +16,22 @@ import { buildDirectorySummaries } from "./directory-navigation";
 function dedupeLinkedDirectories(
   directories: LinkedDirectorySummary[],
 ): LinkedDirectorySummary[] {
+  let overlayWorkspace: LinkedDirectorySummary | undefined;
+  for (const directory of directories) {
+    if (directory.id.startsWith("pwragnt-handoff:")) {
+      overlayWorkspace = directory;
+    }
+  }
+  const filteredDirectories = overlayWorkspace
+    ? directories.filter(
+        (directory) =>
+          directory.id === overlayWorkspace.id ||
+          (directory.kind !== "local" && directory.kind !== "worktree"),
+      )
+    : directories;
   const byId = new Map<string, LinkedDirectorySummary>();
 
-  for (const directory of directories) {
+  for (const directory of filteredDirectories) {
     byId.set(directory.id, directory);
   }
 

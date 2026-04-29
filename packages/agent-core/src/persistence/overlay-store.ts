@@ -170,6 +170,42 @@ export class OverlayStore {
     });
   }
 
+  async replaceWorkspaceLinkedDirectory(params: {
+    backend: ThreadOverlayState["backend"];
+    directory: LinkedDirectorySummary;
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const nextDirectories = [
+        ...current.extraLinkedDirectories.filter((directory) => {
+          if (directory.id === params.directory.id) {
+            return false;
+          }
+
+          if (directory.id.startsWith("pwragnt-handoff:")) {
+            return false;
+          }
+
+          return directory.path !== params.directory.path;
+        }),
+        params.directory,
+      ];
+      const nextState: ThreadOverlayState = {
+        ...current,
+        extraLinkedDirectories: nextDirectories,
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
+  }
+
   async getThreadExecutionMode(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;

@@ -183,4 +183,37 @@ describe("buildDirectorySummaries", () => {
       }),
     ]);
   });
+
+  it("uses handoff overlay workspace metadata as the active local/worktree directory", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          linkedDirectories: [
+            {
+              id: "backend-local",
+              label: "PwrAgnt",
+              path: "/repo",
+              kind: "local",
+            },
+            {
+              id: "pwragnt-handoff:codex:thread-1",
+              label: "PwrAgnt",
+              path: "/repo",
+              worktreePath: "/repo/.worktrees/pwragnt-feature",
+              kind: "worktree",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "directory:/repo",
+        path: "/repo",
+        threadKeys: ["codex:thread-1"],
+      }),
+    ]);
+  });
 });
