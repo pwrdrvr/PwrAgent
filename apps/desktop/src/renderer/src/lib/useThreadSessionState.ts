@@ -426,7 +426,7 @@ function normalizeThreadContextWindowState(
 
 function isContextCompactionItemNotification(
   notification: AppServerNotification
-): notification is Extract<AppServerNotification, { method: "item/started" | "item/completed" }> {
+): boolean {
   if (notification.method !== "item/started" && notification.method !== "item/completed") {
     return false;
   }
@@ -1277,6 +1277,20 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "item/completed") {
+          if (isContextCompactionItemNotification(event.notification)) {
+            return {
+              ...current,
+              activeTurnId: current.activeTurnId ?? event.notification.params.turnId,
+              expectOwnUpdate: true,
+              interacted: true,
+              lastTouchedAt: nextLastTouchedAt,
+              pendingStatusText:
+                current.activeTurnId || event.notification.params.turnId
+                  ? "Thinking"
+                  : undefined,
+            };
+          }
+
           const reviewEntry = reviewEntryFromCompletedItem(event.notification.params);
           if (reviewEntry) {
             const nextResponse = appendThreadEntries(
