@@ -1398,6 +1398,8 @@ export class DesktopBackendRegistry {
       observedBranch: normalizedObservedBranch,
       drifted:
         Boolean(expectedBranch && normalizedObservedBranch) &&
+        expectedBranch !== "HEAD" &&
+        normalizedObservedBranch !== "HEAD" &&
         expectedBranch !== normalizedObservedBranch,
       checkedAt: Date.now(),
     };

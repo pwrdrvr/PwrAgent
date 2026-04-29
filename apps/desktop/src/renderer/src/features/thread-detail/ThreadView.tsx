@@ -1247,6 +1247,15 @@ export function ThreadView(props: ThreadViewProps) {
         pair.observedBranch === observedBranch,
     );
 
+  const canWarnForBranchDrift = (expectedBranch?: string, observedBranch?: string): boolean =>
+    Boolean(
+      expectedBranch &&
+        observedBranch &&
+        expectedBranch !== "HEAD" &&
+        observedBranch !== "HEAD" &&
+        expectedBranch !== observedBranch,
+    );
+
   const showBranchDriftDialog = (
     thread: NavigationThreadSummary,
     expectedBranch: string,
@@ -1254,6 +1263,10 @@ export function ThreadView(props: ThreadViewProps) {
     reason: BranchDriftDialogState["reason"],
     checkedAt?: number,
   ): boolean => {
+    if (!canWarnForBranchDrift(expectedBranch, observedBranch)) {
+      return false;
+    }
+
     if (branchDriftRetained(thread, expectedBranch, observedBranch)) {
       return false;
     }
@@ -1285,7 +1298,12 @@ export function ThreadView(props: ThreadViewProps) {
       if (result.observedBranch !== thread.observedGitBranch) {
         await props.onRefreshNavigation?.();
       }
-      if (!result.drifted || !result.expectedBranch || !result.observedBranch) {
+      if (
+        !result.drifted ||
+        !result.expectedBranch ||
+        !result.observedBranch ||
+        !canWarnForBranchDrift(result.expectedBranch, result.observedBranch)
+      ) {
         setBranchDriftDialog((current) =>
           current?.threadKey === `${thread.source}:${thread.id}` ? undefined : current,
         );
@@ -1311,18 +1329,23 @@ export function ThreadView(props: ThreadViewProps) {
 
   useEffect(() => {
     const thread = selectedThread;
-    if (!thread?.gitBranch || !thread.observedGitBranch) {
+    const expectedBranch = thread?.gitBranch;
+    const observedBranch = thread?.observedGitBranch;
+    if (
+      !thread ||
+      !expectedBranch ||
+      !observedBranch ||
+      !canWarnForBranchDrift(expectedBranch, observedBranch)
+    ) {
+      if (thread) {
+        setBranchDriftDialog((current) =>
+          current?.threadKey === `${thread.source}:${thread.id}` ? undefined : current,
+        );
+      }
       return;
     }
 
-    if (thread.gitBranch === thread.observedGitBranch) {
-      setBranchDriftDialog((current) =>
-        current?.threadKey === `${thread.source}:${thread.id}` ? undefined : current,
-      );
-      return;
-    }
-
-    showBranchDriftDialog(thread, thread.gitBranch, thread.observedGitBranch, "focus");
+    showBranchDriftDialog(thread, expectedBranch, observedBranch, "focus");
   }, [selectedThread]);
 
   useEffect(() => {
