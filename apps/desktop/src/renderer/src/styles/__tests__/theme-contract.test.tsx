@@ -125,4 +125,20 @@ describe("Tangerine Terminal theme contract", () => {
       /\.transcript-list__items\s*\{[\s\S]*?padding-bottom:\s*(?:[4-9]\d|\d{3,})px;[\s\S]*?\}/
     );
   });
+
+  it("keeps thinking scanner variants on one shared visible sweep", () => {
+    expect(css).toContain("--thinking-scanner-progress: 0;");
+    expect(css).toContain("--thinking-scanner-full-offset: 0px;");
+    expect(css).toContain("--thinking-scanner-mini-offset: 0px;");
+    expect(css).not.toContain("@keyframes pwragnt-kitt-scan");
+    expect(css).toMatch(
+      /\.thinking-scanner\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*18px;[\s\S]*?--thinking-scanner-offset:\s*var\(--thinking-scanner-full-offset\);[\s\S]*?width:\s*62px;[\s\S]*?\}/
+    );
+    expect(css).toMatch(
+      /\.thinking-scanner--mini\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*6px;[\s\S]*?--thinking-scanner-offset:\s*var\(--thinking-scanner-mini-offset\);[\s\S]*?width:\s*16px;[\s\S]*?\}/
+    );
+    expect(css).toMatch(
+      /\.thinking-scanner__beam\s*\{[\s\S]*?transform:\s*translateX\(var\(--thinking-scanner-offset\)\);[\s\S]*?\}/
+    );
+  });
 });
