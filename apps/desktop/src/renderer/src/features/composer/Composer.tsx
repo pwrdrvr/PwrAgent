@@ -2227,7 +2227,6 @@ function ContextWindowMoon({
       data-tooltip={tooltip}
       role="img"
       tabIndex={0}
-      title={label}
     >
       <span
         aria-hidden="true"
