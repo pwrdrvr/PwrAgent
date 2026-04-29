@@ -1,4 +1,11 @@
-import { type ClipboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ClipboardEvent,
+  type DragEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   AppServerCollaborationModeRequest,
   AppServerReviewTarget,
@@ -99,7 +106,7 @@ type PendingSteerDraft = QueuedTurnDraft & {
   status: "pending" | "steering";
 };
 
-type PastedImageFile = {
+type ComposerImageFile = {
   file: File;
   type: string;
 };
@@ -1205,17 +1212,37 @@ export function Composer(props: ComposerProps) {
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
-    const pastedFiles = getPastedImageFiles(event.clipboardData);
+    const pastedFiles = getImageFilesFromDataTransfer(event.clipboardData);
     if (pastedFiles.length === 0) {
       return;
     }
 
     event.preventDefault();
     setSendError(undefined);
-    void attachPastedImages(pastedFiles);
+    void attachImages(pastedFiles);
   };
 
-  const attachPastedImages = async (files: PastedImageFile[]): Promise<void> => {
+  const handleDragOver = (event: DragEvent<HTMLTextAreaElement>): void => {
+    if (!hasImageFiles(event.dataTransfer)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDrop = (event: DragEvent<HTMLTextAreaElement>): void => {
+    const droppedFiles = getImageFilesFromDataTransfer(event.dataTransfer);
+    if (droppedFiles.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    setSendError(undefined);
+    void attachImages(droppedFiles);
+  };
+
+  const attachImages = async (files: ComposerImageFile[]): Promise<void> => {
     const pasteScope = pasteScopeRef.current;
     const pasteDraft = draft;
     const pasteImageAttachments = imageAttachments;
@@ -1225,11 +1252,22 @@ export function Composer(props: ComposerProps) {
     try {
       const nextAttachments = await Promise.all(
         files.map(async ({ file, type }, index) => {
+          const fallbackName = formatPastedImageName(type, index);
+          if (isGifFile(file, type)) {
+            return {
+              id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+              name: file.name || fallbackName,
+              size: file.size,
+              type: "image/gif",
+              url: await readFileAsImageDataUrl(file, "image/gif"),
+            };
+          }
+
           const normalized = await normalizeImageFile(file, {
             fallback: props.desktopApi?.normalizeImageForUpload,
           });
           void props.desktopApi?.recordImageUploadNormalization?.({
-            fileName: file.name || formatPastedImageName(type, index),
+            fileName: file.name || fallbackName,
             original: {
               height: normalized.original.height,
               mimeType: normalized.original.mimeType,
@@ -1249,7 +1287,7 @@ export function Composer(props: ComposerProps) {
           });
           return {
             id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
-            name: file.name || formatPastedImageName(type, index),
+            name: file.name || fallbackName,
             size: normalized.size,
             type: normalized.mimeType,
             url: normalized.dataUrl,
@@ -1505,6 +1543,8 @@ export function Composer(props: ComposerProps) {
             setSendError(undefined);
           }}
           onPaste={handlePaste}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
           onClick={() => {
             setActiveSkillIndex(0);
             setActiveSlashIndex(0);
@@ -2140,13 +2180,13 @@ export function Composer(props: ComposerProps) {
   );
 }
 
-function getPastedImageFiles(clipboardData: DataTransfer): PastedImageFile[] {
-  const files: PastedImageFile[] = [];
+function getImageFilesFromDataTransfer(dataTransfer: DataTransfer): ComposerImageFile[] {
+  const files: ComposerImageFile[] = [];
   const seenFiles = new Set<string>();
   let foundImageItem = false;
 
-  for (const item of Array.from(clipboardData.items)) {
-    if (item.kind !== "file" || !item.type.startsWith("image/")) {
+  for (const item of Array.from(dataTransfer.items)) {
+    if (item.kind !== "file") {
       continue;
     }
 
@@ -2155,10 +2195,15 @@ function getPastedImageFiles(clipboardData: DataTransfer): PastedImageFile[] {
       continue;
     }
 
+    const type = isImageMimeType(item.type) ? item.type : inferTransferImageType(file);
+    if (!type) {
+      continue;
+    }
+
     foundImageItem = true;
     const key = buildFileKey(file);
     if (!seenFiles.has(key)) {
-      files.push({ file, type: item.type });
+      files.push({ file, type });
       seenFiles.add(key);
     }
   }
@@ -2167,14 +2212,15 @@ function getPastedImageFiles(clipboardData: DataTransfer): PastedImageFile[] {
     return files;
   }
 
-  for (const file of Array.from(clipboardData.files)) {
-    if (!file.type.startsWith("image/")) {
+  for (const file of Array.from(dataTransfer.files)) {
+    const type = inferTransferImageType(file);
+    if (!type) {
       continue;
     }
 
     const key = buildFileKey(file);
     if (!seenFiles.has(key)) {
-      files.push({ file, type: file.type });
+      files.push({ file, type });
       seenFiles.add(key);
     }
   }
@@ -2182,8 +2228,58 @@ function getPastedImageFiles(clipboardData: DataTransfer): PastedImageFile[] {
   return files;
 }
 
+function hasImageFiles(dataTransfer: DataTransfer): boolean {
+  for (const item of Array.from(dataTransfer.items)) {
+    if (item.kind === "file" && (!item.type || isImageMimeType(item.type))) {
+      return true;
+    }
+  }
+
+  return Array.from(dataTransfer.files).some((file) => Boolean(inferTransferImageType(file)));
+}
+
 function buildFileKey(file: File): string {
   return `${file.name}:${file.type}:${file.size}:${file.lastModified}`;
+}
+
+function inferTransferImageType(file: File): string | undefined {
+  if (isImageMimeType(file.type)) {
+    return file.type;
+  }
+
+  const extension = file.name.toLowerCase().split(".").pop();
+  return extension === "gif" ? "image/gif" : undefined;
+}
+
+function isImageMimeType(type: string): boolean {
+  return type.toLowerCase().startsWith("image/");
+}
+
+function isGifFile(file: File, type: string): boolean {
+  return inferTransferImageType(file) === "image/gif" || type.toLowerCase() === "image/gif";
+}
+
+function readFileAsImageDataUrl(file: File, mimeType: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result === "string") {
+        if (reader.result.startsWith(`data:${mimeType}`)) {
+          resolve(reader.result);
+          return;
+        }
+        if (/^data:[^,]*,/i.test(reader.result)) {
+          resolve(reader.result.replace(/^data:[^,]*,/i, `data:${mimeType};base64,`));
+          return;
+        }
+      }
+      reject(new Error("The image did not produce an image data URL."));
+    });
+    reader.addEventListener("error", () => {
+      reject(reader.error ?? new Error("The image could not be read."));
+    });
+    reader.readAsDataURL(file);
+  });
 }
 
 function formatPastedImageName(type: string, index: number): string {
