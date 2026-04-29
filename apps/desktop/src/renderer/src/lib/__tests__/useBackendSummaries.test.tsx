@@ -66,6 +66,38 @@ describe("useBackendSummaries", () => {
             executionModes: [],
           },
         ],
+      })
+      .mockResolvedValueOnce({
+        fetchedAt: 3,
+        backends: [
+          {
+            kind: "codex",
+            label: "OpenAI",
+            available: true,
+            account: {
+              type: "chatgpt",
+              email: "user@example.com",
+              planType: "team",
+            },
+            rateLimits: [{ name: "5h limit", usedPercent: 10, remaining: 90 }],
+            methods: [],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [],
+          },
+        ],
       });
     const desktopApi: DesktopApi = {
       listBackends,
@@ -91,12 +123,29 @@ describe("useBackendSummaries", () => {
           },
         },
       },
-    } as AgentEvent);
+    });
 
     await waitFor(() => {
       expect(listBackends).toHaveBeenCalledTimes(2);
     });
     expect(result.current.backends[0]?.account?.planType).toBe("pro");
     expect(result.current.backends[0]?.rateLimits?.[0]?.remaining).toBe(85);
+
+    eventHandler?.({
+      backend: "codex",
+      notification: {
+        method: "account/updated",
+        params: {
+          account: {
+            planType: "team",
+          },
+        },
+      },
+    });
+
+    await waitFor(() => {
+      expect(listBackends).toHaveBeenCalledTimes(3);
+    });
+    expect(result.current.backends[0]?.account?.planType).toBe("team");
   });
 });

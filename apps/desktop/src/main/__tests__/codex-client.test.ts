@@ -62,6 +62,9 @@ class MockTransport implements JsonRpcTransport {
   static modelListResult: unknown = {
     data: []
   };
+  static rateLimitsResult: unknown = {
+    rateLimitsByLimitId: {}
+  };
   static turnInterruptResponseMode: "success" | "timeout" = "success";
 
   readonly sentMessages: string[] = [];
@@ -450,6 +453,17 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "account/rateLimits/read") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.rateLimitsResult,
+        })
+      );
+      return;
+    }
+
     if (payload.method === "thread/read") {
       const threadId = (JSON.parse(message) as { params?: { threadId?: string } }).params?.threadId;
       const readThreadError = threadId
@@ -817,6 +831,9 @@ describe("CodexAppServerClient", () => {
     MockTransport.modelListResult = {
       data: []
     };
+    MockTransport.rateLimitsResult = {
+      rateLimitsByLimitId: {}
+    };
     MockTransport.turnInterruptResponseMode = "success";
   });
 
@@ -1033,6 +1050,46 @@ describe("CodexAppServerClient", () => {
         label: "GPT-5.2",
         current: undefined,
         supportsReasoning: true,
+      },
+    ]);
+  });
+
+  it("normalizes 10080 minute rate-limit windows as weekly limits", async () => {
+    MockTransport.rateLimitsResult = {
+      rateLimitsByLimitId: {
+        codex: {
+          limitName: "Codex",
+          primary: {
+            usedPercent: 15,
+            windowDurationMins: 300,
+            resetsAt: "2026-04-29T14:00:00-04:00",
+          },
+          secondary: {
+            usedPercent: 9,
+            windowDurationMins: 10_080,
+            resetsAt: "2026-05-01T14:00:00-04:00",
+          },
+        },
+      },
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+    });
+
+    await expect(client.readRateLimits()).resolves.toMatchObject([
+      {
+        name: "5h limit",
+        remaining: 85,
+        usedPercent: 15,
+        windowMinutes: 300,
+      },
+      {
+        name: "Weekly limit",
+        remaining: 91,
+        usedPercent: 9,
+        windowMinutes: 10_080,
       },
     ]);
   });

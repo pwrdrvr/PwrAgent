@@ -561,7 +561,9 @@ function formatRateLimitWindowName(params: {
   let windowLabel: string;
   const minutes = params.windowMinutes;
   if (typeof minutes === "number" && Number.isFinite(minutes) && minutes > 0) {
-    if (minutes % 1440 === 0) {
+    if (minutes === 10_080) {
+      windowLabel = "Weekly limit";
+    } else if (minutes % 1440 === 0) {
       windowLabel = `${Math.round(minutes / 1440)}d limit`;
     } else if (minutes % 60 === 0) {
       windowLabel = `${Math.round(minutes / 60)}h limit`;

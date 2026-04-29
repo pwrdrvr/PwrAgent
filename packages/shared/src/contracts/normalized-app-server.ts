@@ -641,6 +641,12 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "account/updated";
+      params: {
+        account?: unknown;
+      };
+    }
+  | {
       method: "item/commandExecution/outputDelta";
       params: {
         threadId: string;
