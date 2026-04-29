@@ -132,9 +132,9 @@ const CONTEXT_MOON_PHASES = [
   "waxing crescent",
   "first quarter",
   "waxing gibbous",
+  "mostly full",
   "near full",
   "full",
-  "overfull",
   "critical",
 ] as const;
 

@@ -3399,7 +3399,10 @@ textarea {
   --context-window-moon-shadow: 20%;
 }
 
-.context-window-moon__sprite--phase-5,
+.context-window-moon__sprite--phase-5 {
+  --context-window-moon-shadow: 8%;
+}
+
 .context-window-moon__sprite--phase-6,
 .context-window-moon__sprite--phase-7 {
   --context-window-moon-shadow: 0%;
