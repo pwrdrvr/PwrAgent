@@ -705,7 +705,7 @@ function normalizeSuppressionText(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-function collectReviewOutputExplanations(value: unknown): Set<string> {
+function collectReviewSuppressionTexts(value: unknown): Set<string> {
   const output = new Set<string>();
 
   const visit = (node: unknown): void => {
@@ -722,6 +722,13 @@ function collectReviewOutputExplanations(value: unknown): Set<string> {
     const reviewOutput = normalizeReviewOutput(record);
     if (reviewOutput?.overall_explanation) {
       output.add(normalizeSuppressionText(reviewOutput.overall_explanation));
+    }
+    const reviewEvent = normalizeReviewEventItem(record);
+    if (reviewEvent?.event === "exitedreviewmode") {
+      const review = pickRawString(reviewEvent.item, ["review", "text"]);
+      if (review) {
+        output.add(normalizeSuppressionText(review));
+      }
     }
 
     for (const key of [
@@ -877,7 +884,7 @@ function buildMessageContent(record: Record<string, unknown>): {
 
 function extractConversationMessages(value: unknown): AppServerThreadReplay["messages"] {
   const output: AppServerThreadReplay["messages"] = [];
-  const suppressedAssistantTexts = collectReviewOutputExplanations(value);
+  const suppressedAssistantTexts = collectReviewSuppressionTexts(value);
 
   const visit = (node: unknown): void => {
     if (Array.isArray(node)) {
@@ -1744,7 +1751,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
           .map((entry) => asRecord(entry))
           .filter((entry): entry is Record<string, unknown> => entry !== null)
       : [];
-    const suppressedAssistantTexts = collectReviewOutputExplanations(rawItems);
+    const suppressedAssistantTexts = collectReviewSuppressionTexts(rawItems);
     const pendingActivityItems: Record<string, unknown>[] = [];
 
     const flushActivityItems = (): void => {

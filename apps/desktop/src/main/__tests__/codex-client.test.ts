@@ -1896,6 +1896,56 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("suppresses assistant messages that duplicate plain exited review text", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-plain-review", {
+      thread: {
+        turns: [
+          {
+            id: "turn-review",
+            status: "completed",
+            startedAt: 1_763_509_850,
+            items: [
+              {
+                type: "event_msg",
+                id: "exited-review",
+                payload: {
+                  type: "exited_review_mode",
+                  review: "No findings. The branch comparison is ready to merge.",
+                },
+              },
+              {
+                type: "agentMessage",
+                id: "review-answer",
+                text: "No findings. The branch comparison is ready to merge.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-plain-review",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "review",
+        id: "exited-review",
+        review: "No findings. The branch comparison is ready to merge.",
+      }),
+    ]);
+    expect(replay.messages).toEqual([]);
+
+    await client.close();
+  });
+
   it("suppresses review prompts without legacy image metadata", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-review-prompt", {

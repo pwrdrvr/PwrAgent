@@ -1907,5 +1907,11 @@ describe("useThreadSessionState", () => {
       });
     });
     expect(result.current.response?.replay.messages).toHaveLength(1);
+    expect(result.current.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        text: "Loaded thread-1",
+      }),
+    ]);
   });
 });

@@ -51,4 +51,20 @@ describe("TranscriptReview", () => {
     expect(screen.getByText("src/lib/useThreadSessionState.ts")).toBeInTheDocument();
     expect(screen.getByText("Lines 845-848")).toBeInTheDocument();
   });
+
+  it("hides raw entered-review protocol text when it matches the display label", () => {
+    render(
+      <TranscriptReview
+        entry={{
+          type: "review",
+          id: "review-entered-1",
+          review: "changes against 'main'",
+          displayText: "Review changes against main",
+        }}
+      />
+    );
+
+    expect(screen.getByText("Review changes against main")).toBeInTheDocument();
+    expect(screen.queryByText("changes against 'main'")).not.toBeInTheDocument();
+  });
 });

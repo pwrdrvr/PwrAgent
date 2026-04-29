@@ -147,6 +147,46 @@ function reviewEntryLabels(entry: AppServerThreadReviewEntry): string[] {
     .map((value) => normalizeReviewDisplayText(value).toLocaleLowerCase());
 }
 
+function normalizeTranscriptText(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function reviewResultTexts(entries: AppServerThreadEntry[]): Set<string> {
+  const output = new Set<string>();
+  for (const entry of entries) {
+    if (entry.type !== "review") {
+      continue;
+    }
+
+    const text = entry.output?.overall_explanation ?? entry.review;
+    if (text.trim()) {
+      output.add(normalizeTranscriptText(text));
+    }
+  }
+  return output;
+}
+
+function suppressReviewDuplicateMessages<T extends AppServerThreadMessage | AppServerThreadEntry>(
+  messagesOrEntries: T[],
+  reviewTexts: Set<string>
+): T[] {
+  if (reviewTexts.size === 0) {
+    return messagesOrEntries;
+  }
+
+  return messagesOrEntries.filter((entry) => {
+    if (
+      "role" in entry &&
+      entry.role === "assistant" &&
+      "text" in entry &&
+      typeof entry.text === "string"
+    ) {
+      return !reviewTexts.has(normalizeTranscriptText(entry.text));
+    }
+    return true;
+  });
+}
+
 function optimisticMessageEntries(
   optimisticEntries: AppServerThreadEntry[]
 ): AppServerThreadMessageEntry[] {
@@ -1457,19 +1497,33 @@ export function useThreadSessionState(params: {
   );
 
   const entries = useMemo(
-    () => mergeItems(selectedSession?.response?.replay.entries ?? [], visibleOptimisticEntries),
+    () => {
+      const mergedEntries = mergeItems(
+        selectedSession?.response?.replay.entries ?? [],
+        visibleOptimisticEntries
+      );
+      return suppressReviewDuplicateMessages(
+        mergedEntries,
+        reviewResultTexts(mergedEntries)
+      );
+    },
     [selectedSession?.response?.replay.entries, visibleOptimisticEntries]
   );
 
   const messages = useMemo(
-    () =>
-      mergeItems(
+    () => {
+      const mergedMessages = mergeItems(
         selectedSession?.response?.replay.messages ?? [],
         visibleOptimisticEntries
           .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
           .map(({ type: _type, ...message }) => message)
-      ),
-    [selectedSession?.response?.replay.messages, visibleOptimisticEntries]
+      );
+      return suppressReviewDuplicateMessages(
+        mergedMessages,
+        reviewResultTexts(entries)
+      );
+    },
+    [entries, selectedSession?.response?.replay.messages, visibleOptimisticEntries]
   );
 
   const thinkingThreadKeys = useMemo(

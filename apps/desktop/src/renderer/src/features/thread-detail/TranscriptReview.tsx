@@ -1,4 +1,5 @@
 import type { AppServerThreadReviewEntry } from "@pwragnt/shared";
+import { normalizeReviewDisplayText } from "../../../../shared/review-command";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 
 type TranscriptReviewProps = {
@@ -23,6 +24,15 @@ function priorityLabel(priority: number | undefined): string {
   return typeof priority === "number" ? `P${priority}` : "P?";
 }
 
+function shouldHideReviewBody(summary: string, review: string): boolean {
+  const trimmedReview = review.trim();
+  return (
+    trimmedReview === "" ||
+    trimmedReview === summary.trim() ||
+    normalizeReviewDisplayText(trimmedReview) === summary.trim()
+  );
+}
+
 export function TranscriptReview(props: TranscriptReviewProps) {
   const output = props.entry.output;
   const findings = output?.findings ?? [];
@@ -34,7 +44,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
       : `${findingCount} review ${findingCount === 1 ? "finding" : "findings"}`);
   const body =
     output?.overall_explanation ??
-    (props.entry.review.trim() === summary.trim() ? "" : props.entry.review);
+    (shouldHideReviewBody(summary, props.entry.review) ? "" : props.entry.review);
   const confidence = formatConfidence(output?.overall_confidence_score);
   const correctness =
     output?.overall_correctness === "patch is correct"
