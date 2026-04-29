@@ -1008,6 +1008,7 @@ type ThreadViewProps = {
         | "branchName"
         | "directoryLabel"
         | "directoryPath"
+        | "imageAttachments"
       >
     >
   ) => Promise<void>;
@@ -1033,6 +1034,7 @@ export function ThreadView(props: ThreadViewProps) {
   const [contextRailPinned, setContextRailPinned] = useState(false);
   const [contextRailResizing, setContextRailResizing] = useState(false);
   const [contextRailWidth, setContextRailWidth] = useState(380);
+  const [launchpadMaterializing, setLaunchpadMaterializing] = useState(false);
 
   useEffect(() => {
     setPendingActivityEntry(undefined);
@@ -1044,6 +1046,7 @@ export function ThreadView(props: ThreadViewProps) {
     setContextRailPinned(false);
     setContextRailResizing(false);
     setExpandedImage(undefined);
+    setLaunchpadMaterializing(false);
   }, [
     props.selectedLaunchpad?.directoryKey,
     props.selectedThread?.id,
@@ -1543,10 +1546,30 @@ export function ThreadView(props: ThreadViewProps) {
       (backend) => backend.kind === selectedLaunchpad.backend
     );
     const syncLabel = formatDirectorySync(props.selectedDirectory);
+    const handleMaterializeLaunchpad: NonNullable<
+      ThreadViewProps["onMaterializeLaunchpad"]
+    > = async (directoryKey, input, collaborationMode, reviewTarget) => {
+      if (!props.onMaterializeLaunchpad) {
+        return;
+      }
+
+      setLaunchpadMaterializing(true);
+      try {
+        await props.onMaterializeLaunchpad(
+          directoryKey,
+          input,
+          collaborationMode,
+          reviewTarget
+        );
+      } catch (error) {
+        setLaunchpadMaterializing(false);
+        throw error;
+      }
+    };
 
     return (
-      <section className="thread-view">
-        <header className="thread-header">
+      <section className="thread-view thread-view--launchpad">
+        <header className="thread-header thread-header--launchpad">
           <div>
             <div className="thread-header__eyebrow-row">
               <p className="eyebrow">New thread</p>
@@ -1558,9 +1581,6 @@ export function ThreadView(props: ThreadViewProps) {
               </span>
             </div>
             <h2 className="thread-header__title">{selectedLaunchpad.directoryLabel}</h2>
-            <p className="thread-header__summary">
-              Start a thread in this directory. Unsent prompt and setup changes stay attached to this launchpad until the first send.
-            </p>
           </div>
 
           <div className="thread-header__stats">
@@ -1583,15 +1603,22 @@ export function ThreadView(props: ThreadViewProps) {
           </div>
         </header>
 
-        <div className="launchpad-panel">
-          <div className="launchpad-panel__header">
+        <div className="launchpad-panel launchpad-panel--compact">
+          <div className="launchpad-panel__summary">
             <div>
-              <h3>Directory</h3>
-              <p>
+              <span className="launchpad-panel__label">Project</span>
+              <strong>{selectedLaunchpad.directoryLabel}</strong>
+            </div>
+            <div>
+              <span className="launchpad-panel__label">Threads</span>
+              <strong>
                 {props.selectedDirectory.threadKeys.length} thread
                 {props.selectedDirectory.threadKeys.length === 1 ? "" : "s"}
-                {syncLabel ? ` • ${syncLabel}` : ""}
-              </p>
+              </strong>
+            </div>
+            <div>
+              <span className="launchpad-panel__label">Status</span>
+              <strong>{syncLabel ?? "Directory context only"}</strong>
             </div>
           </div>
 
@@ -1615,20 +1642,33 @@ export function ThreadView(props: ThreadViewProps) {
           </dl>
         </div>
 
-        <Composer
-          backends={props.backends}
-          desktopApi={props.desktopApi}
-          directory={props.selectedDirectory}
-          disabled={!launchpadBackend?.available}
-          launchpad={selectedLaunchpad}
-          launchpadError={props.launchpadError}
-          onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
-          onMaterializeLaunchpad={props.onMaterializeLaunchpad}
-          onUpdateLaunchpad={props.onUpdateLaunchpad}
-          skillError={props.skillError}
-          skillLoading={props.skillLoading}
-          skills={props.skills}
-        />
+        {launchpadMaterializing ? (
+          <section
+            className="transcript-panel transcript-panel--pending"
+            aria-label="Preparing transcript"
+          >
+            <div className="launchpad-pending">
+              <p className="eyebrow">Preparing transcript</p>
+              <h3>Starting {selectedLaunchpad.directoryLabel}</h3>
+              <p>Your prompt was sent. The transcript will appear here when the thread is ready.</p>
+            </div>
+          </section>
+        ) : (
+          <Composer
+            backends={props.backends}
+            desktopApi={props.desktopApi}
+            directory={props.selectedDirectory}
+            disabled={!launchpadBackend?.available}
+            launchpad={selectedLaunchpad}
+            launchpadError={props.launchpadError}
+            onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
+            onMaterializeLaunchpad={handleMaterializeLaunchpad}
+            onUpdateLaunchpad={props.onUpdateLaunchpad}
+            skillError={props.skillError}
+            skillLoading={props.skillLoading}
+            skills={props.skills}
+          />
+        )}
       </section>
     );
   }

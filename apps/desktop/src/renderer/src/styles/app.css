@@ -1112,9 +1112,23 @@ textarea {
   overflow: hidden;
 }
 
+.thread-view--launchpad {
+  gap: 12px;
+  padding-right: 24px;
+}
+
 .thread-header__title {
   font-size: 40px;
   font-weight: 700;
+}
+
+.thread-header--launchpad {
+  align-items: center;
+}
+
+.thread-header--launchpad .thread-header__title {
+  font-size: 34px;
+  line-height: 1.05;
 }
 
 .thread-header__eyebrow-row {
@@ -1209,6 +1223,12 @@ textarea {
   background: var(--bg-panel);
 }
 
+.launchpad-panel--compact {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.6fr);
+  align-items: stretch;
+}
+
 .launchpad-panel__header {
   display: flex;
   align-items: flex-start;
@@ -1225,11 +1245,37 @@ textarea {
   line-height: 1.45;
 }
 
+.launchpad-panel__summary {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.launchpad-panel__summary strong {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.launchpad-panel__label {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .launchpad-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  padding: 16px;
+  gap: 10px 14px;
+  padding: 14px 16px;
 }
 
 .launchpad-grid dt {
@@ -1252,6 +1298,31 @@ textarea {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+
+.transcript-panel--pending {
+  align-items: center;
+  justify-content: center;
+}
+
+.launchpad-pending {
+  width: min(100%, 520px);
+  padding: 24px;
+  text-align: center;
+}
+
+.launchpad-pending h3 {
+  margin: 6px 0 0;
+  color: var(--text-primary);
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.launchpad-pending p:last-child {
+  margin: 10px 0 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.45;
 }
 
 .transcript-list {
@@ -3552,6 +3623,16 @@ textarea {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .launchpad-panel--compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .launchpad-panel__summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
   .context-rail,
   .context-rail.is-open {
     position: static;
@@ -3614,6 +3695,18 @@ textarea {
 
   .thread-header__title {
     font-size: 32px;
+  }
+
+  .thread-header--launchpad {
+    align-items: flex-start;
+  }
+
+  .thread-header--launchpad .thread-header__title {
+    font-size: 30px;
+  }
+
+  .launchpad-panel__summary {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .composer__review-options {

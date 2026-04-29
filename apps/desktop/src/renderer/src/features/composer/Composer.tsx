@@ -1423,6 +1423,7 @@ export function Composer(props: ComposerProps) {
     Boolean(backend?.capabilities.steerTurn) &&
     selectedModelOption?.supportsSteering !== false &&
     props.thread?.source !== "grok";
+  const launchpadSubmitting = isLaunchpad && sending;
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
@@ -1541,7 +1542,7 @@ export function Composer(props: ComposerProps) {
           ref={inputRef}
           id="thread-composer"
           className="composer__input"
-          disabled={props.disabled && !draft}
+          disabled={launchpadSubmitting || (props.disabled && !draft)}
           placeholder={
             isLaunchpad
               ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`
@@ -1859,6 +1860,7 @@ export function Composer(props: ComposerProps) {
               id="composer-provider"
               aria-label="Provider"
               className="composer__select"
+              disabled={launchpadSubmitting}
               value={props.launchpad.backend}
               onChange={(event) => {
                 const currentLaunchpad = props.launchpad;
@@ -1904,7 +1906,7 @@ export function Composer(props: ComposerProps) {
             <select
               aria-label="Access mode"
               className="composer__select composer__select--compact"
-              disabled={Boolean(props.updatingExecutionMode)}
+              disabled={launchpadSubmitting || Boolean(props.updatingExecutionMode)}
               value={
                 props.launchpad?.executionMode ??
                 props.thread?.executionMode ??
@@ -1940,7 +1942,11 @@ export function Composer(props: ComposerProps) {
             <select
               aria-label="Workspace mode"
               className="composer__select composer__select--compact"
-              disabled={!props.onUpdateLaunchpad || launchpadWorkspaceOptions.length <= 1}
+              disabled={
+                launchpadSubmitting ||
+                !props.onUpdateLaunchpad ||
+                launchpadWorkspaceOptions.length <= 1
+              }
               value={props.launchpad.workMode}
               onChange={(event) => {
                 handleLaunchpadPatch({
@@ -1973,6 +1979,7 @@ export function Composer(props: ComposerProps) {
               aria-label="Base branch"
               id="launchpad-branch"
               className="composer__select composer__select--compact"
+              disabled={launchpadSubmitting}
               value={
                 props.launchpad.branchName ??
                 props.directory?.gitStatus?.currentBranch ??
@@ -1995,6 +2002,7 @@ export function Composer(props: ComposerProps) {
               id="composer-model"
               aria-label="Model"
               className="composer__select"
+              disabled={launchpadSubmitting}
               value={selectedModelOption?.id ?? ""}
               onChange={(event) => {
                 const model = event.target.value;
@@ -2039,6 +2047,7 @@ export function Composer(props: ComposerProps) {
               id="composer-reasoning"
               aria-label="Reasoning"
               className="composer__select"
+              disabled={launchpadSubmitting}
               value={selectedReasoningEffort ?? ""}
               onChange={(event) => {
                 const reasoningEffort = event.target.value;
@@ -2062,6 +2071,7 @@ export function Composer(props: ComposerProps) {
               id="composer-service-tier"
               aria-label="Service tier"
               className="composer__select"
+              disabled={launchpadSubmitting}
               value={selectedServiceTier ?? ""}
               onChange={(event) => {
                 const serviceTier = event.target.value;
@@ -2084,6 +2094,7 @@ export function Composer(props: ComposerProps) {
             <label className="composer__checkbox">
               <input
                 checked={Boolean(currentSettings?.fastMode)}
+                disabled={launchpadSubmitting}
                 type="checkbox"
                 onChange={(event) => {
                   if (props.launchpad) {
@@ -2150,10 +2161,6 @@ export function Composer(props: ComposerProps) {
         <p className="composer__meta">
           Waiting for input before this turn can continue.
         </p>
-      ) : props.launchpad ? (
-        <p className="composer__meta">
-          Changes here become the default for future new-thread launchpads. Existing threads keep their current settings.
-        </p>
       ) : null}
 
       <div className="composer__actions">
@@ -2172,14 +2179,14 @@ export function Composer(props: ComposerProps) {
         ) : null}
         <button
           className="button button--primary"
-        disabled={
-          props.disabled ||
-          steering ||
-          (!activeTurnId && sending) ||
-          (!draft.trim() && imageAttachments.length === 0)
-        }
-        type="submit"
-      >
+          disabled={
+            props.disabled ||
+            steering ||
+            (!activeTurnId && sending) ||
+            (!draft.trim() && imageAttachments.length === 0)
+          }
+          type="submit"
+        >
           {activeTurnId
             ? "Queue"
             : sending
