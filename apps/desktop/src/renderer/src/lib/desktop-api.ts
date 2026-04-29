@@ -13,6 +13,8 @@ import type {
   ArchiveThreadResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
+  CheckThreadBranchDriftRequest,
+  CheckThreadBranchDriftResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
   FocusedDiffAnalysisRequest,
@@ -34,6 +36,8 @@ import type {
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
+  RetainThreadBranchDriftRequest,
+  RetainThreadBranchDriftResponse,
   RenameThreadRequest,
   RenameThreadResponse,
   RestoreWorktreeRequest,
@@ -56,6 +60,8 @@ import type {
   SubmitServerRequestResponse,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
+  UpdateThreadExpectedBranchRequest,
+  UpdateThreadExpectedBranchResponse,
 } from "@pwragnt/shared";
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 
@@ -103,6 +109,15 @@ export type DesktopApi = {
   setThreadModelSettings?: (
     request: SetThreadModelSettingsRequest
   ) => Promise<SetThreadModelSettingsResponse>;
+  checkThreadBranchDrift?: (
+    request: CheckThreadBranchDriftRequest
+  ) => Promise<CheckThreadBranchDriftResponse>;
+  updateThreadExpectedBranch?: (
+    request: UpdateThreadExpectedBranchRequest
+  ) => Promise<UpdateThreadExpectedBranchResponse>;
+  retainThreadBranchDrift?: (
+    request: RetainThreadBranchDriftRequest
+  ) => Promise<RetainThreadBranchDriftResponse>;
   materializeDirectoryLaunchpad?: (
     request: MaterializeDirectoryLaunchpadRequest
   ) => Promise<MaterializeDirectoryLaunchpadResponse>;

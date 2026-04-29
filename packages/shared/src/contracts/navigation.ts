@@ -20,6 +20,7 @@ export type ThreadInboxState = {
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
+  retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   optimisticUserMessage?: {
     text: string;
     imageParts?: AppServerThreadImagePart[];
@@ -143,8 +144,15 @@ export type ThreadOverlayState = {
   lastSeenUpdatedAt?: number;
   dismissedAt?: number;
   snoozedUntil?: number;
+  retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   extraLinkedDirectories: LinkedDirectorySummary[];
   worktreeSnapshots?: WorktreeSnapshotSummary[];
+};
+
+export type ThreadBranchDriftPair = {
+  expectedBranch: string;
+  observedBranch: string;
+  retainedAt: number;
 };
 
 export type DirectoryLaunchpadOverlayState = NavigationLaunchpadDraft;

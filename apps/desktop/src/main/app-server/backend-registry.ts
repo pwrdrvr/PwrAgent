@@ -1,4 +1,6 @@
 import { app } from "electron";
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 import { OverlayStore } from "@pwragnt/agent-core";
 import {
   shortenDerivedThreadTitle,
@@ -23,6 +25,8 @@ import {
   type BackendModelOption,
   type BackendRateLimitSummary,
   type BackendSummary,
+  type CheckThreadBranchDriftRequest,
+  type CheckThreadBranchDriftResponse,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
   type ListBackendsRequest,
@@ -35,6 +39,8 @@ import {
   type NavigationLaunchpadDefaults,
   type ResetDirectoryLaunchpadRequest,
   type ResetDirectoryLaunchpadResponse,
+  type RetainThreadBranchDriftRequest,
+  type RetainThreadBranchDriftResponse,
   type RenameThreadRequest,
   type RenameThreadResponse,
   type RestoreWorktreeRequest,
@@ -55,6 +61,8 @@ import {
   type ThreadExecutionMode,
   type UpdateDirectoryLaunchpadRequest,
   type UpdateDirectoryLaunchpadResponse,
+  type UpdateThreadExpectedBranchRequest,
+  type UpdateThreadExpectedBranchResponse,
   type EnsureDirectoryLaunchpadRequest,
   type EnsureDirectoryLaunchpadResponse,
 } from "@pwragnt/shared";
@@ -90,6 +98,7 @@ type InitializeResult = {
 const isDevelopment = process.env.NODE_ENV !== "production";
 const REPLAY_THREAD_TITLE_ENV = "PWRAGNT_REPLAY_THREAD_TITLE";
 const backendRegistryLog = getMainLogger("pwragnt:backend-registry");
+const execFile = promisify(execFileCallback);
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
   if (!isDevelopment) {
@@ -178,6 +187,31 @@ type BackendClient = {
     fastMode?: boolean;
   }): Promise<{ threadId: string }>;
 };
+
+function resolveThreadGitSourcePath(
+  thread: AppServerThreadSummary | undefined,
+): string | undefined {
+  if (!thread) {
+    return undefined;
+  }
+
+  const directory =
+    thread.linkedDirectories.find((candidate) => candidate.kind === "worktree") ??
+    thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
+    thread.linkedDirectories[0];
+
+  return directory?.worktreePath ?? directory?.path ?? thread.projectKey;
+}
+
+async function readCurrentGitBranch(sourcePath: string): Promise<string | undefined> {
+  const result = await execFile(
+    "git",
+    ["-C", sourcePath, "rev-parse", "--abbrev-ref", "HEAD"],
+    { env: process.env },
+  );
+  const branch = result.stdout.trim();
+  return branch || undefined;
+}
 
 type PendingServerRequest = {
   resolve: (response: SubmitServerRequestRequest["response"]) => void;
@@ -1334,6 +1368,83 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
       ...modelSettings,
+    };
+  }
+
+  async checkThreadBranchDrift(
+    params: CheckThreadBranchDriftRequest,
+  ): Promise<CheckThreadBranchDriftResponse> {
+    const thread = await this.findThreadForWorkspaceHandoff({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const expectedBranch = thread?.gitBranch?.trim() || undefined;
+    const sourcePath = resolveThreadGitSourcePath(thread);
+    const observedBranch = sourcePath
+      ? await readCurrentGitBranch(sourcePath).catch(() => thread?.observedGitBranch)
+      : thread?.observedGitBranch;
+    const normalizedObservedBranch = observedBranch?.trim() || undefined;
+
+    await this.overlayStore.setThreadObservedBranch({
+      backend: params.backend,
+      threadId: params.threadId,
+      branch: normalizedObservedBranch,
+    });
+
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      expectedBranch,
+      observedBranch: normalizedObservedBranch,
+      drifted:
+        Boolean(expectedBranch && normalizedObservedBranch) &&
+        expectedBranch !== normalizedObservedBranch,
+      checkedAt: Date.now(),
+    };
+  }
+
+  async updateThreadExpectedBranch(
+    params: UpdateThreadExpectedBranchRequest,
+  ): Promise<UpdateThreadExpectedBranchResponse> {
+    const branch = params.branch.trim();
+    if (!branch) {
+      throw new Error("Expected branch cannot be blank.");
+    }
+
+    await this.overlayStore.setThreadExpectedBranch({
+      backend: params.backend,
+      threadId: params.threadId,
+      branch,
+    });
+    await this.updateThreadGitBranchMetadata({
+      backend: params.backend,
+      threadId: params.threadId,
+      branch,
+    });
+
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      branch,
+      updatedAt: Date.now(),
+    };
+  }
+
+  async retainThreadBranchDrift(
+    params: RetainThreadBranchDriftRequest,
+  ): Promise<RetainThreadBranchDriftResponse> {
+    const retainedAt = Date.now();
+    await this.overlayStore.retainThreadBranchDrift({
+      backend: params.backend,
+      threadId: params.threadId,
+      expectedBranch: params.expectedBranch,
+      observedBranch: params.observedBranch,
+      retainedAt,
+    });
+
+    return {
+      ...params,
+      retainedAt,
     };
   }
 

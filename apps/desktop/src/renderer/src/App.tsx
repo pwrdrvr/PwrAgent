@@ -136,6 +136,7 @@ export function App() {
           onLoadOlder={session.loadOlder}
           onMaterializeLaunchpad={navigation.materializeDirectoryLaunchpad}
           onPendingStatusChange={session.setPendingStatusText}
+          onRefreshNavigation={navigation.refresh}
           onSetExecutionMode={
             navigation.selectedThread
               ? async (executionMode) =>

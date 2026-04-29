@@ -91,6 +91,7 @@ type ComposerProps = {
   onHandoffThreadWorkspace?: (
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
   ) => Promise<void>;
+  onBeforeStartTurn?: () => Promise<boolean>;
   onSetThreadModelSettings?: (
     patch: Partial<
       Pick<
@@ -989,6 +990,11 @@ export function Composer(props: ComposerProps) {
             },
           } satisfies AppServerCollaborationModeRequest)
         : undefined;
+
+    if (props.onBeforeStartTurn && !(await props.onBeforeStartTurn())) {
+      setSending(false);
+      return;
+    }
 
     props.onPendingStatusChange?.(collaborationMode ? "Planning" : "Thinking");
     const optimisticMessageId = props.addOptimisticUserMessage?.(

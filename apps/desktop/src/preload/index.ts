@@ -27,6 +27,8 @@ import type {
   AppServerListThreadsResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  CheckThreadBranchDriftRequest,
+  CheckThreadBranchDriftResponse,
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
@@ -35,6 +37,8 @@ import type {
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
+  RetainThreadBranchDriftRequest,
+  RetainThreadBranchDriftResponse,
   RenameThreadRequest,
   RenameThreadResponse,
   RestoreWorktreeRequest,
@@ -51,6 +55,8 @@ import type {
   SubmitServerRequestResponse,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
+  UpdateThreadExpectedBranchRequest,
+  UpdateThreadExpectedBranchResponse,
 } from "@pwragnt/shared";
 import type { RendererErrorReport } from "../shared/renderer-error";
 import type {
@@ -60,8 +66,10 @@ import type {
 } from "../shared/image-normalization";
 import {
   AGENT_EVENT_CHANNEL,
+  AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
@@ -69,6 +77,7 @@ import {
   AGENT_START_TURN_CHANNEL,
   AGENT_STEER_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
+  AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
@@ -197,6 +206,18 @@ const desktopApi = Object.freeze({
     request: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> =>
     await ipcRenderer.invoke(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL, request),
+  checkThreadBranchDrift: async (
+    request: CheckThreadBranchDriftRequest
+  ): Promise<CheckThreadBranchDriftResponse> =>
+    await ipcRenderer.invoke(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL, request),
+  updateThreadExpectedBranch: async (
+    request: UpdateThreadExpectedBranchRequest
+  ): Promise<UpdateThreadExpectedBranchResponse> =>
+    await ipcRenderer.invoke(AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL, request),
+  retainThreadBranchDrift: async (
+    request: RetainThreadBranchDriftRequest
+  ): Promise<RetainThreadBranchDriftResponse> =>
+    await ipcRenderer.invoke(AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL, request),
   materializeDirectoryLaunchpad: async (
     request: MaterializeDirectoryLaunchpadRequest
   ): Promise<MaterializeDirectoryLaunchpadResponse> =>

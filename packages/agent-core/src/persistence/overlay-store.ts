@@ -55,6 +55,7 @@ export class OverlayStore {
             fastMode: data.threads[threadKey]?.fastMode ?? thread.fastMode,
             gitBranch: data.threads[threadKey]?.gitBranch,
             observedGitBranch: data.threads[threadKey]?.observedGitBranch,
+            retainedBranchDriftPairs: data.threads[threadKey]?.retainedBranchDriftPairs,
             lastSeenAt: params.fetchedAt,
             lastSeenUpdatedAt: thread.updatedAt,
             extraLinkedDirectories:
@@ -129,6 +130,7 @@ export class OverlayStore {
         observedGitBranch: current?.observedGitBranch,
         dismissedAt: current?.dismissedAt,
         snoozedUntil: current?.snoozedUntil,
+        retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
         lastSeenAt: seenAt,
         lastSeenUpdatedAt: params.seenUpdatedAt ?? current?.lastSeenUpdatedAt,
         extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
@@ -318,6 +320,90 @@ export class OverlayStore {
         reasoningEffort: params.reasoningEffort,
         serviceTier: params.serviceTier,
         fastMode: params.fastMode,
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
+  }
+
+  async setThreadExpectedBranch(params: {
+    backend: ThreadOverlayState["backend"];
+    branch: string;
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const nextState: ThreadOverlayState = {
+        ...current,
+        gitBranch: params.branch,
+        observedGitBranch: params.branch,
+        retainedBranchDriftPairs: (current.retainedBranchDriftPairs ?? []).filter(
+          (pair) => pair.expectedBranch !== params.branch && pair.observedBranch !== params.branch,
+        ),
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
+  }
+
+  async setThreadObservedBranch(params: {
+    backend: ThreadOverlayState["backend"];
+    branch?: string;
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const nextState: ThreadOverlayState = {
+        ...current,
+        observedGitBranch: params.branch,
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
+  }
+
+  async retainThreadBranchDrift(params: {
+    backend: ThreadOverlayState["backend"];
+    expectedBranch: string;
+    observedBranch: string;
+    retainedAt?: number;
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const retainedBranchDriftPairs = [
+        ...(current.retainedBranchDriftPairs ?? []).filter(
+          (pair) =>
+            pair.expectedBranch !== params.expectedBranch ||
+            pair.observedBranch !== params.observedBranch,
+        ),
+        {
+          expectedBranch: params.expectedBranch,
+          observedBranch: params.observedBranch,
+          retainedAt: params.retainedAt ?? Date.now(),
+        },
+      ];
+      const nextState: ThreadOverlayState = {
+        ...current,
+        retainedBranchDriftPairs,
       };
       data.threads[threadKey] = nextState;
       return nextState;

@@ -17,6 +17,11 @@ export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";
 export const AGENT_STEER_TURN_CHANNEL = "agent:steer-turn";
 export const AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL = "agent:set-thread-execution-mode";
 export const AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL = "agent:set-thread-model-settings";
+export const AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL = "agent:check-thread-branch-drift";
+export const AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL =
+  "agent:update-thread-expected-branch";
+export const AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL =
+  "agent:retain-thread-branch-drift";
 export const AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "agent:materialize-directory-launchpad";
 export const AGENT_SUBMIT_SERVER_REQUEST_CHANNEL = "agent:submit-server-request";

@@ -3241,4 +3241,92 @@ describe("ThreadView", () => {
     expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.getByText("The request was handled.")).toBeInTheDocument();
   });
+
+  it("warns when a selected thread has branch drift and can update the expected branch", async () => {
+    const updateThreadExpectedBranch = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-branch",
+      branch: "main",
+      updatedAt: Date.now(),
+    }));
+    const refreshNavigation = vi.fn(async () => undefined);
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          },
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          updateThreadExpectedBranch,
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "thread-branch",
+          title: "Branch drift",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "feature/old",
+          observedGitBranch: "main",
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        onRefreshNavigation={refreshNavigation}
+        removeOptimisticMessage={(_id) => undefined}
+      />,
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Thread branch changed" });
+    expect(dialog).toHaveTextContent(
+      "This thread was working on branch feature/old and now has moved to branch main",
+    );
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Update Expected Branch" }));
+
+    await waitFor(() => {
+      expect(updateThreadExpectedBranch).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-branch",
+        branch: "main",
+      });
+    });
+    expect(refreshNavigation).toHaveBeenCalled();
+  });
 });

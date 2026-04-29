@@ -101,6 +101,26 @@ function threadInboxEqual(
   );
 }
 
+function retainedBranchDriftPairsEqual(
+  left: NavigationThreadSummary["retainedBranchDriftPairs"],
+  right: NavigationThreadSummary["retainedBranchDriftPairs"]
+): boolean {
+  const leftPairs = left ?? [];
+  const rightPairs = right ?? [];
+  if (leftPairs.length !== rightPairs.length) {
+    return false;
+  }
+
+  return leftPairs.every((pair, index) => {
+    const candidate = rightPairs[index];
+    return (
+      candidate?.expectedBranch === pair.expectedBranch &&
+      candidate.observedBranch === pair.observedBranch &&
+      candidate.retainedAt === pair.retainedAt
+    );
+  });
+}
+
 function threadSummariesEqual(
   left: NavigationThreadSummary,
   right: NavigationThreadSummary
@@ -121,6 +141,10 @@ function threadSummariesEqual(
     left.reasoningEffort === right.reasoningEffort &&
     left.serviceTier === right.serviceTier &&
     left.fastMode === right.fastMode &&
+    retainedBranchDriftPairsEqual(
+      left.retainedBranchDriftPairs,
+      right.retainedBranchDriftPairs
+    ) &&
     linkedDirectoriesEqual(left.linkedDirectories, right.linkedDirectories) &&
     worktreeSnapshotsEqual(left.worktreeSnapshots, right.worktreeSnapshots) &&
     threadInboxEqual(left.inbox, right.inbox)
