@@ -93,7 +93,7 @@ const sharedThread = {
       label: "PwrAgnt",
       path: "/Users/huntharo/pwrdrvr/PwrAgnt",
       worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
-      kind: "local" as const,
+      kind: "worktree" as const,
     },
   ],
 };
@@ -363,6 +363,152 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
 
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
+  });
+
+  it("shows copy actions below the thread context menu divider", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("separator")).toBeInTheDocument();
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Rename Thread",
+      "Archive Thread",
+      "Copy Thread ID",
+      "Copy Worktree Path",
+      "Copy Local Path",
+      "Copy Branch Name",
+    ]);
+  });
+
+  it("copies thread context menu values", () => {
+    const copyText = vi.fn(async () => undefined);
+    Object.defineProperty(window, "pwragnt", {
+      configurable: true,
+      value: {
+        copyText,
+      },
+    });
+
+    const renderMenu = (): void => {
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="recents"
+          createThreadError={undefined}
+          directories={directories}
+          inboxThreads={[sharedThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey="codex:thread-1"
+          threads={[sharedThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+          onArchiveThread={async () => undefined}
+        />
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    };
+
+    renderMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Thread ID" }));
+    cleanup();
+
+    renderMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Worktree Path" }));
+    cleanup();
+
+    renderMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Local Path" }));
+    cleanup();
+
+    renderMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Branch Name" }));
+
+    expect(copyText).toHaveBeenNthCalledWith(1, "thread-1");
+    expect(copyText).toHaveBeenNthCalledWith(
+      2,
+      "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt"
+    );
+    expect(copyText).toHaveBeenNthCalledWith(3, "/Users/huntharo/pwrdrvr/PwrAgnt");
+    expect(copyText).toHaveBeenNthCalledWith(4, "codex/thread-centric-ui");
+  });
+
+  it("hides optional copy actions without matching thread metadata", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[
+          {
+            ...sharedThread,
+            gitBranch: undefined,
+            linkedDirectories: [
+              {
+                id: "dir-a",
+                label: "PwrAgnt",
+                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                kind: "local" as const,
+              },
+            ],
+          },
+        ]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[
+          {
+            ...sharedThread,
+            gitBranch: undefined,
+            linkedDirectories: [
+              {
+                id: "dir-a",
+                label: "PwrAgnt",
+                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                kind: "local" as const,
+              },
+            ],
+          },
+        ]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+
+    expect(screen.queryByRole("menuitem", { name: "Copy Worktree Path" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Copy Branch Name" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy Thread ID" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy Local Path" })).toBeInTheDocument();
   });
 
   it("hides archive actions when the backend does not support archiving", () => {

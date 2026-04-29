@@ -1016,6 +1016,12 @@ textarea {
   background: var(--bg-panel-hover);
 }
 
+.thread-context-menu__separator {
+  height: 1px;
+  margin: 6px 0;
+  background: var(--border-subtle);
+}
+
 .rename-thread-backdrop {
   position: fixed;
   inset: 0;
