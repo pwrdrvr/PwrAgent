@@ -719,35 +719,25 @@ function appendCommandOutputDelta(
     turn: AppServerThreadTurnMetadata | undefined;
     turnId: string;
   },
-): AppServerThreadActivityEntry {
+): AppServerThreadActivityEntry | undefined {
   const existingDetails = current?.details ?? [];
-  const details = existingDetails.some((detail) => detail.id === params.itemId)
-    ? existingDetails.map((detail) => {
-        if (detail.id !== params.itemId) {
-          return detail;
-        }
-        return {
-          ...detail,
-          command: {
-            displayCommand: detail.command?.displayCommand ?? detail.label,
-            ...detail.command,
-            output: `${detail.command?.output ?? ""}${params.delta}`,
-          },
-        };
-      })
-    : [
-        ...existingDetails,
-        {
-          id: params.itemId,
-          kind: "command" as const,
-          label: "Ran command",
-          status: "in_progress" as const,
-          command: {
-            displayCommand: "Ran command",
-            output: params.delta,
-          },
-        },
-      ];
+  if (!existingDetails.some((detail) => detail.id === params.itemId)) {
+    return current;
+  }
+
+  const details = existingDetails.map((detail) => {
+    if (detail.id !== params.itemId) {
+      return detail;
+    }
+    return {
+      ...detail,
+      command: {
+        displayCommand: detail.command?.displayCommand ?? detail.label,
+        ...detail.command,
+        output: `${detail.command?.output ?? ""}${params.delta}`,
+      },
+    };
+  });
 
   return {
     type: "activity",
