@@ -1384,6 +1384,111 @@ describe("useThreadSessionState", () => {
     expect(result.current.contextWindow).toBeUndefined();
   });
 
+  it("returns to thinking when context compaction completes and the turn continues", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "in_progress",
+              },
+            },
+          } as any,
+        });
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBe("Thinking");
+    expect(result.current.activeTurnId).toBe("turn-1");
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: {
+                id: "compact-item-1",
+                type: "contextCompaction",
+              },
+            },
+          },
+        } as any);
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBe("Compacting context");
+    expect(result.current.activeTurnId).toBe("turn-1");
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: {
+                id: "compact-item-1",
+                type: "contextCompaction",
+              },
+            },
+          },
+        } as any);
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBe("Thinking");
+    expect(result.current.activeTurnId).toBe("turn-1");
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+  });
+
   it("surfaces failed turn errors in the transcript state", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
