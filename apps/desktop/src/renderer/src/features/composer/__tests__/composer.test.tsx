@@ -102,13 +102,13 @@ describe("Composer", () => {
 
     expect(
       screen.getByRole("img", {
-        name: "Context window 50% full, 64k/128k tokens, near full",
+        name: "Context window 50% full, 64k/128k tokens, full moon",
       })
     ).toBeInTheDocument();
     expect(screen.getByRole("img")).toHaveAttribute(
       "data-tooltip",
       [
-        "Context window: 50% full (near full)",
+        "Context window: 50% full (full moon)",
         "Current snapshot: 64k / 128k tokens",
         "Remaining: 64k tokens, 50% remaining",
         "Current breakdown: 63k input, 32k cached, 1k output",

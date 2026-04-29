@@ -2,7 +2,10 @@ import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useThreadSessionState } from "../useThreadSessionState";
+import {
+  getContextWindowMoonPhase,
+  useThreadSessionState,
+} from "../useThreadSessionState";
 
 function buildThread(params: {
   id: string;
@@ -25,6 +28,28 @@ function buildThread(params: {
 describe("useThreadSessionState", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("maps context window moon phases to explicit fill thresholds", () => {
+    expect(getContextWindowMoonPhase(0)).toBe(0);
+    expect(getContextWindowMoonPhase(9.99)).toBe(0);
+    expect(getContextWindowMoonPhase(10)).toBe(1);
+    expect(getContextWindowMoonPhase(22.49)).toBe(1);
+    expect(getContextWindowMoonPhase(22.5)).toBe(2);
+    expect(getContextWindowMoonPhase(34.99)).toBe(2);
+    expect(getContextWindowMoonPhase(35)).toBe(3);
+    expect(getContextWindowMoonPhase(47.49)).toBe(3);
+    expect(getContextWindowMoonPhase(47.5)).toBe(4);
+    expect(getContextWindowMoonPhase(59.99)).toBe(4);
+    expect(getContextWindowMoonPhase(60)).toBe(5);
+    expect(getContextWindowMoonPhase(72.49)).toBe(5);
+    expect(getContextWindowMoonPhase(72.5)).toBe(6);
+    expect(getContextWindowMoonPhase(84.99)).toBe(6);
+    expect(getContextWindowMoonPhase(85)).toBe(7);
+    expect(getContextWindowMoonPhase(97.49)).toBe(7);
+    expect(getContextWindowMoonPhase(97.5)).toBe(8);
+    expect(getContextWindowMoonPhase(100)).toBe(8);
+    expect(getContextWindowMoonPhase(100.01)).toBe(8);
   });
 
   it("keeps the optimistic user message ahead of the completed assistant reply", async () => {

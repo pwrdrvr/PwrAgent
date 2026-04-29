@@ -34,6 +34,34 @@ const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
   "item/fileChange/requestApproval",
 ]);
 
+export function getContextWindowMoonPhase(usedPercent: number): number {
+  if (usedPercent < 10) {
+    return 0;
+  }
+  if (usedPercent < 22.5) {
+    return 1;
+  }
+  if (usedPercent < 35) {
+    return 2;
+  }
+  if (usedPercent < 47.5) {
+    return 3;
+  }
+  if (usedPercent < 60) {
+    return 4;
+  }
+  if (usedPercent < 72.5) {
+    return 5;
+  }
+  if (usedPercent < 85) {
+    return 6;
+  }
+  if (usedPercent < 97.5) {
+    return 7;
+  }
+  return 8;
+}
+
 export type ThreadViewportState = {
   distanceFromBottom: number;
   scrollTop: number;
@@ -370,10 +398,8 @@ function normalizeThreadContextWindowState(
     return undefined;
   }
 
-  const usedPercent = Math.max(
-    0,
-    Math.min(100, (totalTokens / modelContextWindow) * 100)
-  );
+  const rawUsedPercent = (totalTokens / modelContextWindow) * 100;
+  const usedPercent = Math.max(0, Math.min(100, rawUsedPercent));
   const remainingTokens = Math.max(0, modelContextWindow - totalTokens);
   const remainingPercent = Math.max(
     0,
@@ -389,7 +415,7 @@ function normalizeThreadContextWindowState(
     inputTokens: currentUsage.inputTokens,
     modelContextWindow,
     outputTokens: currentUsage.outputTokens,
-    phase: Math.min(7, Math.max(0, Math.floor(usedPercent / 12.5))),
+    phase: getContextWindowMoonPhase(rawUsedPercent),
     reasoningOutputTokens: currentUsage.reasoningOutputTokens,
     remainingPercent,
     remainingTokens,

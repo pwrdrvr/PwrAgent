@@ -128,13 +128,14 @@ type AutocompleteKind = "skills" | "slash";
 type ReviewTargetChoice = AppServerReviewTarget["type"];
 
 const CONTEXT_MOON_PHASES = [
-  "new",
+  "new moon",
   "waxing crescent",
   "first quarter",
   "waxing gibbous",
-  "near full",
-  "full",
-  "overfull",
+  "full moon",
+  "waning gibbous",
+  "third quarter",
+  "waning crescent",
   "critical",
 ] as const;
 
@@ -2203,7 +2204,7 @@ function ContextWindowMoon({
     return null;
   }
 
-  const phase = Math.min(7, Math.max(0, contextWindow.phase));
+  const phase = Math.min(CONTEXT_MOON_PHASES.length - 1, Math.max(0, contextWindow.phase));
   const phaseLabel = CONTEXT_MOON_PHASES[phase];
   const percentLabel = `${Math.round(contextWindow.usedPercent)}%`;
   const tokenLabel = `${formatCompactNumber(

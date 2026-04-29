@@ -3327,19 +3327,23 @@ textarea {
 
 .context-window-moon {
   display: inline-flex;
+  min-height: 34px;
   min-width: 0;
   align-items: center;
-  gap: 6px;
+  align-self: center;
+  gap: 7px;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 34px;
+  margin-right: 4px;
 }
 
 .context-window-moon__sprite {
   display: inline-flex;
-  width: 18px;
-  height: 18px;
+  width: 26px;
+  height: 26px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
@@ -3348,72 +3352,117 @@ textarea {
 .context-window-moon__disc {
   position: relative;
   display: block;
-  width: 14px;
-  height: 14px;
+  width: 22px;
+  height: 22px;
   overflow: hidden;
   border: 1px solid rgba(255, 179, 92, 0.44);
   border-radius: 50%;
-  background: radial-gradient(
-    circle at 38% 34%,
-    var(--accent-bright) 0%,
-    var(--accent-strong) 42%,
-    var(--accent) 100%
-  );
+  background:
+    radial-gradient(circle at 34% 28%, rgba(255, 241, 203, 0.72) 0 8%, transparent 17%),
+    radial-gradient(circle at 68% 62%, rgba(132, 58, 13, 0.28) 0 7%, transparent 13%),
+    radial-gradient(circle at 48% 76%, rgba(94, 42, 13, 0.2) 0 5%, transparent 11%),
+    radial-gradient(circle at 72% 30%, rgba(255, 205, 128, 0.36) 0 6%, transparent 14%),
+    radial-gradient(circle at 38% 34%, var(--accent-bright) 0%, var(--accent-strong) 42%, var(--accent) 100%);
   box-shadow:
-    0 0 8px rgba(255, 138, 31, 0.28),
-    inset 0 0 3px rgba(255, 243, 220, 0.26);
+    0 0 10px rgba(255, 138, 31, 0.3),
+    inset 0 0 4px rgba(255, 243, 220, 0.26);
+}
+
+.context-window-moon__disc::before {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at 63% 34%, rgba(71, 28, 7, 0.36) 0 1px, rgba(255, 207, 139, 0.18) 1px 2px, transparent 3px),
+    radial-gradient(circle at 42% 58%, rgba(77, 33, 10, 0.3) 0 1px, rgba(255, 218, 153, 0.14) 1px 2px, transparent 3px),
+    radial-gradient(circle at 78% 78%, rgba(80, 34, 9, 0.28) 0 1px, transparent 3px),
+    radial-gradient(circle at 50% 22%, rgba(255, 229, 171, 0.22) 0 1px, transparent 3px);
+  content: "";
+  mix-blend-mode: multiply;
+  opacity: 0.72;
 }
 
 .context-window-moon__disc::after {
   position: absolute;
-  inset: -1px auto -1px -1px;
-  width: var(--context-window-moon-shadow, 100%);
-  border-radius: 50%;
+  inset: -1px auto -1px var(--context-window-moon-shadow-left, -1px);
+  width: var(--context-window-moon-shadow-width, 100%);
+  border-radius: var(--context-window-moon-shadow-radius, 50%);
   background: var(--bg-input);
-  box-shadow: inset -1px 0 2px rgba(255, 138, 31, 0.16);
+  box-shadow:
+    var(--context-window-moon-terminator-glow, 1px 0 3px rgba(255, 169, 79, 0.18)),
+    inset var(--context-window-moon-shadow-inset, -1px 0 2px) rgba(255, 138, 31, 0.16);
   content: "";
 }
 
 .context-window-moon__sprite--phase-0 .context-window-moon__disc {
-  background: rgba(255, 138, 31, 0.08);
+  background:
+    radial-gradient(circle at 60% 36%, rgba(255, 138, 31, 0.08) 0 2px, transparent 3px),
+    rgba(255, 138, 31, 0.08);
   box-shadow: inset 0 0 0 1px rgba(255, 138, 31, 0.14);
 }
 
 .context-window-moon__sprite--phase-0 .context-window-moon__disc::after {
-  width: 100%;
+  --context-window-moon-shadow-width: 100%;
 }
 
 .context-window-moon__sprite--phase-1 {
-  --context-window-moon-shadow: 86%;
+  --context-window-moon-shadow-width: 76%;
 }
 
 .context-window-moon__sprite--phase-2 {
-  --context-window-moon-shadow: 64%;
+  --context-window-moon-shadow-radius: 0;
+  --context-window-moon-shadow-width: 50%;
 }
 
 .context-window-moon__sprite--phase-3 {
-  --context-window-moon-shadow: 42%;
+  --context-window-moon-shadow-width: 24%;
 }
 
 .context-window-moon__sprite--phase-4 {
-  --context-window-moon-shadow: 20%;
+  --context-window-moon-shadow-width: 0%;
 }
 
-.context-window-moon__sprite--phase-5,
-.context-window-moon__sprite--phase-6,
+.context-window-moon__sprite--phase-5 {
+  --context-window-moon-shadow-left: auto;
+  --context-window-moon-shadow-inset: 1px 0 2px;
+  --context-window-moon-shadow-width: 24%;
+  --context-window-moon-terminator-glow: -1px 0 3px rgba(255, 169, 79, 0.18);
+}
+
+.context-window-moon__sprite--phase-5 .context-window-moon__disc::after,
+.context-window-moon__sprite--phase-6 .context-window-moon__disc::after,
+.context-window-moon__sprite--phase-7 .context-window-moon__disc::after {
+  right: -1px;
+}
+
+.context-window-moon__sprite--phase-6 {
+  --context-window-moon-shadow-left: auto;
+  --context-window-moon-shadow-inset: 1px 0 2px;
+  --context-window-moon-shadow-radius: 0;
+  --context-window-moon-shadow-width: 50%;
+  --context-window-moon-terminator-glow: -1px 0 3px rgba(255, 169, 79, 0.18);
+}
+
 .context-window-moon__sprite--phase-7 {
-  --context-window-moon-shadow: 0%;
+  --context-window-moon-shadow-left: auto;
+  --context-window-moon-shadow-inset: 1px 0 2px;
+  --context-window-moon-shadow-width: 76%;
+  --context-window-moon-terminator-glow: -1px 0 3px rgba(255, 169, 79, 0.18);
 }
 
-.context-window-moon__sprite--phase-6 .context-window-moon__disc {
+.context-window-moon__sprite--phase-4 .context-window-moon__disc,
+.context-window-moon__sprite--phase-8 .context-window-moon__disc {
   border-color: var(--accent-strong);
 }
 
-.context-window-moon__sprite--phase-7 .context-window-moon__disc {
-  border-color: var(--accent-bright);
+.context-window-moon__sprite--phase-8 {
+  --context-window-moon-shadow-width: 0%;
+}
+
+.context-window-moon__sprite--phase-8 .context-window-moon__disc {
   box-shadow:
-    0 0 10px rgba(255, 138, 31, 0.42),
-    inset 0 0 3px rgba(255, 243, 220, 0.34);
+    0 0 12px rgba(255, 138, 31, 0.48),
+    inset 0 0 4px rgba(255, 243, 220, 0.34);
 }
 
 .context-window-moon__label {
