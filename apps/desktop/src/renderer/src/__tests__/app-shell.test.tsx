@@ -544,13 +544,27 @@ describe("App", () => {
   });
 
   it("creates and sends on a new Grok thread", async () => {
-    const materializeDirectoryLaunchpad = vi.fn(async () => ({
-      backend: "grok" as const,
-      threadId: "thread-2",
-      executionMode: "default" as const,
-      workMode: "local" as const,
-      turnId: "turn-1",
-    }));
+    let resolveMaterializeLaunchpad: (() => void) | undefined;
+    const materializeDirectoryLaunchpad = vi.fn(
+      () =>
+        new Promise<{
+          backend: "grok";
+          threadId: string;
+          executionMode: "default";
+          workMode: "local";
+          turnId: string;
+        }>((resolve) => {
+          resolveMaterializeLaunchpad = () => {
+            resolve({
+              backend: "grok" as const,
+              threadId: "thread-2",
+              executionMode: "default" as const,
+              workMode: "local" as const,
+              turnId: "turn-1",
+            });
+          };
+        })
+    );
     const startTurn = vi.fn(
       async ({
         backend,
@@ -875,6 +889,11 @@ describe("App", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
 
+    expect(
+      await screen.findByRole("region", { name: "Preparing transcript" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "New thread" })).not.toBeInTheDocument();
+
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
         directoryKey: "unlinked:new-thread",
@@ -885,6 +904,9 @@ describe("App", () => {
           },
         ],
       });
+    });
+    await act(async () => {
+      resolveMaterializeLaunchpad?.();
     });
     expect(
       await screen.findByRole("heading", { level: 2, name: "Investigate Grok thread" })
