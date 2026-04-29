@@ -18,6 +18,7 @@ import {
   createQuestionnaireState,
   type PendingQuestionnaireState,
 } from "../features/thread-detail/questionnaire";
+import { normalizeReviewDisplayText } from "../../../shared/review-command";
 
 const MAX_VIEW_ONLY_THREADS = 10;
 const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
@@ -123,12 +124,66 @@ function pruneOptimisticEntries(
       return !response.replay.entries.some(
         (candidate) =>
           candidate.type === "review" &&
-          (candidate.review === entry.review ||
-            candidate.displayText === entry.displayText)
+          reviewEntriesMatch(candidate, entry)
       );
     }
 
     return !response.replay.entries.some((candidate) => candidate.id === entry.id);
+  });
+}
+
+function reviewEntriesMatch(
+  candidate: AppServerThreadReviewEntry,
+  optimisticEntry: AppServerThreadReviewEntry
+): boolean {
+  const candidateLabels = reviewEntryLabels(candidate);
+  const optimisticLabels = reviewEntryLabels(optimisticEntry);
+  return optimisticLabels.some((label) => candidateLabels.includes(label));
+}
+
+function reviewEntryLabels(entry: AppServerThreadReviewEntry): string[] {
+  return [entry.displayText, entry.review]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .map((value) => normalizeReviewDisplayText(value).toLocaleLowerCase());
+}
+
+function normalizeTranscriptText(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function reviewResultTexts(entries: AppServerThreadEntry[]): Set<string> {
+  const output = new Set<string>();
+  for (const entry of entries) {
+    if (entry.type !== "review") {
+      continue;
+    }
+
+    const text = entry.output?.overall_explanation ?? entry.review;
+    if (text.trim()) {
+      output.add(normalizeTranscriptText(text));
+    }
+  }
+  return output;
+}
+
+function suppressReviewDuplicateMessages<T extends AppServerThreadMessage | AppServerThreadEntry>(
+  messagesOrEntries: T[],
+  reviewTexts: Set<string>
+): T[] {
+  if (reviewTexts.size === 0) {
+    return messagesOrEntries;
+  }
+
+  return messagesOrEntries.filter((entry) => {
+    if (
+      "role" in entry &&
+      entry.role === "assistant" &&
+      "text" in entry &&
+      typeof entry.text === "string"
+    ) {
+      return !reviewTexts.has(normalizeTranscriptText(entry.text));
+    }
+    return true;
   });
 }
 
@@ -423,6 +478,12 @@ function reviewEntryFromCompletedItem(params: {
       : typeof record.text === "string"
         ? record.text
         : "";
+  const displayText =
+    record.type === "enteredReviewMode"
+      ? review
+        ? normalizeReviewDisplayText(review)
+        : "Code review started"
+      : undefined;
   const output = normalizeReviewOutput(record.data?.reviewOutput);
   const turn = buildTurnMetadata({
     fallbackId: typeof params.turnId === "string" ? params.turnId : undefined,
@@ -433,10 +494,8 @@ function reviewEntryFromCompletedItem(params: {
   return {
     type: "review",
     id: typeof record.id === "string" ? record.id : `review-${record.type}`,
-    review,
-    ...(record.type === "enteredReviewMode"
-      ? { displayText: review || "Code review started" }
-      : {}),
+    review: displayText ?? review,
+    ...(displayText ? { displayText } : {}),
     ...(output ? { output } : {}),
     ...(turn ? { turn } : {}),
     createdAt: Date.now(),
@@ -969,7 +1028,7 @@ export function useThreadSessionState(params: {
               optimisticEntries: current.optimisticEntries.filter(
                 (entry) =>
                   entry.type !== "review" ||
-                  entry.displayText !== reviewEntry.displayText
+                  !reviewEntriesMatch(reviewEntry, entry)
               ),
               response: nextResponse,
             };
@@ -1001,6 +1060,7 @@ export function useThreadSessionState(params: {
           const shouldHydrateUnknownPhaseAssistant =
             !completedTurnText &&
             Boolean(
+              !completedTurnHasReview &&
               current.pendingAssistantMessage &&
                 current.pendingAssistantMessage.phase === undefined
             );
@@ -1013,7 +1073,9 @@ export function useThreadSessionState(params: {
                   : entry
               ),
             ...(current.pendingAssistantMessage
-              ? [
+              ? completedTurnHasReview
+                ? []
+                : [
                   withTurnMetadataAndPhase(
                     current.pendingAssistantMessage,
                     completedTurn,
@@ -1435,19 +1497,33 @@ export function useThreadSessionState(params: {
   );
 
   const entries = useMemo(
-    () => mergeItems(selectedSession?.response?.replay.entries ?? [], visibleOptimisticEntries),
+    () => {
+      const mergedEntries = mergeItems(
+        selectedSession?.response?.replay.entries ?? [],
+        visibleOptimisticEntries
+      );
+      return suppressReviewDuplicateMessages(
+        mergedEntries,
+        reviewResultTexts(mergedEntries)
+      );
+    },
     [selectedSession?.response?.replay.entries, visibleOptimisticEntries]
   );
 
   const messages = useMemo(
-    () =>
-      mergeItems(
+    () => {
+      const mergedMessages = mergeItems(
         selectedSession?.response?.replay.messages ?? [],
         visibleOptimisticEntries
           .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
           .map(({ type: _type, ...message }) => message)
-      ),
-    [selectedSession?.response?.replay.messages, visibleOptimisticEntries]
+      );
+      return suppressReviewDuplicateMessages(
+        mergedMessages,
+        reviewResultTexts(entries)
+      );
+    },
+    [entries, selectedSession?.response?.replay.messages, visibleOptimisticEntries]
   );
 
   const thinkingThreadKeys = useMemo(

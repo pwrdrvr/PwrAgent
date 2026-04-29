@@ -138,6 +138,10 @@ desktop replay scenarios do not exercise Codex sidebar directory identity.
   drift and restores a saved viewport on reselect
 - `thread-scroll-restore/`: cached thread reselection preserves transcript
   viewport and avoids an extra replay `thread/read`
+- `review-output-rendering/`: captured Codex inline review output renders plain
+  review findings in one review card without duplicate assistant text
+- `review-multiple-findings/`: captured Codex inline review output renders
+  multiple plain-text findings as separate cards without duplicate assistant text
 - `focused-diff-zoom/`: eligible transcript diffs that condense locally and can
   hide low-signal hunks via the focused diff path
 - `thread-image-fit/`: pasted transcript image preview preserves its natural

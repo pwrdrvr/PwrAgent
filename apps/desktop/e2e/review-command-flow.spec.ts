@@ -26,7 +26,9 @@ test("review command asks for target and preserves transcript order", async () =
       })
     ).toBeVisible();
 
-    await app.window.getByLabel("Reply").fill("/review");
+    const reply = app.window.getByLabel("Reply");
+    await reply.fill("/review");
+    await expect(reply).toHaveValue("/review");
     await app.window.getByRole("button", { name: "Send" }).click();
 
     const reviewTarget = app.window.getByRole("group", { name: "Review target" });
@@ -49,16 +51,20 @@ test("review command asks for target and preserves transcript order", async () =
 
     const transcript = app.window.getByRole("region", { name: "Transcript" });
     await expect(transcript.getByText("Review changes against main")).toBeVisible();
+    await expect(transcript.getByText("changes against 'main'")).toHaveCount(0);
 
     await app.advance({ stepId: "status-active-1" });
     await app.advance({ stepId: "turn-started-1" });
+    await app.advance({ stepId: "review-entered-completed-1" });
+    await app.advance({ stepId: "review-exited-completed-1" });
+    await app.advance({ stepId: "review-agent-message-delta-1" });
     await app.advance({ stepId: "turn-completed-1" });
 
     await expect(transcript.getByText("Code review")).toBeVisible();
     await expect(
       transcript.getByText("No findings. The branch comparison is ready to merge.")
-        .first()
-    ).toBeVisible();
+    ).toHaveCount(1);
+    await expect(transcript.getByText("changes against 'main'")).toHaveCount(0);
     await expect(
       transcript.getByText(
         "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings."

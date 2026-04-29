@@ -1890,22 +1890,155 @@ describe("CodexAppServerClient", () => {
         output: reviewOutput,
         turn,
       },
-      {
-        type: "message",
-        id: "review-answer",
-        role: "assistant",
-        text: reviewOutput.overall_explanation,
-        createdAt: 1_763_509_850_000,
-        turn,
+    ]);
+    expect(replay.messages).toEqual([]);
+
+    await client.close();
+  });
+
+  it("suppresses assistant messages that duplicate plain exited review text", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-plain-review", {
+      thread: {
+        turns: [
+          {
+            id: "turn-review",
+            status: "completed",
+            startedAt: 1_763_509_850,
+            items: [
+              {
+                type: "event_msg",
+                id: "exited-review",
+                payload: {
+                  type: "exited_review_mode",
+                  review: "No findings. The branch comparison is ready to merge.",
+                },
+              },
+              {
+                type: "agentMessage",
+                id: "review-answer",
+                text: "No findings. The branch comparison is ready to merge.",
+              },
+            ],
+          },
+        ],
       },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-plain-review",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "review",
+        id: "exited-review",
+        review: "No findings. The branch comparison is ready to merge.",
+      }),
+    ]);
+    expect(replay.messages).toEqual([]);
+
+    await client.close();
+  });
+
+  it("suppresses review prompts without legacy image metadata", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-review-prompt", {
+      thread: {
+        turns: [
+          {
+            id: "turn-review",
+            status: "inProgress",
+            startedAt: 1_763_509_850,
+            items: [
+              {
+                type: "userMessage",
+                id: "hidden-review-prompt",
+                message:
+                  "Review the code changes against the base branch 'main'. Run git diff 329990027959f8a4d07fbce1ff7a804ba798fcb0 to inspect the changes relative to main. Provide prioritized, actionable findings.",
+              },
+              {
+                type: "userMessage",
+                id: "visible-user-message",
+                message: "This should still render.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-review-prompt",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        id: "visible-user-message",
+        role: "user",
+        text: "This should still render.",
+      }),
     ]);
     expect(replay.messages).toEqual([
-      {
-        id: "review-answer",
-        role: "assistant",
-        text: reviewOutput.overall_explanation,
-        createdAt: undefined,
+      expect.objectContaining({
+        id: "visible-user-message",
+        role: "user",
+        text: "This should still render.",
+      }),
+    ]);
+
+    await client.close();
+  });
+
+  it("normalizes entered review display text from Codex hints", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-review-hint", {
+      thread: {
+        turns: [
+          {
+            id: "turn-review",
+            status: "inProgress",
+            items: [
+              {
+                type: "event_msg",
+                id: "entered-review",
+                payload: {
+                  type: "entered_review_mode",
+                  user_facing_hint: "changes against 'main'",
+                },
+              },
+            ],
+          },
+        ],
       },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-review-hint",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "review",
+        id: "entered-review",
+        displayText: "Review changes against main",
+      }),
     ]);
 
     await client.close();

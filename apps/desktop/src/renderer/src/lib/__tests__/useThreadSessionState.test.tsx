@@ -1832,7 +1832,7 @@ describe("useThreadSessionState", () => {
               item: {
                 id: "turn-review-1-item-entered",
                 type: "enteredReviewMode",
-                review: "Review changes against main",
+                review: "changes against 'main'",
               },
             },
           },
@@ -1857,6 +1857,18 @@ describe("useThreadSessionState", () => {
                   },
                 },
               },
+            },
+          },
+        });
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/agentMessage/delta",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-review-1",
+              itemId: "turn-review-1-assistant",
+              delta: "No findings. Ready to merge.",
             },
           },
         });
@@ -1888,7 +1900,18 @@ describe("useThreadSessionState", () => {
         "review:turn-review-1-item-entered",
         "review:turn-review-1-item",
       ]);
+      expect(result.current.entries[1]).toMatchObject({
+        type: "review",
+        review: "Review changes against main",
+        displayText: "Review changes against main",
+      });
     });
     expect(result.current.response?.replay.messages).toHaveLength(1);
+    expect(result.current.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        text: "Loaded thread-1",
+      }),
+    ]);
   });
 });

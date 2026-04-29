@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseReviewCommand } from "../review-command";
+import { normalizeReviewDisplayText, parseReviewCommand } from "../review-command";
 
 describe("parseReviewCommand", () => {
   it("parses bare review as uncommitted changes", () => {
@@ -34,5 +34,19 @@ describe("parseReviewCommand", () => {
     expect(parseReviewCommand("/reviewer main")).toBeUndefined();
     expect(parseReviewCommand("please /review main")).toBeUndefined();
     expect(parseReviewCommand("/review --custom")).toBeUndefined();
+  });
+});
+
+describe("normalizeReviewDisplayText", () => {
+  it("normalizes Codex review hints to the composer display text", () => {
+    expect(normalizeReviewDisplayText("changes against 'main'")).toBe(
+      "Review changes against main"
+    );
+    expect(normalizeReviewDisplayText("Review changes against \"develop\"")).toBe(
+      "Review changes against develop"
+    );
+    expect(normalizeReviewDisplayText("current changes")).toBe(
+      "Review current changes"
+    );
   });
 });

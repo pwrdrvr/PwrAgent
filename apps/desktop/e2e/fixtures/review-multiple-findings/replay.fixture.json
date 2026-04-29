@@ -1,0 +1,266 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "review-multiple-findings",
+    "sourceCaptureId": "2026-04-29T01-22-48-920Z-codex-full-access",
+    "threadId": "019dd4ce-4fec-76c0-8ede-5e65d7377417"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list",
+          "review/start"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "019dd4ce-4fec-76c0-8ede-5e65d7377417",
+          "title": "Steering",
+          "titleSource": "explicit",
+          "summary": "Captured review with two findings",
+          "source": "codex",
+          "executionMode": "default",
+          "gitBranch": "feat/turn-steering-queue",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1777428480000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-before-review",
+            "role": "assistant",
+            "text": "Rebased onto latest `origin/main` again and force-pushed with lease."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-before-review",
+            "role": "assistant",
+            "text": "Rebased onto latest `origin/main` again and force-pushed with lease."
+          }
+        ],
+        "lastAssistantMessage": "Rebased onto latest `origin/main` again and force-pushed with lease.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "review-start-1",
+      "kind": "response",
+      "method": "review/start",
+      "result": {
+        "threadId": "019dd4ce-4fec-76c0-8ede-5e65d7377417",
+        "reviewThreadId": "019dd4ce-4fec-76c0-8ede-5e65d7377417",
+        "turnId": "019dd6fe-485f-7f73-bf6e-16ff7911fadb"
+      }
+    },
+    {
+      "id": "review-entered-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/started",
+        "params": {
+          "threadId": "019dd4ce-4fec-76c0-8ede-5e65d7377417",
+          "turnId": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+          "item": {
+            "type": "enteredReviewMode",
+            "id": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+            "review": "changes against 'main'"
+          }
+        }
+      }
+    },
+    {
+      "id": "review-entered-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "019dd4ce-4fec-76c0-8ede-5e65d7377417",
+          "turnId": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+          "item": {
+            "type": "enteredReviewMode",
+            "id": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+            "review": "changes against 'main'"
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "019dd4ce-4fec-76c0-8ede-5e65d7377417",
+          "turnId": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+          "turn": {
+            "id": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+            "status": "inProgress"
+          }
+        }
+      }
+    },
+    {
+      "id": "review-exited-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/started",
+        "params": {
+          "threadId": "019dd4ce-4fec-76c0-8ede-5e65d7377417",
+          "turnId": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+          "item": {
+            "type": "exitedReviewMode",
+            "id": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+            "review": "The patch can lose pending steer drafts in realistic active-turn races. These are user-visible correctness issues in the new queuing/steering flow.\n\nFull review comments:\n\n- [P2] Only clear steer after it has actually been sent — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:618-622\n  When a pending steer is waiting for the next injection opportunity, any `item/completed` whose params happen to contain the draft text clears `pendingSteer` before `submitPendingSteer` marks it as `steering`. For short/common steer text, this can hide and lose the draft; if the subsequent `steerTurn` call fails, the catch path cannot restore it because the pending state was already set to `undefined`. Gate this confirmation on `pendingSteer.status === \"steering\"` so pre-injection events cannot acknowledge the steer.\n\n- [P2] Preserve pending steer when a queued turn already exists — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:660-667\n  If the user has one queued message and also creates a pending steer, then the active turn completes before the steer is injected, this branch drops the pending steer because `setQueuedTurn((queued) => queued ?? pendingSteer)` keeps the existing queued message and `setPendingSteer(undefined)` removes the other draft. That loses user-entered text in a normal race near turn completion; instead keep the pending steer visible, restore it to the draft, or otherwise preserve it when a queued turn is already present."
+          }
+        }
+      }
+    },
+    {
+      "id": "review-exited-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "019dd4ce-4fec-76c0-8ede-5e65d7377417",
+          "turnId": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+          "item": {
+            "type": "exitedReviewMode",
+            "id": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+            "review": "The patch can lose pending steer drafts in realistic active-turn races. These are user-visible correctness issues in the new queuing/steering flow.\n\nFull review comments:\n\n- [P2] Only clear steer after it has actually been sent — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:618-622\n  When a pending steer is waiting for the next injection opportunity, any `item/completed` whose params happen to contain the draft text clears `pendingSteer` before `submitPendingSteer` marks it as `steering`. For short/common steer text, this can hide and lose the draft; if the subsequent `steerTurn` call fails, the catch path cannot restore it because the pending state was already set to `undefined`. Gate this confirmation on `pendingSteer.status === \"steering\"` so pre-injection events cannot acknowledge the steer.\n\n- [P2] Preserve pending steer when a queued turn already exists — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:660-667\n  If the user has one queued message and also creates a pending steer, then the active turn completes before the steer is injected, this branch drops the pending steer because `setQueuedTurn((queued) => queued ?? pendingSteer)` keeps the existing queued message and `setPendingSteer(undefined)` removes the other draft. That loses user-entered text in a normal race near turn completion; instead keep the pending steer visible, restore it to the draft, or otherwise preserve it when a queued turn is already present."
+          }
+        }
+      }
+    },
+    {
+      "id": "review-assistant-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/started",
+        "params": {
+          "threadId": "019dd4ce-4fec-76c0-8ede-5e65d7377417",
+          "turnId": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+          "item": {
+            "type": "agentMessage",
+            "id": "review_rollout_assistant",
+            "text": "The patch can lose pending steer drafts in realistic active-turn races. These are user-visible correctness issues in the new queuing/steering flow.\n\nFull review comments:\n\n- [P2] Only clear steer after it has actually been sent — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:618-622\n  When a pending steer is waiting for the next injection opportunity, any `item/completed` whose params happen to contain the draft text clears `pendingSteer` before `submitPendingSteer` marks it as `steering`. For short/common steer text, this can hide and lose the draft; if the subsequent `steerTurn` call fails, the catch path cannot restore it because the pending state was already set to `undefined`. Gate this confirmation on `pendingSteer.status === \"steering\"` so pre-injection events cannot acknowledge the steer.\n\n- [P2] Preserve pending steer when a queued turn already exists — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:660-667\n  If the user has one queued message and also creates a pending steer, then the active turn completes before the steer is injected, this branch drops the pending steer because `setQueuedTurn((queued) => queued ?? pendingSteer)` keeps the existing queued message and `setPendingSteer(undefined)` removes the other draft. That loses user-entered text in a normal race near turn completion; instead keep the pending steer visible, restore it to the draft, or otherwise preserve it when a queued turn is already present.",
+            "phase": null,
+            "memoryCitation": null
+          }
+        }
+      }
+    },
+    {
+      "id": "review-assistant-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "019dd4ce-4fec-76c0-8ede-5e65d7377417",
+          "turnId": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+          "item": {
+            "type": "agentMessage",
+            "id": "review_rollout_assistant",
+            "text": "The patch can lose pending steer drafts in realistic active-turn races. These are user-visible correctness issues in the new queuing/steering flow.\n\nFull review comments:\n\n- [P2] Only clear steer after it has actually been sent — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:618-622\n  When a pending steer is waiting for the next injection opportunity, any `item/completed` whose params happen to contain the draft text clears `pendingSteer` before `submitPendingSteer` marks it as `steering`. For short/common steer text, this can hide and lose the draft; if the subsequent `steerTurn` call fails, the catch path cannot restore it because the pending state was already set to `undefined`. Gate this confirmation on `pendingSteer.status === \"steering\"` so pre-injection events cannot acknowledge the steer.\n\n- [P2] Preserve pending steer when a queued turn already exists — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:660-667\n  If the user has one queued message and also creates a pending steer, then the active turn completes before the steer is injected, this branch drops the pending steer because `setQueuedTurn((queued) => queued ?? pendingSteer)` keeps the existing queued message and `setPendingSteer(undefined)` removes the other draft. That loses user-entered text in a normal race near turn completion; instead keep the pending steer visible, restore it to the draft, or otherwise preserve it when a queued turn is already present.",
+            "phase": null,
+            "memoryCitation": null
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "019dd4ce-4fec-76c0-8ede-5e65d7377417",
+          "turnId": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+          "turn": {
+            "id": "019dd6fe-485f-7f73-bf6e-16ff7911fadb",
+            "status": "completed"
+          }
+        }
+      }
+    },
+    {
+      "id": "thread-read-2",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-before-review",
+            "role": "assistant",
+            "text": "Rebased onto latest `origin/main` again and force-pushed with lease."
+          },
+          {
+            "type": "review",
+            "id": "review-entered-1",
+            "displayText": "Review changes against main",
+            "review": "changes against 'main'"
+          },
+          {
+            "type": "review",
+            "id": "review-exited-1",
+            "displayText": "Code review",
+            "review": "The patch can lose pending steer drafts in realistic active-turn races. These are user-visible correctness issues in the new queuing/steering flow.\n\nFull review comments:\n\n- [P2] Only clear steer after it has actually been sent — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:618-622\n  When a pending steer is waiting for the next injection opportunity, any `item/completed` whose params happen to contain the draft text clears `pendingSteer` before `submitPendingSteer` marks it as `steering`. For short/common steer text, this can hide and lose the draft; if the subsequent `steerTurn` call fails, the catch path cannot restore it because the pending state was already set to `undefined`. Gate this confirmation on `pendingSteer.status === \"steering\"` so pre-injection events cannot acknowledge the steer.\n\n- [P2] Preserve pending steer when a queued turn already exists — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:660-667\n  If the user has one queued message and also creates a pending steer, then the active turn completes before the steer is injected, this branch drops the pending steer because `setQueuedTurn((queued) => queued ?? pendingSteer)` keeps the existing queued message and `setPendingSteer(undefined)` removes the other draft. That loses user-entered text in a normal race near turn completion; instead keep the pending steer visible, restore it to the draft, or otherwise preserve it when a queued turn is already present."
+          },
+          {
+            "type": "message",
+            "id": "review_rollout_assistant",
+            "role": "assistant",
+            "text": "The patch can lose pending steer drafts in realistic active-turn races. These are user-visible correctness issues in the new queuing/steering flow.\n\nFull review comments:\n\n- [P2] Only clear steer after it has actually been sent — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:618-622\n  When a pending steer is waiting for the next injection opportunity, any `item/completed` whose params happen to contain the draft text clears `pendingSteer` before `submitPendingSteer` marks it as `steering`. For short/common steer text, this can hide and lose the draft; if the subsequent `steerTurn` call fails, the catch path cannot restore it because the pending state was already set to `undefined`. Gate this confirmation on `pendingSteer.status === \"steering\"` so pre-injection events cannot acknowledge the steer.\n\n- [P2] Preserve pending steer when a queued turn already exists — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:660-667\n  If the user has one queued message and also creates a pending steer, then the active turn completes before the steer is injected, this branch drops the pending steer because `setQueuedTurn((queued) => queued ?? pendingSteer)` keeps the existing queued message and `setPendingSteer(undefined)` removes the other draft. That loses user-entered text in a normal race near turn completion; instead keep the pending steer visible, restore it to the draft, or otherwise preserve it when a queued turn is already present."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-before-review",
+            "role": "assistant",
+            "text": "Rebased onto latest `origin/main` again and force-pushed with lease."
+          },
+          {
+            "id": "review_rollout_assistant",
+            "role": "assistant",
+            "text": "The patch can lose pending steer drafts in realistic active-turn races. These are user-visible correctness issues in the new queuing/steering flow.\n\nFull review comments:\n\n- [P2] Only clear steer after it has actually been sent — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:618-622\n  When a pending steer is waiting for the next injection opportunity, any `item/completed` whose params happen to contain the draft text clears `pendingSteer` before `submitPendingSteer` marks it as `steering`. For short/common steer text, this can hide and lose the draft; if the subsequent `steerTurn` call fails, the catch path cannot restore it because the pending state was already set to `undefined`. Gate this confirmation on `pendingSteer.status === \"steering\"` so pre-injection events cannot acknowledge the steer.\n\n- [P2] Preserve pending steer when a queued turn already exists — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:660-667\n  If the user has one queued message and also creates a pending steer, then the active turn completes before the steer is injected, this branch drops the pending steer because `setQueuedTurn((queued) => queued ?? pendingSteer)` keeps the existing queued message and `setPendingSteer(undefined)` removes the other draft. That loses user-entered text in a normal race near turn completion; instead keep the pending steer visible, restore it to the draft, or otherwise preserve it when a queued turn is already present."
+          }
+        ],
+        "lastAssistantMessage": "The patch can lose pending steer drafts in realistic active-turn races. These are user-visible correctness issues in the new queuing/steering flow.\n\nFull review comments:\n\n- [P2] Only clear steer after it has actually been sent — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:618-622\n  When a pending steer is waiting for the next injection opportunity, any `item/completed` whose params happen to contain the draft text clears `pendingSteer` before `submitPendingSteer` marks it as `steering`. For short/common steer text, this can hide and lose the draft; if the subsequent `steerTurn` call fails, the catch path cannot restore it because the pending state was already set to `undefined`. Gate this confirmation on `pendingSteer.status === \"steering\"` so pre-injection events cannot acknowledge the steer.\n\n- [P2] Preserve pending steer when a queued turn already exists — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moit6ddw/apps/desktop/src/renderer/src/features/composer/Composer.tsx:660-667\n  If the user has one queued message and also creates a pending steer, then the active turn completes before the steer is injected, this branch drops the pending steer because `setQueuedTurn((queued) => queued ?? pendingSteer)` keeps the existing queued message and `setPendingSteer(undefined)` removes the other draft. That loses user-entered text in a normal race near turn completion; instead keep the pending steer visible, restore it to the draft, or otherwise preserve it when a queued turn is already present.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

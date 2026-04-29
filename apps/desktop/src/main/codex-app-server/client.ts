@@ -65,6 +65,7 @@ import {
   createThreadDirectoryEnricher,
   type ThreadDirectoryEnrichment,
 } from "./thread-directory-enricher";
+import { normalizeReviewDisplayText } from "../../shared/review-command";
 import { StdioJsonRpcTransport } from "./stdio-transport";
 import type {
   ThreadTitleAdapterParams,
@@ -692,17 +693,85 @@ function isCodexInternalReviewPrompt(
   text: string
 ): boolean {
   const normalizedType = normalizeItemType(pickString(record, ["type"]));
+  const normalizedText = text.trim().toLowerCase();
   return (
     normalizedType === "usermessage" &&
-    ("images" in record || "local_images" in record || "text_elements" in record) &&
-    text.startsWith("Review ") &&
-    text.includes("provide prioritized findings")
+    normalizedText.startsWith("review ") &&
+    normalizedText.includes("code changes") &&
+    normalizedText.includes("base branch") &&
+    normalizedText.includes("prioritized") &&
+    normalizedText.includes("findings")
   );
 }
 
-function shouldSuppressConversationMessage(record: Record<string, unknown>): boolean {
+function normalizeSuppressionText(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function collectReviewSuppressionTexts(value: unknown): Set<string> {
+  const output = new Set<string>();
+
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach((entry) => visit(entry));
+      return;
+    }
+
+    const record = asRecord(node);
+    if (!record) {
+      return;
+    }
+
+    const reviewOutput = normalizeReviewOutput(record);
+    if (reviewOutput?.overall_explanation) {
+      output.add(normalizeSuppressionText(reviewOutput.overall_explanation));
+    }
+    const reviewEvent = normalizeReviewEventItem(record);
+    if (reviewEvent?.event === "exitedreviewmode") {
+      const review = pickRawString(reviewEvent.item, ["review", "text"]);
+      if (review) {
+        output.add(normalizeSuppressionText(review));
+      }
+    }
+
+    for (const key of [
+      "items",
+      "messages",
+      "content",
+      "parts",
+      "entries",
+      "data",
+      "results",
+      "turns",
+      "events",
+      "payload",
+      "item",
+      "message",
+      "thread",
+      "response",
+      "result"
+    ]) {
+      visit(record[key]);
+    }
+  };
+
+  visit(value);
+  return output;
+}
+
+function shouldSuppressConversationMessage(
+  record: Record<string, unknown>,
+  suppressedAssistantTexts = new Set<string>()
+): boolean {
   const text = collectLegacyMessageText(record);
-  return isReviewActionText(text) || isCodexInternalReviewPrompt(record, text);
+  const role = normalizeConversationRole(
+    pickString(record, ["role", "author", "speaker", "source", "type"])
+  );
+  return (
+    isReviewActionText(text) ||
+    isCodexInternalReviewPrompt(record, text) ||
+    (role === "assistant" && suppressedAssistantTexts.has(normalizeSuppressionText(text)))
+  );
 }
 
 function normalizeRenderableImageUrl(value: string | undefined): string | undefined {
@@ -816,10 +885,9 @@ function buildMessageContent(record: Record<string, unknown>): {
   return { text };
 }
 
-function extractConversationMessages(
-  value: unknown
-): AppServerThreadReplay["messages"] {
+function extractConversationMessages(value: unknown): AppServerThreadReplay["messages"] {
   const output: AppServerThreadReplay["messages"] = [];
+  const suppressedAssistantTexts = collectReviewSuppressionTexts(value);
 
   const visit = (node: unknown): void => {
     if (Array.isArray(node)) {
@@ -839,7 +907,7 @@ function extractConversationMessages(
     if (
       role &&
       (content.text || content.parts?.length) &&
-      !shouldSuppressConversationMessage(record)
+      !shouldSuppressConversationMessage(record, suppressedAssistantTexts)
     ) {
       output.push({
         id:
@@ -1276,15 +1344,12 @@ function normalizeReviewOutput(
 function reviewDisplayText(item: Record<string, unknown>): string | undefined {
   const direct = pickRawString(item, ["review", "text"]);
   if (direct) {
-    return direct;
+    return normalizeReviewDisplayText(direct);
   }
 
   const hint = pickString(item, ["user_facing_hint", "userFacingHint"]);
-  if (hint === "current changes") {
-    return "Review current changes";
-  }
   if (hint) {
-    return `Review ${hint}`;
+    return normalizeReviewDisplayText(hint);
   }
 
   const target = asRecord(item.target);
@@ -1294,7 +1359,9 @@ function reviewDisplayText(item: Record<string, unknown>): string | undefined {
   }
   if (targetType === "baseBranch" || targetType === "base_branch") {
     const branch = pickString(target ?? {}, ["branch", "baseBranch", "base_branch"]);
-    return branch ? `Review changes against ${branch}` : "Review changes";
+    return branch
+      ? normalizeReviewDisplayText(`changes against ${branch}`)
+      : "Review changes";
   }
   if (targetType === "commit") {
     const sha = pickString(target ?? {}, ["sha", "commit"]);
@@ -1687,6 +1754,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
           .map((entry) => asRecord(entry))
           .filter((entry): entry is Record<string, unknown> => entry !== null)
       : [];
+    const suppressedAssistantTexts = collectReviewSuppressionTexts(rawItems);
     const pendingActivityItems: Record<string, unknown>[] = [];
 
     const flushActivityItems = (): void => {
@@ -1706,7 +1774,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
       const role = normalizeConversationRole(itemType);
       if (role) {
         flushActivityItems();
-        if (shouldSuppressConversationMessage(item)) {
+        if (shouldSuppressConversationMessage(item, suppressedAssistantTexts)) {
           continue;
         }
         const content = buildMessageContent(item);

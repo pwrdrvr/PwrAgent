@@ -125,6 +125,51 @@
       }
     },
     {
+      "id": "review-entered-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-review-command",
+          "turnId": "turn-review-1",
+          "item": {
+            "id": "review-entered-1",
+            "type": "enteredReviewMode",
+            "review": "changes against 'main'"
+          }
+        }
+      }
+    },
+    {
+      "id": "review-exited-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-review-command",
+          "turnId": "turn-review-1",
+          "item": {
+            "id": "review-exited-1",
+            "type": "exitedReviewMode",
+            "review": "No findings. The branch comparison is ready to merge."
+          }
+        }
+      }
+    },
+    {
+      "id": "review-agent-message-delta-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "thread-review-command",
+          "turnId": "turn-review-1",
+          "itemId": "message-3",
+          "delta": "No findings. The branch comparison is ready to merge."
+        }
+      }
+    },
+    {
       "id": "turn-completed-1",
       "kind": "notification",
       "notification": {
@@ -161,19 +206,13 @@
             "type": "review",
             "id": "review-entered-1",
             "displayText": "Review changes against main",
-            "review": ""
+            "review": "changes against 'main'"
           },
           {
             "type": "review",
             "id": "review-exited-1",
             "displayText": "Code review",
-            "review": "No findings. The branch comparison is ready to merge.",
-            "output": {
-              "findings": [],
-              "overall_correctness": "patch is correct",
-              "overall_explanation": "No findings. The branch comparison is ready to merge.",
-              "overall_confidence_score": 0.91
-            }
+            "review": "No findings. The branch comparison is ready to merge."
           },
           {
             "type": "message",
