@@ -1,4 +1,7 @@
-import type { AppServerThreadReviewEntry } from "@pwragnt/shared";
+import type {
+  AppServerReviewFinding,
+  AppServerThreadReviewEntry,
+} from "@pwragnt/shared";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 
@@ -33,9 +36,66 @@ function shouldHideReviewBody(summary: string, review: string): boolean {
   );
 }
 
+function parsePlainReview(review: string): {
+  explanation: string;
+  findings: AppServerReviewFinding[];
+} {
+  const [rawExplanation, rawComments] = review.split(/\n\s*Review comments?:\s*\n/i);
+  if (!rawComments) {
+    return {
+      explanation: review,
+      findings: [],
+    };
+  }
+
+  const findingPattern =
+    /(?:^|\n)- \[P(\d+)\] ([^\n—]+?)\s+—\s+(.+?):(\d+)(?:-(\d+))?\n([\s\S]*?)(?=\n- \[P\d+\] |\n*$)/g;
+  const findings: AppServerReviewFinding[] = [];
+
+  for (const match of rawComments.matchAll(findingPattern)) {
+    const priority = Number.parseInt(match[1] ?? "", 10);
+    const title = match[2]?.trim();
+    const absoluteFilePath = match[3]?.trim();
+    const start = Number.parseInt(match[4] ?? "", 10);
+    const end = Number.parseInt(match[5] ?? match[4] ?? "", 10);
+    const body = match[6]?.trim();
+
+    if (
+      !title ||
+      !absoluteFilePath ||
+      !body ||
+      !Number.isInteger(priority) ||
+      !Number.isInteger(start) ||
+      !Number.isInteger(end)
+    ) {
+      continue;
+    }
+
+    findings.push({
+      title,
+      body,
+      priority,
+      confidence_score: 0,
+      code_location: {
+        absolute_file_path: absoluteFilePath,
+        line_range: {
+          start,
+          end,
+        },
+      },
+    });
+  }
+
+  return {
+    explanation: rawExplanation.trim(),
+    findings,
+  };
+}
+
 export function TranscriptReview(props: TranscriptReviewProps) {
   const output = props.entry.output;
-  const findings = output?.findings ?? [];
+  const plainReview = output ? undefined : parsePlainReview(props.entry.review);
+  const findings = output?.findings ?? plainReview?.findings ?? [];
   const findingCount = output?.findings.length;
   const summary =
     props.entry.displayText ??
@@ -44,7 +104,9 @@ export function TranscriptReview(props: TranscriptReviewProps) {
       : `${findingCount} review ${findingCount === 1 ? "finding" : "findings"}`);
   const body =
     output?.overall_explanation ??
-    (shouldHideReviewBody(summary, props.entry.review) ? "" : props.entry.review);
+    (shouldHideReviewBody(summary, props.entry.review)
+      ? ""
+      : plainReview?.explanation ?? props.entry.review);
   const confidence = formatConfidence(output?.overall_confidence_score);
   const correctness =
     output?.overall_correctness === "patch is correct"

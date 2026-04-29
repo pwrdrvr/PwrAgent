@@ -67,4 +67,28 @@ describe("TranscriptReview", () => {
     expect(screen.getByText("Review changes against main")).toBeInTheDocument();
     expect(screen.queryByText("changes against 'main'")).not.toBeInTheDocument();
   });
+
+  it("renders plain Codex review comments as review findings", () => {
+    render(
+      <TranscriptReview
+        entry={{
+          type: "review",
+          id: "review-exited-1",
+          review:
+            "The change fixes the covered scenario, but one edge case remains.\n\nReview comment:\n\n- [P2] Preserve async pasted images for launchpad scopes — /repo/apps/desktop/src/renderer/src/features/composer/Composer.tsx:971-979\n  When an image paste starts from a new-thread launchpad and the user switches away before normalization finishes, the completed attachment is dropped.",
+        }}
+      />
+    );
+
+    expect(screen.getByText("Code review")).toBeInTheDocument();
+    expect(
+      screen.getByText("The change fixes the covered scenario, but one edge case remains.")
+    ).toBeInTheDocument();
+    expect(screen.getByText("P2")).toBeInTheDocument();
+    expect(
+      screen.getByText("Preserve async pasted images for launchpad scopes")
+    ).toBeInTheDocument();
+    expect(screen.getByText("features/composer/Composer.tsx")).toBeInTheDocument();
+    expect(screen.getByText("Lines 971-979")).toBeInTheDocument();
+  });
 });

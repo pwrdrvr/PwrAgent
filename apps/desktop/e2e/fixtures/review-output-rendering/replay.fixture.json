@@ -1,0 +1,266 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "review-output-rendering",
+    "sourceCaptureId": "2026-04-29T01-22-48-920Z-codex-full-access",
+    "threadId": "019dd682-56d6-7601-8634-fc3a49e67554"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list",
+          "review/start"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "019dd682-56d6-7601-8634-fc3a49e67554",
+          "title": "Composer image paste reset E2E",
+          "titleSource": "explicit",
+          "summary": "Captured review output rendering regression",
+          "source": "codex",
+          "executionMode": "default",
+          "gitBranch": "fix/composer-image-thread-switch-race",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1777425951000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-before-review",
+            "role": "assistant",
+            "text": "CI is green again: Build, Desktop E2E, Install Dependencies, Lint, Live Agent Core, and Test all passed."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-before-review",
+            "role": "assistant",
+            "text": "CI is green again: Build, Desktop E2E, Install Dependencies, Lint, Live Agent Core, and Test all passed."
+          }
+        ],
+        "lastAssistantMessage": "CI is green again: Build, Desktop E2E, Install Dependencies, Lint, Live Agent Core, and Test all passed.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "review-start-1",
+      "kind": "response",
+      "method": "review/start",
+      "result": {
+        "threadId": "019dd682-56d6-7601-8634-fc3a49e67554",
+        "reviewThreadId": "019dd682-56d6-7601-8634-fc3a49e67554",
+        "turnId": "019dd6d5-91fa-7820-acb5-8ebd37da76e4"
+      }
+    },
+    {
+      "id": "review-entered-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/started",
+        "params": {
+          "threadId": "019dd682-56d6-7601-8634-fc3a49e67554",
+          "turnId": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+          "item": {
+            "type": "enteredReviewMode",
+            "id": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+            "review": "changes against 'main'"
+          }
+        }
+      }
+    },
+    {
+      "id": "review-entered-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "019dd682-56d6-7601-8634-fc3a49e67554",
+          "turnId": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+          "item": {
+            "type": "enteredReviewMode",
+            "id": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+            "review": "changes against 'main'"
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "019dd682-56d6-7601-8634-fc3a49e67554",
+          "turnId": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+          "turn": {
+            "id": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+            "status": "inProgress"
+          }
+        }
+      }
+    },
+    {
+      "id": "review-exited-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/started",
+        "params": {
+          "threadId": "019dd682-56d6-7601-8634-fc3a49e67554",
+          "turnId": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+          "item": {
+            "type": "exitedReviewMode",
+            "id": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+            "review": "The thread draft preservation path fixes the covered scenario, but the new async paste handling drops completed image attachments for launchpad composers if the user navigates away before normalization finishes.\n\nReview comment:\n\n- [P2] Preserve async pasted images for launchpad scopes — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moja6ucz/apps/desktop/src/renderer/src/features/composer/Composer.tsx:971-979\n  When an image paste starts from a new-thread launchpad and the user switches away before `normalizeImageFile` resolves, this branch runs with a `launchpad:*` `pasteScope.key`; `saveThreadComposerDraft` ignores non-thread scopes, so the completed attachment is dropped instead of being persisted back to the launchpad draft. This makes large pasted images silently disappear for launchpad composers under the same switch-away race this change is trying to fix."
+          }
+        }
+      }
+    },
+    {
+      "id": "review-exited-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "019dd682-56d6-7601-8634-fc3a49e67554",
+          "turnId": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+          "item": {
+            "type": "exitedReviewMode",
+            "id": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+            "review": "The thread draft preservation path fixes the covered scenario, but the new async paste handling drops completed image attachments for launchpad composers if the user navigates away before normalization finishes.\n\nReview comment:\n\n- [P2] Preserve async pasted images for launchpad scopes — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moja6ucz/apps/desktop/src/renderer/src/features/composer/Composer.tsx:971-979\n  When an image paste starts from a new-thread launchpad and the user switches away before `normalizeImageFile` resolves, this branch runs with a `launchpad:*` `pasteScope.key`; `saveThreadComposerDraft` ignores non-thread scopes, so the completed attachment is dropped instead of being persisted back to the launchpad draft. This makes large pasted images silently disappear for launchpad composers under the same switch-away race this change is trying to fix."
+          }
+        }
+      }
+    },
+    {
+      "id": "review-assistant-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/started",
+        "params": {
+          "threadId": "019dd682-56d6-7601-8634-fc3a49e67554",
+          "turnId": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+          "item": {
+            "type": "agentMessage",
+            "id": "review_rollout_assistant",
+            "text": "The thread draft preservation path fixes the covered scenario, but the new async paste handling drops completed image attachments for launchpad composers if the user navigates away before normalization finishes.\n\nReview comment:\n\n- [P2] Preserve async pasted images for launchpad scopes — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moja6ucz/apps/desktop/src/renderer/src/features/composer/Composer.tsx:971-979\n  When an image paste starts from a new-thread launchpad and the user switches away before `normalizeImageFile` resolves, this branch runs with a `launchpad:*` `pasteScope.key`; `saveThreadComposerDraft` ignores non-thread scopes, so the completed attachment is dropped instead of being persisted back to the launchpad draft. This makes large pasted images silently disappear for launchpad composers under the same switch-away race this change is trying to fix.",
+            "phase": null,
+            "memoryCitation": null
+          }
+        }
+      }
+    },
+    {
+      "id": "review-assistant-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "019dd682-56d6-7601-8634-fc3a49e67554",
+          "turnId": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+          "item": {
+            "type": "agentMessage",
+            "id": "review_rollout_assistant",
+            "text": "The thread draft preservation path fixes the covered scenario, but the new async paste handling drops completed image attachments for launchpad composers if the user navigates away before normalization finishes.\n\nReview comment:\n\n- [P2] Preserve async pasted images for launchpad scopes — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moja6ucz/apps/desktop/src/renderer/src/features/composer/Composer.tsx:971-979\n  When an image paste starts from a new-thread launchpad and the user switches away before `normalizeImageFile` resolves, this branch runs with a `launchpad:*` `pasteScope.key`; `saveThreadComposerDraft` ignores non-thread scopes, so the completed attachment is dropped instead of being persisted back to the launchpad draft. This makes large pasted images silently disappear for launchpad composers under the same switch-away race this change is trying to fix.",
+            "phase": null,
+            "memoryCitation": null
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "019dd682-56d6-7601-8634-fc3a49e67554",
+          "turnId": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+          "turn": {
+            "id": "019dd6d5-91fa-7820-acb5-8ebd37da76e4",
+            "status": "completed"
+          }
+        }
+      }
+    },
+    {
+      "id": "thread-read-2",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-before-review",
+            "role": "assistant",
+            "text": "CI is green again: Build, Desktop E2E, Install Dependencies, Lint, Live Agent Core, and Test all passed."
+          },
+          {
+            "type": "review",
+            "id": "review-entered-1",
+            "displayText": "Review changes against main",
+            "review": "changes against 'main'"
+          },
+          {
+            "type": "review",
+            "id": "review-exited-1",
+            "displayText": "Code review",
+            "review": "The thread draft preservation path fixes the covered scenario, but the new async paste handling drops completed image attachments for launchpad composers if the user navigates away before normalization finishes.\n\nReview comment:\n\n- [P2] Preserve async pasted images for launchpad scopes — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moja6ucz/apps/desktop/src/renderer/src/features/composer/Composer.tsx:971-979\n  When an image paste starts from a new-thread launchpad and the user switches away before `normalizeImageFile` resolves, this branch runs with a `launchpad:*` `pasteScope.key`; `saveThreadComposerDraft` ignores non-thread scopes, so the completed attachment is dropped instead of being persisted back to the launchpad draft. This makes large pasted images silently disappear for launchpad composers under the same switch-away race this change is trying to fix."
+          },
+          {
+            "type": "message",
+            "id": "review_rollout_assistant",
+            "role": "assistant",
+            "text": "The thread draft preservation path fixes the covered scenario, but the new async paste handling drops completed image attachments for launchpad composers if the user navigates away before normalization finishes.\n\nReview comment:\n\n- [P2] Preserve async pasted images for launchpad scopes — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moja6ucz/apps/desktop/src/renderer/src/features/composer/Composer.tsx:971-979\n  When an image paste starts from a new-thread launchpad and the user switches away before `normalizeImageFile` resolves, this branch runs with a `launchpad:*` `pasteScope.key`; `saveThreadComposerDraft` ignores non-thread scopes, so the completed attachment is dropped instead of being persisted back to the launchpad draft. This makes large pasted images silently disappear for launchpad composers under the same switch-away race this change is trying to fix."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-before-review",
+            "role": "assistant",
+            "text": "CI is green again: Build, Desktop E2E, Install Dependencies, Lint, Live Agent Core, and Test all passed."
+          },
+          {
+            "id": "review_rollout_assistant",
+            "role": "assistant",
+            "text": "The thread draft preservation path fixes the covered scenario, but the new async paste handling drops completed image attachments for launchpad composers if the user navigates away before normalization finishes.\n\nReview comment:\n\n- [P2] Preserve async pasted images for launchpad scopes — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moja6ucz/apps/desktop/src/renderer/src/features/composer/Composer.tsx:971-979\n  When an image paste starts from a new-thread launchpad and the user switches away before `normalizeImageFile` resolves, this branch runs with a `launchpad:*` `pasteScope.key`; `saveThreadComposerDraft` ignores non-thread scopes, so the completed attachment is dropped instead of being persisted back to the launchpad draft. This makes large pasted images silently disappear for launchpad composers under the same switch-away race this change is trying to fix."
+          }
+        ],
+        "lastAssistantMessage": "The thread draft preservation path fixes the covered scenario, but the new async paste handling drops completed image attachments for launchpad composers if the user navigates away before normalization finishes.\n\nReview comment:\n\n- [P2] Preserve async pasted images for launchpad scopes — /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moja6ucz/apps/desktop/src/renderer/src/features/composer/Composer.tsx:971-979\n  When an image paste starts from a new-thread launchpad and the user switches away before `normalizeImageFile` resolves, this branch runs with a `launchpad:*` `pasteScope.key`; `saveThreadComposerDraft` ignores non-thread scopes, so the completed attachment is dropped instead of being persisted back to the launchpad draft. This makes large pasted images silently disappear for launchpad composers under the same switch-away race this change is trying to fix.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}
