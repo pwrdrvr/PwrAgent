@@ -2363,6 +2363,10 @@ function mergeArchivedThreadMetadata(params: {
     .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
 }
 
+function buildThreadMetadataCacheKey(filter?: string): string {
+  return filter?.trim() || "";
+}
+
 function normalizeGitOriginUrl(value?: string): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -2788,6 +2792,14 @@ export class CodexAppServerClient {
   private readonly threadDirectoryEnricher: (
     projectKey?: string
   ) => Promise<ThreadDirectoryEnrichment>;
+  private readonly archivedThreadMetadataByFilter = new Map<
+    string,
+    RawCodexThreadSummary[]
+  >();
+  private readonly archivedThreadMetadataInFlightByFilter = new Map<
+    string,
+    Promise<RawCodexThreadSummary[]>
+  >();
   private initialized = false;
   private initializationPromise: Promise<void> | null = null;
   private initializeResult: InitializeResult | null = null;
@@ -3123,22 +3135,60 @@ export class CodexAppServerClient {
       return await this.enrichThreads(extractThreadsFromValue(archivedResult));
     }
 
-    const [activeResult, archivedResult] = await Promise.all([
-      requestWithFallbacks({
-        ...requestParams,
-        payloads: buildThreadDiscoveryPayloads(params?.filter, false),
-      }),
-      requestWithFallbacks({
-        ...requestParams,
-        payloads: buildThreadDiscoveryPayloads(params?.filter, true),
-      }).catch(() => undefined),
-    ]);
+    const activeResult = await requestWithFallbacks({
+      ...requestParams,
+      payloads: buildThreadDiscoveryPayloads(params?.filter, false),
+    });
     const threads = mergeArchivedThreadMetadata({
       activeThreads: extractThreadsFromValue(activeResult),
-      archivedThreads: extractThreadsFromValue(archivedResult),
+      archivedThreads: this.getCachedArchivedThreadMetadata(params?.filter),
     });
+    this.scheduleArchivedThreadMetadataRefresh(params?.filter);
 
     return await this.enrichThreads(threads);
+  }
+
+  private getCachedArchivedThreadMetadata(filter?: string): RawCodexThreadSummary[] {
+    return this.archivedThreadMetadataByFilter.get(buildThreadMetadataCacheKey(filter)) ?? [];
+  }
+
+  private scheduleArchivedThreadMetadataRefresh(filter?: string): void {
+    setTimeout(() => {
+      void this.refreshArchivedThreadMetadata(filter).catch((error) => {
+        codexClientLog.warn("archived thread metadata refresh failed", {
+          error: error instanceof Error ? error.message : String(error),
+          filter: filter?.trim() || null,
+        });
+      });
+    }, 0);
+  }
+
+  private async refreshArchivedThreadMetadata(
+    filter?: string,
+  ): Promise<RawCodexThreadSummary[]> {
+    const cacheKey = buildThreadMetadataCacheKey(filter);
+    const inFlight = this.archivedThreadMetadataInFlightByFilter.get(cacheKey);
+    if (inFlight) {
+      return await inFlight;
+    }
+
+    const requestPromise = requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/list"] as CodexClientRequestMethod[],
+      payloads: buildThreadDiscoveryPayloads(filter, true),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    })
+      .then((result) => {
+        const threads = extractThreadsFromValue(result);
+        this.archivedThreadMetadataByFilter.set(cacheKey, threads);
+        return threads;
+      })
+      .finally(() => {
+        this.archivedThreadMetadataInFlightByFilter.delete(cacheKey);
+      });
+
+    this.archivedThreadMetadataInFlightByFilter.set(cacheKey, requestPromise);
+    return await requestPromise;
   }
 
   private async enrichThreads(

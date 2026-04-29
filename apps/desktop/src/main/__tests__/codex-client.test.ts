@@ -874,8 +874,8 @@ describe("CodexAppServerClient", () => {
     });
     expect(renamedThread).toMatchObject({
       id: "thread-renamed",
-      title: "Spud up the thread",
-      titleSource: "explicit",
+      title: "Name this thread something funny and spunky. Something about potatoes",
+      titleSource: "derived",
     });
     expect(archivedThread).toBeUndefined();
 
@@ -896,14 +896,6 @@ describe("CodexAppServerClient", () => {
             sourceKinds: ["cli", "vscode"],
           }
         }),
-        expect.objectContaining({
-          params: {
-            archived: true,
-            limit: 50,
-            sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode"],
-          }
-        })
       ])
     );
 
@@ -1073,15 +1065,6 @@ describe("CodexAppServerClient", () => {
             sourceKinds: ["cli", "vscode"],
           }
         }),
-        expect.objectContaining({
-          params: {
-            searchTerm: "web-app",
-            archived: true,
-            limit: 50,
-            sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode"],
-          }
-        })
       ])
     );
 
@@ -1324,7 +1307,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("hydrates archived threads so persisted explicit names survive reload", async () => {
+  it("hydrates archived thread metadata after the initial active-thread load", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
@@ -1342,21 +1325,34 @@ describe("CodexAppServerClient", () => {
           : []
     });
 
-    const threads = await client.listThreads();
+    const initialThreads = await client.listThreads();
 
-    expect(threads.find((thread) => thread.id === "thread-renamed")).toMatchObject({
+    expect(initialThreads.find((thread) => thread.id === "thread-renamed")).toMatchObject({
       id: "thread-renamed",
-      title: "Spud up the thread",
-      titleSource: "explicit",
       source: "codex",
     });
-    expect(threads.find((thread) => thread.id === "thread-archive")).toBeUndefined();
+    expect(
+      initialThreads.find((thread) => thread.id === "thread-renamed")?.titleSource
+    ).not.toBe("explicit");
+    expect(initialThreads.find((thread) => thread.id === "thread-archive")).toBeUndefined();
 
     const threadListRequests = MockTransport.instances[0]?.sentMessages
       .map((message) => JSON.parse(message) as { method?: string; params?: { archived?: boolean } })
       .filter((message) => message.method === "thread/list");
     expect(threadListRequests?.some((message) => message.params?.archived === false)).toBe(true);
-    expect(threadListRequests?.some((message) => message.params?.archived === true)).toBe(true);
+    expect(threadListRequests?.some((message) => message.params?.archived === true)).toBe(false);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const hydratedThreads = await client.listThreads();
+
+    expect(hydratedThreads.find((thread) => thread.id === "thread-renamed")).toMatchObject({
+      id: "thread-renamed",
+      title: "Spud up the thread",
+      titleSource: "explicit",
+      source: "codex",
+    });
+    expect(hydratedThreads.find((thread) => thread.id === "thread-archive")).toBeUndefined();
 
     await client.close();
   });
