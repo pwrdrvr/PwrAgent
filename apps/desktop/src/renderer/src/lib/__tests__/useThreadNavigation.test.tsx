@@ -579,6 +579,114 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.needsAttentionCount).toBe(1);
   });
 
+  it("does not keep a directory launchpad selected when a thread in that directory is selected", async () => {
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "thread-1",
+          title: "Existing thread",
+          titleSource: "explicit" as const,
+          summary: "Thread summary",
+          source: "codex" as const,
+          linkedDirectories: [
+            {
+              id: "launchpad:directory:/Users/huntharo/github/PwrAgnt",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/github/PwrAgnt",
+              kind: "local" as const,
+            },
+          ],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [
+        {
+          key: "directory:/Users/huntharo/github/PwrAgnt",
+          kind: "directory" as const,
+          label: "PwrAgnt",
+          path: "/Users/huntharo/github/PwrAgnt",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+            directoryKind: "directory" as const,
+            directoryLabel: "PwrAgnt",
+            directoryPath: "/Users/huntharo/github/PwrAgnt",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt: "",
+            workMode: "worktree" as const,
+            branchName: "main",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const launchpad = {
+      directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+      directoryKind: "directory" as const,
+      directoryLabel: "PwrAgnt",
+      directoryPath: "/Users/huntharo/github/PwrAgnt",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "worktree" as const,
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      ensureDirectoryLaunchpad: vi.fn(async () => ({
+        launchpad,
+        defaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      })),
+      markThreadSeen: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "thread-1",
+        seenAt: Date.now(),
+      })),
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+    expect(result.current.selectedLaunchpad).toBeUndefined();
+
+    await act(async () => {
+      await result.current.openDirectoryLaunchpad(result.current.directories[0]!);
+    });
+
+    expect(result.current.selectedLaunchpad?.directoryKey).toBe(
+      "directory:/Users/huntharo/github/PwrAgnt"
+    );
+
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+
+    expect(result.current.selectedThread?.id).toBe("thread-1");
+    expect(result.current.selectedLaunchpad).toBeUndefined();
+  });
+
   it("refreshes the selected thread when only the observed branch changes", async () => {
     const listeners = new Set<(event: any) => void>();
     let navigationCallCount = 0;

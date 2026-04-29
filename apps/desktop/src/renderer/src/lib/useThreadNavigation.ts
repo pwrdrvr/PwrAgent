@@ -1149,7 +1149,15 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     );
   }, [directories, selectedItemKey, selectedThreadKey]);
 
-  const selectedLaunchpad = selectedDirectory?.launchpad;
+  const selectedLaunchpad = useMemo(() => {
+    const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
+    if (!launchpadDirectoryKey) {
+      return undefined;
+    }
+
+    return directories.find((directory) => directory.key === launchpadDirectoryKey)
+      ?.launchpad;
+  }, [directories, selectedItemKey]);
 
   useEffect(() => {
     releaseRetainedUnreadThread(selectedItemKey);
