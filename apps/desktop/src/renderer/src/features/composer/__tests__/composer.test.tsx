@@ -34,6 +34,17 @@ afterEach(() => {
   cleanup();
 });
 
+function openDropdown(label: string): HTMLElement {
+  const dropdown = screen.getByLabelText(label);
+  fireEvent.click(dropdown);
+  return dropdown;
+}
+
+function chooseDropdownOption(label: string, optionName: string): void {
+  openDropdown(label);
+  fireEvent.click(screen.getByRole("option", { name: optionName }));
+}
+
 function backendSummary(
   kind: "codex" | "grok",
   launchpadOptions?: BackendSummary["launchpadOptions"],
@@ -783,9 +794,7 @@ describe("Composer", () => {
 
     expect(screen.getByText("Fast mode")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Model"), {
-      target: { value: "gpt-5.2" },
-    });
+    chooseDropdownOption("Model", "GPT-5.2");
 
     await waitFor(() => {
       expect(onSetThreadModelSettings).toHaveBeenCalledWith({
@@ -1103,8 +1112,13 @@ describe("Composer", () => {
     );
 
     expect(screen.getByLabelText("Access mode")).toHaveValue("default");
-    fireEvent.click(screen.getByRole("button", { name: "Local" }));
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
     expect(screen.getByRole("separator")).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByLabelText("Reply"));
+    expect(
+      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" })
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
     expect(dialog).toBeInTheDocument();
@@ -1124,9 +1138,7 @@ describe("Composer", () => {
       });
     });
 
-    fireEvent.change(screen.getByLabelText("Access mode"), {
-      target: { value: "full-access" },
-    });
+    chooseDropdownOption("Access mode", "Full Access");
 
     await waitFor(() => {
       expect(onSetExecutionMode).toHaveBeenCalledWith("full-access");
@@ -1202,10 +1214,11 @@ describe("Composer", () => {
     const workspaceMode = screen.getByLabelText("Workspace mode");
     expect(workspaceMode).toBeEnabled();
     expect(workspaceMode).toHaveValue("local");
+    fireEvent.click(workspaceMode);
     expect(screen.getByRole("option", { name: "Local (main)" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "New worktree" })).toBeInTheDocument();
 
-    fireEvent.change(workspaceMode, { target: { value: "worktree" } });
+    fireEvent.click(screen.getByRole("option", { name: "New worktree" }));
 
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
@@ -1244,7 +1257,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Worktree/ }));
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
     expect(screen.getByRole("dialog", { name: "Handoff to Local" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));

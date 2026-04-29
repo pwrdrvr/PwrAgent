@@ -2,6 +2,7 @@ import {
   type ClipboardEvent,
   type DragEvent,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -102,6 +103,12 @@ type ComposerProps = {
 };
 
 type ComposerImageAttachment = NavigationLaunchpadImageAttachment;
+
+type ComposerDropdownOption = {
+  disabled?: boolean;
+  label: string;
+  value: string;
+};
 
 type QueuedTurnDraft = {
   imageAttachments: ComposerImageAttachment[];
@@ -381,6 +388,112 @@ function HighlightedAutocompleteLabel(props: {
   );
 }
 
+function useDismissableMenu<T extends HTMLElement>(
+  open: boolean,
+  onDismiss: () => void,
+) {
+  const ref = useRef<T>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent): void => {
+      if (!ref.current?.contains(event.target as Node)) {
+        onDismiss();
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        onDismiss();
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onDismiss, open]);
+
+  return ref;
+}
+
+function ComposerDropdown(props: {
+  ariaLabel: string;
+  compact?: boolean;
+  disabled?: boolean;
+  id?: string;
+  onChange: (value: string) => void;
+  options: ComposerDropdownOption[];
+  value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const listboxId = useId();
+  const selectedOption =
+    props.options.find((option) => option.value === props.value) ?? props.options[0];
+  const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+
+  return (
+    <div
+      className={`composer-dropdown${props.compact ? " composer-dropdown--compact" : ""}`}
+      ref={ref}
+    >
+      <button
+        aria-controls={open ? listboxId : undefined}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-label={props.ariaLabel}
+        className="composer-dropdown__button"
+        data-value={props.value}
+        disabled={props.disabled || props.options.length === 0}
+        id={props.id}
+        type="button"
+        value={props.value}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="composer-dropdown__label">
+          {selectedOption?.label ?? props.value}
+        </span>
+        <span aria-hidden="true" className="composer-dropdown__chevron">
+          ⌄
+        </span>
+      </button>
+      {open ? (
+        <div className="composer-dropdown__menu" id={listboxId} role="listbox">
+          {props.options.map((option) => (
+            <button
+              aria-selected={option.value === props.value}
+              className="composer-dropdown__option"
+              disabled={option.disabled}
+              key={option.value}
+              role="option"
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                if (option.value !== props.value) {
+                  props.onChange(option.value);
+                }
+              }}
+            >
+              {option.value === props.value ? (
+                <span aria-hidden="true" className="composer-dropdown__check">
+                  ✓
+                </span>
+              ) : (
+                <span aria-hidden="true" className="composer-dropdown__check" />
+              )}
+              <span>{option.label}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function Composer(props: ComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(undefined);
@@ -396,6 +509,10 @@ export function Composer(props: ComposerProps) {
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const [draft, setDraft] = useState("");
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const workspaceMenuRef = useDismissableMenu<HTMLDivElement>(
+    workspaceMenuOpen,
+    () => setWorkspaceMenuOpen(false),
+  );
   const [handoffDialog, setHandoffDialog] = useState<
     HandoffThreadWorkspaceRequest["direction"] | undefined
   >();
@@ -1931,18 +2048,21 @@ export function Composer(props: ComposerProps) {
           aria-label={props.launchpad ? "New thread settings" : "Thread settings"}
         >
           {props.launchpad && providerOptions.length > 0 ? (
-            <select
+            <ComposerDropdown
               id="composer-provider"
-              aria-label="Provider"
-              className="composer__select"
+              ariaLabel="Provider"
               disabled={launchpadSubmitting}
               value={props.launchpad.backend}
-              onChange={(event) => {
+              options={providerOptions.map((candidate) => ({
+                label: formatBackendLabel(candidate.kind),
+                value: candidate.kind,
+              }))}
+              onChange={(value) => {
                 const currentLaunchpad = props.launchpad;
                 if (!currentLaunchpad) {
                   return;
                 }
-                const nextBackend = event.target.value as NavigationLaunchpadDraft["backend"];
+                const nextBackend = value as NavigationLaunchpadDraft["backend"];
                 const nextBackendSummary = props.backends?.find(
                   (candidate) => candidate.kind === nextBackend
                 );
@@ -1963,13 +2083,7 @@ export function Composer(props: ComposerProps) {
                   fastMode: undefined,
                 });
               }}
-            >
-              {providerOptions.map((candidate) => (
-                <option key={candidate.kind} value={candidate.kind}>
-                  {formatBackendLabel(candidate.kind)}
-                </option>
-              ))}
-            </select>
+            />
           ) : props.thread ? (
             <span className="composer__fixed-value" aria-label="Provider">
               {formatBackendLabel(props.thread.source)}
@@ -1978,17 +2092,21 @@ export function Composer(props: ComposerProps) {
 
           {availableExecutionModes.length > 0 &&
           (props.launchpad || (props.thread?.source === "codex" && props.onSetExecutionMode)) ? (
-            <select
-              aria-label="Access mode"
-              className="composer__select composer__select--compact"
+            <ComposerDropdown
+              ariaLabel="Access mode"
+              compact
               disabled={launchpadSubmitting || Boolean(props.updatingExecutionMode)}
               value={
                 props.launchpad?.executionMode ??
                 props.thread?.executionMode ??
                 "default"
               }
-              onChange={(event) => {
-                const executionMode = event.target.value as ThreadExecutionMode;
+              options={availableExecutionModes.map((mode) => ({
+                label: formatExecutionModeLabel(mode.mode),
+                value: mode.mode,
+              }))}
+              onChange={(value) => {
+                const executionMode = value as ThreadExecutionMode;
                 if (props.launchpad) {
                   if (props.launchpad.executionMode !== executionMode) {
                     handleLaunchpadPatch({ executionMode });
@@ -2004,68 +2122,70 @@ export function Composer(props: ComposerProps) {
                   void props.onSetExecutionMode?.(executionMode);
                 }
               }}
-            >
-              {availableExecutionModes.map((mode) => (
-                <option key={mode.mode} value={mode.mode}>
-                  {formatExecutionModeLabel(mode.mode)}
-                </option>
-              ))}
-            </select>
+            />
           ) : null}
 
           {props.launchpad ? (
-            <select
-              aria-label="Workspace mode"
-              className="composer__select composer__select--compact"
+            <ComposerDropdown
+              ariaLabel="Workspace mode"
+              compact
               disabled={
                 launchpadSubmitting ||
                 !props.onUpdateLaunchpad ||
                 launchpadWorkspaceOptions.length <= 1
               }
               value={props.launchpad.workMode}
-              onChange={(event) => {
+              options={launchpadWorkspaceOptions.map((option) => ({
+                label: option.label,
+                value: option.value,
+              }))}
+              onChange={(value) => {
                 handleLaunchpadPatch({
-                  workMode: event.target.value as NavigationLaunchpadDraft["workMode"],
+                  workMode: value as NavigationLaunchpadDraft["workMode"],
                 });
               }}
-            >
-              {launchpadWorkspaceOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+            />
           ) : workspaceLabel && threadWorkspace ? (
-            <div className="workspace-handoff">
+            <div className="composer-dropdown composer-dropdown--compact" ref={workspaceMenuRef}>
               <button
                 aria-expanded={workspaceMenuOpen}
                 aria-haspopup="menu"
-                className="workspace-handoff__button"
+                aria-label="Workspace mode"
+                className="composer-dropdown__button"
                 disabled={!props.onHandoffThreadWorkspace}
                 type="button"
+                value={threadWorkspace.mode}
                 onClick={() => setWorkspaceMenuOpen((open) => !open)}
               >
-                {workspaceLabel}
-                <span aria-hidden="true">⌄</span>
+                <span className="composer-dropdown__label">{workspaceLabel}</span>
+                <span aria-hidden="true" className="composer-dropdown__chevron">
+                  ⌄
+                </span>
               </button>
               {workspaceMenuOpen ? (
-                <div className="workspace-handoff__menu" role="menu">
-                  <button className="workspace-handoff__current" disabled type="button">
+                <div className="composer-dropdown__menu" role="menu">
+                  <button className="composer-dropdown__option" disabled type="button">
+                    <span aria-hidden="true" className="composer-dropdown__check">
+                      ✓
+                    </span>
                     {workspaceLabel}
                   </button>
-                  <div className="workspace-handoff__separator" role="separator" />
+                  <div className="composer-dropdown__separator" role="separator" />
                   <button
+                    className="composer-dropdown__option"
                     disabled={!canHandoffThreadWorkspace}
                     role="menuitem"
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
+                      setWorkspaceMenuOpen(false);
                       openHandoffDialog(
                         threadWorkspace.mode === "worktree"
                           ? "worktree-to-local"
                           : "local-to-worktree"
-                      )
-                    }
+                      );
+                    }}
                   >
+                    <span aria-hidden="true" className="composer-dropdown__check" />
                     {threadWorkspace.mode === "worktree"
                       ? "Handoff to Local"
                       : "Handoff to New Worktree"}
@@ -2078,37 +2198,38 @@ export function Composer(props: ComposerProps) {
           {props.launchpad &&
           props.launchpad.workMode === "worktree" &&
           (props.directory?.gitStatus?.branches?.length ?? 0) > 0 ? (
-            <select
-              aria-label="Base branch"
+            <ComposerDropdown
+              ariaLabel="Base branch"
               id="launchpad-branch"
-              className="composer__select composer__select--compact"
+              compact
               disabled={launchpadSubmitting}
               value={
                 props.launchpad.branchName ??
                 props.directory?.gitStatus?.currentBranch ??
                 ""
               }
-              onChange={(event) => {
-                handleLaunchpadPatch({ branchName: event.target.value || undefined });
+              options={(props.directory?.gitStatus?.branches ?? []).map((branch) => ({
+                label: branch,
+                value: branch,
+              }))}
+              onChange={(value) => {
+                handleLaunchpadPatch({ branchName: value || undefined });
               }}
-            >
-              {(props.directory?.gitStatus?.branches ?? []).map((branch) => (
-                <option key={branch} value={branch}>
-                  {branch}
-                </option>
-              ))}
-            </select>
+            />
           ) : null}
 
           {(props.launchpad || props.thread) && backend?.launchpadOptions?.models?.length ? (
-            <select
+            <ComposerDropdown
               id="composer-model"
-              aria-label="Model"
-              className="composer__select"
+              ariaLabel="Model"
               disabled={launchpadSubmitting}
               value={selectedModelOption?.id ?? ""}
-              onChange={(event) => {
-                const model = event.target.value;
+              options={backend.launchpadOptions.models.map((model) => ({
+                label: model.label ?? model.id,
+                value: model.id,
+              }))}
+              onChange={(value) => {
+                const model = value;
                 const nextModelOption = backend.launchpadOptions?.models?.find(
                   (option) => option.id === model
                 );
@@ -2134,63 +2255,51 @@ export function Composer(props: ComposerProps) {
                 }
                 handleThreadModelSettingsPatch(patch);
               }}
-            >
-              {backend.launchpadOptions.models.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.label ?? model.id}
-                </option>
-              ))}
-            </select>
+            />
           ) : null}
 
           {(props.launchpad || props.thread) &&
           supportsReasoning &&
           backend?.launchpadOptions?.reasoningEfforts?.length ? (
-            <select
+            <ComposerDropdown
               id="composer-reasoning"
-              aria-label="Reasoning"
-              className="composer__select"
+              ariaLabel="Reasoning"
               disabled={launchpadSubmitting}
               value={selectedReasoningEffort ?? ""}
-              onChange={(event) => {
-                const reasoningEffort = event.target.value;
+              options={backend.launchpadOptions.reasoningEfforts.map((effort) => ({
+                label: effort,
+                value: effort,
+              }))}
+              onChange={(value) => {
+                const reasoningEffort = value;
                 if (props.launchpad) {
                   handleLaunchpadPatch({ reasoningEffort });
                   return;
                 }
                 handleThreadModelSettingsPatch({ reasoningEffort });
               }}
-            >
-              {backend.launchpadOptions.reasoningEfforts.map((effort) => (
-                <option key={effort} value={effort}>
-                  {effort}
-                </option>
-              ))}
-            </select>
+            />
           ) : null}
 
           {(props.launchpad || props.thread) && backend?.launchpadOptions?.serviceTiers?.length ? (
-            <select
+            <ComposerDropdown
               id="composer-service-tier"
-              aria-label="Service tier"
-              className="composer__select"
+              ariaLabel="Service tier"
               disabled={launchpadSubmitting}
               value={selectedServiceTier ?? ""}
-              onChange={(event) => {
-                const serviceTier = event.target.value;
+              options={backend.launchpadOptions.serviceTiers.map((tier) => ({
+                label: tier,
+                value: tier,
+              }))}
+              onChange={(value) => {
+                const serviceTier = value;
                 if (props.launchpad) {
                   handleLaunchpadPatch({ serviceTier });
                   return;
                 }
                 handleThreadModelSettingsPatch({ serviceTier });
               }}
-            >
-              {backend.launchpadOptions.serviceTiers.map((tier) => (
-                <option key={tier} value={tier}>
-                  {tier}
-                </option>
-              ))}
-            </select>
+            />
           ) : null}
 
           {(props.launchpad || props.thread) && supportsFast ? (
