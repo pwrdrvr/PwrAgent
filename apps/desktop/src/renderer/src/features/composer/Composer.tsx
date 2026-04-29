@@ -930,6 +930,10 @@ export function Composer(props: ComposerProps) {
 
   const attachPastedImages = async (files: PastedImageFile[]): Promise<void> => {
     const pasteScope = pasteScopeRef.current;
+    const pasteDraft = draft;
+    const pasteImageAttachments = imageAttachments;
+    const pasteLaunchpad = props.launchpad;
+    const updateLaunchpad = props.onUpdateLaunchpad;
 
     try {
       const nextAttachments = await Promise.all(
@@ -969,6 +973,15 @@ export function Composer(props: ComposerProps) {
       );
 
       if (activeComposerScopeKeyRef.current !== pasteScope.key) {
+        if (pasteLaunchpad && updateLaunchpad) {
+          const mergedAttachments = [...pasteImageAttachments, ...nextAttachments];
+          void updateLaunchpad(pasteLaunchpad.directoryKey, {
+            imageAttachments: mergedAttachments.length > 0 ? mergedAttachments : undefined,
+            prompt: pasteDraft,
+          });
+          return;
+        }
+
         const saved = scopedThreadDraftsRef.current.get(pasteScope.key) ?? {
           draft: "",
           imageAttachments: [],
