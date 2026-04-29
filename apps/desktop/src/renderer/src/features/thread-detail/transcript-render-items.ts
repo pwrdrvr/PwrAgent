@@ -57,13 +57,12 @@ export function buildTranscriptRenderItems(params: {
     return renderWithGroups(params.entries, completedGroups);
   }
 
-  const commentaryMessages = params.entries.filter(isAssistantCommentaryMessage);
-  if (commentaryMessages.length === 0) {
+  const fallbackGroups = buildCommentaryOnlyGroups(params.entries);
+  if (fallbackGroups.length === 0) {
     return params.entries.map((entry) => ({ type: "entry", entry }));
   }
 
-  const fallbackGroup = buildCommentaryOnlyGroup(commentaryMessages);
-  return renderWithGroups(params.entries, [fallbackGroup]);
+  return renderWithGroups(params.entries, fallbackGroups);
 }
 
 type RenderGroup = {
@@ -110,40 +109,60 @@ function buildCompletedGroups(
   entries: AppServerThreadEntry[],
   excludeTurnId?: string
 ): RenderGroup[] {
-  const grouped = new Map<string, AppServerThreadEntry[]>();
+  const groups: RenderGroup[] = [];
+  let currentEntries: AppServerThreadEntry[] = [];
+  let currentTurnId: string | undefined;
+
+  const flushCurrent = (): void => {
+    if (currentEntries.length === 0 || !currentTurnId) {
+      currentEntries = [];
+      currentTurnId = undefined;
+      return;
+    }
+
+    const turn = readCompletedTurn(currentEntries);
+    if (!turn) {
+      currentEntries = [];
+      currentTurnId = undefined;
+      return;
+    }
+
+    const hasWork = hasConcreteWork(currentEntries);
+    const firstEntryId = currentEntries[0]?.id ?? groups.length.toString();
+    groups.push({
+      collapsible: true,
+      entries: currentEntries,
+      id: `${hasWork ? "work" : "commentary"}:${currentTurnId}:${firstEntryId}:complete`,
+      label: hasWork
+        ? workGroupLabel(turn)
+        : previousMessagesLabel(currentEntries.filter(isAssistantCommentaryMessage).length),
+    });
+    currentEntries = [];
+    currentTurnId = undefined;
+  };
 
   for (const entry of entries) {
-    if (!entry.turn?.id || entry.turn.id === excludeTurnId || !isWorkPhaseEntry(entry)) {
+    const turnId = entry.turn?.id;
+    const canJoinGroup =
+      Boolean(turnId) &&
+      turnId !== excludeTurnId &&
+      isWorkPhaseEntry(entry);
+
+    if (!canJoinGroup) {
+      flushCurrent();
       continue;
     }
 
-    const current = grouped.get(entry.turn.id) ?? [];
-    current.push(entry);
-    grouped.set(entry.turn.id, current);
+    if (currentTurnId && currentTurnId !== turnId) {
+      flushCurrent();
+    }
+
+    currentTurnId = turnId;
+    currentEntries.push(entry);
   }
 
-  return [...grouped.entries()].flatMap(([turnId, turnEntries]) => {
-    if (turnEntries.length === 0) {
-      return [];
-    }
-
-    const turn = readCompletedTurn(turnEntries);
-    if (!turn) {
-      return [];
-    }
-
-    const hasWork = hasConcreteWork(turnEntries);
-    return [
-      {
-        collapsible: true,
-        entries: turnEntries,
-        id: `${hasWork ? "work" : "commentary"}:${turnId}:complete`,
-        label: hasWork
-          ? workGroupLabel(turn)
-          : previousMessagesLabel(turnEntries.filter(isAssistantCommentaryMessage).length),
-      },
-    ];
-  });
+  flushCurrent();
+  return groups;
 }
 
 function buildCommentaryOnlyGroup(
@@ -155,6 +174,30 @@ function buildCommentaryOnlyGroup(
     id: `commentary:${messages[0]?.id ?? "start"}:${messages[messages.length - 1]?.id ?? "end"}:complete`,
     label: previousMessagesLabel(messages.length),
   };
+}
+
+function buildCommentaryOnlyGroups(entries: AppServerThreadEntry[]): RenderGroup[] {
+  const groups: RenderGroup[] = [];
+  let currentMessages: AppServerThreadMessageEntry[] = [];
+
+  const flushCurrent = (): void => {
+    if (currentMessages.length === 0) {
+      return;
+    }
+    groups.push(buildCommentaryOnlyGroup(currentMessages));
+    currentMessages = [];
+  };
+
+  for (const entry of entries) {
+    if (isAssistantCommentaryMessage(entry)) {
+      currentMessages.push(entry);
+      continue;
+    }
+    flushCurrent();
+  }
+
+  flushCurrent();
+  return groups;
 }
 
 function renderWithGroups(

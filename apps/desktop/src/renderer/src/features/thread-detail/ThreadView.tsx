@@ -184,8 +184,26 @@ function readElapsedMs(item: Record<string, unknown>): number | undefined {
     typeof item.data === "object" && item.data !== null && !Array.isArray(item.data)
       ? item.data as Record<string, unknown>
       : undefined;
-  return typeof data?.elapsedMs === "number" && Number.isFinite(data.elapsedMs)
-    ? data.elapsedMs
+  const direct =
+    typeof item.durationMs === "number" && Number.isFinite(item.durationMs)
+      ? item.durationMs
+      : typeof item.elapsedMs === "number" && Number.isFinite(item.elapsedMs)
+        ? item.elapsedMs
+        : typeof data?.durationMs === "number" && Number.isFinite(data.durationMs)
+          ? data.durationMs
+          : typeof data?.elapsedMs === "number" && Number.isFinite(data.elapsedMs)
+            ? data.elapsedMs
+            : undefined;
+  if (typeof direct === "number") {
+    return direct;
+  }
+
+  const startedAt = normalizeNotificationTimestamp(item.startedAt);
+  const completedAt = normalizeNotificationTimestamp(item.completedAt);
+  return typeof startedAt === "number" &&
+    typeof completedAt === "number" &&
+    completedAt >= startedAt
+    ? completedAt - startedAt
     : undefined;
 }
 

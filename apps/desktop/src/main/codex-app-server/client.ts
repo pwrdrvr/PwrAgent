@@ -1678,6 +1678,40 @@ function formatActivitySummary(parts: string[]): string {
   return parts.join(", ");
 }
 
+function formatElapsedMs(elapsedMs: number): string {
+  if (elapsedMs < 1_000) {
+    return `${elapsedMs}ms`;
+  }
+  const seconds = elapsedMs / 1_000;
+  return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
+}
+
+function readActivityElapsedMs(item: Record<string, unknown>): number | undefined {
+  const data = asRecord(item.data);
+  const direct =
+    pickNumber(item, ["durationMs", "duration_ms", "elapsedMs", "elapsed_ms"]) ??
+    pickNumber(data ?? {}, ["durationMs", "duration_ms", "elapsedMs", "elapsed_ms"]);
+  if (typeof direct === "number") {
+    return direct;
+  }
+
+  const startedAt = normalizeEpochTimestamp(
+    pickNumber(item, ["startedAt", "started_at"])
+  );
+  const completedAt = normalizeEpochTimestamp(
+    pickNumber(item, ["completedAt", "completed_at"])
+  );
+  return typeof startedAt === "number" &&
+    typeof completedAt === "number" &&
+    completedAt >= startedAt
+    ? completedAt - startedAt
+    : undefined;
+}
+
+function appendElapsedLabel(label: string, elapsedMs: number | undefined): string {
+  return typeof elapsedMs === "number" ? `${label} (${formatElapsedMs(elapsedMs)})` : label;
+}
+
 function normalizeItemType(value: string | undefined): string | undefined {
   return value?.replace(/[-_\s]/g, "").toLowerCase();
 }
@@ -1760,6 +1794,7 @@ function summarizeActivityItems(
 
     const itemType = pickString(item, ["type"]);
     const normalizedItemType = normalizeItemType(itemType);
+    const elapsedMs = readActivityElapsedMs(item);
     if (normalizedItemType === "commandexecution") {
       const command = pickString(item, ["command"]);
       const actions = Array.isArray(item.commandActions)
@@ -1773,7 +1808,7 @@ function summarizeActivityItems(
         pushActivityDetail(details, {
           id: itemId,
           kind: "command",
-          label: formatCommandLabel(command),
+          label: appendElapsedLabel(formatCommandLabel(command), elapsedMs),
           status: itemStatus
         });
         continue;
@@ -1790,7 +1825,10 @@ function summarizeActivityItems(
           pushActivityDetail(details, {
             id: detailId,
             kind: "read",
-            label: `Read ${path.basename(actionPath) || actionPath}`,
+            label: appendElapsedLabel(
+              `Read ${path.basename(actionPath) || actionPath}`,
+              elapsedMs
+            ),
             path: actionPath,
             status: itemStatus
           });
@@ -1802,7 +1840,10 @@ function summarizeActivityItems(
           pushActivityDetail(details, {
             id: detailId,
             kind: "read",
-            label: `Searched ${path.basename(actionPath) || actionPath}`,
+            label: appendElapsedLabel(
+              `Searched ${path.basename(actionPath) || actionPath}`,
+              elapsedMs
+            ),
             path: actionPath,
             status: itemStatus
           });
@@ -1819,7 +1860,7 @@ function summarizeActivityItems(
         pushActivityDetail(details, {
           id: detailId,
           kind: "command",
-          label,
+          label: appendElapsedLabel(label, elapsedMs),
           ...(actionPath ? { path: actionPath } : {}),
           status: itemStatus
         });
@@ -1877,7 +1918,10 @@ function summarizeActivityItems(
       pushActivityDetail(details, {
         id: itemId,
         kind: "command",
-        label: functionName === "exec_command" ? formatCommandLabel(command) : functionName,
+        label: appendElapsedLabel(
+          functionName === "exec_command" ? formatCommandLabel(command) : functionName,
+          elapsedMs
+        ),
         status: itemStatus
       });
       continue;
@@ -1898,7 +1942,10 @@ function summarizeActivityItems(
       pushActivityDetail(details, {
         id: itemId,
         kind: normalizedItemType === "websearch" ? "read" : "command",
-        label: [toolName ?? "Used tool", query ? `: ${query}` : ""].join(""),
+        label: [
+          appendElapsedLabel(toolName ?? "Used tool", elapsedMs),
+          query ? `: ${query}` : "",
+        ].join(""),
         status: itemStatus
       });
     }

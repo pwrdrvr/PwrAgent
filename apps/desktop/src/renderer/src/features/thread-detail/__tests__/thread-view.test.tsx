@@ -1762,6 +1762,7 @@ describe("ThreadView", () => {
               type: "commandExecution",
               status: "completed",
               command: "/bin/zsh -lc 'git status --short'",
+              durationMs: 5_000,
               commandActions: [
                 {
                   type: "read",
@@ -1774,7 +1775,7 @@ describe("ThreadView", () => {
       });
     });
 
-    expect(screen.getByText("Read ThreadView.tsx")).toBeInTheDocument();
+    expect(screen.getByText("Read ThreadView.tsx (5.0s)")).toBeInTheDocument();
   });
 
   it("renders live Codex tool names when command execution items lack a command string", async () => {

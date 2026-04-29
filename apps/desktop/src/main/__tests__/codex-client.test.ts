@@ -2198,6 +2198,7 @@ describe("CodexAppServerClient", () => {
                 payload: {
                   type: "function_call",
                   name: "exec_command",
+                  durationMs: 5_200,
                   arguments: JSON.stringify({
                     cmd: "gh pr checks 62 --watch --interval 10"
                   })
@@ -2268,7 +2269,7 @@ describe("CodexAppServerClient", () => {
           {
             id: "call-1",
             kind: "command",
-            label: "gh pr checks 62 --watch --interval 10"
+            label: "gh pr checks 62 --watch --interval 10 (5.2s)"
           },
           {
             id: "call-2",
