@@ -115,6 +115,7 @@ describe("Composer", () => {
         "Cumulative usage reported: 80k tokens",
       ].join("\n")
     );
+    expect(screen.getByRole("img")).not.toHaveAttribute("title");
     expect(screen.getByText("50%")).toBeInTheDocument();
   });
 
