@@ -273,6 +273,10 @@ describe("ThreadView", () => {
       />
     );
 
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This thread is linked to a directory that no longer exists: /Users/huntharo/.codex/worktrees/be87/search-product"
+    );
+
     fireEvent.click(screen.getByRole("button", { name: "Open context rail" }));
 
     expect(screen.getByText("Recorded working directory is no longer available.")).toBeInTheDocument();
