@@ -3450,8 +3450,19 @@ textarea {
   --context-window-moon-terminator-glow: -1px 0 3px rgba(255, 169, 79, 0.18);
 }
 
-.context-window-moon__sprite--phase-4 .context-window-moon__disc {
+.context-window-moon__sprite--phase-4 .context-window-moon__disc,
+.context-window-moon__sprite--phase-8 .context-window-moon__disc {
   border-color: var(--accent-strong);
+}
+
+.context-window-moon__sprite--phase-8 {
+  --context-window-moon-shadow-width: 0%;
+}
+
+.context-window-moon__sprite--phase-8 .context-window-moon__disc {
+  box-shadow:
+    0 0 12px rgba(255, 138, 31, 0.48),
+    inset 0 0 4px rgba(255, 243, 220, 0.34);
 }
 
 .context-window-moon__label {

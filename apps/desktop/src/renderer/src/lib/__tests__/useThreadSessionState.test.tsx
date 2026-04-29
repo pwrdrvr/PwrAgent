@@ -47,9 +47,9 @@ describe("useThreadSessionState", () => {
     expect(getContextWindowMoonPhase(84.99)).toBe(6);
     expect(getContextWindowMoonPhase(85)).toBe(7);
     expect(getContextWindowMoonPhase(97.49)).toBe(7);
-    expect(getContextWindowMoonPhase(97.5)).toBe(0);
-    expect(getContextWindowMoonPhase(100)).toBe(0);
-    expect(getContextWindowMoonPhase(100.01)).toBe(0);
+    expect(getContextWindowMoonPhase(97.5)).toBe(8);
+    expect(getContextWindowMoonPhase(100)).toBe(8);
+    expect(getContextWindowMoonPhase(100.01)).toBe(8);
   });
 
   it("keeps the optimistic user message ahead of the completed assistant reply", async () => {

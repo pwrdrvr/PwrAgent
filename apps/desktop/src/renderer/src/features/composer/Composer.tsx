@@ -136,6 +136,7 @@ const CONTEXT_MOON_PHASES = [
   "waning gibbous",
   "third quarter",
   "waning crescent",
+  "critical",
 ] as const;
 
 type ReviewConfigState = {
@@ -2203,7 +2204,7 @@ function ContextWindowMoon({
     return null;
   }
 
-  const phase = Math.min(7, Math.max(0, contextWindow.phase));
+  const phase = Math.min(CONTEXT_MOON_PHASES.length - 1, Math.max(0, contextWindow.phase));
   const phaseLabel = CONTEXT_MOON_PHASES[phase];
   const percentLabel = `${Math.round(contextWindow.usedPercent)}%`;
   const tokenLabel = `${formatCompactNumber(
