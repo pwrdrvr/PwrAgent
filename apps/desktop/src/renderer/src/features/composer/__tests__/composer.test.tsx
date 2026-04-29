@@ -1746,6 +1746,69 @@ describe("Composer", () => {
     });
   });
 
+  it("keeps dropped GIF images animated by preserving the original data URL", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    const gifFile = new File([new Uint8Array([71, 73, 70, 56])], "demo.gif", {
+      type: "image/gif",
+    });
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.drop(textarea, {
+      dataTransfer: {
+        files: [],
+        items: [
+          {
+            kind: "file",
+            type: "image/gif",
+            getAsFile: () => gifFile,
+          },
+        ],
+      },
+    });
+
+    const preview = await screen.findByAltText("demo.gif");
+    expect(preview).toHaveAttribute("src", expect.stringMatching(/^data:image\/gif;base64,/));
+    expect(normalizeImageFile).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "image",
+            url: expect.stringMatching(/^data:image\/gif;base64,/),
+          },
+        ],
+      });
+    });
+  });
+
   it("does not duplicate a pasted image when clipboard items and files both expose it", async () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,

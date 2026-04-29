@@ -174,3 +174,68 @@ test("pasted WebP image is uploaded as bounded JPEG or PNG", async () => {
     await fixture.cleanup();
   }
 });
+
+test("dropped GIF image is uploaded as GIF and previewed without normalization", async () => {
+  const fixture = await createComposerImageFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+
+  try {
+    await app.window.getByRole("button", { name: "Image normalization" }).first().click();
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Image normalization",
+      }),
+    ).toBeVisible();
+    await app.window.getByLabel("Reply").waitFor();
+
+    await app.window.evaluate(async () => {
+      const textarea = document.querySelector<HTMLTextAreaElement>("#thread-composer");
+      if (!textarea) {
+        throw new Error("Reply textarea not found");
+      }
+
+      const gifBytes = Uint8Array.from([
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0x21, 0xff, 0x0b, 0x4e, 0x45,
+        0x54, 0x53, 0x43, 0x41, 0x50, 0x45, 0x32, 0x2e, 0x30, 0x03, 0x01, 0x00,
+        0x00, 0x00, 0x21, 0xf9, 0x04, 0x04, 0x0a, 0x00, 0x00, 0x00, 0x2c, 0x00,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01,
+        0x00, 0x21, 0xf9, 0x04, 0x04, 0x0a, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x81, 0xff, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3b,
+      ]);
+      const file = new File([gifBytes], "loop.gif", { type: "image/gif" });
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      textarea.dispatchEvent(
+        new DragEvent("drop", {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer,
+        }),
+      );
+    });
+
+    const preview = app.window.getByAltText("loop.gif");
+    await expect(preview).toBeVisible();
+    await expect(preview).toHaveAttribute("src", /^data:image\/gif;base64,/);
+
+    await app.window.getByLabel("Reply").fill("Describe the dropped gif");
+    await app.window.getByRole("button", { name: "Send" }).click();
+
+    await expect.poll(async () => await app.getLastStartTurn()).not.toBeNull();
+    const request = await app.getLastStartTurn();
+    const imageItem = (request as { input: Array<{ type: string; url?: string }> }).input.find(
+      (item) => item.type === "image",
+    );
+    const imageUrl = imageItem?.url;
+    if (!imageUrl) {
+      throw new Error("Expected turn/start payload to include a GIF data URL");
+    }
+    expect(imageUrl).toMatch(/^data:image\/gif;base64,/);
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
