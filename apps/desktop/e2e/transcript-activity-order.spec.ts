@@ -44,7 +44,7 @@ test("tool activity stays in protocol order when transcript work is collapsed", 
     await app.window.getByRole("button", { name: /Worked for 1m 10s/ }).first().click();
     await app.window.getByRole("button", { name: /Explored 1 file/ }).first().click();
     await expect(app.window.getByText("Read a.ts (1.2s)")).toBeVisible();
-    await expect(app.window.getByText("Read b.ts (2.5s)")).toHaveCount(0);
+    await expect(app.window.getByText("Read b.ts (2.5s)")).toBeHidden();
 
     await app.window.getByRole("button", { name: /Worked for 1m 10s/ }).last().click();
     await app.window.getByRole("button", { name: /Explored 1 file/ }).last().click();

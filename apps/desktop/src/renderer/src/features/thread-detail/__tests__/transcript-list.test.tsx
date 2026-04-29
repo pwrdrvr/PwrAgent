@@ -525,7 +525,7 @@ describe("TranscriptList", () => {
     expect(screen.getByText("function messageMatchesOptimisticEntry(")).toBeInTheDocument();
   });
 
-  it("keeps just-finished live tool activity visible when the final message arrives", async () => {
+  it("keeps just-finished live tool activity reachable when the final message arrives", async () => {
     const completedTurn = {
       id: "turn-1",
       status: "completed" as const,
@@ -575,6 +575,11 @@ describe("TranscriptList", () => {
         onLoadOlder={async () => undefined}
       />
     );
+
+    const workGroup = screen.getByRole("button", { name: /Worked for 1m 11s/i });
+    expect(workGroup).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(workGroup);
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Used 2 tools/i })).toBeVisible();
@@ -726,12 +731,13 @@ describe("TranscriptList", () => {
       />
     );
 
-    const workGroup = screen.getByRole("button", { name: /MCP status updates/i });
+    const workGroup = screen.getByRole("button", { name: /Previous work/i });
     const finalReply = screen.getByText("Yes, there are two separate websocket layers.");
 
     expect(
       workGroup.compareDocumentPosition(finalReply) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+    expect(workGroup).toHaveAttribute("aria-expanded", "false");
   });
 
   it("keeps a pending tool below the earlier pending assistant message that started first", () => {
@@ -785,6 +791,79 @@ describe("TranscriptList", () => {
     expect(
       commentary.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+
+  it("collapses completed work groups when a final message arrives while live work is still pending", async () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "user-1",
+            role: "user",
+            text: "Investigate transcript ordering.",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              durationMs: 956_000
+            }
+          },
+          {
+            type: "message",
+            id: "commentary-1",
+            role: "assistant",
+            phase: "commentary",
+            text: "I’ll trace this from the protocol capture.",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              durationMs: 956_000
+            }
+          },
+          {
+            type: "message",
+            id: "final-1",
+            role: "assistant",
+            phase: "final",
+            text: "Found and fixed the transcript ordering issue.",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              durationMs: 956_000
+            }
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingActivityEntry={{
+          type: "activity",
+          id: "live-tools-turn-1",
+          summary: "Ran 1 command",
+          status: "completed",
+          details: [
+            {
+              id: "call-1",
+              kind: "command",
+              label: "rg -n transcript apps/desktop",
+              status: "completed"
+            }
+          ],
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            durationMs: 956_000
+          }
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const workGroup = screen.getByRole("button", { name: /Worked for 15m 56s/i });
+
+    await waitFor(() => {
+      expect(workGroup).toHaveAttribute("aria-expanded", "false");
+    });
   });
 
   it("renders simple write diffs fully without zoom controls", () => {
