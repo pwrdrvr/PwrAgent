@@ -1,5 +1,6 @@
 import { useId, useState } from "react";
 import type { AppServerThreadActivityEntry } from "@pwragnt/shared";
+import { TranscriptCommandOutput } from "./TranscriptCommandOutput";
 import { TranscriptDiff } from "./TranscriptDiff";
 
 type TranscriptActivityProps = {
@@ -87,6 +88,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                 </span>
               ) : null}
               {detail.fileDiff ? <TranscriptDiff detail={detail} /> : null}
+              {detail.command ? <TranscriptCommandOutput detail={detail} /> : null}
             </li>
           ))}
         </ul>
