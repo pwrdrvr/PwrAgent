@@ -1863,6 +1863,18 @@ describe("useThreadSessionState", () => {
         listener({
           backend: "codex",
           notification: {
+            method: "item/agentMessage/delta",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-review-1",
+              itemId: "turn-review-1-assistant",
+              delta: "No findings. Ready to merge.",
+            },
+          },
+        });
+        listener({
+          backend: "codex",
+          notification: {
             method: "turn/completed",
             params: {
               threadId: "thread-1",
@@ -1890,6 +1902,7 @@ describe("useThreadSessionState", () => {
       ]);
       expect(result.current.entries[1]).toMatchObject({
         type: "review",
+        review: "Review changes against main",
         displayText: "Review changes against main",
       });
     });

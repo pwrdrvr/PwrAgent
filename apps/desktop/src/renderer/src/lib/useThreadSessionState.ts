@@ -438,6 +438,12 @@ function reviewEntryFromCompletedItem(params: {
       : typeof record.text === "string"
         ? record.text
         : "";
+  const displayText =
+    record.type === "enteredReviewMode"
+      ? review
+        ? normalizeReviewDisplayText(review)
+        : "Code review started"
+      : undefined;
   const output = normalizeReviewOutput(record.data?.reviewOutput);
   const turn = buildTurnMetadata({
     fallbackId: typeof params.turnId === "string" ? params.turnId : undefined,
@@ -448,10 +454,8 @@ function reviewEntryFromCompletedItem(params: {
   return {
     type: "review",
     id: typeof record.id === "string" ? record.id : `review-${record.type}`,
-    review,
-    ...(record.type === "enteredReviewMode"
-      ? { displayText: review ? normalizeReviewDisplayText(review) : "Code review started" }
-      : {}),
+    review: displayText ?? review,
+    ...(displayText ? { displayText } : {}),
     ...(output ? { output } : {}),
     ...(turn ? { turn } : {}),
     createdAt: Date.now(),
@@ -1016,6 +1020,7 @@ export function useThreadSessionState(params: {
           const shouldHydrateUnknownPhaseAssistant =
             !completedTurnText &&
             Boolean(
+              !completedTurnHasReview &&
               current.pendingAssistantMessage &&
                 current.pendingAssistantMessage.phase === undefined
             );
@@ -1028,7 +1033,9 @@ export function useThreadSessionState(params: {
                   : entry
               ),
             ...(current.pendingAssistantMessage
-              ? [
+              ? completedTurnHasReview
+                ? []
+                : [
                   withTurnMetadataAndPhase(
                     current.pendingAssistantMessage,
                     completedTurn,
