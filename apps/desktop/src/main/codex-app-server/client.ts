@@ -1756,11 +1756,15 @@ function extractActivityItemFromReplayItem(
       continue;
     }
 
+    const normalizedNestedItemType = normalizeItemType(pickString(nestedItem, ["type"]));
     return {
       ...nestedItem,
       id:
-        pickString(item, ["id", "itemId", "item_id"]) ??
-        pickString(nestedItem, ["id", "itemId", "item_id", "call_id"])
+        normalizedNestedItemType === "functioncall"
+          ? pickString(nestedItem, ["call_id", "callId", "id", "itemId", "item_id"]) ??
+            pickString(item, ["id", "itemId", "item_id"])
+          : pickString(nestedItem, ["id", "itemId", "item_id", "call_id", "callId"]) ??
+            pickString(item, ["id", "itemId", "item_id"])
     };
   }
 
@@ -1803,8 +1807,14 @@ function attachFunctionCallOutput(
     if (!item) {
       continue;
     }
-    const itemId = pickString(item, ["id", "itemId", "item_id", "call_id", "callId"]);
-    if (itemId !== output.callId) {
+    const itemIds = [
+      pickString(item, ["id"]),
+      pickString(item, ["itemId"]),
+      pickString(item, ["item_id"]),
+      pickString(item, ["call_id"]),
+      pickString(item, ["callId"]),
+    ].filter((value): value is string => Boolean(value));
+    if (!itemIds.includes(output.callId)) {
       continue;
     }
     item.functionCallOutput = output.output;

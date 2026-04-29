@@ -2301,9 +2301,10 @@ describe("CodexAppServerClient", () => {
               },
               {
                 type: "response_item",
-                id: "call-1",
+                id: "response-call-1",
                 payload: {
                   type: "function_call",
+                  call_id: "call-1",
                   name: "exec_command",
                   durationMs: 5_200,
                   arguments: JSON.stringify({
