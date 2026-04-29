@@ -642,6 +642,7 @@ export class DesktopBackendRegistry {
       token: number;
     }
   >();
+  private readonly attemptedTitleGenerations = new Set<string>();
   private titleGenerationSequence = 0;
 
   constructor(options?: {
@@ -1800,12 +1801,17 @@ export class DesktopBackendRegistry {
     }
 
     const key = buildTitleGenerationKey(params.backend, params.threadId);
-    const promptHash = buildPromptHash(prompt);
-    const current = this.pendingTitleGenerations.get(key);
-    if (current?.promptHash === promptHash) {
+    if (this.attemptedTitleGenerations.has(key)) {
       return;
     }
 
+    const promptHash = buildPromptHash(prompt);
+    const current = this.pendingTitleGenerations.get(key);
+    if (current) {
+      return;
+    }
+
+    this.attemptedTitleGenerations.add(key);
     const token = ++this.titleGenerationSequence;
     this.pendingTitleGenerations.set(key, {
       promptHash,

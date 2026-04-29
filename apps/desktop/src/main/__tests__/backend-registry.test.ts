@@ -779,6 +779,57 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("does not retry Codex title generation for a thread after one generated attempt", async () => {
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Leopard tea button",
+      })),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: [
+        {
+          id: "thread-title",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-title",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await waitForCondition(() => titleService.generateTitle.mock.calls.length === 1);
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-title",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await flushAsync();
+    await flushAsync();
+
+    expect(titleService.generateTitle).toHaveBeenCalledTimes(1);
+
+    await registry.close();
+  });
+
   it("applies generated titles when Codex exposes the prompt as an explicit title", async () => {
     const titleService = {
       generateTitle: vi.fn(async () => ({

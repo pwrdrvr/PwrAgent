@@ -6,7 +6,18 @@ type ThreadHeaderProps = {
   thread: NavigationThreadSummary;
 };
 
+function missingDirectoryPath(thread: NavigationThreadSummary): string | undefined {
+  const projectKey = thread.projectKey?.trim();
+  if (!projectKey || thread.linkedDirectories.length > 0) {
+    return undefined;
+  }
+
+  return projectKey;
+}
+
 export function ThreadHeader(props: ThreadHeaderProps) {
+  const missingPath = missingDirectoryPath(props.thread);
+
   return (
     <header className="thread-header">
       <div>
@@ -21,6 +32,12 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             {formatExecutionModeLabel(props.thread.executionMode)}
           </span>
         </div>
+        {missingPath ? (
+          <p className="thread-header__warning" role="alert">
+            This thread is linked to a directory that no longer exists:{" "}
+            <code>{missingPath}</code>
+          </p>
+        ) : null}
       </div>
     </header>
   );
