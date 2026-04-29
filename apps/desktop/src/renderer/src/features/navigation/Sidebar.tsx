@@ -161,6 +161,11 @@ export function Sidebar(props: SidebarProps) {
     void onArchiveThread(thread);
   };
 
+  const copyFromContextMenu = (value: string): void => {
+    setContextMenu(undefined);
+    void copyText(value);
+  };
+
   const submitRename = (): void => {
     if (!renameThread) {
       return;
@@ -184,6 +189,12 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuCanArchive = contextMenu
     ? canArchiveThread(contextMenu.thread)
     : false;
+  const contextMenuLocalPath = contextMenu?.thread.linkedDirectories[0]?.path;
+  const contextMenuWorktreePath = contextMenu?.thread.linkedDirectories.find(
+    (directory) => directory.kind === "worktree" && directory.worktreePath
+  )?.worktreePath;
+  const contextMenuBranchName = contextMenu?.thread.gitBranch;
+  const contextMenuHasTopActions = contextMenuCanRename || contextMenuCanArchive;
 
   return (
     <aside className="sidebar" aria-label="Threads">
@@ -315,7 +326,7 @@ export function Sidebar(props: SidebarProps) {
         </div>
       </section>
 
-      {contextMenu && (contextMenuCanRename || contextMenuCanArchive) ? (
+      {contextMenu ? (
         <div
           className="thread-context-menu"
           role="menu"
@@ -325,24 +336,67 @@ export function Sidebar(props: SidebarProps) {
           }}
           onClick={(event) => event.stopPropagation()}
         >
-          {contextMenuCanRename ? (
+          {contextMenuHasTopActions ? (
+            <div className="thread-context-menu__section">
+              {contextMenuCanRename ? (
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={() => requestRenameFromContextMenu(contextMenu.thread)}
+                >
+                  Rename Thread
+                </button>
+              ) : null}
+              {contextMenuCanArchive ? (
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={() => archiveFromContextMenu(contextMenu.thread)}
+                >
+                  Archive Thread
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          {contextMenuHasTopActions ? (
+            <div className="thread-context-menu__separator" role="separator" />
+          ) : null}
+          <div className="thread-context-menu__section">
             <button
               role="menuitem"
               type="button"
-              onClick={() => requestRenameFromContextMenu(contextMenu.thread)}
+              onClick={() => copyFromContextMenu(contextMenu.thread.id)}
             >
-              Rename Thread
+              Copy Thread ID
             </button>
-          ) : null}
-          {contextMenuCanArchive ? (
-            <button
-              role="menuitem"
-              type="button"
-              onClick={() => archiveFromContextMenu(contextMenu.thread)}
-            >
-              Archive Thread
-            </button>
-          ) : null}
+            {contextMenuWorktreePath ? (
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => copyFromContextMenu(contextMenuWorktreePath)}
+              >
+                Copy Worktree Path
+              </button>
+            ) : null}
+            {contextMenuLocalPath ? (
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => copyFromContextMenu(contextMenuLocalPath)}
+              >
+                Copy Local Path
+              </button>
+            ) : null}
+            {contextMenuBranchName ? (
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => copyFromContextMenu(contextMenuBranchName)}
+              >
+                Copy Branch Name
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
