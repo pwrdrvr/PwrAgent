@@ -30,6 +30,11 @@
   --info-text: #9fc8ff;
   --button-text: #120800;
   --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.42);
+  --thinking-scanner-beam-width: 18px;
+  --thinking-scanner-full-offset: 0px;
+  --thinking-scanner-mini-offset: 0px;
+  --thinking-scanner-offset: var(--thinking-scanner-full-offset);
+  --thinking-scanner-progress: 0;
 }
 
 * {
@@ -2004,19 +2009,10 @@ textarea {
   outline: none;
 }
 
-@keyframes pwragnt-kitt-scan {
-  0% { transform: translateX(0); }
-  50% { transform: translateX(44px); }
-  100% { transform: translateX(0); }
-}
-
-@keyframes pwragnt-kitt-glow {
-  0%, 100% { opacity: 0.72; }
-  50% { opacity: 1; }
-}
-
 .thinking-scanner {
   position: relative;
+  --thinking-scanner-beam-width: 18px;
+  --thinking-scanner-offset: var(--thinking-scanner-full-offset);
   width: 62px;
   height: 6px;
   flex: 0 0 auto;
@@ -2027,7 +2023,9 @@ textarea {
 }
 
 .thinking-scanner--mini {
-  width: 14px;
+  --thinking-scanner-beam-width: 6px;
+  --thinking-scanner-offset: var(--thinking-scanner-mini-offset);
+  width: 16px;
   height: 6px;
 }
 
@@ -2035,7 +2033,7 @@ textarea {
   position: absolute;
   top: 0;
   left: 0;
-  width: 18px;
+  width: var(--thinking-scanner-beam-width);
   height: 100%;
   border-radius: 999px;
   background: linear-gradient(
@@ -2047,13 +2045,12 @@ textarea {
   box-shadow:
     0 0 10px rgba(255, 138, 31, 0.42),
     0 0 18px rgba(255, 138, 31, 0.22);
-  animation:
-    pwragnt-kitt-scan 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite,
-    pwragnt-kitt-glow 0.7s ease-in-out infinite;
+  opacity: calc(0.76 + (var(--thinking-scanner-progress, 0) * 0.24));
+  transform: translateX(var(--thinking-scanner-offset));
+  will-change: opacity, transform;
 }
 
 .thinking-scanner--mini .thinking-scanner__beam {
-  width: 8px;
   box-shadow:
     0 0 8px rgba(255, 138, 31, 0.42),
     0 0 14px rgba(255, 138, 31, 0.22);
