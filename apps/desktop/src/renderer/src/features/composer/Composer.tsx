@@ -2210,12 +2210,15 @@ function ContextWindowMoon({
     contextWindow.totalTokens
   )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
   const label = `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
+  const tooltip = buildContextWindowTooltip(contextWindow, phaseLabel);
 
   return (
     <div
       aria-label={label}
-      className="context-window-moon"
+      className="context-window-moon tooltip-target"
+      data-tooltip={tooltip}
       role="img"
+      tabIndex={0}
       title={label}
     >
       <span
@@ -2227,6 +2230,53 @@ function ContextWindowMoon({
       <span className="context-window-moon__label">{percentLabel}</span>
     </div>
   );
+}
+
+function buildContextWindowTooltip(
+  contextWindow: ThreadContextWindowState,
+  phaseLabel: string
+): string {
+  const lines = [
+    `Context window: ${Math.round(contextWindow.usedPercent)}% full (${phaseLabel})`,
+    `Current snapshot: ${formatCompactNumber(contextWindow.totalTokens)} / ${formatCompactNumber(
+      contextWindow.modelContextWindow
+    )} tokens`,
+  ];
+
+  if (typeof contextWindow.remainingTokens === "number") {
+    const remainingPercent =
+      typeof contextWindow.remainingPercent === "number"
+        ? `, ${Math.round(contextWindow.remainingPercent)}% remaining`
+        : "";
+    lines.push(
+      `Remaining: ${formatCompactNumber(contextWindow.remainingTokens)} tokens${remainingPercent}`
+    );
+  }
+
+  const breakdown = [
+    formatOptionalTokenDetail("input", contextWindow.inputTokens),
+    formatOptionalTokenDetail("cached", contextWindow.cachedInputTokens),
+    formatOptionalTokenDetail("output", contextWindow.outputTokens),
+    formatOptionalTokenDetail("reasoning", contextWindow.reasoningOutputTokens),
+  ].filter((detail): detail is string => Boolean(detail));
+
+  if (breakdown.length > 0) {
+    lines.push(`Current breakdown: ${breakdown.join(", ")}`);
+  }
+
+  if (typeof contextWindow.cumulativeTotalTokens === "number") {
+    lines.push(
+      `Cumulative usage reported: ${formatCompactNumber(
+        contextWindow.cumulativeTotalTokens
+      )} tokens`
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function formatOptionalTokenDetail(label: string, value: number | undefined): string | undefined {
+  return typeof value === "number" ? `${formatCompactNumber(value)} ${label}` : undefined;
 }
 
 function formatCompactNumber(value: number): string {

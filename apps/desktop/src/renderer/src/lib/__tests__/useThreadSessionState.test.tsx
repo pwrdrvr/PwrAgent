@@ -2249,8 +2249,15 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.contextWindow).toEqual({
+      cachedInputTokens: undefined,
+      cumulativeTotalTokens: undefined,
+      inputTokens: undefined,
       modelContextWindow: 128_000,
+      outputTokens: undefined,
       phase: 6,
+      reasoningOutputTokens: undefined,
+      remainingPercent: 25,
+      remainingTokens: 32_000,
       totalTokens: 96_000,
       usedPercent: 75,
     });
@@ -2309,10 +2316,89 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.contextWindow).toEqual({
+      cachedInputTokens: undefined,
+      cumulativeTotalTokens: undefined,
+      inputTokens: 1_200,
       modelContextWindow: 258_400,
+      outputTokens: 12,
       phase: 0,
+      reasoningOutputTokens: undefined,
+      remainingPercent: ((258_400 - 1_212) / 258_400) * 100,
+      remainingTokens: 258_400 - 1_212,
       totalTokens: 1_212,
       usedPercent: (1_212 / 258_400) * 100,
+    });
+  });
+
+  it("prefers last token usage over cumulative session usage for context fill", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(desktopApi.readThread).toHaveBeenCalled();
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 20_663,
+                cached_input_tokens: 20_352,
+                output_tokens: 45,
+                total_tokens: 20_708,
+              },
+              total_token_usage: {
+                input_tokens: 41_267,
+                cached_input_tokens: 23_808,
+                output_tokens: 75,
+                total_tokens: 41_342,
+              },
+              model_context_window: 258_400,
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.contextWindow).toMatchObject({
+      cachedInputTokens: 20_352,
+      cumulativeTotalTokens: 41_342,
+      inputTokens: 20_663,
+      modelContextWindow: 258_400,
+      outputTokens: 45,
+      phase: 0,
+      totalTokens: 20_708,
+      usedPercent: (20_708 / 258_400) * 100,
     });
   });
 });

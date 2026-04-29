@@ -39,8 +39,15 @@ export type ThreadViewportState = {
 };
 
 export type ThreadContextWindowState = {
+  cachedInputTokens?: number;
+  cumulativeTotalTokens?: number;
+  inputTokens?: number;
   modelContextWindow: number;
+  outputTokens?: number;
   phase: number;
+  reasoningOutputTokens?: number;
+  remainingPercent?: number;
+  remainingTokens?: number;
   totalTokens: number;
   usedPercent: number;
 };
@@ -253,43 +260,112 @@ function readFiniteNumber(record: Record<string, unknown>, keys: string[]): numb
   return undefined;
 }
 
-function readTokenBreakdownTotal(record: Record<string, unknown>): number | undefined {
-  const explicitTotal = readFiniteNumber(record, ["totalTokens", "total_tokens"]);
-  if (explicitTotal !== undefined) {
-    return explicitTotal;
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function findFirstNestedValue(value: unknown, keys: string[]): unknown {
+  const record = readRecord(value);
+  if (!record) {
+    return undefined;
   }
 
-  const inputTokens = readFiniteNumber(record, ["inputTokens", "input_tokens"]) ?? 0;
-  const outputTokens = readFiniteNumber(record, ["outputTokens", "output_tokens"]) ?? 0;
-  const reasoningOutputTokens =
-    readFiniteNumber(record, [
-      "reasoningOutputTokens",
-      "reasoning_output_tokens",
-    ]) ?? 0;
-  const totalTokens = inputTokens + outputTokens + reasoningOutputTokens;
+  for (const key of keys) {
+    if (record[key] !== undefined) {
+      return record[key];
+    }
+  }
 
-  return totalTokens > 0 ? totalTokens : undefined;
+  for (const child of Object.values(record)) {
+    const nested = findFirstNestedValue(child, keys);
+    if (nested !== undefined) {
+      return nested;
+    }
+  }
+
+  return undefined;
+}
+
+type TokenUsageBreakdown = {
+  cachedInputTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+};
+
+function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdown | undefined {
+  const explicitTotal = readFiniteNumber(record, ["totalTokens", "total_tokens"]);
+  const inputTokens = readFiniteNumber(record, ["inputTokens", "input_tokens"]);
+  const cachedInputTokens = readFiniteNumber(record, [
+    "cachedInputTokens",
+    "cached_input_tokens",
+  ]);
+  const outputTokens = readFiniteNumber(record, ["outputTokens", "output_tokens"]);
+  const reasoningOutputTokens = readFiniteNumber(record, [
+    "reasoningOutputTokens",
+    "reasoning_output_tokens",
+  ]);
+  const derivedTotal =
+    (inputTokens ?? 0) + (outputTokens ?? 0) + (reasoningOutputTokens ?? 0);
+  const totalTokens = explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
+
+  if (
+    totalTokens === undefined &&
+    inputTokens === undefined &&
+    cachedInputTokens === undefined &&
+    outputTokens === undefined &&
+    reasoningOutputTokens === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    cachedInputTokens,
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+  };
 }
 
 function normalizeThreadContextWindowState(
   tokenUsage: unknown
 ): ThreadContextWindowState | undefined {
-  if (!tokenUsage || typeof tokenUsage !== "object" || Array.isArray(tokenUsage)) {
+  const root =
+    readRecord(findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"])) ??
+    readRecord(tokenUsage);
+  if (!root) {
     return undefined;
   }
 
-  const usageRecord = tokenUsage as Record<string, unknown>;
-  const modelContextWindow = readFiniteNumber(usageRecord, [
+  const currentUsageRecord =
+    readRecord(findFirstNestedValue(root, ["last", "last_token_usage"])) ??
+    readRecord(root.last) ??
+    readRecord(root.last_token_usage) ??
+    readRecord(findFirstNestedValue(root, ["total", "total_token_usage"])) ??
+    readRecord(root.total) ??
+    readRecord(root.total_token_usage);
+  const totalUsageRecord =
+    readRecord(findFirstNestedValue(root, ["total", "total_token_usage"])) ??
+    readRecord(root.total) ??
+    readRecord(root.total_token_usage);
+  const currentUsage = currentUsageRecord ? readTokenBreakdown(currentUsageRecord) : undefined;
+  const totalUsage = totalUsageRecord ? readTokenBreakdown(totalUsageRecord) : undefined;
+  const nestedModelContextWindow = findFirstNestedValue(root, [
     "modelContextWindow",
     "model_context_window",
   ]);
-  const total = usageRecord.total;
-  const totalTokens =
-    total && typeof total === "object" && !Array.isArray(total)
-      ? readTokenBreakdownTotal(total as Record<string, unknown>)
-      : undefined;
+  const modelContextWindow =
+    readFiniteNumber(root, ["modelContextWindow", "model_context_window"]) ??
+    (typeof nestedModelContextWindow === "number" && Number.isFinite(nestedModelContextWindow)
+      ? nestedModelContextWindow
+      : undefined);
+  const totalTokens = currentUsage?.totalTokens;
 
-  if (!modelContextWindow || modelContextWindow <= 0 || totalTokens === undefined) {
+  if (!currentUsage || !modelContextWindow || modelContextWindow <= 0 || totalTokens === undefined) {
     return undefined;
   }
 
@@ -297,10 +373,25 @@ function normalizeThreadContextWindowState(
     0,
     Math.min(100, (totalTokens / modelContextWindow) * 100)
   );
+  const remainingTokens = Math.max(0, modelContextWindow - totalTokens);
+  const remainingPercent = Math.max(
+    0,
+    Math.min(100, (remainingTokens / modelContextWindow) * 100)
+  );
 
   return {
+    cachedInputTokens: currentUsage.cachedInputTokens,
+    cumulativeTotalTokens:
+      totalUsage?.totalTokens !== undefined && totalUsage.totalTokens !== totalTokens
+        ? totalUsage.totalTokens
+        : undefined,
+    inputTokens: currentUsage.inputTokens,
     modelContextWindow,
+    outputTokens: currentUsage.outputTokens,
     phase: Math.min(7, Math.max(0, Math.floor(usedPercent / 12.5))),
+    reasoningOutputTokens: currentUsage.reasoningOutputTokens,
+    remainingPercent,
+    remainingTokens,
     totalTokens,
     usedPercent,
   };
