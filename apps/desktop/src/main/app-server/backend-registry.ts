@@ -17,9 +17,11 @@ import {
   type AppServerTurnInputItem,
   type AppServerBackendKind,
   type AppServerCollaborationModeRequest,
+  type BackendAccountSummary,
   type BackendCapabilities,
   type BackendLaunchpadOptions,
   type BackendModelOption,
+  type BackendRateLimitSummary,
   type BackendSummary,
   type ListBackendsRequest,
   type ListBackendsResponse,
@@ -142,6 +144,8 @@ type BackendClient = {
     delivery?: StartReviewRequest["delivery"];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }>;
   listModels?(): Promise<BackendModelOption[]>;
+  readAccount?(): Promise<BackendAccountSummary>;
+  readRateLimits?(): Promise<BackendRateLimitSummary[]>;
   interruptTurn(params: {
     threadId: string;
     turnId: string;
@@ -464,6 +468,33 @@ async function readClientModels(client: BackendClient): Promise<BackendModelOpti
     return [];
   }
   return await client.listModels();
+}
+
+async function readClientAccount(
+  client: BackendClient
+): Promise<BackendAccountSummary | undefined> {
+  if (!client.readAccount) {
+    return undefined;
+  }
+  return await client.readAccount();
+}
+
+function isMeaningfulAccountSummary(
+  account: BackendAccountSummary | undefined
+): account is BackendAccountSummary {
+  return Boolean(
+    account?.type ||
+      account?.email ||
+      account?.planType ||
+      typeof account?.requiresOpenaiAuth === "boolean"
+  );
+}
+
+async function readClientRateLimits(client: BackendClient): Promise<BackendRateLimitSummary[]> {
+  if (!client.readRateLimits) {
+    return [];
+  }
+  return await client.readRateLimits();
 }
 
 type ModelSettings = {
@@ -1533,10 +1564,18 @@ export class DesktopBackendRegistry {
   }
 
   private async describeCodexBackend(): Promise<BackendSummary> {
-    const [defaultResult, fullAccessResult, defaultModelsResult] = await Promise.allSettled([
+    const [
+      defaultResult,
+      fullAccessResult,
+      defaultModelsResult,
+      defaultAccountResult,
+      defaultRateLimitsResult,
+    ] = await Promise.allSettled([
       this.codexDefaultClient.getInitializeResult(),
       this.codexFullAccessClient.getInitializeResult(),
       readClientModels(this.codexDefaultClient),
+      readClientAccount(this.codexDefaultClient),
+      readClientRateLimits(this.codexDefaultClient),
     ]);
     const successful = [defaultResult, fullAccessResult].flatMap((result) =>
       result.status === "fulfilled" ? [result.value] : [],
@@ -1558,6 +1597,15 @@ export class DesktopBackendRegistry {
       kind: "codex",
       label: BACKEND_LABELS.codex,
       available,
+      account:
+        defaultAccountResult.status === "fulfilled" &&
+        isMeaningfulAccountSummary(defaultAccountResult.value)
+          ? defaultAccountResult.value
+          : undefined,
+      rateLimits:
+        defaultRateLimitsResult.status === "fulfilled"
+          ? defaultRateLimitsResult.value
+          : undefined,
       serverName: successful[0]?.serverInfo?.name,
       serverVersion: successful[0]?.serverInfo?.version,
       methods,
