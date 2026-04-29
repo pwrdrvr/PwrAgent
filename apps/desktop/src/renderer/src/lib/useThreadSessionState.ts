@@ -38,10 +38,18 @@ export type ThreadViewportState = {
   scrollTop: number;
 };
 
+export type ThreadContextWindowState = {
+  modelContextWindow: number;
+  phase: number;
+  totalTokens: number;
+  usedPercent: number;
+};
+
 type ThreadSessionEntry = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
   completionHydrationRetries: number;
+  contextWindow?: ThreadContextWindowState;
   error?: string;
   expectOwnUpdate: boolean;
   failedHydrationVersion?: number | "unknown";
@@ -233,6 +241,69 @@ function normalizeNotificationTimestamp(value: unknown): number | undefined {
 
 function normalizeNotificationDuration(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readFiniteNumber(record: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readTokenBreakdownTotal(record: Record<string, unknown>): number | undefined {
+  const explicitTotal = readFiniteNumber(record, ["totalTokens", "total_tokens"]);
+  if (explicitTotal !== undefined) {
+    return explicitTotal;
+  }
+
+  const inputTokens = readFiniteNumber(record, ["inputTokens", "input_tokens"]) ?? 0;
+  const outputTokens = readFiniteNumber(record, ["outputTokens", "output_tokens"]) ?? 0;
+  const reasoningOutputTokens =
+    readFiniteNumber(record, [
+      "reasoningOutputTokens",
+      "reasoning_output_tokens",
+    ]) ?? 0;
+  const totalTokens = inputTokens + outputTokens + reasoningOutputTokens;
+
+  return totalTokens > 0 ? totalTokens : undefined;
+}
+
+function normalizeThreadContextWindowState(
+  tokenUsage: unknown
+): ThreadContextWindowState | undefined {
+  if (!tokenUsage || typeof tokenUsage !== "object" || Array.isArray(tokenUsage)) {
+    return undefined;
+  }
+
+  const usageRecord = tokenUsage as Record<string, unknown>;
+  const modelContextWindow = readFiniteNumber(usageRecord, [
+    "modelContextWindow",
+    "model_context_window",
+  ]);
+  const total = usageRecord.total;
+  const totalTokens =
+    total && typeof total === "object" && !Array.isArray(total)
+      ? readTokenBreakdownTotal(total as Record<string, unknown>)
+      : undefined;
+
+  if (!modelContextWindow || modelContextWindow <= 0 || totalTokens === undefined) {
+    return undefined;
+  }
+
+  const usedPercent = Math.max(
+    0,
+    Math.min(100, (totalTokens / modelContextWindow) * 100)
+  );
+
+  return {
+    modelContextWindow,
+    phase: Math.min(7, Math.max(0, Math.floor(usedPercent / 12.5))),
+    totalTokens,
+    usedPercent,
+  };
 }
 
 function buildTurnMetadata(params: {
@@ -635,6 +706,7 @@ export function useThreadSessionState(params: {
   loadingMore: boolean;
   loadOlder: () => Promise<void>;
   messages: AppServerThreadMessage[];
+  contextWindow?: ThreadContextWindowState;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingMcpInteraction?: PendingMcpInteractionState;
   pendingRequest?: AppServerPendingRequestNotification;
@@ -1266,10 +1338,26 @@ export function useThreadSessionState(params: {
         if (event.notification.method === "thread/compacted") {
           return {
             ...current,
+            contextWindow: undefined,
             failedHydrationVersion: undefined,
             hydratedUpdatedAt: undefined,
             lastTouchedAt: nextLastTouchedAt,
             response: undefined,
+          };
+        }
+
+        if (event.notification.method === "thread/tokenUsage/updated") {
+          const contextWindow = normalizeThreadContextWindowState(
+            event.notification.params.tokenUsage
+          );
+          if (!contextWindow) {
+            return current;
+          }
+
+          return {
+            ...current,
+            contextWindow,
+            lastTouchedAt: nextLastTouchedAt,
           };
         }
 
@@ -1628,6 +1716,7 @@ export function useThreadSessionState(params: {
     loadingMore: selectedSession?.loadingMore ?? false,
     loadOlder,
     messages,
+    contextWindow: selectedSession?.contextWindow,
     pendingAssistantMessage: selectedSession?.pendingAssistantMessage,
     pendingMcpInteraction: selectedSession?.pendingMcpInteraction,
     pendingRequest: selectedSession?.pendingRequest,

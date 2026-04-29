@@ -23,6 +23,7 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { normalizeImageFile } from "../../lib/image-normalization";
+import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import {
   findSkillTrigger,
   hydrateSkillLabelsWithMarkdown,
@@ -43,6 +44,7 @@ type ComposerProps = {
   desktopApi?: DesktopApi;
   directory?: NavigationDirectorySummary;
   disabled?: boolean;
+  contextWindow?: ThreadContextWindowState;
   launchpad?: NavigationLaunchpadDraft;
   launchpadError?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
@@ -124,6 +126,17 @@ type SlashCommandSuggestion = {
 
 type AutocompleteKind = "skills" | "slash";
 type ReviewTargetChoice = AppServerReviewTarget["type"];
+
+const CONTEXT_MOON_PHASES = [
+  "new",
+  "waxing crescent",
+  "first quarter",
+  "waxing gibbous",
+  "near full",
+  "full",
+  "overfull",
+  "critical",
+] as const;
 
 type ReviewConfigState = {
   branch: string;
@@ -2143,6 +2156,7 @@ export function Composer(props: ComposerProps) {
       ) : null}
 
       <div className="composer__actions">
+        <ContextWindowMoon contextWindow={props.contextWindow} />
         {activeTurnId ? (
           <button
             className="button button--ghost"
@@ -2178,6 +2192,53 @@ export function Composer(props: ComposerProps) {
       </div>
     </form>
   );
+}
+
+function ContextWindowMoon({
+  contextWindow,
+}: {
+  contextWindow?: ThreadContextWindowState;
+}) {
+  if (!contextWindow) {
+    return null;
+  }
+
+  const phase = Math.min(7, Math.max(0, contextWindow.phase));
+  const phaseLabel = CONTEXT_MOON_PHASES[phase];
+  const percentLabel = `${Math.round(contextWindow.usedPercent)}%`;
+  const tokenLabel = `${formatCompactNumber(
+    contextWindow.totalTokens
+  )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
+  const label = `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
+
+  return (
+    <div
+      aria-label={label}
+      className="context-window-moon"
+      role="img"
+      title={label}
+    >
+      <span
+        aria-hidden="true"
+        className={`context-window-moon__sprite context-window-moon__sprite--phase-${phase}`}
+      >
+        <span className="context-window-moon__disc" />
+      </span>
+      <span className="context-window-moon__label">{percentLabel}</span>
+    </div>
+  );
+}
+
+function formatCompactNumber(value: number): string {
+  if (value >= 1_000_000) {
+    return `${Math.round(value / 100_000) / 10}M`;
+  }
+
+  if (value >= 1_000) {
+    return `${Math.round(value / 100) / 10}k`;
+  }
+
+  return String(Math.round(value));
 }
 
 function getImageFilesFromDataTransfer(dataTransfer: DataTransfer): ComposerImageFile[] {

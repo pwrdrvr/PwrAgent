@@ -70,6 +70,38 @@ function backendSummary(
 }
 
 describe("Composer", () => {
+  it("shows an orange moon for reported context window usage", () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        contextWindow={{
+          modelContextWindow: 128_000,
+          phase: 4,
+          totalTokens: 64_000,
+          usedPercent: 50,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Context usage",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    expect(
+      screen.getByRole("img", {
+        name: "Context window 50% full, 64k/128k tokens, near full",
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByText("50%")).toBeInTheDocument();
+  });
+
   it("shows OpenAI model and reasoning defaults without a Default option", () => {
     render(
       <Composer
