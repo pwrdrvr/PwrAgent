@@ -5,6 +5,7 @@ import type {
   NavigationLaunchpadDraft,
   StartReviewRequest,
   StartTurnRequest,
+  StartTurnResponse,
 } from "@pwragnt/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeImageFile } from "../../../lib/image-normalization";
@@ -213,6 +214,479 @@ describe("Composer", () => {
         reasoningEffort: "medium",
       })
     );
+  });
+
+  it("keeps the reply input focusable while the send request is pending", async () => {
+    let resolveStartTurn: ((value: StartTurnResponse) => void) | undefined;
+    const startTurn = vi.fn(
+      (request: StartTurnRequest) =>
+        new Promise<StartTurnResponse>((resolve) => {
+          resolveStartTurn = resolve;
+        })
+    );
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Slow send",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Start a slow turn" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(screen.getByRole("button", { name: "Sending…" })).toBeDisabled();
+    expect(textarea).toBeEnabled();
+
+    await act(async () => {
+      resolveStartTurn?.({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      });
+    });
+  });
+
+  it("queues Enter during an active turn and sends it after the turn clears", async () => {
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-2",
+    }));
+    const baseProps = {
+      backends: [backendSummary("codex")],
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startTurn,
+      },
+      disabled: false,
+      skills: [],
+      thread: {
+        id: "thread-1",
+        title: "Active turn",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: "default" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    };
+
+    const { rerender } = render(
+      <Composer
+        {...baseProps}
+        activeTurnId="turn-1"
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Follow up next" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Follow up next")).toBeInTheDocument();
+    expect(textarea).toHaveValue("");
+
+    rerender(<Composer {...baseProps} activeTurnId={undefined} />);
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "thread-1",
+          input: [{ type: "text", text: "Follow up next" }],
+        })
+      );
+    });
+  });
+
+  it("steers Command Enter during an active turn when supported", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    const startTurn = vi.fn();
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex", {
+              models: [
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  current: true,
+                  supportsReasoning: true,
+                  supportsSteering: true,
+                },
+              ],
+            }),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn,
+          steerTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Steerable thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Change direction" } });
+    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+
+    expect(steerTurn).not.toHaveBeenCalled();
+    expect(screen.getByText("Pending steer")).toBeInTheDocument();
+    expect(screen.getByText("Change direction")).toBeInTheDocument();
+    expect(textarea).toHaveValue("");
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            item: {
+              type: "tool_call",
+              output: "ready for another instruction",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(steerTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "Change direction" }],
+      });
+    });
+    expect(screen.getByText("Steering now")).toBeInTheDocument();
+    expect(startTurn).not.toHaveBeenCalled();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            item: {
+              type: "message",
+              role: "user",
+              text: "Change direction",
+            },
+          },
+        },
+      });
+    });
+
+    expect(screen.queryByText("Steering now")).not.toBeInTheDocument();
+  });
+
+  it("lets pending steers be edited before they are injected", async () => {
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex", {
+              models: [
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  current: true,
+                  supportsReasoning: true,
+                  supportsSteering: true,
+                },
+              ],
+            }),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          steerTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Editable steer",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Revise the plan" } });
+    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+
+    expect(screen.getByText("Pending steer")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(textarea).toHaveValue("Revise the plan");
+    expect(screen.queryByText("Pending steer")).not.toBeInTheDocument();
+    expect(steerTurn).not.toHaveBeenCalled();
+  });
+
+  it("does not acknowledge matching steer text before the steer is sent", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const steerTurn = vi.fn(async () => {
+      throw new Error("steer failed");
+    });
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex", {
+              models: [
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  current: true,
+                  supportsReasoning: true,
+                  supportsSteering: true,
+                },
+              ],
+            }),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          steerTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Steer race",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Change direction" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter", metaKey: true });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            item: {
+              type: "tool_call",
+              output: "tool output mentioning Change direction before injection",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(steerTurn).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByText("Pending steer")).toBeInTheDocument();
+    expect(screen.getByText("Change direction")).toBeInTheDocument();
+    expect(screen.getByText("steer failed")).toBeInTheDocument();
+  });
+
+  it("restores a pending steer to the draft when turn completion leaves an existing queue", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: {
+            method: "turn/completed";
+            params: {
+              threadId: string;
+              turnId: string;
+              turn: {
+                id: string;
+                status: "completed";
+              };
+            };
+          };
+        }) => void)
+      | undefined;
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-2",
+    }));
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex", {
+              models: [
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  current: true,
+                  supportsReasoning: true,
+                  supportsSteering: true,
+                },
+              ],
+            }),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn,
+          steerTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Queue and steer",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Queued follow-up" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    fireEvent.change(textarea, { target: { value: "Pending steer draft" } });
+    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+
+    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Queued follow-up")).toBeInTheDocument();
+    expect(screen.getByText("Pending steer")).toBeInTheDocument();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "thread-1",
+          input: [{ type: "text", text: "Queued follow-up" }],
+        })
+      );
+    });
+    expect(textarea).toHaveValue("Pending steer draft");
+    expect(screen.queryByText("Pending steer")).not.toBeInTheDocument();
   });
 
   it("updates model settings without crashing when fast-mode support changes", async () => {

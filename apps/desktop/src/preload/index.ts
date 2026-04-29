@@ -17,6 +17,8 @@ import type {
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
+  SteerTurnRequest,
+  SteerTurnResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   FocusedDiffAnalysisRequest,
@@ -63,6 +65,7 @@ import {
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
+  AGENT_STEER_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
@@ -175,6 +178,10 @@ const desktopApi = Object.freeze({
     request: InterruptTurnRequest
   ): Promise<InterruptTurnResponse> =>
     await ipcRenderer.invoke(AGENT_INTERRUPT_TURN_CHANNEL, request),
+  steerTurn: async (
+    request: SteerTurnRequest
+  ): Promise<SteerTurnResponse> =>
+    await ipcRenderer.invoke(AGENT_STEER_TURN_CHANNEL, request),
   setThreadExecutionMode: async (
     request: SetThreadExecutionModeRequest
   ): Promise<SetThreadExecutionModeResponse> =>

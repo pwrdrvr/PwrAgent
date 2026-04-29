@@ -41,6 +41,8 @@ import {
   type SetThreadExecutionModeResponse,
   type SetThreadModelSettingsRequest,
   type SetThreadModelSettingsResponse,
+  type SteerTurnRequest,
+  type SteerTurnResponse,
   type StartReviewRequest,
   type StartReviewResponse,
   type StartThreadResponse,
@@ -144,6 +146,11 @@ type BackendClient = {
     threadId: string;
     turnId: string;
   }): Promise<{ threadId: string; turnId: string }>;
+  steerTurn?(params: {
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    expectedTurnId: string;
+  }): Promise<{ threadId: string; turnId: string }>;
   setThreadPermissions?(params: {
     threadId: string;
     cwd?: string;
@@ -186,27 +193,32 @@ const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
     current: true,
     supportsReasoning: true,
     supportsFast: true,
+    supportsSteering: true,
   },
   {
     id: "gpt-5.4",
     label: "GPT-5.4",
     supportsReasoning: true,
     supportsFast: true,
+    supportsSteering: true,
   },
   {
     id: "gpt-5.4-mini",
     label: "GPT-5.4-Mini",
     supportsReasoning: true,
+    supportsSteering: true,
   },
   {
     id: "gpt-5.3-codex",
     label: "GPT-5.3-Codex",
     supportsReasoning: true,
+    supportsSteering: true,
   },
   {
     id: "gpt-5.2",
     label: "GPT-5.2",
     supportsReasoning: true,
+    supportsSteering: true,
   },
 ];
 
@@ -216,35 +228,41 @@ const GROK_FALLBACK_MODELS: BackendModelOption[] = [
     label: "Grok 4.20 Reasoning",
     current: true,
     supportsReasoning: false,
+    supportsSteering: false,
   },
   {
     id: "grok-4.20-non-reasoning",
     label: "Grok 4.20 Non-Reasoning",
     supportsReasoning: false,
+    supportsSteering: false,
   },
   {
     id: "grok-4-1-fast-reasoning",
     label: "Grok 4.1 Fast Reasoning",
     supportsReasoning: false,
     supportsFast: true,
+    supportsSteering: false,
   },
   {
     id: "grok-4-1-fast-non-reasoning",
     label: "Grok 4.1 Fast Non-Reasoning",
     supportsReasoning: false,
     supportsFast: true,
+    supportsSteering: false,
   },
   {
     id: "grok-4-fast-reasoning",
     label: "Grok 4 Fast Reasoning",
     supportsReasoning: false,
     supportsFast: true,
+    supportsSteering: false,
   },
   {
     id: "grok-4-fast-non-reasoning",
     label: "Grok 4 Fast Non-Reasoning",
     supportsReasoning: false,
     supportsFast: true,
+    supportsSteering: false,
   },
 ];
 
@@ -295,7 +313,7 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
     startReview: supported.has("review/start") || assumeCodexAppServerSurface,
     interruptTurn: supported.has("turn/interrupt"),
-    steerTurn: supported.has("turn/steer"),
+    steerTurn: backend === "codex" || supported.has("turn/steer"),
     transcriptPagination: false,
     toolUse: false,
     approvalRequests: true,
@@ -356,6 +374,17 @@ function inferSupportsFast(
   return backend === "codex" && (id === "gpt-5.5" || id === "gpt-5.4");
 }
 
+function inferSupportsSteering(
+  backend: AppServerBackendKind,
+  model: BackendModelOption,
+): boolean {
+  if (typeof model.supportsSteering === "boolean") {
+    return model.supportsSteering;
+  }
+
+  return backend === "codex";
+}
+
 function getBackendFallbackModels(backend: AppServerBackendKind): BackendModelOption[] {
   return backend === "codex" ? OPENAI_FALLBACK_MODELS : GROK_FALLBACK_MODELS;
 }
@@ -378,6 +407,7 @@ function dedupeModelOptions(
       ...model,
       supportsReasoning: inferSupportsReasoning(backend, model),
       supportsFast: inferSupportsFast(backend, model),
+      supportsSteering: inferSupportsSteering(backend, model),
     };
     const current = byId.get(model.id);
     byId.set(model.id, {
@@ -386,6 +416,7 @@ function dedupeModelOptions(
       current: current?.current || normalizedModel.current,
       supportsReasoning: current?.supportsReasoning || normalizedModel.supportsReasoning,
       supportsFast: current?.supportsFast || normalizedModel.supportsFast,
+      supportsSteering: current?.supportsSteering || normalizedModel.supportsSteering,
     });
   }
 
@@ -1115,6 +1146,32 @@ export class DesktopBackendRegistry {
             await client.interruptTurn(params),
           )
         : await this.grokClient.interruptTurn(params);
+
+    return {
+      backend: params.backend,
+      threadId: result.threadId,
+      turnId: result.turnId,
+    };
+  }
+
+  async steerTurn(params: SteerTurnRequest): Promise<SteerTurnResponse> {
+    const steerWithClient = async (
+      client: BackendClient,
+    ): Promise<{ threadId: string; turnId: string }> => {
+      if (!client.steerTurn) {
+        throw new Error("Selected backend does not support turn/steer");
+      }
+      return await client.steerTurn({
+        threadId: params.threadId,
+        input: params.input,
+        expectedTurnId: params.expectedTurnId,
+      });
+    };
+
+    const result =
+      params.backend === "codex"
+        ? await this.withCodexThreadClient(params.threadId, steerWithClient)
+        : await steerWithClient(this.grokClient);
 
     return {
       backend: params.backend,

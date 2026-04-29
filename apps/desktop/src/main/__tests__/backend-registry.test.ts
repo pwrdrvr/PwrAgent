@@ -409,7 +409,7 @@ describe("DesktopBackendRegistry", () => {
           readThread: true,
           startTurn: true,
           interruptTurn: false,
-          steerTurn: false,
+          steerTurn: true,
           transcriptPagination: false,
           toolUse: false,
           approvalRequests: true,

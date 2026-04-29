@@ -11,6 +11,8 @@ import type {
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
+  SteerTurnRequest,
+  SteerTurnResponse,
   StartReviewRequest,
   StartReviewResponse,
   StartThreadRequest,
@@ -30,6 +32,7 @@ import {
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
+  AGENT_STEER_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   BACKEND_LIST_CHANNEL,
 } from "../../shared/ipc";
@@ -285,6 +288,34 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);
+  ipcMain.handle(
+    AGENT_STEER_TURN_CHANNEL,
+    async (
+      _event,
+      request: SteerTurnRequest
+    ): Promise<SteerTurnResponse> => {
+      logDebug("steerTurn", {
+        backend: request.backend,
+        threadId: request.threadId,
+        expectedTurnId: request.expectedTurnId,
+        ...summarizeTurnInput(request.input),
+      });
+
+      try {
+        return await registry.steerTurn(request);
+      } catch (error) {
+        appServerLog.error("steerTurn failed", {
+          backend: request.backend,
+          threadId: request.threadId,
+          expectedTurnId: request.expectedTurnId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+  );
+
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
   ipcMain.handle(
     AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
@@ -338,6 +369,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_START_REVIEW_CHANNEL);
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
+  ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL);
   ipcMain.removeHandler(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL);

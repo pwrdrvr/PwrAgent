@@ -26,6 +26,7 @@ export type BackendModelOption = {
   current?: boolean;
   supportsReasoning?: boolean;
   supportsFast?: boolean;
+  supportsSteering?: boolean;
 };
 
 export type BackendLaunchpadOptions = {

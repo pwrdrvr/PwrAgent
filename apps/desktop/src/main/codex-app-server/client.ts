@@ -53,6 +53,7 @@ import type {
   ThreadStartParams as CodexThreadStartParams,
   TurnInterruptParams as CodexTurnInterruptParams,
   TurnStartParams as CodexTurnStartParams,
+  TurnSteerParams as CodexTurnSteerParams,
   UserInput as CodexUserInput,
 } from "@pwragnt/shared/codex-app-server-protocol/v2";
 import {
@@ -1956,6 +1957,10 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
           "supports_reasoning",
         ]),
         supportsFast: pickBoolean(modelRecord, ["supportsFast", "supports_fast"]),
+        supportsSteering: pickBoolean(modelRecord, [
+          "supportsSteering",
+          "supports_steering",
+        ]),
       },
     ];
   });
@@ -3497,6 +3502,40 @@ export class CodexAppServerClient {
         turnId: params.turnId,
       };
     }
+  }
+
+  async steerTurn(params: {
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    expectedTurnId: string;
+  }): Promise<{ threadId: string; turnId: string }> {
+    await this.ensureInitialized();
+
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads({
+        threadId: params.threadId,
+      }),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    }).catch(() => undefined);
+
+    const payload: CodexTurnSteerParams = {
+      threadId: params.threadId,
+      input: params.input.map(toCodexUserInput),
+      expectedTurnId: params.expectedTurnId,
+    };
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["turn/steer"],
+      payloads: [payload],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      threadId: params.threadId,
+      turnId: extractTurnIdFromValue(result) ?? params.expectedTurnId,
+    };
   }
 
   private async ensureInitialized(): Promise<void> {

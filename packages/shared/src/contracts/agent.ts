@@ -74,6 +74,19 @@ export type InterruptTurnResponse = {
   turnId: string;
 };
 
+export type SteerTurnRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  input: AppServerTurnInputItem[];
+  expectedTurnId: string;
+};
+
+export type SteerTurnResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId: string;
+};
+
 export type SetThreadExecutionModeRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
