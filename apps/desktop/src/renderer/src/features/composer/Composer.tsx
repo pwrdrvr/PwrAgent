@@ -616,7 +616,7 @@ export function Composer(props: ComposerProps) {
       }
 
       if (
-        pendingSteer &&
+        pendingSteer?.status === "steering" &&
         event.notification.method === "item/completed" &&
         notificationIncludesDraftText(event.notification.params, pendingSteer)
       ) {
@@ -658,12 +658,15 @@ export function Composer(props: ComposerProps) {
         setInterrupting(false);
         setSteering(false);
         if (pendingSteer?.status === "pending") {
-          setQueuedTurn((queued) =>
-            queued ?? {
+          if (queuedTurn) {
+            setDraft(pendingSteer.text);
+            setImageAttachments(pendingSteer.imageAttachments);
+          } else {
+            setQueuedTurn({
               text: pendingSteer.text,
               imageAttachments: pendingSteer.imageAttachments,
-            }
-          );
+            });
+          }
         }
         setPendingSteer(undefined);
         updateActiveTurnId(undefined);
@@ -698,6 +701,7 @@ export function Composer(props: ComposerProps) {
     props.removeOptimisticMessage,
     props.thread,
     pendingSteer,
+    queuedTurn,
   ]);
 
   useEffect(() => {
