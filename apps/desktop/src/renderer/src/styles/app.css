@@ -2642,17 +2642,17 @@ textarea {
   bottom: 0;
   z-index: 10;
   flex: 0 0 auto;
-  width: 48px;
-  min-width: 48px;
+  width: min(var(--context-rail-width, 380px), calc(100% - 32px));
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   border: 0;
   border-left: 1px solid var(--border-subtle);
   border-radius: 0;
   background: var(--bg-panel);
+  transform: translateX(calc(100% - 48px));
   transition:
-    width 160ms ease,
-    flex-basis 160ms ease,
+    transform 160ms ease,
     border-color 140ms ease,
     background 140ms ease;
 }
@@ -2662,6 +2662,7 @@ textarea {
   z-index: 30;
   overflow: visible;
   box-shadow: var(--shadow-popover);
+  transform: translateX(0);
 }
 
 .context-rail.is-pinned {
@@ -2674,6 +2675,7 @@ textarea {
   width: min(var(--context-rail-width, 380px), 42vw);
   overflow: hidden;
   box-shadow: none;
+  transform: translateX(0);
 }
 
 .context-rail.is-resizing {
@@ -3733,6 +3735,7 @@ textarea {
     flex-basis: auto;
     margin-left: 0;
     box-shadow: none;
+    transform: none;
   }
 
   .context-rail__spine {
