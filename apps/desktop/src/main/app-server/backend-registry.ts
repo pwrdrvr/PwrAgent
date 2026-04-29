@@ -190,15 +190,20 @@ type BackendClient = {
 
 function resolveThreadGitSourcePath(
   thread: AppServerThreadSummary | undefined,
+  overlayDirectories: AppServerThreadSummary["linkedDirectories"] = [],
 ): string | undefined {
   if (!thread) {
     return undefined;
   }
 
+  const linkedDirectories = [
+    ...overlayDirectories,
+    ...thread.linkedDirectories,
+  ];
   const directory =
-    thread.linkedDirectories.find((candidate) => candidate.kind === "worktree") ??
-    thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
-    thread.linkedDirectories[0];
+    linkedDirectories.find((candidate) => candidate.kind === "worktree") ??
+    linkedDirectories.find((candidate) => candidate.kind === "local") ??
+    linkedDirectories[0];
 
   return directory?.worktreePath ?? directory?.path ?? thread.projectKey;
 }
@@ -1374,12 +1379,20 @@ export class DesktopBackendRegistry {
   async checkThreadBranchDrift(
     params: CheckThreadBranchDriftRequest,
   ): Promise<CheckThreadBranchDriftResponse> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
     const thread = await this.findThreadForWorkspaceHandoff({
       backend: params.backend,
       threadId: params.threadId,
     });
-    const expectedBranch = thread?.gitBranch?.trim() || undefined;
-    const sourcePath = resolveThreadGitSourcePath(thread);
+    const expectedBranch =
+      overlay?.gitBranch?.trim() || thread?.gitBranch?.trim() || undefined;
+    const sourcePath = resolveThreadGitSourcePath(
+      thread,
+      overlay?.extraLinkedDirectories ?? [],
+    );
     const observedBranch = sourcePath
       ? await readCurrentGitBranch(sourcePath).catch(() => thread?.observedGitBranch)
       : thread?.observedGitBranch;
