@@ -3,6 +3,7 @@ import { buildThreadIdentityKey } from "@pwragnt/shared";
 import { ThreadRow } from "./ThreadRow";
 
 type InboxListProps = {
+  approvalRequestThreadKeys?: Record<string, boolean>;
   selectedThreadKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -27,6 +28,7 @@ export function InboxList(props: InboxListProps) {
       {props.threads.map((thread) => (
         <ThreadRow
           key={buildThreadIdentityKey(thread.source, thread.id)}
+          approvalRequestThreadKeys={props.approvalRequestThreadKeys}
           includeLinkedDirectories
           selectedThreadKey={props.selectedThreadKey}
           thinkingThreadKeys={props.thinkingThreadKeys}

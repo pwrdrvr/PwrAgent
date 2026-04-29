@@ -35,6 +35,7 @@ type SidebarProps = {
   archiveThreadError?: string;
   renameThreadError?: string;
   runtimeIdentity?: RuntimeIdentity;
+  approvalRequestThreadKeys?: Record<string, boolean>;
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -294,6 +295,7 @@ export function Sidebar(props: SidebarProps) {
             <p className="sidebar-error">{props.error}</p>
           ) : props.browseMode === "inbox" ? (
             <InboxList
+              approvalRequestThreadKeys={props.approvalRequestThreadKeys}
               selectedThreadKey={props.selectedItemKey}
               thinkingThreadKeys={props.thinkingThreadKeys}
               threads={props.inboxThreads}
@@ -302,6 +304,7 @@ export function Sidebar(props: SidebarProps) {
             />
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
+              approvalRequestThreadKeys={props.approvalRequestThreadKeys}
               directories={props.directories}
               selectedItemKey={props.selectedItemKey}
               thinkingThreadKeys={props.thinkingThreadKeys}
@@ -315,6 +318,7 @@ export function Sidebar(props: SidebarProps) {
               <p className="sidebar-empty">No threads yet.</p>
             ) : (
               <RecentsList
+                approvalRequestThreadKeys={props.approvalRequestThreadKeys}
                 selectedThreadKey={props.selectedItemKey}
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 threads={props.threads}

@@ -235,6 +235,37 @@ describe("Sidebar", () => {
     expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
   });
 
+  it("shows an approval chip for threads waiting on an approval request", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        approvalRequestThreadKeys={{ "codex:thread-1": true }}
+        selectedItemKey={undefined}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
+      name: /Cross-project cleanup/i,
+    });
+
+    const approvalChip = within(threadButton).getByTitle("Waiting for approval");
+    expect(approvalChip).toHaveTextContent("Waiting for approval");
+    expect(approvalChip).toHaveAttribute("title", "Waiting for approval");
+  });
+
   it("does not duplicate new-thread inbox membership as an attention marker in recents", () => {
     render(
       <Sidebar

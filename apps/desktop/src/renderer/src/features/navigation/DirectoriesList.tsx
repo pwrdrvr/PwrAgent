@@ -8,6 +8,7 @@ import { buildThreadIdentityKey } from "@pwragnt/shared";
 import { ThreadRow } from "./ThreadRow";
 
 type DirectoriesListProps = {
+  approvalRequestThreadKeys?: Record<string, boolean>;
   directories: NavigationDirectorySummary[];
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
@@ -145,6 +146,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     {visibleThreads.map((thread) => (
                       <ThreadRow
                         key={`${directory.key}:${buildThreadIdentityKey(thread.source, thread.id)}`}
+                        approvalRequestThreadKeys={props.approvalRequestThreadKeys}
                         compact
                         selectedThreadKey={props.selectedItemKey}
                         thinkingThreadKeys={props.thinkingThreadKeys}

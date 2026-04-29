@@ -65,6 +65,7 @@ export function App() {
         runtimeIdentity={runtimeIdentity}
         launchpadError={navigation.launchpadError}
         loading={navigation.loading}
+        approvalRequestThreadKeys={session.approvalRequestThreadKeys}
         selectedItemKey={navigation.selectedItemKey}
         thinkingThreadKeys={session.thinkingThreadKeys}
         threads={navigation.threads}
