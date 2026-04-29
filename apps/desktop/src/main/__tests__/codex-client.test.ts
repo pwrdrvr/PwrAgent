@@ -1575,6 +1575,10 @@ describe("CodexAppServerClient", () => {
               id: "item-4-1",
               kind: "command",
               label: "pwd && rg --files",
+              command: {
+                displayCommand: "pwd && rg --files",
+                rawCommand: "/bin/zsh -lc 'pwd && rg --files'"
+              },
               status: "completed"
             },
             {
@@ -1644,6 +1648,109 @@ describe("CodexAppServerClient", () => {
         previousCursor: undefined
       }
     });
+
+    await client.close();
+  });
+
+  it("preserves protocol thread/read activity groups at their captured item positions", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-captured-order", {
+      thread: {
+        turns: [
+          {
+            id: "turn-captured",
+            status: "completed",
+            startedAt: 1_763_500_100,
+            durationMs: 12_000,
+            items: [
+              {
+                type: "userMessage",
+                id: "user-1",
+                content: [{ type: "text", text: "Replay the captured order." }]
+              },
+              {
+                type: "agentMessage",
+                id: "commentary-1",
+                phase: "commentary",
+                text: "I am checking the first file."
+              },
+              {
+                type: "commandExecution",
+                id: "cmd-1",
+                status: "completed",
+                command: "/bin/zsh -lc 'sed -n 1,40p src/a.ts'",
+                commandActions: [
+                  {
+                    type: "read",
+                    path: "/repo/src/a.ts"
+                  }
+                ],
+                durationMs: 1_200
+              },
+              {
+                type: "agentMessage",
+                id: "commentary-2",
+                phase: "commentary",
+                text: "Now I am checking the second file."
+              },
+              {
+                type: "commandExecution",
+                id: "cmd-2",
+                status: "completed",
+                command: "/bin/zsh -lc 'sed -n 1,40p src/b.ts'",
+                commandActions: [
+                  {
+                    type: "read",
+                    path: "/repo/src/b.ts"
+                  }
+                ],
+                durationMs: 2_500
+              },
+              {
+                type: "agentMessage",
+                id: "final-1",
+                phase: "final",
+                text: "Done."
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-captured-order"
+    });
+
+    expect(replay.entries.map((entry) => `${entry.type}:${entry.id}`)).toEqual([
+      "message:user-1",
+      "message:commentary-1",
+      "activity:activity-cmd-1",
+      "message:commentary-2",
+      "activity:activity-cmd-2",
+      "message:final-1",
+    ]);
+    expect(replay.entries).toMatchObject([
+      { type: "message", role: "user", text: "Replay the captured order." },
+      { type: "message", role: "assistant", phase: "commentary" },
+      {
+        type: "activity",
+        summary: "Explored 1 file",
+        details: [{ label: "Read a.ts (1.2s)" }],
+      },
+      { type: "message", role: "assistant", phase: "commentary" },
+      {
+        type: "activity",
+        summary: "Explored 1 file",
+        details: [{ label: "Read b.ts (2.5s)" }],
+      },
+      { type: "message", role: "assistant", text: "Done." },
+    ]);
 
     await client.close();
   });
@@ -2194,10 +2301,12 @@ describe("CodexAppServerClient", () => {
               },
               {
                 type: "response_item",
-                id: "call-1",
+                id: "response-call-1",
                 payload: {
                   type: "function_call",
+                  call_id: "call-1",
                   name: "exec_command",
+                  durationMs: 5_200,
                   arguments: JSON.stringify({
                     cmd: "gh pr checks 62 --watch --interval 10"
                   })
@@ -2209,7 +2318,7 @@ describe("CodexAppServerClient", () => {
                 payload: {
                   type: "function_call_output",
                   call_id: "call-1",
-                  output: "Build pass"
+                  output: "Build pass\nLint pass"
                 }
               },
               {
@@ -2268,12 +2377,22 @@ describe("CodexAppServerClient", () => {
           {
             id: "call-1",
             kind: "command",
-            label: "gh pr checks 62 --watch --interval 10"
+            label: "gh pr checks 62 --watch --interval 10 (5.2s)",
+            command: {
+              displayCommand: "gh pr checks 62 --watch --interval 10",
+              rawCommand: "gh pr checks 62 --watch --interval 10",
+              output: "Build pass\nLint pass",
+              durationMs: 5_200
+            }
           },
           {
             id: "call-2",
             kind: "command",
-            label: "git status --short --branch"
+            label: "git status --short --branch",
+            command: {
+              displayCommand: "git status --short --branch",
+              rawCommand: "git status --short --branch"
+            }
           }
         ],
         turn: {

@@ -108,6 +108,12 @@ test("preserves live assistant commentary messages, tool usage, and final answer
       name: /Worked for 8m/
     });
     await expect(workedForToggle).toBeVisible();
+    await expect(workedForToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(transcript.getByText("Using ce:brainstorm for this.")).toBeHidden();
+    await expect(transcript.getByText("The broad search was too noisy")).toBeHidden();
+    await expect(transcript.getByText("The existing product direction is thread-first")).toBeHidden();
+
+    await workedForToggle.click();
     await expect(workedForToggle).toHaveAttribute("aria-expanded", "true");
     await expect(transcript.getByText("Using ce:brainstorm for this.")).toBeVisible();
     await expect(transcript.getByText("The broad search was too noisy")).toBeVisible();

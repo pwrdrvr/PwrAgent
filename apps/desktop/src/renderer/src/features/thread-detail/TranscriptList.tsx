@@ -76,6 +76,74 @@ type ScrollSnapshot = {
 const BOTTOM_THRESHOLD_PX = 24;
 type ScrollBottomMode = "instant" | "smooth";
 
+function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
+  return (
+    entry.type === "message" &&
+    entry.role === "assistant" &&
+    entry.phase === "final"
+  );
+}
+
+function entryCreatedAt(entry: AppServerThreadEntry): number | undefined {
+  return typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+}
+
+function pendingEntriesInEventOrder(
+  entries: Array<AppServerThreadEntry | undefined>
+): AppServerThreadEntry[] {
+  return entries
+    .map((entry, index) => ({ entry, index }))
+    .filter((item): item is { entry: AppServerThreadEntry; index: number } =>
+      Boolean(item.entry)
+    )
+    .sort((left, right) => {
+      const leftCreatedAt = entryCreatedAt(left.entry);
+      const rightCreatedAt = entryCreatedAt(right.entry);
+      if (
+        typeof leftCreatedAt === "number" &&
+        typeof rightCreatedAt === "number" &&
+        leftCreatedAt !== rightCreatedAt
+      ) {
+        return leftCreatedAt - rightCreatedAt;
+      }
+
+      if (typeof leftCreatedAt === "number" && typeof rightCreatedAt !== "number") {
+        return -1;
+      }
+      if (typeof leftCreatedAt !== "number" && typeof rightCreatedAt === "number") {
+        return 1;
+      }
+
+      return left.index - right.index;
+    })
+    .map((item) => item.entry);
+}
+
+function insertPendingEntry(
+  entries: AppServerThreadEntry[],
+  pendingEntry: AppServerThreadEntry | undefined
+): void {
+  if (!pendingEntry) {
+    return;
+  }
+
+  const pendingTurnId = pendingEntry.turn?.id;
+  if (!pendingTurnId || isAssistantFinalMessage(pendingEntry)) {
+    entries.push(pendingEntry);
+    return;
+  }
+
+  const finalMessageIndex = entries.findLastIndex(
+    (entry) => entry.turn?.id === pendingTurnId && isAssistantFinalMessage(entry)
+  );
+  if (finalMessageIndex === -1) {
+    entries.push(pendingEntry);
+    return;
+  }
+
+  entries.splice(finalMessageIndex, 0, pendingEntry);
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -199,17 +267,13 @@ export function TranscriptList(props: TranscriptListProps) {
   );
   const transcriptEntries = useMemo(() => {
     const entries = [...props.entries];
-    if (props.pendingPlanEntry) {
-      entries.push(props.pendingPlanEntry);
-    }
-    if (props.pendingActivityEntry) {
-      entries.push(props.pendingActivityEntry);
-    }
-    if (props.pendingProtocolActivityEntry) {
-      entries.push(props.pendingProtocolActivityEntry);
-    }
-    if (props.pendingAssistantMessage) {
-      entries.push(props.pendingAssistantMessage);
+    for (const pendingEntry of pendingEntriesInEventOrder([
+      props.pendingPlanEntry,
+      props.pendingActivityEntry,
+      props.pendingProtocolActivityEntry,
+      props.pendingAssistantMessage,
+    ])) {
+      insertPendingEntry(entries, pendingEntry);
     }
     return entries;
   }, [
@@ -236,58 +300,9 @@ export function TranscriptList(props: TranscriptListProps) {
       transcriptEntries,
     ]
   );
-  const livePendingWorkEntryIds = useMemo(
-    () =>
-      new Set(
-        [
-          props.pendingActivityEntry?.id,
-          props.pendingProtocolActivityEntry?.id,
-          props.pendingPlanEntry?.id,
-        ].filter((id): id is string => typeof id === "string")
-      ),
-    [
-      props.pendingActivityEntry?.id,
-      props.pendingPlanEntry?.id,
-      props.pendingProtocolActivityEntry?.id,
-    ]
-  );
-
   useEffect(() => {
     setExpandedCommentaryGroupIds(new Set());
   }, [props.threadId]);
-
-  useEffect(() => {
-    if (livePendingWorkEntryIds.size === 0) {
-      return;
-    }
-
-    const liveWorkGroupIds = transcriptRenderItems.flatMap((item) => {
-      if (
-        item.type !== "workPhaseGroup" ||
-        !item.collapsible ||
-        !item.entries.some((entry) => livePendingWorkEntryIds.has(entry.id))
-      ) {
-        return [];
-      }
-
-      return [item.id];
-    });
-    if (liveWorkGroupIds.length === 0) {
-      return;
-    }
-
-    setExpandedCommentaryGroupIds((current) => {
-      const next = new Set(current);
-      let changed = false;
-      for (const groupId of liveWorkGroupIds) {
-        if (!next.has(groupId)) {
-          next.add(groupId);
-          changed = true;
-        }
-      }
-      return changed ? next : current;
-    });
-  }, [livePendingWorkEntryIds, transcriptRenderItems]);
 
   useEffect(() => {
     if (!props.activeTurnId) {

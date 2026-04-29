@@ -4,6 +4,7 @@ import type {
   AppServerPendingRequestNotification,
   AppServerReviewTarget,
   AppServerSource,
+  AppServerThreadCommandDetail,
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
@@ -179,13 +180,60 @@ function readToolOutputText(item: Record<string, unknown>): string | undefined {
   return output && output !== toolName ? output : undefined;
 }
 
+function readCommandOutputText(item: Record<string, unknown>): string | undefined {
+  const data =
+    typeof item.data === "object" && item.data !== null && !Array.isArray(item.data)
+      ? item.data as Record<string, unknown>
+      : undefined;
+  return (
+    readString(item, "aggregatedOutput") ??
+    readString(item, "aggregated_output") ??
+    readString(item, "output") ??
+    readString(data, "aggregatedOutput") ??
+    readString(data, "aggregated_output") ??
+    readString(data, "output")
+  );
+}
+
+function readNumber(record: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readExitCode(item: Record<string, unknown>): number | undefined {
+  const data =
+    typeof item.data === "object" && item.data !== null && !Array.isArray(item.data)
+      ? item.data as Record<string, unknown>
+      : undefined;
+  return readNumber(item, "exitCode") ?? readNumber(item, "exit_code") ??
+    readNumber(data, "exitCode") ?? readNumber(data, "exit_code");
+}
+
 function readElapsedMs(item: Record<string, unknown>): number | undefined {
   const data =
     typeof item.data === "object" && item.data !== null && !Array.isArray(item.data)
       ? item.data as Record<string, unknown>
       : undefined;
-  return typeof data?.elapsedMs === "number" && Number.isFinite(data.elapsedMs)
-    ? data.elapsedMs
+  const direct =
+    typeof item.durationMs === "number" && Number.isFinite(item.durationMs)
+      ? item.durationMs
+      : typeof item.elapsedMs === "number" && Number.isFinite(item.elapsedMs)
+        ? item.elapsedMs
+        : typeof data?.durationMs === "number" && Number.isFinite(data.durationMs)
+          ? data.durationMs
+          : typeof data?.elapsedMs === "number" && Number.isFinite(data.elapsedMs)
+            ? data.elapsedMs
+            : undefined;
+  if (typeof direct === "number") {
+    return direct;
+  }
+
+  const startedAt = normalizeNotificationTimestamp(item.startedAt);
+  const completedAt = normalizeNotificationTimestamp(item.completedAt);
+  return typeof startedAt === "number" &&
+    typeof completedAt === "number" &&
+    completedAt >= startedAt
+    ? completedAt - startedAt
     : undefined;
 }
 
@@ -211,6 +259,43 @@ function formatCommandLabel(command: string | undefined): string {
   }
 
   return collapsed.length > 72 ? `${collapsed.slice(0, 69)}...` : collapsed;
+}
+
+function readDisplayCommand(command: string | undefined): string | undefined {
+  if (!command) {
+    return undefined;
+  }
+
+  const stripped = command
+    .replace(/^\/bin\/[a-z]+ -lc /, "")
+    .replace(/^['"]|['"]$/g, "");
+  const collapsed = stripped.replace(/\s+/g, " ").trim();
+  return collapsed || undefined;
+}
+
+function buildLiveCommandDetail(
+  item: Record<string, unknown>,
+  command: string | undefined,
+  elapsedMs: number | undefined,
+): AppServerThreadCommandDetail | undefined {
+  const displayCommand = readDisplayCommand(command);
+  if (!displayCommand) {
+    return undefined;
+  }
+
+  const output = readCommandOutputText(item);
+  const exitCode = readExitCode(item);
+  const cwd = readString(item, "cwd") ??
+    readString(item, "workingDirectory") ??
+    readString(item, "working_directory");
+  return {
+    displayCommand,
+    rawCommand: command,
+    ...(cwd ? { cwd } : {}),
+    ...(output ? { output } : {}),
+    ...(typeof exitCode === "number" ? { exitCode } : {}),
+    ...(typeof elapsedMs === "number" ? { durationMs: elapsedMs } : {}),
+  };
 }
 
 function readCommandActionLabel(item: Record<string, unknown>): string | undefined {
@@ -397,6 +482,10 @@ function buildLiveToolDetails(
       ? summarizeJsonValue(item.error) ?? summarizeJsonValue(item.result)
       : summarizeToolOutput(readToolOutputText(item));
   const elapsedMs = readElapsedMs(item);
+  const command = itemType === "commandexecution" ? readString(item, "command") : undefined;
+  const commandDetail = itemType === "commandexecution"
+    ? buildLiveCommandDetail(item, command, elapsedMs)
+    : undefined;
   const details: AppServerThreadActivityDetail[] = [
     {
       id: itemId,
@@ -412,6 +501,7 @@ function buildLiveToolDetails(
         query ? `: ${query}` : "",
         preview ? ` - ${preview}` : "",
       ].join(""),
+      ...(commandDetail ? { command: commandDetail } : {}),
       status,
     },
   ];
@@ -580,15 +670,84 @@ function mergeActivityDetails(
   for (const detail of next) {
     const existingIndex = merged.findIndex((entry) => entry.id === detail.id);
     if (existingIndex >= 0) {
+      const existing = merged[existingIndex];
+      const command = mergeCommandDetail(existing?.command, detail.command);
       merged[existingIndex] = {
-        ...merged[existingIndex],
+        ...existing,
         ...detail,
+        ...(command ? { command } : {}),
       };
     } else {
       merged.push(detail);
     }
   }
   return merged;
+}
+
+function mergeCommandDetail(
+  existing: AppServerThreadCommandDetail | undefined,
+  next: AppServerThreadCommandDetail | undefined,
+): AppServerThreadCommandDetail | undefined {
+  const displayCommand = next?.displayCommand ?? existing?.displayCommand;
+  if (!displayCommand) {
+    return undefined;
+  }
+
+  return {
+    displayCommand,
+    ...(existing?.rawCommand || next?.rawCommand
+      ? { rawCommand: next?.rawCommand ?? existing?.rawCommand }
+      : {}),
+    ...(existing?.cwd || next?.cwd ? { cwd: next?.cwd ?? existing?.cwd } : {}),
+    ...(existing?.output || next?.output
+      ? { output: next?.output ?? existing?.output }
+      : {}),
+    ...(typeof (next?.exitCode ?? existing?.exitCode) === "number"
+      ? { exitCode: next?.exitCode ?? existing?.exitCode }
+      : {}),
+    ...(typeof (next?.durationMs ?? existing?.durationMs) === "number"
+      ? { durationMs: next?.durationMs ?? existing?.durationMs }
+      : {}),
+  };
+}
+
+function appendCommandOutputDelta(
+  current: AppServerThreadActivityEntry | undefined,
+  params: {
+    delta: string;
+    itemId: string;
+    turn: AppServerThreadTurnMetadata | undefined;
+    turnId: string;
+  },
+): AppServerThreadActivityEntry | undefined {
+  const existingDetails = current?.details ?? [];
+  if (!existingDetails.some((detail) => detail.id === params.itemId)) {
+    return current;
+  }
+
+  const details = existingDetails.map((detail) => {
+    if (detail.id !== params.itemId) {
+      return detail;
+    }
+    return {
+      ...detail,
+      command: {
+        displayCommand: detail.command?.displayCommand ?? detail.label,
+        ...detail.command,
+        output: `${detail.command?.output ?? ""}${params.delta}`,
+      },
+    };
+  });
+
+  return {
+    type: "activity",
+    id: current?.id ?? `live-tools-${params.turnId}`,
+    createdAt: current?.createdAt ?? Date.now(),
+    summary: summarizeLiveToolActivity(details),
+    status: summarizeActivityStatus(details),
+    details,
+    ...(current?.turn ?? params.turn ? { turn: current?.turn ?? params.turn } : {}),
+  };
 }
 
 function normalizeLivePlanSteps(value: unknown): AppServerThreadPlanStep[] {
@@ -1304,6 +1463,37 @@ export function ThreadView(props: ThreadViewProps) {
             };
           });
         }
+        return;
+      }
+
+      if (event.notification.method === "item/commandExecution/outputDelta") {
+        const params = event.notification.params as Record<string, unknown>;
+        const delta = typeof params.delta === "string" ? params.delta : "";
+        const itemId = typeof params.itemId === "string"
+          ? params.itemId
+          : typeof params.item_id === "string"
+            ? params.item_id
+            : undefined;
+        if (!delta || !itemId) {
+          return;
+        }
+
+        const turnId =
+          typeof params.turnId === "string"
+            ? params.turnId
+            : props.activeTurnId ?? selectedThread.id;
+        const turn = buildLiveTurnMetadata({
+          turnId,
+          activeTurnStartedAt: props.activeTurnStartedAt,
+        });
+        setPendingToolActivityEntry((current) =>
+          appendCommandOutputDelta(current, {
+            delta,
+            itemId,
+            turn,
+            turnId,
+          })
+        );
         return;
       }
 

@@ -1753,6 +1753,24 @@ describe("ThreadView", () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
+          method: "item/commandExecution/outputDelta",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-1",
+            itemId: "cmd-1",
+            delta: "## main\n",
+          },
+        } as AppServerNotification,
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /git status --short/i }));
+    expect(screen.getByText("## main")).toBeInTheDocument();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
           method: "item/completed",
           params: {
             threadId: "thread-2",
@@ -1762,6 +1780,8 @@ describe("ThreadView", () => {
               type: "commandExecution",
               status: "completed",
               command: "/bin/zsh -lc 'git status --short'",
+              aggregatedOutput: "## main\n M apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx\n",
+              durationMs: 5_000,
               commandActions: [
                 {
                   type: "read",
@@ -1774,7 +1794,14 @@ describe("ThreadView", () => {
       });
     });
 
-    expect(screen.getByText("Read ThreadView.tsx")).toBeInTheDocument();
+    expect(screen.getAllByText("Read ThreadView.tsx (5.0s)").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText((_, element) =>
+        element?.textContent?.includes(
+          "M apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx"
+        ) ?? false
+      ).length
+    ).toBeGreaterThan(0);
   });
 
   it("renders live Codex tool names when command execution items lack a command string", async () => {

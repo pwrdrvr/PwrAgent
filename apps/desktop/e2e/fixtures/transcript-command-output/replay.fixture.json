@@ -1,0 +1,156 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "transcript-command-output",
+    "sourceCaptureId": "019ddaa3-60c1-7160-95f3-14744bdfabb7",
+    "threadId": "thread-transcript-command-output"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "initialize-2",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-transcript-command-output",
+          "title": "Transcript command output",
+          "titleSource": "explicit",
+          "summary": "Verify captured shell output is inspectable",
+          "source": "codex",
+          "executionMode": "full-access",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000100000
+        }
+      ]
+    },
+    {
+      "id": "thread-list-2",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-transcript-command-output",
+          "title": "Transcript command output",
+          "titleSource": "explicit",
+          "summary": "Verify captured shell output is inspectable",
+          "source": "codex",
+          "executionMode": "full-access",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000100000
+        }
+      ]
+    },
+    {
+      "id": "skills-list-1",
+      "kind": "response",
+      "method": "skills/list",
+      "result": []
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Run npm view dive. I'm just testing thread ordering improvements here."
+          },
+          {
+            "type": "activity",
+            "id": "activity-call-knu32",
+            "summary": "npm view dive (373ms)",
+            "details": [
+              {
+                "id": "call_knu32UdAro7gcoacZ2lqgSNS",
+                "kind": "command",
+                "label": "npm view dive (373ms)",
+                "status": "completed",
+                "command": {
+                  "displayCommand": "npm view dive",
+                  "rawCommand": "/bin/zsh -lc 'npm view dive'",
+                  "output": "dive@0.5.0 | Proprietary | deps: none | versions: 14\nwalk through directory trees and apply an action to every file\nhttps://github.com/pvorb/node-dive#readme\n\ndist\n.tarball: https://registry.npmjs.org/dive/-/dive-0.5.0.tgz\n",
+                  "exitCode": 0,
+                  "durationMs": 373
+                }
+              }
+            ],
+            "turn": {
+              "id": "turn-command-output",
+              "status": "completed",
+              "durationMs": 2000
+            }
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "phase": "final",
+            "text": "`npm view dive` completed successfully.\n\nKey result: `dive@0.5.0`, proprietary license, no dependencies, latest tag `0.5.0`, published by `pvorb`."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Run npm view dive. I'm just testing thread ordering improvements here."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "phase": "final",
+            "text": "`npm view dive` completed successfully.\n\nKey result: `dive@0.5.0`, proprietary license, no dependencies, latest tag `0.5.0`, published by `pvorb`."
+          }
+        ],
+        "lastUserMessage": "Run npm view dive. I'm just testing thread ordering improvements here.",
+        "lastAssistantMessage": "`npm view dive` completed successfully.\n\nKey result: `dive@0.5.0`, proprietary license, no dependencies, latest tag `0.5.0`, published by `pvorb`.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

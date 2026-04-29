@@ -82,7 +82,7 @@ describe("buildTranscriptRenderItems", () => {
     expect(items).toEqual([
       {
         type: "workPhaseGroup",
-        id: "work:turn-1:complete",
+        id: "work:turn-1:c1:complete",
         collapsible: true,
         entries: [first, activity, second],
         label: "Worked for 8m 44s",
@@ -114,7 +114,7 @@ describe("buildTranscriptRenderItems", () => {
     expect(items).toEqual([
       {
         type: "workPhaseGroup",
-        id: "work:turn-1:complete",
+        id: "work:turn-1:c1:complete",
         collapsible: true,
         entries: [first, activity],
         label: "Worked for 8m 44s",
@@ -219,7 +219,7 @@ describe("buildTranscriptRenderItems", () => {
     expect(items).toEqual([
       {
         type: "workPhaseGroup",
-        id: "work:turn-1:complete",
+        id: "work:turn-1:c1:complete",
         collapsible: true,
         entries: [oldCommentary, oldActivity],
         label: "Worked for 1m 10s",
@@ -245,6 +245,74 @@ describe("buildTranscriptRenderItems", () => {
 
     expect(buildTranscriptRenderItems({ entries: [legacy] })).toEqual([
       { type: "entry", entry: legacy },
+    ]);
+  });
+
+  it("does not move later completed work above intervening transcript entries", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const first = commentary("c1", "First scan.", turn);
+    const firstActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Read one file",
+      details: [],
+      turn,
+    };
+    const answer = final("f1", "Interim answer.", turn);
+    const secondActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-2",
+      summary: "Read another file",
+      details: [],
+      turn,
+    };
+
+    const items = buildTranscriptRenderItems({
+      entries: [first, firstActivity, answer, secondActivity],
+    });
+
+    expect(items).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:c1:complete",
+        collapsible: true,
+        entries: [first, firstActivity],
+        label: "Worked for 1m 10s",
+      },
+      { type: "entry", entry: answer },
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:tool-2:complete",
+        collapsible: true,
+        entries: [secondActivity],
+        label: "Worked for 1m 10s",
+      },
+    ]);
+  });
+
+  it("only collapses consecutive commentary in the fallback path", () => {
+    const first = commentary("c1", "First scan.");
+    const answer = final("f1", "Interim answer.");
+    const second = commentary("c2", "Second scan.");
+
+    const items = buildTranscriptRenderItems({ entries: [first, answer, second] });
+
+    expect(items).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "commentary:c1:c1:complete",
+        collapsible: true,
+        entries: [first],
+        label: "1 previous message",
+      },
+      { type: "entry", entry: answer },
+      {
+        type: "workPhaseGroup",
+        id: "commentary:c2:c2:complete",
+        collapsible: true,
+        entries: [second],
+        label: "1 previous message",
+      },
     ]);
   });
 });

@@ -2376,6 +2376,98 @@ textarea {
   color: var(--danger-text);
 }
 
+.transcript-command {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.transcript-command__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 10px 12px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.transcript-command__source,
+.transcript-command__status,
+.transcript-command__cwd,
+.transcript-command__block code,
+.transcript-command__output code {
+  font-family: var(--font-mono);
+}
+
+.transcript-command__cwd {
+  margin: 0;
+  padding: 0 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.transcript-command__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.transcript-command__copy {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.transcript-command__block,
+.transcript-command__output pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.transcript-command__block {
+  padding: 0 12px 10px;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.transcript-command__output {
+  overflow-x: auto;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+
+.transcript-command__output pre,
+.transcript-command__output p {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.transcript-command__output p {
+  color: var(--text-muted);
+}
+
+.transcript-command__toggle {
+  align-self: flex-start;
+  min-height: 28px;
+  margin: 0 12px 12px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .transcript-diff {
   display: flex;
   flex-direction: column;

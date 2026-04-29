@@ -399,6 +399,9 @@ describe("GrokAppServerClient", () => {
                 toolName: "shell_command",
                 command: "rg needle .",
                 commandAction: "search",
+                aggregatedOutput: "src/file.ts:needle",
+                durationMs: 1_250,
+                exitCode: 1,
                 success: false,
               },
               {
@@ -437,8 +440,15 @@ describe("GrokAppServerClient", () => {
             },
             {
               kind: "command",
-              label: "rg needle .",
+              label: "rg needle . (1.3s)",
               status: "failed",
+              command: {
+                displayCommand: "rg needle .",
+                rawCommand: "rg needle .",
+                output: "src/file.ts:needle",
+                exitCode: 1,
+                durationMs: 1_250,
+              },
             },
           ],
         },
@@ -451,6 +461,107 @@ describe("GrokAppServerClient", () => {
       lastUserMessage: "Find the code",
       lastAssistantMessage: "Found it.",
     });
+
+    await client.close();
+  });
+
+  it("preserves restored rollout activity groups at their original item positions", async () => {
+    const server = {
+      request: async (method: string): Promise<unknown> => {
+        if (method === "initialize") {
+          return {
+            serverInfo: { name: "@pwragnt/grok-app-server", version: "1.0.0" },
+            methods: ["thread/read"],
+          };
+        }
+        if (method === "thread/read") {
+          return {
+            messages: [
+              { role: "user", text: "Replay restored rollout order." },
+              { role: "assistant", text: "I am checking the first file." },
+              { role: "assistant", text: "Now I am checking the second file." },
+              { role: "assistant", text: "Done." },
+            ],
+            items: [
+              {
+                id: "user-1",
+                type: "userMessage",
+                role: "user",
+                text: "Replay restored rollout order.",
+              },
+              {
+                id: "commentary-1",
+                type: "agentMessage",
+                role: "assistant",
+                text: "I am checking the first file.",
+                phase: "commentary",
+              },
+              {
+                id: "cmd-1",
+                type: "commandExecution",
+                status: "completed",
+                command: "sed -n 1,40p src/a.ts",
+                commandActions: [{ type: "read", path: "/repo/src/a.ts" }],
+                durationMs: 1_200,
+              },
+              {
+                id: "commentary-2",
+                type: "agentMessage",
+                role: "assistant",
+                text: "Now I am checking the second file.",
+                phase: "commentary",
+              },
+              {
+                id: "cmd-2",
+                type: "commandExecution",
+                status: "completed",
+                command: "sed -n 1,40p src/b.ts",
+                commandActions: [{ type: "read", path: "/repo/src/b.ts" }],
+                durationMs: 2_500,
+              },
+              {
+                id: "final-1",
+                type: "agentMessage",
+                role: "assistant",
+                text: "Done.",
+                phase: "final",
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+      notify: async () => undefined,
+      onNotification: () => () => undefined,
+    };
+    const client = new GrokAppServerClient({ server });
+
+    const replay = await client.readThread({ threadId: "thread-1" });
+
+    expect(replay.entries.map((entry) => `${entry.type}:${entry.id}`)).toEqual([
+      "message:message-1",
+      "message:message-2",
+      "activity:activity-cmd-1",
+      "message:message-3",
+      "activity:activity-cmd-2",
+      "message:message-4",
+    ]);
+    expect(replay.entries).toMatchObject([
+      { type: "message", role: "user", text: "Replay restored rollout order." },
+      { type: "message", role: "assistant", text: "I am checking the first file." },
+      {
+        type: "activity",
+        summary: "Ran 1 command",
+        details: [{ label: "sed -n 1,40p src/a.ts (1.2s)" }],
+      },
+      { type: "message", role: "assistant", text: "Now I am checking the second file." },
+      {
+        type: "activity",
+        summary: "Ran 1 command",
+        details: [{ label: "sed -n 1,40p src/b.ts (2.5s)" }],
+      },
+      { type: "message", role: "assistant", text: "Done." },
+    ]);
 
     await client.close();
   });
