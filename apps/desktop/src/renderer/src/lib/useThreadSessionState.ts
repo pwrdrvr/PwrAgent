@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AppServerNotification,
   AppServerMcpElicitationRequestNotification,
   AppServerPendingRequestNotification,
   AppServerReadThreadResponse,
@@ -38,10 +39,25 @@ export type ThreadViewportState = {
   scrollTop: number;
 };
 
+export type ThreadContextWindowState = {
+  cachedInputTokens?: number;
+  cumulativeTotalTokens?: number;
+  inputTokens?: number;
+  modelContextWindow: number;
+  outputTokens?: number;
+  phase: number;
+  reasoningOutputTokens?: number;
+  remainingPercent?: number;
+  remainingTokens?: number;
+  totalTokens: number;
+  usedPercent: number;
+};
+
 type ThreadSessionEntry = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
   completionHydrationRetries: number;
+  contextWindow?: ThreadContextWindowState;
   error?: string;
   expectOwnUpdate: boolean;
   failedHydrationVersion?: number | "unknown";
@@ -233,6 +249,169 @@ function normalizeNotificationTimestamp(value: unknown): number | undefined {
 
 function normalizeNotificationDuration(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readFiniteNumber(record: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function findFirstNestedValue(value: unknown, keys: string[]): unknown {
+  const record = readRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    if (record[key] !== undefined) {
+      return record[key];
+    }
+  }
+
+  for (const child of Object.values(record)) {
+    const nested = findFirstNestedValue(child, keys);
+    if (nested !== undefined) {
+      return nested;
+    }
+  }
+
+  return undefined;
+}
+
+type TokenUsageBreakdown = {
+  cachedInputTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+};
+
+function readTokenBreakdown(record: Record<string, unknown>): TokenUsageBreakdown | undefined {
+  const explicitTotal = readFiniteNumber(record, ["totalTokens", "total_tokens"]);
+  const inputTokens = readFiniteNumber(record, ["inputTokens", "input_tokens"]);
+  const cachedInputTokens = readFiniteNumber(record, [
+    "cachedInputTokens",
+    "cached_input_tokens",
+  ]);
+  const outputTokens = readFiniteNumber(record, ["outputTokens", "output_tokens"]);
+  const reasoningOutputTokens = readFiniteNumber(record, [
+    "reasoningOutputTokens",
+    "reasoning_output_tokens",
+  ]);
+  const derivedTotal =
+    (inputTokens ?? 0) + (outputTokens ?? 0) + (reasoningOutputTokens ?? 0);
+  const totalTokens = explicitTotal ?? (derivedTotal > 0 ? derivedTotal : undefined);
+
+  if (
+    totalTokens === undefined &&
+    inputTokens === undefined &&
+    cachedInputTokens === undefined &&
+    outputTokens === undefined &&
+    reasoningOutputTokens === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    cachedInputTokens,
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+  };
+}
+
+function normalizeThreadContextWindowState(
+  tokenUsage: unknown
+): ThreadContextWindowState | undefined {
+  const root =
+    readRecord(findFirstNestedValue(tokenUsage, ["tokenUsage", "token_usage", "info"])) ??
+    readRecord(tokenUsage);
+  if (!root) {
+    return undefined;
+  }
+
+  const currentUsageRecord =
+    readRecord(findFirstNestedValue(root, ["last", "last_token_usage"])) ??
+    readRecord(root.last) ??
+    readRecord(root.last_token_usage) ??
+    readRecord(findFirstNestedValue(root, ["total", "total_token_usage"])) ??
+    readRecord(root.total) ??
+    readRecord(root.total_token_usage);
+  const totalUsageRecord =
+    readRecord(findFirstNestedValue(root, ["total", "total_token_usage"])) ??
+    readRecord(root.total) ??
+    readRecord(root.total_token_usage);
+  const currentUsage = currentUsageRecord ? readTokenBreakdown(currentUsageRecord) : undefined;
+  const totalUsage = totalUsageRecord ? readTokenBreakdown(totalUsageRecord) : undefined;
+  const nestedModelContextWindow = findFirstNestedValue(root, [
+    "modelContextWindow",
+    "model_context_window",
+  ]);
+  const modelContextWindow =
+    readFiniteNumber(root, ["modelContextWindow", "model_context_window"]) ??
+    (typeof nestedModelContextWindow === "number" && Number.isFinite(nestedModelContextWindow)
+      ? nestedModelContextWindow
+      : undefined);
+  const totalTokens = currentUsage?.totalTokens;
+
+  if (!currentUsage || !modelContextWindow || modelContextWindow <= 0 || totalTokens === undefined) {
+    return undefined;
+  }
+
+  const usedPercent = Math.max(
+    0,
+    Math.min(100, (totalTokens / modelContextWindow) * 100)
+  );
+  const remainingTokens = Math.max(0, modelContextWindow - totalTokens);
+  const remainingPercent = Math.max(
+    0,
+    Math.min(100, (remainingTokens / modelContextWindow) * 100)
+  );
+
+  return {
+    cachedInputTokens: currentUsage.cachedInputTokens,
+    cumulativeTotalTokens:
+      totalUsage?.totalTokens !== undefined && totalUsage.totalTokens !== totalTokens
+        ? totalUsage.totalTokens
+        : undefined,
+    inputTokens: currentUsage.inputTokens,
+    modelContextWindow,
+    outputTokens: currentUsage.outputTokens,
+    phase: Math.min(7, Math.max(0, Math.floor(usedPercent / 12.5))),
+    reasoningOutputTokens: currentUsage.reasoningOutputTokens,
+    remainingPercent,
+    remainingTokens,
+    totalTokens,
+    usedPercent,
+  };
+}
+
+function isContextCompactionItemNotification(
+  notification: AppServerNotification
+): notification is Extract<AppServerNotification, { method: "item/started" | "item/completed" }> {
+  if (notification.method !== "item/started" && notification.method !== "item/completed") {
+    return false;
+  }
+  const item =
+    typeof notification.params.item === "object" &&
+    notification.params.item !== null &&
+    !Array.isArray(notification.params.item)
+      ? notification.params.item as Record<string, unknown>
+      : undefined;
+  const itemType = typeof item?.type === "string" ? item.type : undefined;
+  return itemType?.replace(/[-_\s]/g, "").toLowerCase() === "contextcompaction";
 }
 
 function buildTurnMetadata(params: {
@@ -635,6 +814,7 @@ export function useThreadSessionState(params: {
   loadingMore: boolean;
   loadOlder: () => Promise<void>;
   messages: AppServerThreadMessage[];
+  contextWindow?: ThreadContextWindowState;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingMcpInteraction?: PendingMcpInteractionState;
   pendingRequest?: AppServerPendingRequestNotification;
@@ -954,6 +1134,19 @@ export function useThreadSessionState(params: {
         }
 
         if (
+          event.notification.method === "item/started" &&
+          isContextCompactionItemNotification(event.notification)
+        ) {
+          return {
+            ...current,
+            expectOwnUpdate: true,
+            interacted: true,
+            lastTouchedAt: nextLastTouchedAt,
+            pendingStatusText: "Compacting context",
+          };
+        }
+
+        if (
           event.notification.method === "item/agentMessage/delta" &&
           typeof event.notification.params.itemId === "string" &&
           typeof event.notification.params.delta === "string"
@@ -1266,10 +1459,29 @@ export function useThreadSessionState(params: {
         if (event.notification.method === "thread/compacted") {
           return {
             ...current,
+            activeTurnId: undefined,
+            activeTurnStartedAt: undefined,
+            contextWindow: undefined,
             failedHydrationVersion: undefined,
             hydratedUpdatedAt: undefined,
             lastTouchedAt: nextLastTouchedAt,
+            pendingStatusText: undefined,
             response: undefined,
+          };
+        }
+
+        if (event.notification.method === "thread/tokenUsage/updated") {
+          const contextWindow = normalizeThreadContextWindowState(
+            event.notification.params.tokenUsage
+          );
+          if (!contextWindow) {
+            return current;
+          }
+
+          return {
+            ...current,
+            contextWindow,
+            lastTouchedAt: nextLastTouchedAt,
           };
         }
 
@@ -1628,6 +1840,7 @@ export function useThreadSessionState(params: {
     loadingMore: selectedSession?.loadingMore ?? false,
     loadOlder,
     messages,
+    contextWindow: selectedSession?.contextWindow,
     pendingAssistantMessage: selectedSession?.pendingAssistantMessage,
     pendingMcpInteraction: selectedSession?.pendingMcpInteraction,
     pendingRequest: selectedSession?.pendingRequest,

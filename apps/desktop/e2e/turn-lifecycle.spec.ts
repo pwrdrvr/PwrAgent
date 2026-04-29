@@ -218,6 +218,48 @@ test("keeps transient turn UI through metadata and premature idle notifications"
   }
 });
 
+test("renders the context window moon from token usage notifications", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      turnLifecycleSpecDir,
+      "fixtures/turn-lifecycle/replay.fixture.json"
+    ),
+  });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /Turn lifecycle replay/i })
+      .first()
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Turn lifecycle replay",
+      })
+    ).toBeVisible();
+
+    await app.window
+      .getByLabel("Reply")
+      .fill(
+        "Create /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+      );
+    await app.window.getByRole("button", { name: "Send" }).click();
+
+    await app.advance({ stepId: "status-active-1" });
+    await app.advance({ stepId: "turn-started-1" });
+    await app.advance({ stepId: "token-usage-1" });
+
+    await expect(
+      app.window.getByRole("img", {
+        name: /Context window 0% full, 1\.2k\/258\.4k tokens, new/,
+      })
+    ).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
+
 test("keeps the in-thread thinking indicator visible for active turns without pending text", async () => {
   const fixture = await createActiveTurnThinkingFixture();
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });

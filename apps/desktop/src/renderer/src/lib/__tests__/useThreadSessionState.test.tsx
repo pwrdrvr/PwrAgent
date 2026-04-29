@@ -1281,6 +1281,84 @@ describe("useThreadSessionState", () => {
     expect(result.current.activeTurnId).toBeUndefined();
   });
 
+  it("shows a transcript status when context compaction starts", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "compact-turn-1",
+              item: {
+                id: "compact-item-1",
+                type: "contextCompaction",
+              },
+            },
+          },
+        } as any);
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBe("Compacting context");
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/compacted",
+            params: {
+              threadId: "thread-1",
+              itemId: "compact-item-1",
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.contextWindow).toBeUndefined();
+  });
+
   it("surfaces failed turn errors in the transcript state", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
@@ -2195,5 +2273,210 @@ describe("useThreadSessionState", () => {
         text: "Loaded thread-1",
       }),
     ]);
+  });
+
+  it("stores context window usage from token usage notifications", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(desktopApi.readThread).toHaveBeenCalled();
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            tokenUsage: {
+              total: {
+                totalTokens: 96_000,
+              },
+              modelContextWindow: 128_000,
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.contextWindow).toEqual({
+      cachedInputTokens: undefined,
+      cumulativeTotalTokens: undefined,
+      inputTokens: undefined,
+      modelContextWindow: 128_000,
+      outputTokens: undefined,
+      phase: 6,
+      reasoningOutputTokens: undefined,
+      remainingPercent: 25,
+      remainingTokens: 32_000,
+      totalTokens: 96_000,
+      usedPercent: 75,
+    });
+  });
+
+  it("derives context window usage from captured input and output token breakdowns", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(desktopApi.readThread).toHaveBeenCalled();
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            tokenUsage: {
+              total: {
+                inputTokens: 1_200,
+                outputTokens: 12,
+              },
+              modelContextWindow: 258_400,
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.contextWindow).toEqual({
+      cachedInputTokens: undefined,
+      cumulativeTotalTokens: undefined,
+      inputTokens: 1_200,
+      modelContextWindow: 258_400,
+      outputTokens: 12,
+      phase: 0,
+      reasoningOutputTokens: undefined,
+      remainingPercent: ((258_400 - 1_212) / 258_400) * 100,
+      remainingTokens: 258_400 - 1_212,
+      totalTokens: 1_212,
+      usedPercent: (1_212 / 258_400) * 100,
+    });
+  });
+
+  it("prefers last token usage over cumulative session usage for context fill", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(desktopApi.readThread).toHaveBeenCalled();
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 20_663,
+                cached_input_tokens: 20_352,
+                output_tokens: 45,
+                total_tokens: 20_708,
+              },
+              total_token_usage: {
+                input_tokens: 41_267,
+                cached_input_tokens: 23_808,
+                output_tokens: 75,
+                total_tokens: 41_342,
+              },
+              model_context_window: 258_400,
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.contextWindow).toMatchObject({
+      cachedInputTokens: 20_352,
+      cumulativeTotalTokens: 41_342,
+      inputTokens: 20_663,
+      modelContextWindow: 258_400,
+      outputTokens: 45,
+      phase: 0,
+      totalTokens: 20_708,
+      usedPercent: (20_708 / 258_400) * 100,
+    });
   });
 });

@@ -41,5 +41,20 @@ export function useBackendSummaries(desktopApi?: DesktopApi): BackendSummaryStat
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    if (!desktopApi?.onAgentEvent) {
+      return;
+    }
+    return desktopApi.onAgentEvent((event) => {
+      if (
+        event.backend === "codex" &&
+        (event.notification.method === "account/rateLimits/updated" ||
+          event.notification.method === "account/updated")
+      ) {
+        void refresh();
+      }
+    });
+  }, [desktopApi, refresh]);
+
   return state;
 }

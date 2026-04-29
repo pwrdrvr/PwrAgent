@@ -36,10 +36,31 @@ export type BackendLaunchpadOptions = {
   supportsFastMode?: boolean;
 };
 
+export type BackendAccountSummary = {
+  type?: "apiKey" | "chatgpt";
+  email?: string;
+  planType?: string;
+  requiresOpenaiAuth?: boolean;
+};
+
+export type BackendRateLimitSummary = {
+  name: string;
+  limitId?: string;
+  remaining?: number;
+  limit?: number;
+  used?: number;
+  usedPercent?: number;
+  resetAt?: number;
+  windowSeconds?: number;
+  windowMinutes?: number;
+};
+
 export type BackendSummary = {
   kind: AppServerBackendKind;
   label: string;
   available: boolean;
+  account?: BackendAccountSummary;
+  rateLimits?: BackendRateLimitSummary[];
   serverName?: string;
   serverVersion?: string;
   methods: string[];

@@ -29,7 +29,9 @@ import type {
   AppServerCollaborationModeRequest,
   AppServerReviewDelivery,
   AppServerReviewTarget,
+  BackendAccountSummary,
   BackendModelOption,
+  BackendRateLimitSummary,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
 import { getMainLogger } from "../log";
@@ -157,6 +159,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set<string>([
   "thread/tokenUsage/updated",
   "turn/requestApproval",
   "review/requestApproval",
+  "account/updated",
   "account/rateLimits/updated",
   "item/commandExecution/outputDelta",
   "item/commandExecution/terminalInteraction",
@@ -183,6 +186,7 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "thread/name/updated",
   "thread/status/changed",
   "thread/tokenUsage/updated",
+  "account/updated",
   "account/rateLimits/updated",
   "item/commandExecution/outputDelta",
   "item/commandExecution/terminalInteraction",
@@ -394,6 +398,19 @@ function pickNumber(
   return undefined;
 }
 
+function pickFiniteNumber(
+  record: Record<string, unknown>,
+  keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 function pickBoolean(
   record: Record<string, unknown>,
   keys: string[]
@@ -500,6 +517,204 @@ function normalizeEpochTimestamp(value: number | undefined): number | undefined 
     return undefined;
   }
   return value < 1_000_000_000_000 ? value * 1_000 : value;
+}
+
+function findFirstNestedValue(value: unknown, keys: string[], depth = 0): unknown {
+  if (depth > 8) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const nested = findFirstNestedValue(entry, keys, depth + 1);
+      if (nested !== undefined) {
+        return nested;
+      }
+    }
+    return undefined;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    if (record[key] !== undefined) {
+      return record[key];
+    }
+  }
+  for (const child of Object.values(record)) {
+    const nested = findFirstNestedValue(child, keys, depth + 1);
+    if (nested !== undefined) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function formatRateLimitWindowName(params: {
+  limitId?: string;
+  limitName?: string;
+  windowKey: "primary" | "secondary";
+  windowMinutes?: number;
+}): string {
+  const rawId = params.limitId?.trim();
+  const rawName = params.limitName?.trim();
+  let windowLabel: string;
+  const minutes = params.windowMinutes;
+  if (typeof minutes === "number" && Number.isFinite(minutes) && minutes > 0) {
+    if (minutes === 10_080) {
+      windowLabel = "Weekly limit";
+    } else if (minutes % 1440 === 0) {
+      windowLabel = `${Math.round(minutes / 1440)}d limit`;
+    } else if (minutes % 60 === 0) {
+      windowLabel = `${Math.round(minutes / 60)}h limit`;
+    } else {
+      windowLabel = `${minutes}m limit`;
+    }
+  } else {
+    windowLabel = params.windowKey === "primary" ? "Primary limit" : "Secondary limit";
+  }
+  if (!rawId || rawId.toLowerCase() === "codex") {
+    return windowLabel;
+  }
+  return `${rawName ?? rawId} ${windowLabel}`.trim();
+}
+
+function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
+  const out = new Map<string, BackendRateLimitSummary>();
+  const addWindow = (
+    windowValue: unknown,
+    params: { limitId?: string; limitName?: string; windowKey: "primary" | "secondary" }
+  ): void => {
+    const window = asRecord(windowValue);
+    if (!window) {
+      return;
+    }
+    const usedPercent = pickFiniteNumber(window, ["usedPercent", "used_percent"]);
+    const windowMinutes = pickFiniteNumber(window, [
+      "windowDurationMins",
+      "window_duration_mins",
+      "windowMinutes",
+      "window_minutes",
+    ]);
+    const name = formatRateLimitWindowName({
+      limitId: params.limitId,
+      limitName: params.limitName,
+      windowKey: params.windowKey,
+      windowMinutes,
+    });
+    out.set(name, {
+      name,
+      limitId: params.limitId,
+      usedPercent,
+      remaining:
+        typeof usedPercent === "number" ? Math.max(0, Math.round(100 - usedPercent)) : undefined,
+      resetAt: normalizeEpochTimestamp(
+        pickNumber(window, ["resetsAt", "resets_at", "resetAt", "reset_at"])
+      ),
+      windowSeconds: typeof windowMinutes === "number" ? Math.round(windowMinutes * 60) : undefined,
+      windowMinutes,
+    });
+  };
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach((entry) => visit(entry));
+      return;
+    }
+    const record = asRecord(node);
+    if (!record) {
+      return;
+    }
+    if ("primary" in record || "secondary" in record) {
+      const limitId = pickString(record, ["limitId", "limit_id", "id"]);
+      const limitName = pickString(record, ["limitName", "limit_name", "name", "label"]);
+      addWindow(record.primary, { limitId, limitName, windowKey: "primary" });
+      addWindow(record.secondary, { limitId, limitName, windowKey: "secondary" });
+    }
+    const byLimitId = asRecord(record.rateLimitsByLimitId ?? record.rate_limits_by_limit_id);
+    if (byLimitId) {
+      for (const [limitId, snapshot] of Object.entries(byLimitId)) {
+        const snapshotRecord = asRecord(snapshot);
+        if (!snapshotRecord) {
+          continue;
+        }
+        const limitName = pickString(snapshotRecord, ["limitName", "limit_name", "name", "label"]);
+        addWindow(snapshotRecord.primary, { limitId, limitName, windowKey: "primary" });
+        addWindow(snapshotRecord.secondary, { limitId, limitName, windowKey: "secondary" });
+      }
+    }
+    const remaining = pickFiniteNumber(record, [
+      "remaining",
+      "remainingCount",
+      "remaining_count",
+      "available",
+    ]);
+    const limit = pickFiniteNumber(record, ["limit", "max", "quota", "capacity"]);
+    const used = pickFiniteNumber(record, ["used", "consumed", "count"]);
+    const resetAt = pickNumber(record, [
+      "resetAt",
+      "reset_at",
+      "resetsAt",
+      "resets_at",
+      "nextResetAt",
+    ]);
+    const windowSeconds = pickFiniteNumber(record, [
+      "windowSeconds",
+      "window_seconds",
+      "resetInSeconds",
+      "retryAfterSeconds",
+    ]);
+    const name =
+      pickString(record, ["name", "label", "scope", "resource", "model", "id"]) ??
+      (typeof remaining === "number" ||
+      typeof limit === "number" ||
+      typeof used === "number" ||
+      typeof resetAt === "number"
+        ? `limit-${out.size + 1}`
+        : undefined);
+    if (name) {
+      const existing = out.get(name);
+      out.set(name, {
+        name,
+        limitId: existing?.limitId,
+        remaining: remaining ?? existing?.remaining,
+        limit: limit ?? existing?.limit,
+        used: used ?? existing?.used,
+        usedPercent: existing?.usedPercent,
+        resetAt: normalizeEpochTimestamp(resetAt) ?? existing?.resetAt,
+        windowSeconds: windowSeconds ?? existing?.windowSeconds,
+        windowMinutes: existing?.windowMinutes,
+      });
+    }
+    for (const key of [
+      "limits",
+      "items",
+      "data",
+      "results",
+      "entries",
+      "buckets",
+      "rateLimits",
+      "rate_limits",
+      "rateLimitsByLimitId",
+      "rate_limits_by_limit_id",
+    ]) {
+      visit(record[key]);
+    }
+  };
+  visit(value);
+  return [...out.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function extractAccountSummary(value: unknown): BackendAccountSummary {
+  const root = asRecord(value) ?? {};
+  const account =
+    asRecord(findFirstNestedValue(value, ["account"])) ?? asRecord(root.account) ?? undefined;
+  const type = pickString(account ?? {}, ["type"]);
+  return {
+    type: type === "apiKey" || type === "chatgpt" ? type : undefined,
+    email: pickString(account ?? {}, ["email"]),
+    planType: pickString(account ?? {}, ["planType", "plan_type"]),
+    requiresOpenaiAuth: pickBoolean(root, ["requiresOpenaiAuth", "requires_openai_auth"]),
+  };
 }
 
 function collectText(value: unknown): string[] {
@@ -3263,6 +3478,32 @@ export class CodexAppServerClient {
     });
 
     return models;
+  }
+
+  async readAccount(): Promise<BackendAccountSummary> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["account/read"],
+      payloads: [{ refreshToken: false }, { refresh_token: false }, {}],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    return extractAccountSummary(result);
+  }
+
+  async readRateLimits(): Promise<BackendRateLimitSummary[]> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["account/rateLimits/read"],
+      payloads: [{}],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    });
+
+    return extractRateLimitSummaries(result);
   }
 
   async readThread(params: {

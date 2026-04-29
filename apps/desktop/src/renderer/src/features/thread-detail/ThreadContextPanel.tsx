@@ -443,6 +443,34 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                         ? "Available"
                         : backend.unavailableReason ?? "Unavailable"}
                     </p>
+                    {backend.available &&
+                    (backend.account || (backend.rateLimits?.length ?? 0) > 0) ? (
+                      <div className="backend-status-list__metadata">
+                        {backend.account ? (
+                          <dl className="backend-status-list__metadata-grid">
+                            <div>
+                              <dt>Account</dt>
+                              <dd>{formatBackendAccountText(backend.account)}</dd>
+                            </div>
+                            {backend.account.planType ? (
+                              <div>
+                                <dt>Plan</dt>
+                                <dd>{backend.account.planType}</dd>
+                              </div>
+                            ) : null}
+                          </dl>
+                        ) : null}
+                        {backend.rateLimits?.length ? (
+                          <ul className="backend-status-list__limits">
+                            {selectVisibleRateLimits(backend).map((limit) => (
+                              <li key={`${limit.limitId ?? "limit"}:${limit.name}`}>
+                                {formatRateLimitLine(limit)}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -543,6 +571,106 @@ function formatTimestamp(timestamp: number): string {
     hour: "numeric",
     minute: "2-digit"
   }).format(timestamp);
+}
+
+function formatBackendAccountText(
+  account: NonNullable<BackendSummary["account"]>
+): string {
+  if (account.type === "chatgpt" && account.email?.trim()) {
+    return formatMaskedEmail(account.email);
+  }
+  if (account.type === "apiKey") {
+    return "API key";
+  }
+  if (account.requiresOpenaiAuth === false) {
+    return "Not required";
+  }
+  if (account.requiresOpenaiAuth === true) {
+    return "Not signed in";
+  }
+  return "Unknown";
+}
+
+function formatMaskedEmail(email: string): string {
+  const trimmed = email.trim();
+  const atIndex = trimmed.indexOf("@");
+  if (atIndex <= 1) {
+    return trimmed;
+  }
+  const local = trimmed.slice(0, atIndex);
+  return `${local.slice(0, 2)}...${trimmed.slice(atIndex)}`;
+}
+
+function splitRateLimitName(name: string): {
+  label: string;
+  labelOrder: number;
+  prefix: string;
+} {
+  const trimmed = name.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower.endsWith("5h limit")) {
+    const prefix = trimmed.slice(0, Math.max(0, trimmed.length - "5h limit".length)).trim();
+    return { label: "5h limit", labelOrder: 0, prefix };
+  }
+  if (lower.endsWith("weekly limit")) {
+    const prefix = trimmed.slice(0, Math.max(0, trimmed.length - "weekly limit".length)).trim();
+    return { label: "Weekly limit", labelOrder: 1, prefix };
+  }
+  return { label: trimmed, labelOrder: 99, prefix: "" };
+}
+
+function selectVisibleRateLimits(
+  backend: BackendSummary
+): NonNullable<BackendSummary["rateLimits"]> {
+  return [...(backend.rateLimits ?? [])]
+    .filter((limit) => {
+      const { label } = splitRateLimitName(limit.name);
+      return label === "5h limit" || label === "Weekly limit";
+    })
+    .sort((left, right) => {
+      const leftName = splitRateLimitName(left.name);
+      const rightName = splitRateLimitName(right.name);
+      if (leftName.labelOrder !== rightName.labelOrder) {
+        return leftName.labelOrder - rightName.labelOrder;
+      }
+      return left.name.localeCompare(right.name);
+    });
+}
+
+function formatRateLimitLine(limit: NonNullable<BackendSummary["rateLimits"]>[number]): string {
+  const { label } = splitRateLimitName(limit.name);
+  const resetText = formatRateLimitReset(limit.resetAt);
+  if (typeof limit.usedPercent === "number") {
+    const remaining = Math.max(0, Math.round(100 - limit.usedPercent));
+    return `${label}: ${remaining}% left${resetText ? `, resets ${resetText}` : ""}`;
+  }
+  if (typeof limit.remaining === "number" && typeof limit.limit === "number") {
+    return `${label}: ${limit.remaining}/${limit.limit} remaining${
+      resetText ? `, resets ${resetText}` : ""
+    }`;
+  }
+  return `${label}: unavailable`;
+}
+
+function formatRateLimitReset(resetAt: number | undefined): string | undefined {
+  if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) {
+    return undefined;
+  }
+  const date = new Date(resetAt);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  const now = new Date();
+  if (now.toDateString() === date.toDateString()) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(date);
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(date);
 }
 
 function findSnapshotForWorktree(

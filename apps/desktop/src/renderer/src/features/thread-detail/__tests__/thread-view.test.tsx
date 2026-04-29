@@ -35,6 +35,28 @@ describe("ThreadView", () => {
             kind: "codex",
             label: "Codex app server",
             available: true,
+            account: {
+              type: "chatgpt",
+              email: "user@example.com",
+              planType: "pro",
+              requiresOpenaiAuth: false,
+            },
+            rateLimits: [
+              {
+                name: "5h limit",
+                usedPercent: 15,
+                resetAt: Date.now() + 60 * 60 * 1000,
+                windowSeconds: 18_000,
+                windowMinutes: 300,
+              },
+              {
+                name: "Weekly limit",
+                usedPercent: 9,
+                resetAt: Date.now() + 3 * 24 * 60 * 60 * 1000,
+                windowSeconds: 604_800,
+                windowMinutes: 10_080,
+              },
+            ],
             methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
             capabilities: {
               listThreads: true,
@@ -189,6 +211,10 @@ describe("ThreadView", () => {
     expect(screen.getByRole("heading", { level: 3, name: "Execution context" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pin context rail" })).toBeInTheDocument();
     expect(screen.getByText("Codex app server")).toBeInTheDocument();
+    expect(screen.getByText("us...@example.com")).toBeInTheDocument();
+    expect(screen.getByText("pro")).toBeInTheDocument();
+    expect(screen.getByText(/5h limit: 85% left/)).toBeInTheDocument();
+    expect(screen.getByText(/Weekly limit: 91% left/)).toBeInTheDocument();
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();

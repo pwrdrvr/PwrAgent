@@ -100,6 +100,7 @@ export function App() {
           loading={session.loading}
           loadingMore={session.loadingMore}
           messageCount={session.messages.length}
+          contextWindow={session.contextWindow}
           pendingAssistantMessage={session.pendingAssistantMessage}
           pendingMcpInteraction={session.pendingMcpInteraction}
           pendingRequest={session.pendingRequest}

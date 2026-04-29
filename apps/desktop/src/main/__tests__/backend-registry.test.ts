@@ -7,6 +7,8 @@ import type {
   AppServerThreadSummary,
   AppServerReviewTarget,
   AppServerTurnInputItem,
+  BackendAccountSummary,
+  BackendRateLimitSummary,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   ThreadOverlayState,
@@ -224,6 +226,8 @@ class MockBackendClient {
         supportsReasoning?: boolean;
         supportsFast?: boolean;
       }>;
+      account?: BackendAccountSummary;
+      rateLimits?: BackendRateLimitSummary[];
       setThreadPermissionsError?: Error;
     }
   ) {}
@@ -271,6 +275,14 @@ class MockBackendClient {
   async listModels() {
     this.listModelsCallCount += 1;
     return this.options.models ?? [];
+  }
+
+  async readAccount(): Promise<BackendAccountSummary> {
+    return this.options.account ?? {};
+  }
+
+  async readRateLimits(): Promise<BackendRateLimitSummary[]> {
+    return this.options.rateLimits ?? [];
   }
 
   onNotification(
@@ -372,6 +384,30 @@ describe("DesktopBackendRegistry", () => {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
         methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
       },
+      account: {
+        type: "chatgpt",
+        email: "user@example.com",
+        planType: "pro",
+        requiresOpenaiAuth: false,
+      },
+      rateLimits: [
+        {
+          name: "5h limit",
+          usedPercent: 15,
+          remaining: 85,
+          resetAt: new Date("2026-04-29T14:00:00-04:00").getTime(),
+          windowSeconds: 18_000,
+          windowMinutes: 300,
+        },
+        {
+          name: "Weekly limit",
+          usedPercent: 9,
+          remaining: 91,
+          resetAt: new Date("2026-05-01T14:00:00-04:00").getTime(),
+          windowSeconds: 604_800,
+          windowMinutes: 10_080,
+        },
+      ],
     });
     const codexFullAccessClient = new MockBackendClient({
       initializeResult: {
@@ -398,6 +434,24 @@ describe("DesktopBackendRegistry", () => {
         kind: "codex",
         label: "OpenAI",
         available: true,
+        account: {
+          type: "chatgpt",
+          email: "user@example.com",
+          planType: "pro",
+          requiresOpenaiAuth: false,
+        },
+        rateLimits: [
+          {
+            name: "5h limit",
+            usedPercent: 15,
+            remaining: 85,
+          },
+          {
+            name: "Weekly limit",
+            usedPercent: 9,
+            remaining: 91,
+          },
+        ],
         serverName: "Codex App Server",
         serverVersion: "1.0.0",
         methods: ["thread/list", "thread/read", "thread/start", "turn/start"],

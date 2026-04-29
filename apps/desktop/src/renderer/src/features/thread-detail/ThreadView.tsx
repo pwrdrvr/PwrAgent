@@ -22,6 +22,7 @@ import type {
   ThreadExecutionMode,
 } from "@pwragnt/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { Composer } from "../composer/Composer";
@@ -909,6 +910,7 @@ type ThreadViewProps = {
   loading: boolean;
   loadingMore: boolean;
   messageCount: number;
+  contextWindow?: ThreadContextWindowState;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingMcpInteraction?: PendingMcpInteractionState;
   pendingRequest?: AppServerPendingRequestNotification;
@@ -1667,6 +1669,7 @@ export function ThreadView(props: ThreadViewProps) {
             desktopApi={props.desktopApi}
             directory={props.selectedDirectory}
             disabled={props.composerDisabled}
+            contextWindow={props.contextWindow}
             onActiveTurnIdChange={props.onActiveTurnIdChange}
             onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
             onPendingStatusChange={props.onPendingStatusChange}
