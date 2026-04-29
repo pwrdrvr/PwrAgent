@@ -462,7 +462,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                         ) : null}
                         {backend.rateLimits?.length ? (
                           <ul className="backend-status-list__limits">
-                            {selectVisibleRateLimits(backend).map((limit) => (
+                            {selectVisibleRateLimits(backend, props.thread).map((limit) => (
                               <li key={`${limit.limitId ?? "limit"}:${limit.name}`}>
                                 {formatRateLimitLine(limit)}
                               </li>
@@ -620,16 +620,32 @@ function splitRateLimitName(name: string): {
 }
 
 function selectVisibleRateLimits(
-  backend: BackendSummary
+  backend: BackendSummary,
+  thread: NavigationThreadSummary
 ): NonNullable<BackendSummary["rateLimits"]> {
-  return [...(backend.rateLimits ?? [])]
+  const limits = backend.rateLimits ?? [];
+  const currentThreadUsesSpark = backend.kind === "codex" && isSparkName(thread.model);
+  const sparkHasUsage = limits.some((limit) => isSparkRateLimit(limit) && hasRateLimitUsage(limit));
+
+  return [...limits]
     .filter((limit) => {
       const { label } = splitRateLimitName(limit.name);
-      return label === "5h limit" || label === "Weekly limit";
+      if (label !== "5h limit" && label !== "Weekly limit") {
+        return false;
+      }
+      if (!isSparkRateLimit(limit)) {
+        return true;
+      }
+      return currentThreadUsesSpark || sparkHasUsage;
     })
     .sort((left, right) => {
       const leftName = splitRateLimitName(left.name);
       const rightName = splitRateLimitName(right.name);
+      const leftFamilyOrder = rateLimitFamilyOrder(left);
+      const rightFamilyOrder = rateLimitFamilyOrder(right);
+      if (leftFamilyOrder !== rightFamilyOrder) {
+        return leftFamilyOrder - rightFamilyOrder;
+      }
       if (leftName.labelOrder !== rightName.labelOrder) {
         return leftName.labelOrder - rightName.labelOrder;
       }
@@ -639,17 +655,43 @@ function selectVisibleRateLimits(
 
 function formatRateLimitLine(limit: NonNullable<BackendSummary["rateLimits"]>[number]): string {
   const { label } = splitRateLimitName(limit.name);
+  const displayLabel = isSparkRateLimit(limit) ? `Spark ${label}` : label;
   const resetText = formatRateLimitReset(limit.resetAt);
   if (typeof limit.usedPercent === "number") {
     const remaining = Math.max(0, Math.round(100 - limit.usedPercent));
-    return `${label}: ${remaining}% left${resetText ? `, resets ${resetText}` : ""}`;
+    return `${displayLabel}: ${remaining}% left${resetText ? `, resets ${resetText}` : ""}`;
   }
   if (typeof limit.remaining === "number" && typeof limit.limit === "number") {
-    return `${label}: ${limit.remaining}/${limit.limit} remaining${
+    return `${displayLabel}: ${limit.remaining}/${limit.limit} remaining${
       resetText ? `, resets ${resetText}` : ""
     }`;
   }
-  return `${label}: unavailable`;
+  return `${displayLabel}: unavailable`;
+}
+
+function isSparkRateLimit(limit: NonNullable<BackendSummary["rateLimits"]>[number]): boolean {
+  return isSparkName(limit.limitId) || isSparkName(limit.name);
+}
+
+function isSparkName(value: string | undefined): boolean {
+  return value?.toLowerCase().includes("spark") ?? false;
+}
+
+function hasRateLimitUsage(limit: NonNullable<BackendSummary["rateLimits"]>[number]): boolean {
+  if (typeof limit.usedPercent === "number") {
+    return limit.usedPercent > 0;
+  }
+  if (typeof limit.used === "number") {
+    return limit.used > 0;
+  }
+  if (typeof limit.remaining === "number" && typeof limit.limit === "number") {
+    return limit.remaining < limit.limit;
+  }
+  return false;
+}
+
+function rateLimitFamilyOrder(limit: NonNullable<BackendSummary["rateLimits"]>[number]): number {
+  return isSparkRateLimit(limit) ? 1 : 0;
 }
 
 function formatRateLimitReset(resetAt: number | undefined): string | undefined {
