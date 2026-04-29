@@ -684,6 +684,56 @@ describe("TranscriptList", () => {
     expect(screen.queryByText("Read TranscriptActivity.tsx")).not.toBeInTheDocument();
   });
 
+  it("renders pending same-turn work before a persisted final assistant reply", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "user-1",
+            role: "user",
+            text: "Are there two websocket layers?",
+            turn: { id: "turn-1", status: "completed" }
+          },
+          {
+            type: "message",
+            id: "assistant-final-1",
+            role: "assistant",
+            phase: "final",
+            text: "Yes, there are two separate websocket layers.",
+            turn: { id: "turn-1", status: "completed" }
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingProtocolActivityEntry={{
+          type: "activity",
+          id: "protocol-activity-1",
+          summary: "MCP status updates (3)",
+          status: "completed",
+          details: [
+            {
+              id: "mcp-status-1",
+              kind: "command",
+              label: "MCP server status updated",
+              status: "completed"
+            }
+          ],
+          turn: { id: "turn-1", status: "completed" }
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const workGroup = screen.getByRole("button", { name: /MCP status updates/i });
+    const finalReply = screen.getByText("Yes, there are two separate websocket layers.");
+
+    expect(
+      workGroup.compareDocumentPosition(finalReply) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it("renders simple write diffs fully without zoom controls", () => {
     render(
       <TranscriptList

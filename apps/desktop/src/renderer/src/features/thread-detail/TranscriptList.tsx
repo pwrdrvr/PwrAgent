@@ -76,6 +76,39 @@ type ScrollSnapshot = {
 const BOTTOM_THRESHOLD_PX = 24;
 type ScrollBottomMode = "instant" | "smooth";
 
+function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
+  return (
+    entry.type === "message" &&
+    entry.role === "assistant" &&
+    entry.phase !== "commentary"
+  );
+}
+
+function insertPendingEntry(
+  entries: AppServerThreadEntry[],
+  pendingEntry: AppServerThreadEntry | undefined
+): void {
+  if (!pendingEntry) {
+    return;
+  }
+
+  const pendingTurnId = pendingEntry.turn?.id;
+  if (!pendingTurnId || isAssistantFinalMessage(pendingEntry)) {
+    entries.push(pendingEntry);
+    return;
+  }
+
+  const finalMessageIndex = entries.findLastIndex(
+    (entry) => entry.turn?.id === pendingTurnId && isAssistantFinalMessage(entry)
+  );
+  if (finalMessageIndex === -1) {
+    entries.push(pendingEntry);
+    return;
+  }
+
+  entries.splice(finalMessageIndex, 0, pendingEntry);
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -199,18 +232,10 @@ export function TranscriptList(props: TranscriptListProps) {
   );
   const transcriptEntries = useMemo(() => {
     const entries = [...props.entries];
-    if (props.pendingPlanEntry) {
-      entries.push(props.pendingPlanEntry);
-    }
-    if (props.pendingActivityEntry) {
-      entries.push(props.pendingActivityEntry);
-    }
-    if (props.pendingProtocolActivityEntry) {
-      entries.push(props.pendingProtocolActivityEntry);
-    }
-    if (props.pendingAssistantMessage) {
-      entries.push(props.pendingAssistantMessage);
-    }
+    insertPendingEntry(entries, props.pendingPlanEntry);
+    insertPendingEntry(entries, props.pendingActivityEntry);
+    insertPendingEntry(entries, props.pendingProtocolActivityEntry);
+    insertPendingEntry(entries, props.pendingAssistantMessage);
     return entries;
   }, [
     props.entries,
