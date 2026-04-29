@@ -102,13 +102,16 @@ describe("Composer", () => {
 
     expect(
       screen.getByRole("img", {
-        name: "Context window 50% full, 64k/128k tokens, mostly full",
+        name: "Context window 50% full, 64k/128k tokens, half full",
       })
     ).toBeInTheDocument();
+    expect(screen.getByRole("img").querySelector(".context-window-moon__sprite")).toHaveStyle({
+      "--context-window-moon-shadow": "50%",
+    });
     expect(screen.getByRole("img")).toHaveAttribute(
       "data-tooltip",
       [
-        "Context window: 50% full (mostly full)",
+        "Context window: 50% full (half full)",
         "Current snapshot: 64k / 128k tokens",
         "Remaining: 64k tokens, 50% remaining",
         "Current breakdown: 63k input, 32k cached, 1k output",

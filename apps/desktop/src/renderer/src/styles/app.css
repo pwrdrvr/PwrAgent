@@ -3388,7 +3388,9 @@ textarea {
   width: var(--context-window-moon-shadow, 100%);
   border-radius: 50%;
   background: var(--bg-input);
-  box-shadow: inset -1px 0 2px rgba(255, 138, 31, 0.16);
+  box-shadow:
+    1px 0 3px rgba(255, 169, 79, 0.18),
+    inset -1px 0 2px rgba(255, 138, 31, 0.16);
   content: "";
 }
 
@@ -3401,31 +3403,6 @@ textarea {
 
 .context-window-moon__sprite--phase-0 .context-window-moon__disc::after {
   width: 100%;
-}
-
-.context-window-moon__sprite--phase-1 {
-  --context-window-moon-shadow: 86%;
-}
-
-.context-window-moon__sprite--phase-2 {
-  --context-window-moon-shadow: 64%;
-}
-
-.context-window-moon__sprite--phase-3 {
-  --context-window-moon-shadow: 42%;
-}
-
-.context-window-moon__sprite--phase-4 {
-  --context-window-moon-shadow: 20%;
-}
-
-.context-window-moon__sprite--phase-5 {
-  --context-window-moon-shadow: 8%;
-}
-
-.context-window-moon__sprite--phase-6,
-.context-window-moon__sprite--phase-7 {
-  --context-window-moon-shadow: 0%;
 }
 
 .context-window-moon__sprite--phase-6 .context-window-moon__disc {

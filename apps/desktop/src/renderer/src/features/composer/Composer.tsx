@@ -1,5 +1,6 @@
 import {
   type ClipboardEvent,
+  type CSSProperties,
   type DragEvent,
   useEffect,
   useMemo,
@@ -129,10 +130,10 @@ type ReviewTargetChoice = AppServerReviewTarget["type"];
 
 const CONTEXT_MOON_PHASES = [
   "new",
-  "waxing crescent",
-  "first quarter",
-  "waxing gibbous",
-  "mostly full",
+  "sliver",
+  "crescent",
+  "partly full",
+  "half full",
   "near full",
   "full",
   "critical",
@@ -2206,6 +2207,10 @@ function ContextWindowMoon({
   const phase = Math.min(7, Math.max(0, contextWindow.phase));
   const phaseLabel = CONTEXT_MOON_PHASES[phase];
   const percentLabel = `${Math.round(contextWindow.usedPercent)}%`;
+  const litPercent = Math.max(0, Math.min(100, contextWindow.usedPercent));
+  const moonStyle = {
+    "--context-window-moon-shadow": `${100 - litPercent}%`,
+  } as CSSProperties;
   const tokenLabel = `${formatCompactNumber(
     contextWindow.totalTokens
   )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
@@ -2224,6 +2229,7 @@ function ContextWindowMoon({
       <span
         aria-hidden="true"
         className={`context-window-moon__sprite context-window-moon__sprite--phase-${phase}`}
+        style={moonStyle}
       >
         <span className="context-window-moon__disc" />
       </span>
