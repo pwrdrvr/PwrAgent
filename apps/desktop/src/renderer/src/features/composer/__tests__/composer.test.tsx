@@ -7,6 +7,7 @@ import type {
   StartTurnRequest,
 } from "@pwragnt/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { normalizeImageFile } from "../../../lib/image-normalization";
 import { Composer } from "../Composer";
 
 vi.mock("../../../lib/image-normalization", () => ({
@@ -28,6 +29,7 @@ vi.mock("../../../lib/image-normalization", () => ({
 }));
 
 afterEach(() => {
+  vi.mocked(normalizeImageFile).mockClear();
   cleanup();
 });
 
@@ -797,6 +799,168 @@ describe("Composer", () => {
       "Review the pasted mockup"
     );
     expect(screen.getByAltText("mockup.png")).toBeInTheDocument();
+  });
+
+  it("persists launchpad pasted images that finish after switching away", async () => {
+    let resolveNormalization: (file: File) => void = () => undefined;
+    vi.mocked(normalizeImageFile).mockImplementationOnce(
+      async () =>
+        await new Promise((resolve) => {
+          resolveNormalization = (file: File) => {
+            resolve({
+              conversionPath: "renderer",
+              dataUrl: "data:image/png;base64,AQID",
+              height: 24,
+              mimeType: "image/png",
+              original: {
+                height: 24,
+                mimeType: file.type || "image/png",
+                name: file.name,
+                size: file.size,
+                width: 32,
+              },
+              size: 3,
+              width: 32,
+            });
+          };
+        })
+    );
+
+    const launchpads = new Map<string, NavigationLaunchpadDraft>([
+      [
+        "directory:/repo-a",
+        {
+          directoryKey: "directory:/repo-a",
+          directoryKind: "directory",
+          directoryLabel: "Repo A",
+          directoryPath: "/repo-a",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+      [
+        "directory:/repo-b",
+        {
+          directoryKey: "directory:/repo-b",
+          directoryKind: "directory",
+          directoryLabel: "Repo B",
+          directoryPath: "/repo-b",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    ]);
+    const onUpdateLaunchpad = vi.fn(async (directoryKey, patch) => {
+      const current = launchpads.get(directoryKey);
+      if (!current) {
+        throw new Error(`Unknown launchpad ${directoryKey}`);
+      }
+      launchpads.set(directoryKey, {
+        ...current,
+        ...patch,
+        updatedAt: current.updatedAt + 1,
+      });
+    });
+    const imageFile = new File([new Uint8Array([1, 2, 3])], "slow-mockup.png", {
+      type: "image/png",
+    });
+
+    const { rerender } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo-a",
+          kind: "directory",
+          label: "Repo A",
+          path: "/repo-a",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={launchpads.get("directory:/repo-a")!}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("New thread"), {
+      target: { value: "Review the slow mockup" },
+    });
+    fireEvent.paste(screen.getByLabelText("New thread"), {
+      clipboardData: {
+        files: [],
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => imageFile,
+          },
+        ],
+      },
+    });
+
+    rerender(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo-b",
+          kind: "directory",
+          label: "Repo B",
+          path: "/repo-b",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={launchpads.get("directory:/repo-b")!}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    await act(async () => {
+      resolveNormalization(imageFile);
+    });
+
+    await waitFor(() => {
+      expect(launchpads.get("directory:/repo-a")?.imageAttachments).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "slow-mockup.png" }),
+        ])
+      );
+    });
+    expect(launchpads.get("directory:/repo-a")?.prompt).toBe(
+      "Review the slow mockup"
+    );
+
+    rerender(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo-a",
+          kind: "directory",
+          label: "Repo A",
+          path: "/repo-a",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={launchpads.get("directory:/repo-a")!}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByLabelText("New thread")).toHaveValue(
+      "Review the slow mockup"
+    );
+    expect(screen.getByAltText("slow-mockup.png")).toBeInTheDocument();
   });
 
   it("keeps active launchpad edits stable when an autosave rerenders the same draft", () => {
