@@ -1,5 +1,6 @@
 import path from "node:path";
 import type {
+  AppServerThreadCommandDetail,
   AppServerSource,
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
@@ -74,10 +75,12 @@ export function summarizeToolActivityItems(
 
     if (itemType === "commandExecution") {
       commands += 1;
+      const elapsedMs = readElapsedMs(item);
       details.push({
         id: itemId,
         kind: "command",
-        label: formatCommandLabel(command),
+        label: appendElapsedLabel(formatCommandLabel(command), elapsedMs),
+        command: buildCommandDetail(item, command, elapsedMs),
         status: itemStatus,
       });
       continue;
@@ -218,8 +221,11 @@ function summarizeToolOutput(text: string | undefined): string | undefined {
 
 function readElapsedMs(item: Record<string, unknown>): number | undefined {
   const data = asRecord(item.data);
-  return typeof data?.elapsedMs === "number" && Number.isFinite(data.elapsedMs)
-    ? data.elapsedMs
+  const elapsedMs =
+    pickNumber(item, ["durationMs", "duration_ms", "elapsedMs", "elapsed_ms"]) ??
+    pickNumber(data ?? {}, ["durationMs", "duration_ms", "elapsedMs", "elapsed_ms"]);
+  return typeof elapsedMs === "number" && Number.isFinite(elapsedMs)
+    ? elapsedMs
     : undefined;
 }
 
@@ -229,6 +235,39 @@ function formatElapsedMs(elapsedMs: number): string {
   }
   const seconds = elapsedMs / 1_000;
   return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
+}
+
+function appendElapsedLabel(label: string, elapsedMs: number | undefined): string {
+  return typeof elapsedMs === "number" ? `${label} (${formatElapsedMs(elapsedMs)})` : label;
+}
+
+function buildCommandDetail(
+  item: Record<string, unknown>,
+  command: string | undefined,
+  elapsedMs: number | undefined,
+): AppServerThreadCommandDetail | undefined {
+  const displayCommand = formatCommandLabel(command);
+  if (!command && displayCommand === "Ran command") {
+    return undefined;
+  }
+
+  const data = asRecord(item.data);
+  const output =
+    pickString(item, ["aggregatedOutput", "aggregated_output", "output"]) ??
+    pickString(data ?? {}, ["aggregatedOutput", "aggregated_output", "output"]);
+  const exitCode =
+    pickNumber(item, ["exitCode", "exit_code"]) ??
+    pickNumber(data ?? {}, ["exitCode", "exit_code"]);
+  const cwd = pickString(item, ["cwd", "workingDirectory", "working_directory"]);
+
+  return {
+    displayCommand,
+    ...(command ? { rawCommand: command } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(output ? { output } : {}),
+    ...(typeof exitCode === "number" ? { exitCode } : {}),
+    ...(typeof elapsedMs === "number" ? { durationMs: elapsedMs } : {}),
+  };
 }
 
 function extractSources(item: Record<string, unknown>): AppServerSource[] {
@@ -304,6 +343,19 @@ function pickString(
     const value = record[key];
     if (typeof value === "string" && value.trim()) {
       return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function pickNumber(
+  record: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
     }
   }
   return undefined;

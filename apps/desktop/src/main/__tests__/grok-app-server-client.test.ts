@@ -399,6 +399,9 @@ describe("GrokAppServerClient", () => {
                 toolName: "shell_command",
                 command: "rg needle .",
                 commandAction: "search",
+                aggregatedOutput: "src/file.ts:needle",
+                durationMs: 1_250,
+                exitCode: 1,
                 success: false,
               },
               {
@@ -437,8 +440,15 @@ describe("GrokAppServerClient", () => {
             },
             {
               kind: "command",
-              label: "rg needle .",
+              label: "rg needle . (1.3s)",
               status: "failed",
+              command: {
+                displayCommand: "rg needle .",
+                rawCommand: "rg needle .",
+                output: "src/file.ts:needle",
+                exitCode: 1,
+                durationMs: 1_250,
+              },
             },
           ],
         },
@@ -542,13 +552,13 @@ describe("GrokAppServerClient", () => {
       {
         type: "activity",
         summary: "Ran 1 command",
-        details: [{ label: "sed -n 1,40p src/a.ts" }],
+        details: [{ label: "sed -n 1,40p src/a.ts (1.2s)" }],
       },
       { type: "message", role: "assistant", text: "Now I am checking the second file." },
       {
         type: "activity",
         summary: "Ran 1 command",
-        details: [{ label: "sed -n 1,40p src/b.ts" }],
+        details: [{ label: "sed -n 1,40p src/b.ts (2.5s)" }],
       },
       { type: "message", role: "assistant", text: "Done." },
     ]);

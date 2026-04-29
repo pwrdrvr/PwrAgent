@@ -7,6 +7,7 @@ import {
 import type {
   AppServerNotification,
   AppServerPendingRequestNotification,
+  AppServerThreadCommandDetail,
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadActivityStatus,
@@ -1674,6 +1675,18 @@ function formatCommandLabel(command: string | undefined): string {
   return collapsed.length > 72 ? `${collapsed.slice(0, 69)}...` : collapsed;
 }
 
+function stripShellWrapper(command: string | undefined): string | undefined {
+  if (!command) {
+    return undefined;
+  }
+
+  const stripped = command
+    .replace(/^\/bin\/[a-z]+ -lc /, "")
+    .replace(/^['"]|['"]$/g, "");
+  const collapsed = stripped.replace(/\s+/g, " ").trim();
+  return collapsed || undefined;
+}
+
 function formatActivitySummary(parts: string[]): string {
   return parts.join(", ");
 }
@@ -1754,6 +1767,52 @@ function extractActivityItemFromReplayItem(
   return undefined;
 }
 
+function extractFunctionCallOutputFromReplayItem(
+  item: Record<string, unknown>
+): { callId: string; output: string } | undefined {
+  const candidates = [item];
+  for (const key of ["payload", "item", "responseItem", "response_item"]) {
+    const nestedItem = asRecord(item[key]);
+    if (nestedItem) {
+      candidates.push(nestedItem);
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (normalizeItemType(pickString(candidate, ["type"])) !== "functioncalloutput") {
+      continue;
+    }
+    const callId = pickString(candidate, ["call_id", "callId", "id", "itemId", "item_id"]);
+    const output =
+      pickString(candidate, ["output", "text", "result"]) ??
+      pickString(asRecord(candidate.data) ?? {}, ["output", "text", "result"]);
+    if (callId && output !== undefined) {
+      return { callId, output };
+    }
+  }
+
+  return undefined;
+}
+
+function attachFunctionCallOutput(
+  items: Record<string, unknown>[],
+  output: { callId: string; output: string }
+): boolean {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (!item) {
+      continue;
+    }
+    const itemId = pickString(item, ["id", "itemId", "item_id", "call_id", "callId"]);
+    if (itemId !== output.callId) {
+      continue;
+    }
+    item.functionCallOutput = output.output;
+    return true;
+  }
+  return false;
+}
+
 function parseToolArguments(item: Record<string, unknown>): Record<string, unknown> | undefined {
   return (
     asRecord(parseStructuredValue(item.arguments)) ??
@@ -1762,6 +1821,51 @@ function parseToolArguments(item: Record<string, unknown>): Record<string, unkno
     asRecord(item.input) ??
     undefined
   );
+}
+
+function readActivityOutputText(item: Record<string, unknown>): string | undefined {
+  const data = asRecord(item.data);
+  return (
+    pickString(item, [
+      "aggregatedOutput",
+      "aggregated_output",
+      "functionCallOutput",
+      "output",
+      "text",
+    ]) ??
+    pickString(data ?? {}, ["aggregatedOutput", "aggregated_output", "output", "text"])
+  );
+}
+
+function readActivityExitCode(item: Record<string, unknown>): number | undefined {
+  const data = asRecord(item.data);
+  return (
+    pickNumber(item, ["exitCode", "exit_code"]) ??
+    pickNumber(data ?? {}, ["exitCode", "exit_code"])
+  );
+}
+
+function buildCommandDetail(params: {
+  item: Record<string, unknown>;
+  command: string | undefined;
+  elapsedMs: number | undefined;
+}): AppServerThreadCommandDetail | undefined {
+  const displayCommand = stripShellWrapper(params.command);
+  if (!displayCommand) {
+    return undefined;
+  }
+
+  const cwd = pickString(params.item, ["cwd", "workingDirectory", "working_directory"]);
+  const output = readActivityOutputText(params.item);
+  const exitCode = readActivityExitCode(params.item);
+  return {
+    displayCommand,
+    ...(params.command ? { rawCommand: params.command } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(output ? { output } : {}),
+    ...(typeof exitCode === "number" ? { exitCode } : {}),
+    ...(typeof params.elapsedMs === "number" ? { durationMs: params.elapsedMs } : {}),
+  };
 }
 
 function summarizeActivityItems(
@@ -1809,6 +1913,7 @@ function summarizeActivityItems(
           id: itemId,
           kind: "command",
           label: appendElapsedLabel(formatCommandLabel(command), elapsedMs),
+          command: buildCommandDetail({ item, command, elapsedMs }),
           status: itemStatus
         });
         continue;
@@ -1862,6 +1967,7 @@ function summarizeActivityItems(
           kind: "command",
           label: appendElapsedLabel(label, elapsedMs),
           ...(actionPath ? { path: actionPath } : {}),
+          command: buildCommandDetail({ item, command, elapsedMs }),
           status: itemStatus
         });
       }
@@ -1915,6 +2021,9 @@ function summarizeActivityItems(
         pickString(item, ["name", "toolName", "tool_name", "tool", "text"]) ?? "Used tool";
       const args = parseToolArguments(item);
       const command = args ? pickString(args, ["cmd", "command", "displayCommand"]) : undefined;
+      const commandDetail = functionName === "exec_command"
+        ? buildCommandDetail({ item, command, elapsedMs })
+        : undefined;
       pushActivityDetail(details, {
         id: itemId,
         kind: "command",
@@ -1922,6 +2031,7 @@ function summarizeActivityItems(
           functionName === "exec_command" ? formatCommandLabel(command) : functionName,
           elapsedMs
         ),
+        ...(commandDetail ? { command: commandDetail } : {}),
         status: itemStatus
       });
       continue;
@@ -2082,6 +2192,12 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
       const activityItem = extractActivityItemFromReplayItem(item);
       if (activityItem) {
         pendingActivityItems.push(activityItem);
+        continue;
+      }
+
+      const functionCallOutput = extractFunctionCallOutputFromReplayItem(item);
+      if (functionCallOutput) {
+        attachFunctionCallOutput(pendingActivityItems, functionCallOutput);
       }
     }
 

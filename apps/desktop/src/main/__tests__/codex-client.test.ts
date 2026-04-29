@@ -1575,6 +1575,10 @@ describe("CodexAppServerClient", () => {
               id: "item-4-1",
               kind: "command",
               label: "pwd && rg --files",
+              command: {
+                displayCommand: "pwd && rg --files",
+                rawCommand: "/bin/zsh -lc 'pwd && rg --files'"
+              },
               status: "completed"
             },
             {
@@ -2313,7 +2317,7 @@ describe("CodexAppServerClient", () => {
                 payload: {
                   type: "function_call_output",
                   call_id: "call-1",
-                  output: "Build pass"
+                  output: "Build pass\nLint pass"
                 }
               },
               {
@@ -2372,12 +2376,22 @@ describe("CodexAppServerClient", () => {
           {
             id: "call-1",
             kind: "command",
-            label: "gh pr checks 62 --watch --interval 10 (5.2s)"
+            label: "gh pr checks 62 --watch --interval 10 (5.2s)",
+            command: {
+              displayCommand: "gh pr checks 62 --watch --interval 10",
+              rawCommand: "gh pr checks 62 --watch --interval 10",
+              output: "Build pass\nLint pass",
+              durationMs: 5_200
+            }
           },
           {
             id: "call-2",
             kind: "command",
-            label: "git status --short --branch"
+            label: "git status --short --branch",
+            command: {
+              displayCommand: "git status --short --branch",
+              rawCommand: "git status --short --branch"
+            }
           }
         ],
         turn: {

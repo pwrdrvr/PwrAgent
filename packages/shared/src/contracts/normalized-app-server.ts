@@ -203,6 +203,15 @@ export type AppServerThreadFileDiff = {
   removals: number;
 };
 
+export type AppServerThreadCommandDetail = {
+  displayCommand: string;
+  rawCommand?: string;
+  cwd?: string;
+  output?: string;
+  exitCode?: number;
+  durationMs?: number;
+};
+
 export type AppServerThreadActivityDetail = {
   id: string;
   kind: "read" | "write" | "command";
@@ -210,6 +219,7 @@ export type AppServerThreadActivityDetail = {
   path?: string;
   url?: string;
   status?: AppServerThreadActivityStatus;
+  command?: AppServerThreadCommandDetail;
   fileDiff?: AppServerThreadFileDiff;
 };
 
