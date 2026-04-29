@@ -49,6 +49,15 @@ type ReplayDriver = {
         delivery?: AppServerReviewDelivery;
       }
     | undefined;
+  getLastRenameThread(params?: {
+    backend?: AppServerBackendKind;
+    executionMode?: ThreadExecutionMode;
+  }):
+    | {
+        threadId: string;
+        name: string;
+      }
+    | undefined;
   getPendingRequest(params?: {
     backend?: AppServerBackendKind;
     executionMode?: ThreadExecutionMode;
@@ -83,6 +92,12 @@ type ReplayRuntimeClient = {
         threadId: string;
         target: AppServerReviewTarget;
         delivery?: AppServerReviewDelivery;
+      }
+    | undefined;
+  getLastRenameThreadParams?():
+    | {
+        threadId: string;
+        name: string;
       }
     | undefined;
   getInitializeResult(): Promise<{
@@ -140,6 +155,10 @@ type ReplayRuntimeClient = {
     threadId: string;
     turnId: string;
   }): Promise<{ threadId: string; turnId: string }>;
+  renameThread?(params: {
+    threadId: string;
+    name: string;
+  }): Promise<{ threadId: string }>;
   respondToPendingRequest?(requestId: string): Promise<void>;
 };
 
@@ -195,6 +214,13 @@ export function createReplayClientsFromEnv():
         executionMode: params?.executionMode,
       });
       return client.getLastStartReviewParams?.();
+    },
+    getLastRenameThread: (params) => {
+      const client = getReplayClient(clients, {
+        backend: params?.backend,
+        executionMode: params?.executionMode,
+      });
+      return client.getLastRenameThreadParams?.();
     },
     respondToPendingRequest: async (params) => {
       const client = getReplayClient(clients, {
@@ -276,6 +302,7 @@ function createUnavailableReplayClient(
     getPendingRequest: () => undefined,
     getLastStartTurnParams: () => undefined,
     getLastStartReviewParams: () => undefined,
+    getLastRenameThreadParams: () => undefined,
     getInitializeResult: async () => {
       throw new Error(message);
     },
@@ -300,6 +327,9 @@ function createUnavailableReplayClient(
       throw new Error(message);
     },
     interruptTurn: async () => {
+      throw new Error(message);
+    },
+    renameThread: async () => {
       throw new Error(message);
     },
     respondToPendingRequest: async () => {
