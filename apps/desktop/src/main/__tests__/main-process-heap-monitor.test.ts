@@ -110,6 +110,35 @@ async function advance(ms: number) {
   await vi.advanceTimersByTimeAsync(ms);
 }
 
+async function waitForEvent(
+  eventsPath: string,
+  predicate: (event: { type?: string; detail?: Record<string, unknown> }) => boolean,
+): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  let lastError: unknown;
+
+  while (Date.now() < deadline) {
+    try {
+      const events = (await fs.readFile(eventsPath, "utf8"))
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { type?: string; detail?: Record<string, unknown> });
+      if (events.some(predicate)) {
+        return;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Timed out waiting for heap monitor event in ${eventsPath}.`);
+}
+
 describe("MainProcessHeapMonitor", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -362,6 +391,13 @@ describe("MainProcessHeapMonitor", () => {
         "utf8",
       ),
     ).resolves.toContain('"snapshot":true');
+
+    await waitForEvent(
+      created.session.eventsPath,
+      (event) =>
+        event.type === "snapshot-completed" &&
+        event.detail?.filename === "main-heap-0001.heapsnapshot",
+    );
 
     const eventLines = (
       await fs.readFile(path.join(created.session.directoryPath, "events.ndjson"), "utf8")

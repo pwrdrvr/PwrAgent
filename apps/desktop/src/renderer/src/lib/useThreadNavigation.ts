@@ -259,6 +259,50 @@ function removeThreadFromSnapshot(
   };
 }
 
+function removeThreadKeysFromSnapshot(
+  snapshot: NavigationSnapshot,
+  threadKeysToRemove: ReadonlySet<string>
+): NavigationSnapshot {
+  if (threadKeysToRemove.size === 0) {
+    return snapshot;
+  }
+
+  const threads = snapshot.threads.filter(
+    (thread) => !threadKeysToRemove.has(buildThreadIdentityKey(thread.source, thread.id))
+  );
+  if (threads.length === snapshot.threads.length) {
+    return snapshot;
+  }
+
+  const threadInboxByKey = new Map(
+    threads.map((thread) => [
+      buildThreadIdentityKey(thread.source, thread.id),
+      thread.inbox.inInbox,
+    ])
+  );
+
+  return {
+    ...snapshot,
+    directories: snapshot.directories.map((directory) => {
+      const threadKeys = directory.threadKeys.filter(
+        (candidate) => !threadKeysToRemove.has(candidate)
+      );
+      return {
+        ...directory,
+        threadKeys,
+        needsAttentionCount: threadKeys.reduce(
+          (count, candidate) => count + (threadInboxByKey.get(candidate) ? 1 : 0),
+          0
+        ),
+      };
+    }),
+    inboxThreadKeys: snapshot.inboxThreadKeys.filter(
+      (candidate) => !threadKeysToRemove.has(candidate)
+    ),
+    threads,
+  };
+}
+
 function getFallbackSelectionAfterRemoval(
   snapshot: NavigationSnapshot | undefined,
   params: {
@@ -703,6 +747,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       }
     | undefined
   >(undefined);
+  const suppressedArchivedThreadKeysRef = useRef<Set<string>>(new Set());
   const scheduledRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
   );
@@ -758,7 +803,10 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       }));
 
       try {
-        const response = await desktopApi.getNavigationSnapshot();
+        const response = removeThreadKeysFromSnapshot(
+          await desktopApi.getNavigationSnapshot(),
+          suppressedArchivedThreadKeysRef.current
+        );
         const optimisticSelection = preferredOptimisticThread ?? optimisticThreadRef.current;
         const optimisticThreadKey = optimisticSelection
           ? buildThreadIdentityKey(optimisticSelection.source, optimisticSelection.id)
@@ -938,6 +986,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           threadId: string;
         };
         const threadKey = buildThreadIdentityKey(event.backend, threadId);
+        suppressedArchivedThreadKeysRef.current.add(threadKey);
 
         setState((current) => ({
           ...current,
@@ -970,6 +1019,12 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       }
 
       if (method === "thread/unarchived") {
+        const { threadId } = event.notification.params as {
+          threadId: string;
+        };
+        suppressedArchivedThreadKeysRef.current.delete(
+          buildThreadIdentityKey(event.backend, threadId)
+        );
         scheduleRefresh();
         return;
       }
@@ -1401,6 +1456,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         ? buildThreadIdentityKey(optimisticThread.source, optimisticThread.id)
         : undefined;
 
+      suppressedArchivedThreadKeysRef.current.add(threadKey);
       setArchiveThreadError(undefined);
       setCreateThreadError(undefined);
       setLaunchpadError(undefined);
@@ -1436,6 +1492,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         });
         await refresh();
       } catch (error) {
+        suppressedArchivedThreadKeysRef.current.delete(threadKey);
         setArchiveThreadError(error instanceof Error ? error.message : String(error));
         await refresh(threadKey);
       }

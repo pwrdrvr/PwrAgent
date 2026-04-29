@@ -175,6 +175,8 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "turn/diff/updated",
   "serverRequest/resolved",
   "thread/compacted",
+  "thread/archived",
+  "thread/unarchived",
   "thread/name/updated",
   "thread/status/changed",
   "thread/tokenUsage/updated",
