@@ -80,8 +80,43 @@ function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
   return (
     entry.type === "message" &&
     entry.role === "assistant" &&
-    entry.phase !== "commentary"
+    entry.phase === "final"
   );
+}
+
+function entryCreatedAt(entry: AppServerThreadEntry): number | undefined {
+  return typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+}
+
+function pendingEntriesInEventOrder(
+  entries: Array<AppServerThreadEntry | undefined>
+): AppServerThreadEntry[] {
+  return entries
+    .map((entry, index) => ({ entry, index }))
+    .filter((item): item is { entry: AppServerThreadEntry; index: number } =>
+      Boolean(item.entry)
+    )
+    .sort((left, right) => {
+      const leftCreatedAt = entryCreatedAt(left.entry);
+      const rightCreatedAt = entryCreatedAt(right.entry);
+      if (
+        typeof leftCreatedAt === "number" &&
+        typeof rightCreatedAt === "number" &&
+        leftCreatedAt !== rightCreatedAt
+      ) {
+        return leftCreatedAt - rightCreatedAt;
+      }
+
+      if (typeof leftCreatedAt === "number" && typeof rightCreatedAt !== "number") {
+        return -1;
+      }
+      if (typeof leftCreatedAt !== "number" && typeof rightCreatedAt === "number") {
+        return 1;
+      }
+
+      return left.index - right.index;
+    })
+    .map((item) => item.entry);
 }
 
 function insertPendingEntry(
@@ -232,10 +267,14 @@ export function TranscriptList(props: TranscriptListProps) {
   );
   const transcriptEntries = useMemo(() => {
     const entries = [...props.entries];
-    insertPendingEntry(entries, props.pendingPlanEntry);
-    insertPendingEntry(entries, props.pendingActivityEntry);
-    insertPendingEntry(entries, props.pendingProtocolActivityEntry);
-    insertPendingEntry(entries, props.pendingAssistantMessage);
+    for (const pendingEntry of pendingEntriesInEventOrder([
+      props.pendingPlanEntry,
+      props.pendingActivityEntry,
+      props.pendingProtocolActivityEntry,
+      props.pendingAssistantMessage,
+    ])) {
+      insertPendingEntry(entries, pendingEntry);
+    }
     return entries;
   }, [
     props.entries,

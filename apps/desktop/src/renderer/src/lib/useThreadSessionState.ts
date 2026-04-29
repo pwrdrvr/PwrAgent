@@ -1211,6 +1211,9 @@ export function useThreadSessionState(params: {
               id: itemId,
               role: "assistant",
               phase,
+              createdAt: isSamePendingMessage
+                ? current.pendingAssistantMessage?.createdAt
+                : Date.now(),
               ...(turn ? { turn } : {}),
               text:
                 isSamePendingMessage

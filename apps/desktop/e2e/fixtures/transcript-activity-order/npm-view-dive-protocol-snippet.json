@@ -1,0 +1,94 @@
+{
+  "threadId": "019dda1e-08da-7b82-a47f-06fa167e025b",
+  "turnId": "019dda1e-145d-7c83-b41a-31aefc325851",
+  "source": "apps/desktop/.local/protocol-captures/2026-04-29T16-41-03-667Z-codex-full-access.jsonl",
+  "events": [
+    {
+      "sequence": 27,
+      "timestamp": 1777480901377,
+      "direction": "inbound",
+      "method": "item/started",
+      "item": {
+        "type": "agentMessage",
+        "id": "msg_03a7771d482064d30169f234c52ff08194b88ab7268c84cfe0",
+        "phase": "commentary"
+      }
+    },
+    {
+      "sequence": 44,
+      "timestamp": 1777480901936,
+      "direction": "inbound",
+      "method": "item/completed",
+      "item": {
+        "type": "agentMessage",
+        "id": "msg_03a7771d482064d30169f234c52ff08194b88ab7268c84cfe0",
+        "phase": "commentary",
+        "text": "I’ll run the package lookup directly and relay the useful parts of the output."
+      }
+    },
+    {
+      "sequence": 47,
+      "timestamp": 1777480902942,
+      "direction": "inbound",
+      "method": "item/started",
+      "item": {
+        "type": "commandExecution",
+        "id": "call_d46rX8FnAuKrzfXsugNascnc",
+        "command": "/bin/zsh -lc 'npm view dive'",
+        "status": "inProgress"
+      }
+    },
+    {
+      "sequence": 49,
+      "timestamp": 1777480903362,
+      "direction": "inbound",
+      "method": "item/completed",
+      "item": {
+        "type": "commandExecution",
+        "id": "call_d46rX8FnAuKrzfXsugNascnc",
+        "command": "/bin/zsh -lc 'npm view dive'",
+        "status": "completed",
+        "durationMs": 419
+      }
+    },
+    {
+      "sequence": 50,
+      "timestamp": 1777480904347,
+      "direction": "inbound",
+      "method": "item/started",
+      "item": {
+        "type": "agentMessage",
+        "id": "msg_03a7771d482064d30169f234c82c2c819481d38e99f9f727aa",
+        "phase": "final_answer"
+      }
+    },
+    {
+      "sequence": 190,
+      "timestamp": 1777480906948,
+      "direction": "inbound",
+      "method": "item/completed",
+      "item": {
+        "type": "agentMessage",
+        "id": "msg_03a7771d482064d30169f234c82c2c819481d38e99f9f727aa",
+        "phase": "final_answer",
+        "text": "`npm view dive` output says:\n\n- `dive@0.5.0`\n- License: `Proprietary`\n- No dependencies"
+      }
+    }
+  ],
+  "postTurnThreadReadItems": [
+    {
+      "type": "userMessage",
+      "id": "item-1"
+    },
+    {
+      "type": "agentMessage",
+      "id": "item-2",
+      "phase": "commentary"
+    },
+    {
+      "type": "agentMessage",
+      "id": "item-3",
+      "phase": "final_answer"
+    }
+  ]
+}

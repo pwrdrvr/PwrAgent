@@ -734,6 +734,59 @@ describe("TranscriptList", () => {
     ).toBeTruthy();
   });
 
+  it("keeps a pending tool below the earlier pending assistant message that started first", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "user-1",
+            role: "user",
+            text: "Run npm view dive pls",
+            turn: { id: "turn-1", status: "in_progress" }
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingActivityEntry={{
+          type: "activity",
+          id: "live-tools-turn-1",
+          createdAt: 1_777_480_902_942,
+          summary: "Ran 1 command",
+          status: "completed",
+          details: [
+            {
+              id: "call-dive",
+              kind: "command",
+              label: "npm view dive (419ms)",
+              status: "completed"
+            }
+          ],
+          turn: { id: "turn-1", status: "in_progress" }
+        }}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "commentary-1",
+          role: "assistant",
+          createdAt: 1_777_480_901_377,
+          text: "I’ll run the package lookup directly and relay the useful parts of the output.",
+          turn: { id: "turn-1", status: "in_progress" }
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const commentary = screen.getByText(
+      "I’ll run the package lookup directly and relay the useful parts of the output."
+    );
+    const tool = screen.getByRole("button", { name: /Ran 1 command/i });
+
+    expect(
+      commentary.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it("renders simple write diffs fully without zoom controls", () => {
     render(
       <TranscriptList
