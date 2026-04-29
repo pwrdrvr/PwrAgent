@@ -589,6 +589,15 @@ function isEmptyDirectoryLaunchpadDraft(launchpad: NavigationLaunchpadDraft): bo
   );
 }
 
+function defaultLaunchpadWorkMode(
+  request: Pick<EnsureDirectoryLaunchpadRequest, "directoryKind" | "directoryPath">,
+  defaults: NavigationLaunchpadDefaults
+): NavigationLaunchpadDraft["workMode"] {
+  return request.directoryKind === "directory" && request.directoryPath
+    ? defaults.workMode ?? "local"
+    : "local";
+}
+
 function extractFirstMeaningfulTextInput(input: AppServerTurnInputItem[]): string | undefined {
   const text = input
     .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")
@@ -1542,13 +1551,16 @@ export class DesktopBackendRegistry {
       if (isEmptyDirectoryLaunchpadDraft(existing)) {
         const refreshed: NavigationLaunchpadDraft = {
           ...existing,
+          directoryKind: request.directoryKind,
+          directoryLabel: request.directoryLabel,
+          directoryPath: request.directoryPath,
           backend: request.preferredBackend ?? defaults.backend,
           executionMode: defaults.executionMode,
           model: defaults.model,
           reasoningEffort: defaults.reasoningEffort,
           serviceTier: defaults.serviceTier,
           fastMode: defaults.fastMode,
-          workMode: defaults.workMode ?? "local",
+          workMode: defaultLaunchpadWorkMode(request, defaults),
           branchName: existing.branchName ?? request.currentBranch,
           updatedAt: Date.now(),
         };
@@ -1577,7 +1589,7 @@ export class DesktopBackendRegistry {
       serviceTier: defaults.serviceTier,
       fastMode: defaults.fastMode,
       prompt: "",
-      workMode: defaults.workMode ?? "local",
+      workMode: defaultLaunchpadWorkMode(request, defaults),
       branchName: request.currentBranch,
       createdAt: Date.now(),
       updatedAt: Date.now(),

@@ -2743,6 +2743,10 @@ function formatLaunchpadWorkspaceLabel(
     return "New worktree";
   }
 
+  if (directory?.kind === "workspace") {
+    return "Workspace";
+  }
+
   return directory?.gitStatus?.currentBranch
     ? `Local (${directory.gitStatus.currentBranch})`
     : "Local";

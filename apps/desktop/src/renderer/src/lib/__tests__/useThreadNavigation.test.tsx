@@ -687,6 +687,83 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad).toBeUndefined();
   });
 
+  it("opens masthead new-thread drafts inside the Workspaces directory", async () => {
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey: "workspace:/Users/test/.pwragnt/projects",
+        directoryKind: "workspace" as const,
+        directoryLabel: "Workspaces",
+        directoryPath: "/Users/test/.pwragnt/projects",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        workMode: "local" as const,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: "workspace:/Users/test/.pwragnt/projects",
+          kind: "workspace" as const,
+          label: "Workspaces",
+          path: "/Users/test/.pwragnt/projects",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.directories[0]?.label).toBe("Workspaces");
+    });
+
+    await act(async () => {
+      await result.current.createThread();
+    });
+
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "workspace:/Users/test/.pwragnt/projects",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: "/Users/test/.pwragnt/projects",
+      preferredBackend: undefined,
+    });
+    expect(result.current.selectedItemKey).toBe(
+      "launchpad:workspace:/Users/test/.pwragnt/projects"
+    );
+    expect(result.current.selectedDirectory?.label).toBe("Workspaces");
+    expect(result.current.selectedLaunchpad?.directoryKind).toBe("workspace");
+    expect(result.current.directories.map((directory) => directory.label)).toEqual([
+      "Workspaces",
+    ]);
+    expect(result.current.directories.some((directory) => directory.kind === "unlinked")).toBe(
+      false
+    );
+  });
+
   it("refreshes the selected thread when only the observed branch changes", async () => {
     const listeners = new Set<(event: any) => void>();
     let navigationCallCount = 0;

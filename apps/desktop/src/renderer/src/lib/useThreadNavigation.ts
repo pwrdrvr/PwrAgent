@@ -19,7 +19,8 @@ import type { DesktopApi } from "./desktop-api";
 
 export type BrowseMode = "inbox" | "recents" | "directories";
 
-const ROOT_NEW_THREAD_LAUNCHPAD_KEY = "unlinked:new-thread";
+const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
+const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
 
 type NavigationState = {
   loading: boolean;
@@ -526,7 +527,7 @@ function projectOptimisticThreadIntoDirectories(
 
     nextDirectories.push({
       key: directoryKey,
-      kind: "directory",
+      kind: directoryKey.startsWith("workspace:") ? "workspace" : "directory",
       label: linkedDirectory.label,
       path: linkedDirectory.path,
       threadKeys: [threadKey],
@@ -599,12 +600,12 @@ function buildOptimisticThreadFromLaunchpad(params: {
     serviceTier: params.launchpad.serviceTier,
     fastMode: params.launchpad.fastMode,
     optimisticUserMessage: params.optimisticUserMessage,
-    linkedDirectories: params.launchpad.directoryPath
+    linkedDirectories: params.launchpad.directoryPath || params.launchpad.directoryKind === "workspace"
       ? [
           {
             id: `launchpad:${params.launchpad.directoryKey}`,
             label: params.launchpad.directoryLabel,
-            path: params.launchpad.directoryPath,
+            path: params.launchpad.directoryPath ?? "",
             kind: params.workMode === "worktree" ? "worktree" : "local",
           },
         ]
@@ -1277,10 +1278,16 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       setSetThreadModelSettingsError(undefined);
 
       try {
+        const workspaceDirectory = directories.find(
+          (directory) => directory.kind === "workspace"
+        );
+        const directoryKey =
+          workspaceDirectory?.key ?? ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY;
         const response = await desktopApi.ensureDirectoryLaunchpad({
-          directoryKey: ROOT_NEW_THREAD_LAUNCHPAD_KEY,
-          directoryKind: "unlinked",
-          directoryLabel: "New thread",
+          directoryKey,
+          directoryKind: "workspace",
+          directoryLabel: workspaceDirectory?.label ?? ROOT_NEW_THREAD_WORKSPACE_LABEL,
+          directoryPath: workspaceDirectory?.path,
           preferredBackend: backend,
         });
         let launchpad = response.launchpad;
@@ -1290,7 +1297,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           desktopApi.updateDirectoryLaunchpad
         ) {
           const updated = await desktopApi.updateDirectoryLaunchpad({
-            directoryKey: ROOT_NEW_THREAD_LAUNCHPAD_KEY,
+            directoryKey,
             patch: { executionMode },
           });
           launchpad = updated.launchpad;
@@ -1300,14 +1307,14 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           ...current,
           response: applyLaunchpadUpdate(current.response, launchpad, defaults),
         }));
-        setSelectedItemKey(buildLaunchpadSelectionKey(ROOT_NEW_THREAD_LAUNCHPAD_KEY));
+        setSelectedItemKey(buildLaunchpadSelectionKey(directoryKey));
       } catch (error) {
         setCreateThreadError(error instanceof Error ? error.message : String(error));
       } finally {
         setCreatingThread(undefined);
       }
     },
-    [desktopApi]
+    [desktopApi, directories]
   );
 
   const openDirectoryLaunchpad = useCallback(

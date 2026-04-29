@@ -902,6 +902,41 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("keeps workspace launchpads in workspace mode even when directory drafts prefer worktrees", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: { workMode: "worktree" },
+    });
+
+    const workspace = await registry.ensureDirectoryLaunchpad({
+      directoryKey: "workspace:/Users/test/.pwragnt/projects",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: "/Users/test/.pwragnt/projects",
+    });
+
+    expect(workspace.defaults.workMode).toBe("worktree");
+    expect(workspace.launchpad.directoryKind).toBe("workspace");
+    expect(workspace.launchpad.directoryLabel).toBe("Workspaces");
+    expect(workspace.launchpad.workMode).toBe("local");
+    expect(workspace.launchpad.branchName).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("creates a scratch workspace for Codex thread creation when cwd is omitted", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },
