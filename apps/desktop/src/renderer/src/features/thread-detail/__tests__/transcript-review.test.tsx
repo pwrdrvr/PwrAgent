@@ -91,4 +91,29 @@ describe("TranscriptReview", () => {
     expect(screen.getByText("features/composer/Composer.tsx")).toBeInTheDocument();
     expect(screen.getByText("Lines 971-979")).toBeInTheDocument();
   });
+
+  it("renders full review comments as separate finding cards", () => {
+    render(
+      <TranscriptReview
+        entry={{
+          type: "review",
+          id: "review-exited-2",
+          review:
+            "The patch can lose pending steer drafts in realistic active-turn races.\n\nFull review comments:\n\n- [P2] Only clear steer after it has actually been sent — /repo/apps/desktop/src/renderer/src/features/composer/Composer.tsx:618-622\n  Gate confirmation on the steering status so pre-injection events cannot acknowledge the steer.\n\n- [P2] Preserve pending steer when a queued turn already exists — /repo/apps/desktop/src/renderer/src/features/composer/Composer.tsx:660-667\n  Keep the pending steer visible instead of dropping it when a queued turn already exists.",
+        }}
+      />
+    );
+
+    expect(
+      screen.getByText("The patch can lose pending steer drafts in realistic active-turn races.")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Only clear steer after it has actually been sent")).toBeInTheDocument();
+    expect(
+      screen.getByText("Preserve pending steer when a queued turn already exists")
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("P2")).toHaveLength(2);
+    expect(screen.getByText("Lines 618-622")).toBeInTheDocument();
+    expect(screen.getByText("Lines 660-667")).toBeInTheDocument();
+    expect(screen.queryByText("Full review comments:")).not.toBeInTheDocument();
+  });
 });

@@ -40,7 +40,9 @@ function parsePlainReview(review: string): {
   explanation: string;
   findings: AppServerReviewFinding[];
 } {
-  const [rawExplanation, rawComments] = review.split(/\n\s*Review comments?:\s*\n/i);
+  const [rawExplanation, rawComments] = review.split(
+    /\n\s*(?:Full\s+)?Review comments?:\s*\n/i
+  );
   if (!rawComments) {
     return {
       explanation: review,
