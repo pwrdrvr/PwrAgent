@@ -101,6 +101,7 @@ export function App() {
           loadingMore={session.loadingMore}
           messageCount={session.messages.length}
           pendingAssistantMessage={session.pendingAssistantMessage}
+          pendingMcpInteraction={session.pendingMcpInteraction}
           pendingRequest={session.pendingRequest}
           pendingUserInput={session.pendingUserInput}
           pendingStatusText={session.pendingStatusText}
@@ -145,6 +146,7 @@ export function App() {
           onRestoreWorktree={navigation.restoreWorktree}
           onTranscriptViewportChange={session.setViewport}
           onUpdateLaunchpad={navigation.updateDirectoryLaunchpad}
+          onUpdatePendingMcpInteraction={session.updatePendingMcpInteraction}
           onUpdatePendingUserInput={session.updatePendingUserInput}
           removeOptimisticMessage={session.removeOptimisticMessage}
           transcriptViewport={session.viewport}

@@ -3420,6 +3420,159 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("normalizes MCP elicitation requests and returns MCP-shaped responses", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    client.onRequest((request) => {
+      requests.push(request as { method: string; params: Record<string, unknown> });
+      return {
+        action: "accept",
+        content: {},
+        _meta: null
+      };
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      id: "0",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-mcp",
+        turnId: "turn-mcp",
+        serverName: "playwright",
+        mode: "form",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          tool_description: "List, create, close, or select a browser tab.",
+          tool_params: {
+            action: "list"
+          },
+          tool_params_display: [
+            {
+              label: "action",
+              value: "list"
+            }
+          ]
+        },
+        message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+        requestedSchema: {
+          type: "object",
+          properties: {}
+        }
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(requests).toEqual([
+      {
+        method: "mcpServer/elicitation/request",
+        params: expect.objectContaining({
+          threadId: "thread-mcp",
+          turnId: "turn-mcp",
+          requestId: "0",
+          serverName: "playwright",
+          mode: "form",
+          message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+          requestedSchema: {
+            type: "object",
+            properties: {}
+          },
+          _meta: expect.objectContaining({
+            tool_description: "List, create, close, or select a browser tab."
+          })
+        })
+      }
+    ]);
+    expect(
+      transport!.sentMessages
+        .map((message) => JSON.parse(message) as { id?: string; result?: unknown })
+        .find((message) => message.id === "0")
+    ).toEqual({
+      jsonrpc: "2.0",
+      id: "0",
+      result: {
+        action: "accept",
+        content: {},
+        _meta: null
+      }
+    });
+
+    await client.close();
+  });
+
+  it("preserves URL-mode MCP elicitation requests", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    client.onRequest((request) => {
+      requests.push(request as { method: string; params: Record<string, unknown> });
+      return {
+        action: "cancel",
+        content: null,
+        _meta: null
+      };
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      id: "mcp-url-1",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-mcp",
+        turnId: null,
+        serverName: "github",
+        mode: "url",
+        _meta: null,
+        message: "Authorize GitHub access in the browser.",
+        url: "https://example.test/oauth/start?state=secret-state",
+        elicitationId: "elicitation-1"
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(requests).toEqual([
+      {
+        method: "mcpServer/elicitation/request",
+        params: expect.objectContaining({
+          threadId: "thread-mcp",
+          turnId: null,
+          requestId: "mcp-url-1",
+          serverName: "github",
+          mode: "url",
+          message: "Authorize GitHub access in the browser.",
+          url: "https://example.test/oauth/start?state=secret-state",
+          elicitationId: "elicitation-1",
+          _meta: null
+        })
+      }
+    ]);
+
+    await client.close();
+  });
+
   it("normalizes approval requests from rpc envelope ids and nested thread metadata", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

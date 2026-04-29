@@ -33,6 +33,10 @@ import {
   buildQuestionnaireResponse,
   type PendingQuestionnaireState,
 } from "./questionnaire";
+import {
+  buildMcpElicitationResponse,
+  type PendingMcpInteractionState,
+} from "./mcp-elicitation";
 
 function arePlanEntriesEquivalent(
   left: AppServerThreadPlanEntry,
@@ -301,6 +305,23 @@ function summarizeToolOutput(text: string | undefined): string | undefined {
   return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
 }
 
+function summarizeJsonValue(value: unknown): string | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return summarizeToolOutput(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  try {
+    return summarizeToolOutput(JSON.stringify(value));
+  } catch {
+    return undefined;
+  }
+}
+
 function formatLiveToolName(
   toolName: string,
   status: AppServerThreadActivityDetail["status"],
@@ -315,6 +336,15 @@ function formatLiveToolName(
     return "Ran command";
   }
   return toolName.replace(/_/g, " ");
+}
+
+function formatMcpToolName(
+  serverName: string | undefined,
+  toolName: string,
+  status: AppServerThreadActivityDetail["status"],
+): string {
+  const action = status === "in_progress" ? "Using MCP" : "Used MCP";
+  return `${action} ${serverName ? `${serverName}/` : ""}${toolName}`;
 }
 
 function buildLiveToolLabel(
@@ -332,6 +362,11 @@ function buildLiveToolLabel(
     );
   }
 
+  if (itemType === "mcptoolcall") {
+    const serverName = readString(item, "server") ?? readString(item, "serverName");
+    return formatMcpToolName(serverName, toolName, status);
+  }
+
   return formatLiveToolName(toolName, status);
 }
 
@@ -339,19 +374,27 @@ function buildLiveToolDetails(
   item: Record<string, unknown>,
 ): AppServerThreadActivityDetail[] {
   const itemType = readString(item, "type")?.replace(/[-_\s]/g, "").toLowerCase();
-  if (itemType !== "dynamictoolcall" && itemType !== "commandexecution") {
+  if (
+    itemType !== "dynamictoolcall" &&
+    itemType !== "commandexecution" &&
+    itemType !== "mcptoolcall"
+  ) {
     return [];
   }
 
   const itemId = readString(item, "id") ?? readString(item, "itemId") ?? "tool";
   const toolName =
+    readString(item, "tool") ??
     readString(item, "toolName") ??
     readString(item, "tool_name") ??
     readString(item, "name") ??
     "tool";
   const status = normalizeItemStatus(item.status);
   const query = readToolArgument(item, "query") ?? readToolArgument(item, "q");
-  const preview = summarizeToolOutput(readToolOutputText(item));
+  const preview =
+    itemType === "mcptoolcall"
+      ? summarizeJsonValue(item.error) ?? summarizeJsonValue(item.result)
+      : summarizeToolOutput(readToolOutputText(item));
   const elapsedMs = readElapsedMs(item);
   const details: AppServerThreadActivityDetail[] = [
     {
@@ -387,6 +430,90 @@ function buildLiveToolDetails(
   }
 
   return details;
+}
+
+function buildMcpProgressDetail(
+  params: Record<string, unknown>
+): AppServerThreadActivityDetail | undefined {
+  const itemId = readString(params, "itemId");
+  const message = readString(params, "message");
+  if (!itemId || !message) {
+    return undefined;
+  }
+
+  return {
+    id: itemId,
+    kind: "command",
+    label: `MCP ${message}`,
+    status: "in_progress",
+  };
+}
+
+function buildMcpServerStatusActivityEntry(params: Record<string, unknown>): AppServerThreadActivityEntry | undefined {
+  const serverName = readString(params, "name") ?? readString(params, "serverName");
+  const status = readString(params, "status") ?? "updated";
+  if (!serverName) {
+    return undefined;
+  }
+
+  const error = readString(params, "error");
+  const detailStatus: AppServerThreadActivityDetail["status"] =
+    status === "failed" || error
+      ? "failed"
+      : status === "cancelled"
+        ? "cancelled"
+        : status === "ready"
+          ? "completed"
+          : "in_progress";
+  const label = error
+    ? `MCP ${serverName} ${status}: ${error}`
+    : `MCP ${serverName} ${status}`;
+
+  return {
+    type: "activity",
+    id: `live-mcp-status-${serverName}`,
+    createdAt: Date.now(),
+    summary: label,
+    status: detailStatus,
+    details: [
+      {
+        id: `live-mcp-status-${serverName}-detail`,
+        kind: "command",
+        label,
+        status: detailStatus,
+      },
+    ],
+  };
+}
+
+function buildMcpOauthActivityEntry(params: Record<string, unknown>): AppServerThreadActivityEntry | undefined {
+  const serverName = readString(params, "name") ?? readString(params, "serverName");
+  if (!serverName) {
+    return undefined;
+  }
+
+  const success = params.success === true;
+  const error = readString(params, "error");
+  const label = success
+    ? `MCP ${serverName} login completed`
+    : `MCP ${serverName} login failed${error ? `: ${error}` : ""}`;
+  const status: AppServerThreadActivityDetail["status"] = success ? "completed" : "failed";
+
+  return {
+    type: "activity",
+    id: `live-mcp-oauth-${serverName}`,
+    createdAt: Date.now(),
+    summary: label,
+    status,
+    details: [
+      {
+        id: `live-mcp-oauth-${serverName}-detail`,
+        kind: "command",
+        label,
+        status,
+      },
+    ],
+  };
 }
 
 function summarizeActivityStatus(
@@ -783,6 +910,7 @@ type ThreadViewProps = {
   loadingMore: boolean;
   messageCount: number;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
+  pendingMcpInteraction?: PendingMcpInteractionState;
   pendingRequest?: AppServerPendingRequestNotification;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
@@ -813,6 +941,10 @@ type ThreadViewProps = {
   onUpdatePendingUserInput?: (
     requestId: string,
     updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
+  ) => void;
+  onUpdatePendingMcpInteraction?: (
+    requestId: string,
+    updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
   ) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
   onSetThreadModelSettings?: (
@@ -954,10 +1086,35 @@ export function ThreadView(props: ThreadViewProps) {
           ? event.notification.params.threadId
           : undefined;
 
+      const isGlobalMcpStatus =
+        notificationThreadId == null &&
+        (event.notification.method === "mcpServer/startupStatus/updated" ||
+          event.notification.method === "mcpServer/oauthLogin/completed");
+
       if (
         event.backend !== selectedThread.source ||
-        notificationThreadId !== selectedThread.id
+        (notificationThreadId !== selectedThread.id && !isGlobalMcpStatus)
       ) {
+        return;
+      }
+
+      if (event.notification.method === "mcpServer/startupStatus/updated") {
+        const entry = buildMcpServerStatusActivityEntry(
+          event.notification.params as Record<string, unknown>
+        );
+        if (entry) {
+          setPendingProtocolActivityEntry(entry);
+        }
+        return;
+      }
+
+      if (event.notification.method === "mcpServer/oauthLogin/completed") {
+        const entry = buildMcpOauthActivityEntry(
+          event.notification.params as Record<string, unknown>
+        );
+        if (entry) {
+          setPendingProtocolActivityEntry(entry);
+        }
         return;
       }
 
@@ -1075,6 +1232,36 @@ export function ThreadView(props: ThreadViewProps) {
           });
           setPendingToolActivityEntry((current) => {
             const mergedDetails = mergeActivityDetails(current?.details ?? [], details);
+            return {
+              type: "activity",
+              id: current?.id ?? `live-tools-${turnId}`,
+              createdAt: current?.createdAt ?? Date.now(),
+              summary: summarizeLiveToolActivity(mergedDetails),
+              status: summarizeActivityStatus(mergedDetails),
+              details: mergedDetails,
+              ...(current?.turn ?? turn ? { turn: current?.turn ?? turn } : {}),
+            };
+          });
+        }
+        return;
+      }
+
+      if (event.notification.method === "item/mcpToolCall/progress") {
+        const detail = buildMcpProgressDetail(
+          event.notification.params as Record<string, unknown>
+        );
+        if (detail) {
+          const params = event.notification.params as Record<string, unknown>;
+          const turnId =
+            typeof params.turnId === "string"
+              ? params.turnId
+              : props.activeTurnId ?? selectedThread.id;
+          const turn = buildLiveTurnMetadata({
+            turnId,
+            activeTurnStartedAt: props.activeTurnStartedAt,
+          });
+          setPendingToolActivityEntry((current) => {
+            const mergedDetails = mergeActivityDetails(current?.details ?? [], [detail]);
             return {
               type: "activity",
               id: current?.id ?? `live-tools-${turnId}`,
@@ -1276,6 +1463,40 @@ export function ThreadView(props: ThreadViewProps) {
     }
   }
 
+  async function submitPendingMcpInteraction(
+    pendingMcpInteraction: PendingMcpInteractionState,
+    action: "accept" | "decline" | "cancel"
+  ): Promise<void> {
+    if (!props.desktopApi?.submitServerRequest || !selectedThread) {
+      setPendingRequestError("Desktop bridge is missing submitServerRequest().");
+      return;
+    }
+
+    setPendingRequestBusy(true);
+    setPendingRequestError(undefined);
+
+    try {
+      await props.desktopApi.submitServerRequest({
+        backend: selectedThread.source,
+        threadId: selectedThread.id,
+        turnId:
+          typeof pendingMcpInteraction.turnId === "string"
+            ? pendingMcpInteraction.turnId
+            : undefined,
+        requestId: pendingMcpInteraction.requestId,
+        response: buildMcpElicitationResponse(pendingMcpInteraction, action),
+      });
+      props.clearPendingRequest(
+        pendingMcpInteraction.requestId,
+        action === "accept" ? "Thinking" : undefined
+      );
+    } catch (error) {
+      setPendingRequestError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPendingRequestBusy(false);
+    }
+  }
+
   if (!selectedThread && !selectedLaunchpad) {
     return (
       <section className="thread-empty-state">
@@ -1411,6 +1632,7 @@ export function ThreadView(props: ThreadViewProps) {
               pendingActivityEntry={pendingToolActivityEntry ?? pendingActivityEntry}
               pendingAssistantMessage={props.pendingAssistantMessage}
               pendingPlanEntry={pendingPlanEntry}
+              pendingMcpInteraction={props.pendingMcpInteraction}
               pendingRequest={props.pendingRequest}
               pendingRequestBusy={pendingRequestBusy}
               pendingUserInput={props.pendingUserInput}
@@ -1422,6 +1644,10 @@ export function ThreadView(props: ThreadViewProps) {
               onLoadOlder={props.onLoadOlder}
               onOpenImage={setExpandedImage}
               onRespondToPendingRequest={respondToPendingRequest}
+              onPendingMcpInteractionChange={(state) => {
+                props.onUpdatePendingMcpInteraction?.(state.requestId, () => state);
+              }}
+              onSubmitPendingMcpInteraction={submitPendingMcpInteraction}
               onPendingUserInputChange={(state) => {
                 props.onUpdatePendingUserInput?.(state.requestId, () => state);
               }}
@@ -1447,7 +1673,9 @@ export function ThreadView(props: ThreadViewProps) {
             onSetExecutionMode={props.onSetExecutionMode}
             onSetThreadModelSettings={props.onSetThreadModelSettings}
             pendingRequestActive={Boolean(props.pendingRequest)}
-            pendingUserInputActive={Boolean(props.pendingUserInput)}
+            pendingUserInputActive={Boolean(
+              props.pendingUserInput || props.pendingMcpInteraction
+            )}
             removeOptimisticMessage={props.removeOptimisticMessage}
             setExecutionModeError={props.setExecutionModeError}
             threadModelSettingsError={props.setThreadModelSettingsError}

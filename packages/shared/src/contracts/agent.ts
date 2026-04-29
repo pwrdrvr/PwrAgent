@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  AppServerMcpElicitationResponse,
   AppServerNotification,
   ThreadExecutionMode,
   AppServerReviewDelivery,
@@ -115,7 +116,7 @@ export type SubmitServerRequestRequest = {
   threadId: ThreadIdentifier;
   turnId?: string;
   requestId: string;
-  response: Record<string, unknown>;
+  response: Record<string, unknown> | AppServerMcpElicitationResponse;
 };
 
 export type SubmitServerRequestResponse = {

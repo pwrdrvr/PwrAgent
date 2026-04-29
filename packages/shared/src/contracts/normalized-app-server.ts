@@ -393,7 +393,7 @@ export type AppServerPendingRequestNotification = {
   method: string;
   params: {
     threadId: string;
-    turnId?: string;
+    turnId?: string | null;
     requestId: string;
     prompt?: string;
     options?: string[];
@@ -429,6 +429,35 @@ export type AppServerToolRequestUserInputNotification = {
     turnId?: string;
     itemId?: string;
     questions: AppServerToolRequestUserInputQuestion[];
+  };
+};
+
+export type AppServerMcpElicitationAction = "accept" | "decline" | "cancel";
+
+export type AppServerMcpElicitationSchema = {
+  type: "object";
+  properties?: Record<string, unknown>;
+  required?: string[];
+  [key: string]: unknown;
+};
+
+export type AppServerMcpElicitationResponse = {
+  action: AppServerMcpElicitationAction;
+  content: Record<string, unknown> | null;
+  _meta: Record<string, unknown> | null;
+};
+
+export type AppServerMcpElicitationRequestNotification = {
+  method: "mcpServer/elicitation/request";
+  params: AppServerPendingRequestNotification["params"] & {
+    turnId: string | null;
+    serverName: string;
+    mode: "form" | "url";
+    _meta: Record<string, unknown> | null;
+    message: string;
+    requestedSchema?: AppServerMcpElicitationSchema;
+    url?: string;
+    elicitationId?: string;
   };
 };
 
@@ -567,6 +596,7 @@ export type AppServerNotification =
       params: AppServerPendingRequestNotification["params"];
     }
   | AppServerToolRequestUserInputNotification
+  | AppServerMcpElicitationRequestNotification
   | {
       method: "thread/status/changed";
       params: {
@@ -636,6 +666,35 @@ export type AppServerNotification =
         turnId?: string;
         itemId: string;
         delta: string;
+      };
+    }
+  | {
+      method: "item/mcpToolCall/progress";
+      params: {
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        message: string;
+      };
+    }
+  | {
+      method: "mcpServer/startupStatus/updated";
+      params: {
+        name?: string;
+        serverName?: string;
+        status?: "starting" | "ready" | "failed" | "cancelled";
+        error?: string | null;
+        [key: string]: unknown;
+      };
+    }
+  | {
+      method: "mcpServer/oauthLogin/completed";
+      params: {
+        name?: string;
+        serverName?: string;
+        success?: boolean;
+        error?: string;
+        [key: string]: unknown;
       };
     }
   | {

@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerNotification, AppServerPendingRequestNotification } from "@pwragnt/shared";
+import type { PendingMcpInteractionState } from "../mcp-elicitation";
 import type { PendingQuestionnaireState } from "../questionnaire";
 import { ThreadView } from "../ThreadView";
 
@@ -1261,6 +1262,256 @@ describe("ThreadView", () => {
     );
   });
 
+  it("renders MCP tool-call item and progress activity", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Browser task",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: true,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Use Playwright."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-1",
+            item: {
+              id: "call-mcp-browser-tabs",
+              type: "mcpToolCall",
+              server: "playwright",
+              tool: "browser_tabs",
+              status: "in_progress",
+              arguments: { action: "list" },
+              result: null,
+              error: null,
+            },
+          },
+        } as AppServerNotification,
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/mcpToolCall/progress",
+          params: {
+            threadId: "thread-2",
+            turnId: "turn-1",
+            itemId: "call-mcp-browser-tabs",
+            message: "Listing browser tabs",
+          },
+        },
+      });
+    });
+
+    expect(screen.getAllByText("MCP Listing browser tabs").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: /MCP Listing browser tabs/ }));
+    expect(screen.getAllByText("MCP Listing browser tabs").length).toBeGreaterThan(0);
+  });
+
+  it("renders global MCP startup and OAuth status for the selected backend", async () => {
+    const selectedThread = {
+      id: "thread-2",
+      title: "Browser task",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false
+      }
+    };
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: true,
+              approvalRequests: false,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Use Playwright."
+          }
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "grok",
+        notification: {
+          method: "mcpServer/startupStatus/updated",
+          params: {
+            name: "ignored",
+            status: "ready",
+            error: null,
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "mcpServer/startupStatus/updated",
+          params: {
+            name: "playwright",
+            status: "starting",
+            error: null,
+          },
+        },
+      });
+    });
+
+    expect(screen.getByText("MCP playwright starting")).toBeInTheDocument();
+    expect(screen.queryByText("MCP ignored ready")).not.toBeInTheDocument();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "mcpServer/oauthLogin/completed",
+          params: {
+            name: "playwright",
+            success: true,
+          },
+        },
+      });
+    });
+
+    expect(screen.getByText("MCP playwright login completed")).toBeInTheDocument();
+  });
+
   it("renders live Codex command execution activity without falling back to tool", async () => {
     const selectedThread = {
       id: "thread-2",
@@ -2449,6 +2700,227 @@ describe("ThreadView", () => {
       ).not.toBeInTheDocument();
     });
     expect(clearPendingRequest).toHaveBeenCalledWith("input-request-1", "Thinking");
+  });
+
+  it("submits pending MCP interactions through the server request bridge", async () => {
+    let currentPendingMcpInteraction: PendingMcpInteractionState | undefined = {
+      method: "mcpServer/elicitation/request",
+      threadId: "thread-2",
+      turnId: "turn-1",
+      requestId: "mcp-request-1",
+      serverName: "playwright",
+      message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+      mode: "form",
+      _meta: {
+        tool_description: "List, create, close, or select a browser tab.",
+      },
+      form: {
+        empty: true,
+        fields: [],
+      },
+      url: null,
+    };
+    let currentPendingStatus = "Waiting for MCP approval";
+    const submitServerRequest = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-2",
+      turnId: "turn-1",
+      requestId: "mcp-request-1",
+    }));
+    const clearPendingRequest = vi.fn((_requestId: string, nextStatus?: string) => {
+      currentPendingMcpInteraction = undefined;
+      currentPendingStatus = nextStatus ?? "";
+      rerenderThreadView();
+    });
+    const updatePendingMcpInteraction = vi.fn(
+      (
+        _requestId: string,
+        updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
+      ) => {
+        if (currentPendingMcpInteraction) {
+          currentPendingMcpInteraction = updater(currentPendingMcpInteraction);
+          rerenderThreadView();
+        }
+      }
+    );
+
+    const { rerender } = render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: true,
+              multiDirectoryThreads: true
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          }
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-2",
+            turnId: "turn-1",
+          }),
+          submitServerRequest,
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        pendingMcpInteraction={currentPendingMcpInteraction}
+        pendingStatusText={currentPendingStatus}
+        selectedThread={{
+          id: "thread-2",
+          title: "Plan the app-server protocol",
+          titleSource: "explicit",
+          source: "codex",
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false
+          }
+        }}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Use the browser"
+          }
+        ]}
+        clearPendingRequest={clearPendingRequest}
+        onLoadOlder={async () => undefined}
+        onUpdatePendingMcpInteraction={updatePendingMcpInteraction}
+        removeOptimisticMessage={(_id) => undefined}
+      />
+    );
+
+    const rerenderThreadView = () => {
+      rerender(
+        <ThreadView
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+              capabilities: {
+                listThreads: true,
+                createThread: false,
+                resumeThread: true,
+                renameThread: false,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: false,
+                steerTurn: false,
+                transcriptPagination: true,
+                toolUse: false,
+                approvalRequests: true,
+                multiDirectoryThreads: true
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+              ],
+            }
+          ]}
+          composerDisabled={false}
+          desktopApi={{
+            startTurn: async () => ({
+              backend: "codex",
+              threadId: "thread-2",
+              turnId: "turn-1",
+            }),
+            submitServerRequest,
+          }}
+          loading={false}
+          loadingMore={false}
+          messageCount={1}
+          pendingMcpInteraction={currentPendingMcpInteraction}
+          pendingStatusText={currentPendingStatus}
+          selectedThread={{
+            id: "thread-2",
+            title: "Plan the app-server protocol",
+            titleSource: "explicit",
+            source: "codex",
+            updatedAt: Date.now(),
+            linkedDirectories: [],
+            inbox: {
+              inInbox: false
+            }
+          }}
+          skills={[]}
+          transcriptEntries={[
+            {
+              type: "message",
+              id: "message-1",
+              role: "user",
+              text: "Use the browser"
+            }
+          ]}
+          clearPendingRequest={clearPendingRequest}
+          onLoadOlder={async () => undefined}
+          onUpdatePendingMcpInteraction={updatePendingMcpInteraction}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    };
+
+    expect(
+      screen.getByRole("group", { name: "Pending MCP interaction" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+
+    await waitFor(() => {
+      expect(submitServerRequest).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-2",
+        turnId: "turn-1",
+        requestId: "mcp-request-1",
+        response: {
+          action: "accept",
+          content: {},
+          _meta: null,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("group", { name: "Pending MCP interaction" })
+      ).not.toBeInTheDocument();
+    });
+    expect(clearPendingRequest).toHaveBeenCalledWith("mcp-request-1", "Thinking");
   });
 
   it("clears a stale approval card when assistant output resumes", async () => {

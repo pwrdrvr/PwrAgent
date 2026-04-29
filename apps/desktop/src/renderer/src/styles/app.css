@@ -1840,7 +1840,8 @@ textarea {
   background: var(--bg-row-active);
 }
 
-.transcript-questionnaire {
+.transcript-questionnaire,
+.transcript-mcp {
   width: min(100%, 760px);
   display: flex;
   flex-direction: column;
@@ -1887,6 +1888,8 @@ textarea {
 .transcript-request__actions,
 .transcript-questionnaire__header,
 .transcript-questionnaire__actions,
+.transcript-mcp__header,
+.transcript-mcp__actions,
 .context-mode-switch {
   display: flex;
   align-items: center;
@@ -1895,12 +1898,14 @@ textarea {
 
 .transcript-request__header,
 .transcript-questionnaire__header,
+.transcript-mcp__header,
 .context-mode-switch {
   flex-wrap: wrap;
 }
 
 .transcript-request__header,
-.transcript-questionnaire__header {
+.transcript-questionnaire__header,
+.transcript-mcp__header {
   justify-content: space-between;
 }
 
@@ -1913,25 +1918,140 @@ textarea {
 }
 
 .transcript-request__actions,
-.transcript-questionnaire__actions {
+.transcript-questionnaire__actions,
+.transcript-mcp__actions {
   justify-content: flex-start;
 }
 
-.transcript-questionnaire__prompt {
+.transcript-questionnaire__prompt,
+.transcript-mcp__prompt {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.transcript-questionnaire__prompt .eyebrow {
+.transcript-questionnaire__prompt .eyebrow,
+.transcript-mcp__prompt .eyebrow {
   margin: 0;
 }
 
-.transcript-questionnaire__prompt h3 {
+.transcript-questionnaire__prompt h3,
+.transcript-mcp__prompt h3 {
   margin: 0;
   color: var(--text-primary);
   font-size: 16px;
   line-height: 1.35;
+}
+
+.transcript-mcp__params {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.transcript-mcp__params div {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.3fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.transcript-mcp__params dt {
+  color: var(--text-muted);
+  font-weight: 650;
+}
+
+.transcript-mcp__params dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+}
+
+.transcript-mcp__url {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.transcript-mcp__url span {
+  min-width: 0;
+  flex: 1 1 220px;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.transcript-mcp__fields {
+  display: grid;
+  gap: 10px;
+}
+
+.transcript-mcp__field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.transcript-mcp__field-label,
+.transcript-mcp__toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.transcript-mcp__field-label span:last-child,
+.transcript-mcp__toggle span:last-child {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.transcript-mcp__field input,
+.transcript-mcp__field select {
+  min-height: 36px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font: inherit;
+  padding: 8px 10px;
+}
+
+.transcript-mcp__field input:focus,
+.transcript-mcp__field select:focus {
+  border-color: var(--accent-border);
+  outline: none;
+}
+
+.transcript-mcp__toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.transcript-mcp__field-help {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.transcript-mcp__options {
+  display: grid;
+  gap: 8px;
 }
 
 .transcript-questionnaire__options {

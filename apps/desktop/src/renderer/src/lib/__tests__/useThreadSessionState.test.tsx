@@ -1611,6 +1611,288 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingStatusText).toBe("Thinking");
   });
 
+  it("surfaces MCP elicitations as pending MCP interactions instead of approval", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "mcpServer/elicitation/request",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              requestId: "mcp-request-1",
+              serverName: "playwright",
+              mode: "form",
+              _meta: {
+                tool_description: "List, create, close, or select a browser tab.",
+              },
+              message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+              requestedSchema: {
+                type: "object",
+                properties: {},
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.pendingStatusText).toBe("Waiting for MCP approval");
+    expect(result.current.pendingRequest).toBeUndefined();
+    expect(result.current.pendingUserInput).toBeUndefined();
+    expect(result.current.pendingMcpInteraction).toMatchObject({
+      method: "mcpServer/elicitation/request",
+      requestId: "mcp-request-1",
+      serverName: "playwright",
+      mode: "form",
+      form: {
+        empty: true,
+        fields: [],
+      },
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "serverRequest/resolved",
+            params: {
+              threadId: "thread-1",
+              requestId: "mcp-request-1",
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.pendingMcpInteraction).toBeUndefined();
+    expect(result.current.pendingStatusText).toBe("Thinking");
+  });
+
+  it("clears pending MCP interactions when the turn is cancelled", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "mcpServer/elicitation/request",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              requestId: "mcp-request-cancelled",
+              serverName: "playwright",
+              mode: "form",
+              _meta: null,
+              message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+              requestedSchema: {
+                type: "object",
+                properties: {},
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.pendingMcpInteraction?.requestId).toBe(
+      "mcp-request-cancelled"
+    );
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/cancelled",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "cancelled",
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.pendingMcpInteraction).toBeUndefined();
+    expect(result.current.pendingRequest).toBeUndefined();
+    expect(result.current.pendingUserInput).toBeUndefined();
+    expect(result.current.pendingStatusText).toBeUndefined();
+  });
+
+  it("updates and clears pending MCP interactions", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "mcpServer/elicitation/request",
+            params: {
+              threadId: "thread-1",
+              turnId: null,
+              requestId: "mcp-request-2",
+              serverName: "github",
+              mode: "form",
+              _meta: null,
+              message: "Provide a repository.",
+              requestedSchema: {
+                type: "object",
+                required: ["repo"],
+                properties: {
+                  repo: {
+                    type: "string",
+                    title: "Repository",
+                  },
+                },
+              },
+            },
+          },
+        });
+      }
+    });
+
+    act(() => {
+      result.current.updatePendingMcpInteraction("mcp-request-2", (state) => ({
+        ...state,
+        form: state.form
+          ? {
+              ...state.form,
+              fields: state.form.fields.map((field) =>
+                field.key === "repo" && field.kind === "string"
+                  ? { ...field, value: "pwrdrvr/PwrAgnt" }
+                  : field
+              ),
+            }
+          : state.form,
+      }));
+    });
+
+    expect(result.current.pendingMcpInteraction?.form?.fields[0]).toMatchObject({
+      key: "repo",
+      value: "pwrdrvr/PwrAgnt",
+    });
+
+    act(() => {
+      result.current.clearPendingRequest("mcp-request-2", "Thinking");
+    });
+
+    expect(result.current.pendingMcpInteraction).toBeUndefined();
+    expect(result.current.pendingStatusText).toBe("Thinking");
+  });
+
   it("rereads a partially hydrated transcript after turn completion when only the user message is present", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
