@@ -52,6 +52,10 @@ export class ReplayClient {
     target: AppServerReviewTarget;
     delivery?: AppServerReviewDelivery;
   };
+  private lastRenameThreadParams?: {
+    threadId: string;
+    name: string;
+  };
 
   constructor(private readonly controller: ReplayController) {}
 
@@ -172,6 +176,15 @@ export class ReplayClient {
     };
   }
 
+  async renameThread(params: {
+    threadId: string;
+    name: string;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+    this.lastRenameThreadParams = params;
+    return { threadId: params.threadId };
+  }
+
   async advance(params: {
     stepId?: string;
     override?: ReplayStepOverride;
@@ -218,6 +231,15 @@ export class ReplayClient {
       }
     | undefined {
     return this.lastStartReviewParams;
+  }
+
+  getLastRenameThreadParams():
+    | {
+        threadId: string;
+        name: string;
+      }
+    | undefined {
+    return this.lastRenameThreadParams;
   }
 
   async respondToPendingRequest(requestId: string): Promise<void> {

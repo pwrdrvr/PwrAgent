@@ -3,6 +3,7 @@ import { buildThreadIdentityKey } from "@pwragnt/shared";
 import { ThreadRow } from "./ThreadRow";
 
 type RecentsListProps = {
+  approvalRequestThreadKeys?: Record<string, boolean>;
   selectedThreadKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -19,6 +20,7 @@ export function RecentsList(props: RecentsListProps) {
       {props.threads.map((thread) => (
         <ThreadRow
           key={buildThreadIdentityKey(thread.source, thread.id)}
+          approvalRequestThreadKeys={props.approvalRequestThreadKeys}
           includeLinkedDirectories
           selectedThreadKey={props.selectedThreadKey}
           thinkingThreadKeys={props.thinkingThreadKeys}

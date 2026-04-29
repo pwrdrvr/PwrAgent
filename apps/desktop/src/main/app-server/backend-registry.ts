@@ -85,6 +85,7 @@ type InitializeResult = {
 };
 
 const isDevelopment = process.env.NODE_ENV !== "production";
+const REPLAY_THREAD_TITLE_ENV = "PWRAGNT_REPLAY_THREAD_TITLE";
 const backendRegistryLog = getMainLogger("pwragnt:backend-registry");
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
@@ -600,6 +601,20 @@ function buildTitleEligibilityLogDetails(
   };
 }
 
+function createReplayThreadTitleService(): ThreadTitleService | undefined {
+  const title = process.env[REPLAY_THREAD_TITLE_ENV]?.trim();
+  if (!title) {
+    return undefined;
+  }
+
+  return {
+    generateTitle: async () => ({
+      status: "generated",
+      title,
+    }),
+  };
+}
+
 function getDefaultModelOption(
   backend: AppServerBackendKind,
   options?: BackendLaunchpadOptions,
@@ -769,7 +784,7 @@ export class DesktopBackendRegistry {
         ? undefined
         : options?.threadTitleGenerationService ??
           (replayClients
-            ? undefined
+            ? createReplayThreadTitleService()
             : new ThreadTitleGenerationService({
                 generators: {
                   codex: this.codexDefaultClient.generateTitle
@@ -1929,7 +1944,7 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: params.threadId,
       });
-      if (!latestThread || !isEligibleForGeneratedTitle(latestThread, params.prompt)) {
+      if (latestThread && !isEligibleForGeneratedTitle(latestThread, params.prompt)) {
         this.logThreadTitleGeneration(
           "skipped",
           params,

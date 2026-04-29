@@ -1527,6 +1527,9 @@ describe("useThreadSessionState", () => {
     });
 
     expect(result.current.pendingStatusText).toBe("Waiting for approval");
+    expect(result.current.approvalRequestThreadKeys).toEqual({
+      "codex:thread-1": true,
+    });
     expect(result.current.pendingRequest).toMatchObject({
       method: "item/commandExecution/requestApproval",
       params: {

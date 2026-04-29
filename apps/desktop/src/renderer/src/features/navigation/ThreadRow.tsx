@@ -4,6 +4,7 @@ import { ThreadMetaChips } from "./ThreadMetaChips";
 import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
 
 type ThreadRowProps = {
+  approvalRequestThreadKeys?: Record<string, boolean>;
   compact?: boolean;
   includeLinkedDirectories?: boolean;
   selectedThreadKey?: string;
@@ -17,9 +18,9 @@ type ThreadRowProps = {
 };
 
 export function ThreadRow(props: ThreadRowProps) {
+  const threadKey = buildThreadIdentityKey(props.thread.source, props.thread.id);
   const selected =
-    buildThreadIdentityKey(props.thread.source, props.thread.id) ===
-    props.selectedThreadKey;
+    threadKey === props.selectedThreadKey;
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
 
   return (
@@ -53,6 +54,7 @@ export function ThreadRow(props: ThreadRowProps) {
         </span>
 
         <ThreadMetaChips
+          hasApprovalRequest={props.approvalRequestThreadKeys?.[threadKey] === true}
           includeLinkedDirectories={props.includeLinkedDirectories}
           thread={props.thread}
         />

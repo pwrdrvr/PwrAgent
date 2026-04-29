@@ -701,6 +701,13 @@ textarea {
   font-weight: 600;
 }
 
+.thread-row__chip--approval {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 .path-copy-target {
   position: relative;
 }

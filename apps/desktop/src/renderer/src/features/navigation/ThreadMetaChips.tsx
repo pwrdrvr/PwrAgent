@@ -4,11 +4,13 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 
 type ThreadMetaChipsProps = {
+  hasApprovalRequest?: boolean;
   includeLinkedDirectories?: boolean;
   thread: NavigationThreadSummary;
 };
 
 export function ThreadMetaChips({
+  hasApprovalRequest = false,
   includeLinkedDirectories = false,
   thread,
 }: ThreadMetaChipsProps) {
@@ -89,6 +91,19 @@ export function ThreadMetaChips({
       <span className="thread-row__chip thread-row__chip--backend">
         {formatBackendLabel(thread.source)}
       </span>
+
+      {hasApprovalRequest ? (
+        <span
+          aria-label="Waiting for approval"
+          className="thread-row__chip thread-row__chip--approval"
+          title="Waiting for approval"
+        >
+          <span aria-hidden="true" className="thread-row__chip-icon">
+            !
+          </span>
+          Waiting for approval
+        </span>
+      ) : null}
 
       {linkedDirectoryChips}
 
