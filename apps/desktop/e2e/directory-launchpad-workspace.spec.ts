@@ -3,10 +3,19 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+
+async function selectComposerOption(params: {
+  option: string | RegExp;
+  select: Locator;
+  window: Page;
+}) {
+  await params.select.click();
+  await params.window.getByRole("option", { name: params.option }).click();
+}
 
 async function createDirectoryLaunchpadFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -286,13 +295,14 @@ test("directory launchpad can switch from local checkout to a new worktree", asy
     const workspaceMode = settings.getByLabel("Workspace mode");
 
     await expect(workspaceMode).toBeEnabled();
-    await expect(workspaceMode).toHaveValue("local");
-    await expect(workspaceMode.getByRole("option", { name: "New worktree" })).toHaveCount(1);
+    await expect(workspaceMode).toHaveAttribute("data-value", "local");
+    await workspaceMode.click();
+    await expect(app.window.getByRole("option", { name: "New worktree" })).toHaveCount(1);
 
-    await workspaceMode.selectOption("worktree");
+    await app.window.getByRole("option", { name: "New worktree" }).click();
 
-    await expect(workspaceMode).toHaveValue("worktree");
-    await expect(settings.getByLabel("Base branch")).toHaveValue("main");
+    await expect(workspaceMode).toHaveAttribute("data-value", "worktree");
+    await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -314,8 +324,12 @@ test("directory launchpad keeps new worktree as the sticky default after startin
     const settings = app.window.getByLabel("New thread settings");
     const workspaceMode = settings.getByLabel("Workspace mode");
 
-    await workspaceMode.selectOption("worktree");
-    await expect(workspaceMode).toHaveValue("worktree");
+    await selectComposerOption({
+      select: workspaceMode,
+      window: app.window,
+      option: "New worktree",
+    });
+    await expect(workspaceMode).toHaveAttribute("data-value", "worktree");
 
     await app.window
       .getByRole("textbox", { name: "New thread" })
@@ -336,8 +350,8 @@ test("directory launchpad keeps new worktree as the sticky default after startin
       app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
     ).toBeVisible();
 
-    await expect(settings.getByLabel("Workspace mode")).toHaveValue("worktree");
-    await expect(settings.getByLabel("Base branch")).toHaveValue("main");
+    await expect(settings.getByLabel("Workspace mode")).toHaveAttribute("data-value", "worktree");
+    await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -357,7 +371,7 @@ test("directory launchpad applies new worktree sticky defaults to stale empty dr
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
     const settings = app.window.getByLabel("New thread settings");
-    await expect(settings.getByLabel("Workspace mode")).toHaveValue("local");
+    await expect(settings.getByLabel("Workspace mode")).toHaveAttribute("data-value", "local");
 
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for OtherRepo" })
@@ -366,9 +380,10 @@ test("directory launchpad applies new worktree sticky defaults to stale empty dr
       app.window.getByRole("heading", { level: 2, name: "OtherRepo" }),
     ).toBeVisible();
     const otherWorkspaceMode = settings.getByLabel("Workspace mode");
-    await expect(otherWorkspaceMode.getByRole("option", { name: "New worktree" })).toHaveCount(1);
-    await otherWorkspaceMode.selectOption("worktree");
-    await expect(otherWorkspaceMode).toHaveValue("worktree");
+    await otherWorkspaceMode.click();
+    await expect(app.window.getByRole("option", { name: "New worktree" })).toHaveCount(1);
+    await app.window.getByRole("option", { name: "New worktree" }).click();
+    await expect(otherWorkspaceMode).toHaveAttribute("data-value", "worktree");
 
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
@@ -377,8 +392,8 @@ test("directory launchpad applies new worktree sticky defaults to stale empty dr
       app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
     ).toBeVisible();
 
-    await expect(settings.getByLabel("Workspace mode")).toHaveValue("worktree");
-    await expect(settings.getByLabel("Base branch")).toHaveValue("main");
+    await expect(settings.getByLabel("Workspace mode")).toHaveAttribute("data-value", "worktree");
+    await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
   } finally {
     await app.close();
     await fixture.cleanup();

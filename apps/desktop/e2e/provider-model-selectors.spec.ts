@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { AppServerBackendKind, NavigationLaunchpadDefaults } from "@pwragnt/shared";
 import { launchElectronApp } from "./fixtures/electron-app";
 
@@ -9,6 +9,15 @@ async function assertTangerineFocusRing(locator: Locator) {
   await locator.focus();
   await expect(locator).toHaveCSS("outline-color", "rgb(255, 138, 31)");
   await expect(locator).toHaveCSS("outline-style", "solid");
+}
+
+async function selectComposerOption(params: {
+  option: string | RegExp;
+  select: Locator;
+  window: Page;
+}) {
+  await params.select.click();
+  await params.window.getByRole("option", { name: params.option }).click();
 }
 
 async function createProviderSelectorFixture(params: {
@@ -105,9 +114,9 @@ test("OpenAI new-thread selector uses concrete model and reasoning defaults", as
     const providerSelect = settings.getByLabel("Provider");
     const modelSelect = settings.getByLabel("Model");
     const reasoningSelect = settings.getByLabel("Reasoning");
-    await expect(providerSelect).toHaveValue("codex");
-    await expect(modelSelect).toHaveValue("gpt-5.5");
-    await expect(reasoningSelect).toHaveValue("medium");
+    await expect(providerSelect).toHaveAttribute("data-value", "codex");
+    await expect(modelSelect).toHaveAttribute("data-value", "gpt-5.5");
+    await expect(reasoningSelect).toHaveAttribute("data-value", "medium");
     await expect(settings.getByRole("option", { name: /^Default$/ })).toHaveCount(0);
     await assertTangerineFocusRing(providerSelect);
     await assertTangerineFocusRing(modelSelect);
@@ -140,17 +149,25 @@ test("Grok new-thread selector hides reasoning for Grok 4.20 models", async () =
     const settings = app.window.getByLabel("New thread settings");
     const providerSelect = settings.getByLabel("Provider");
     const modelSelect = settings.getByLabel("Model");
-    await expect(providerSelect).toHaveValue("grok");
-    await expect(modelSelect).toHaveValue("grok-4.20-reasoning");
+    await expect(providerSelect).toHaveAttribute("data-value", "grok");
+    await expect(modelSelect).toHaveAttribute("data-value", "grok-4.20-reasoning");
     await expect(settings.getByLabel("Reasoning")).toHaveCount(0);
     await expect(settings.getByRole("option", { name: /^Default$/ })).toHaveCount(0);
     await assertTangerineFocusRing(providerSelect);
     await assertTangerineFocusRing(modelSelect);
 
-    await modelSelect.selectOption("grok-4.20-non-reasoning");
+    await selectComposerOption({
+      select: modelSelect,
+      window: app.window,
+      option: "Grok 4.20 Non-Reasoning",
+    });
     await expect(settings.getByLabel("Reasoning")).toHaveCount(0);
 
-    await modelSelect.selectOption("grok-4.20-reasoning");
+    await selectComposerOption({
+      select: modelSelect,
+      window: app.window,
+      option: "Grok 4.20 Reasoning",
+    });
     await expect(settings.getByLabel("Reasoning")).toHaveCount(0);
   } finally {
     await app.close();
