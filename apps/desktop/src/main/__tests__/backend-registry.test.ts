@@ -121,10 +121,12 @@ function createOverlayStoreMock(params?: {
       backend,
       threadId,
       directory,
+      gitBranch,
     }: {
       backend: "codex" | "grok";
       threadId: string;
       directory: ThreadOverlayState["extraLinkedDirectories"][number];
+      gitBranch?: string;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -135,6 +137,8 @@ function createOverlayStoreMock(params?: {
       };
       const next = {
         ...current,
+        gitBranch: gitBranch ?? current.gitBranch,
+        observedGitBranch: gitBranch ?? current.observedGitBranch,
         extraLinkedDirectories: [directory],
       } as ThreadOverlayState;
       overlays.set(key, next);
@@ -213,6 +217,14 @@ class MockBackendClient {
     threadId: string;
     name: string;
   };
+  lastUpdateThreadMetadataParams?: {
+    threadId: string;
+    gitInfo?: {
+      branch?: string | null;
+      originUrl?: string | null;
+      sha?: string | null;
+    } | null;
+  };
   lastSetThreadPermissionsParams?: {
     threadId: string;
     cwd?: string;
@@ -289,6 +301,18 @@ class MockBackendClient {
 
   async renameThread(params: { threadId: string; name: string }): Promise<{ threadId: string }> {
     this.lastRenameThreadParams = params;
+    return { threadId: params.threadId };
+  }
+
+  async updateThreadMetadata(params: {
+    threadId: string;
+    gitInfo?: {
+      branch?: string | null;
+      originUrl?: string | null;
+      sha?: string | null;
+    } | null;
+  }): Promise<{ threadId: string }> {
+    this.lastUpdateThreadMetadataParams = params;
     return { threadId: params.threadId };
   }
 
@@ -1593,11 +1617,12 @@ describe("DesktopBackendRegistry", () => {
       warnings: [],
       completedAt: 1000,
     }));
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [thread],
+    });
     const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/list"] },
-        threads: [thread],
-      }),
+      codexClient,
       codexFullAccessClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
         threads: [],
@@ -1628,9 +1653,17 @@ describe("DesktopBackendRegistry", () => {
       sourceBranch: undefined,
     });
     expect(response.workMode).toBe("worktree");
+    expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
+      threadId: "thread-1",
+      gitInfo: {
+        branch: "feature/handoff",
+      },
+    });
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
     ).resolves.toMatchObject({
+      gitBranch: "feature/handoff",
+      observedGitBranch: "feature/handoff",
       extraLinkedDirectories: [
         expect.objectContaining({
           id: "pwragnt-handoff:codex:thread-1",

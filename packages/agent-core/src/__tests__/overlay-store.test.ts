@@ -126,6 +126,7 @@ describe("OverlayStore", () => {
     await store.replaceWorkspaceLinkedDirectory({
       backend: "codex",
       threadId: "thread-1",
+      gitBranch: "feature/handoff",
       directory: {
         id: "pwragnt-handoff:codex:thread-1",
         kind: "worktree",
@@ -138,6 +139,8 @@ describe("OverlayStore", () => {
     await expect(
       store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
     ).resolves.toMatchObject({
+      gitBranch: "feature/handoff",
+      observedGitBranch: "feature/handoff",
       extraLinkedDirectories: [
         {
           id: "/other",

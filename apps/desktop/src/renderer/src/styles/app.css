@@ -3324,10 +3324,12 @@ textarea {
 
 .workspace-handoff__menu button:disabled {
   color: var(--text-muted);
+  opacity: 1;
 }
 
 .workspace-handoff__current:disabled {
   color: var(--text-primary);
+  font-weight: 600;
 }
 
 .workspace-handoff__separator {

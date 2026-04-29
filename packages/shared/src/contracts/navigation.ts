@@ -137,6 +137,8 @@ export type ThreadOverlayState = {
   reasoningEffort?: string;
   serviceTier?: string;
   fastMode?: boolean;
+  gitBranch?: string;
+  observedGitBranch?: string;
   lastSeenAt?: number;
   lastSeenUpdatedAt?: number;
   dismissedAt?: number;

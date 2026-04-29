@@ -3993,6 +3993,33 @@ export class CodexAppServerClient {
     };
   }
 
+  async updateThreadMetadata(params: {
+    threadId: string;
+    gitInfo?: {
+      branch?: string | null;
+      originUrl?: string | null;
+      sha?: string | null;
+    } | null;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/metadata/update"],
+      payloads: [
+        {
+          threadId: params.threadId,
+          gitInfo: params.gitInfo,
+        },
+      ],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+    };
+  }
+
   async interruptTurn(params: {
     threadId: string;
     turnId: string;

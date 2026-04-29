@@ -59,6 +59,8 @@ export function materializeNavigationThreads(params: {
 
     return {
       ...thread,
+      gitBranch: overlay?.gitBranch ?? thread.gitBranch,
+      observedGitBranch: overlay?.observedGitBranch ?? thread.observedGitBranch,
       executionMode: overlay?.executionMode ?? thread.executionMode ?? "default",
       model: overlay?.model ?? thread.model,
       reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,

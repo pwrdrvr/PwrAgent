@@ -264,6 +264,14 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
               typeof threadRecord.fastMode === "boolean"
                 ? threadRecord.fastMode
                 : undefined,
+            gitBranch:
+              typeof threadRecord.gitBranch === "string"
+                ? threadRecord.gitBranch
+                : undefined,
+            observedGitBranch:
+              typeof threadRecord.observedGitBranch === "string"
+                ? threadRecord.observedGitBranch
+                : undefined,
             lastSeenAt:
               typeof threadRecord.lastSeenAt === "number"
                 ? threadRecord.lastSeenAt

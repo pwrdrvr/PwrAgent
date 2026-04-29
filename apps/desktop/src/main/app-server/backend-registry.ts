@@ -106,6 +106,14 @@ type BackendClient = {
   archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   restoreThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   renameThread?(params: { threadId: string; name: string }): Promise<{ threadId: string }>;
+  updateThreadMetadata?(params: {
+    threadId: string;
+    gitInfo?: {
+      branch?: string | null;
+      originUrl?: string | null;
+      sha?: string | null;
+    } | null;
+  }): Promise<{ threadId: string }>;
   generateTitle?: ThreadTitleGenerator["generateTitle"];
   listSkills(params?: {
     cwd?: string;
@@ -1018,6 +1026,12 @@ export class DesktopBackendRegistry {
       backend: request.backend,
       threadId: request.threadId,
       directory: result.linkedDirectory,
+      gitBranch: result.branch,
+    });
+    await this.updateThreadGitBranchMetadata({
+      backend: request.backend,
+      threadId: request.threadId,
+      branch: result.branch,
     });
 
     if (result.archivedSourceWorktree) {
@@ -1968,6 +1982,46 @@ export class DesktopBackendRegistry {
     }
 
     return await client.renameThread({ threadId, name });
+  }
+
+  private async updateThreadGitBranchMetadata(params: {
+    backend: AppServerBackendKind;
+    branch?: string;
+    threadId: string;
+  }): Promise<void> {
+    const branch = params.branch?.trim();
+    if (!branch) {
+      return;
+    }
+
+    const updateWithClient = async (client: BackendClient): Promise<void> => {
+      if (!client.updateThreadMetadata) {
+        return;
+      }
+
+      await client.updateThreadMetadata({
+        threadId: params.threadId,
+        gitInfo: {
+          branch,
+        },
+      });
+    };
+
+    try {
+      if (params.backend === "codex") {
+        await this.withCodexThreadClient(params.threadId, async (client) => {
+          await updateWithClient(client);
+        });
+      } else {
+        await updateWithClient(this.grokClient);
+      }
+    } catch (error) {
+      backendRegistryLog.warn("thread git metadata update failed after handoff", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+      });
+    }
   }
 
   private scheduleThreadTitleGeneration(params: {
