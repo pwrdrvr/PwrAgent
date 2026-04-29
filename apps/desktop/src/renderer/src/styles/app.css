@@ -3327,19 +3327,23 @@ textarea {
 
 .context-window-moon {
   display: inline-flex;
+  min-height: 34px;
   min-width: 0;
   align-items: center;
-  gap: 6px;
+  align-self: center;
+  gap: 7px;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 34px;
+  margin-right: 4px;
 }
 
 .context-window-moon__sprite {
   display: inline-flex;
-  width: 18px;
-  height: 18px;
+  width: 26px;
+  height: 26px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
@@ -3348,8 +3352,8 @@ textarea {
 .context-window-moon__disc {
   position: relative;
   display: block;
-  width: 14px;
-  height: 14px;
+  width: 22px;
+  height: 22px;
   overflow: hidden;
   border: 1px solid rgba(255, 179, 92, 0.44);
   border-radius: 50%;
@@ -3360,8 +3364,8 @@ textarea {
     radial-gradient(circle at 72% 30%, rgba(255, 205, 128, 0.36) 0 6%, transparent 14%),
     radial-gradient(circle at 38% 34%, var(--accent-bright) 0%, var(--accent-strong) 42%, var(--accent) 100%);
   box-shadow:
-    0 0 8px rgba(255, 138, 31, 0.28),
-    inset 0 0 3px rgba(255, 243, 220, 0.26);
+    0 0 10px rgba(255, 138, 31, 0.3),
+    inset 0 0 4px rgba(255, 243, 220, 0.26);
 }
 
 .context-window-moon__disc::before {
