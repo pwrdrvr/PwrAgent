@@ -291,7 +291,7 @@ async function pasteDelayedImage(page: import("@playwright/test").Page): Promise
   });
 }
 
-test("clears a pasted composer image after switching away from a newly created thread", async () => {
+test("keeps a pasted composer image after switching away from a newly created thread", async () => {
   const fixture = await createComposerImageThreadSwitchFixture();
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
 
@@ -346,8 +346,8 @@ test("clears a pasted composer image after switching away from a newly created t
     ).toBeVisible();
 
     await app.window.waitForTimeout(700);
-    await expect(app.window.getByLabel("Pasted images")).toHaveCount(0);
-    await expect(app.window.getByAltText("switch-race.png")).toHaveCount(0);
+    await expect(app.window.getByLabel("Pasted images")).toHaveCount(1);
+    await expect(app.window.getByAltText("switch-race.png")).toBeVisible();
   } finally {
     await app.close();
     await fixture.cleanup();

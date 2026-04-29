@@ -116,6 +116,11 @@ type ReviewConfigState = {
   target?: ReviewTargetChoice;
 };
 
+type ComposerDraftState = {
+  draft: string;
+  imageAttachments: ComposerImageAttachment[];
+};
+
 const DEFAULT_REASONING_EFFORT = "medium";
 
 const SLASH_COMMANDS: SlashCommandSuggestion[] = [
@@ -305,6 +310,8 @@ export function Composer(props: ComposerProps) {
     : props.thread
       ? `thread:${props.thread.source}:${props.thread.id}`
       : "empty";
+  const activeComposerScopeKeyRef = useRef(composerScopeKey);
+  const scopedThreadDraftsRef = useRef(new Map<string, ComposerDraftState>());
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -328,6 +335,28 @@ export function Composer(props: ComposerProps) {
   );
 
   const selectionStart = inputRef.current?.selectionStart ?? draft.length;
+  const isThreadComposerScope = (scopeKey: string): boolean =>
+    scopeKey.startsWith("thread:");
+  const saveThreadComposerDraft = (
+    scopeKey: string,
+    state: ComposerDraftState,
+  ): void => {
+    if (!isThreadComposerScope(scopeKey)) {
+      return;
+    }
+
+    if (!state.draft.trim() && state.imageAttachments.length === 0) {
+      scopedThreadDraftsRef.current.delete(scopeKey);
+      return;
+    }
+
+    scopedThreadDraftsRef.current.set(scopeKey, state);
+  };
+  const clearThreadComposerDraft = (scopeKey: string): void => {
+    if (isThreadComposerScope(scopeKey)) {
+      scopedThreadDraftsRef.current.delete(scopeKey);
+    }
+  };
   const updateActiveTurnId = (nextTurnId?: string): void => {
     activeTurnIdRef.current = nextTurnId;
     setActiveTurnId(nextTurnId);
@@ -398,15 +427,33 @@ export function Composer(props: ComposerProps) {
   const isBareReviewCommand = draft.trim() === "/review";
 
   useEffect(() => {
-    const current = pasteScopeRef.current;
-    if (current.key === composerScopeKey) {
+    const previousScopeKey = activeComposerScopeKeyRef.current;
+    if (previousScopeKey === composerScopeKey) {
       return;
     }
 
+    saveThreadComposerDraft(previousScopeKey, {
+      draft,
+      imageAttachments,
+    });
+
+    activeComposerScopeKeyRef.current = composerScopeKey;
+    const current = pasteScopeRef.current;
     pasteScopeRef.current = {
       key: composerScopeKey,
       version: current.version + 1,
     };
+
+    if (props.thread) {
+      const saved = scopedThreadDraftsRef.current.get(composerScopeKey);
+      setDraft(saved?.draft ?? "");
+      setImageAttachments(saved?.imageAttachments ?? []);
+    }
+    setSending(false);
+    setInterrupting(false);
+    updateActiveTurnId(undefined);
+    setActiveOptimisticMessageId(undefined);
+    setReviewConfig(undefined);
   }, [composerScopeKey]);
 
   useEffect(() => {
@@ -460,14 +507,8 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    setDraft("");
-    setSending(false);
-    setInterrupting(false);
-    updateActiveTurnId(undefined);
-    setActiveOptimisticMessageId(undefined);
-    setReviewConfig(undefined);
-    setImageAttachments([]);
-  }, [props.thread?.id, props.thread?.source]);
+    activeComposerScopeKeyRef.current = composerScopeKey;
+  }, [composerScopeKey, props.thread]);
 
   useEffect(() => {
     updateActiveTurnId(props.activeTurnId);
@@ -638,6 +679,7 @@ export function Composer(props: ComposerProps) {
       });
       updateActiveTurnId(response.turnId);
       props.onActiveTurnIdChange?.(response.turnId);
+      clearThreadComposerDraft(composerScopeKey);
       setDraft("");
       setReviewConfig(undefined);
     } catch (error) {
@@ -747,6 +789,7 @@ export function Composer(props: ComposerProps) {
       });
       updateActiveTurnId(response.turnId);
       props.onActiveTurnIdChange?.(response.turnId);
+      clearThreadComposerDraft(composerScopeKey);
       setDraft("");
       setImageAttachments([]);
       if (collaborationMode) {
@@ -852,6 +895,10 @@ export function Composer(props: ComposerProps) {
   const removeImageAttachment = (id: string): void => {
     setImageAttachments((current) => {
       const nextAttachments = current.filter((attachment) => attachment.id !== id);
+      saveThreadComposerDraft(composerScopeKey, {
+        draft,
+        imageAttachments: nextAttachments,
+      });
       persistLaunchpadImageAttachments(nextAttachments);
       return nextAttachments;
     });
@@ -921,23 +968,29 @@ export function Composer(props: ComposerProps) {
         })
       );
 
-      if (
-        pasteScopeRef.current.key !== pasteScope.key ||
-        pasteScopeRef.current.version !== pasteScope.version
-      ) {
+      if (activeComposerScopeKeyRef.current !== pasteScope.key) {
+        const saved = scopedThreadDraftsRef.current.get(pasteScope.key) ?? {
+          draft: "",
+          imageAttachments: [],
+        };
+        saveThreadComposerDraft(pasteScope.key, {
+          draft: saved.draft,
+          imageAttachments: [...saved.imageAttachments, ...nextAttachments],
+        });
         return;
       }
 
       setImageAttachments((current) => {
         const mergedAttachments = [...current, ...nextAttachments];
+        saveThreadComposerDraft(pasteScope.key, {
+          draft,
+          imageAttachments: mergedAttachments,
+        });
         persistLaunchpadImageAttachments(mergedAttachments);
         return mergedAttachments;
       });
     } catch (error) {
-      if (
-        pasteScopeRef.current.key !== pasteScope.key ||
-        pasteScopeRef.current.version !== pasteScope.version
-      ) {
+      if (activeComposerScopeKeyRef.current !== pasteScope.key) {
         return;
       }
 
