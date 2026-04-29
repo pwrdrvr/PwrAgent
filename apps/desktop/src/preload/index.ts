@@ -28,6 +28,8 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   GetNavigationSnapshotRequest,
+  HandoffThreadWorkspaceRequest,
+  HandoffThreadWorkspaceResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   NavigationSnapshot,
@@ -71,6 +73,7 @@ import {
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
+  APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
   APP_SERVER_RESTORE_THREAD_CHANNEL,
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
@@ -154,6 +157,10 @@ const desktopApi = Object.freeze({
     request: RestoreWorktreeRequest,
   ): Promise<RestoreWorktreeResponse> =>
     await ipcRenderer.invoke(APP_SERVER_RESTORE_WORKTREE_CHANNEL, request),
+  handoffThreadWorkspace: async (
+    request: HandoffThreadWorkspaceRequest,
+  ): Promise<HandoffThreadWorkspaceResponse> =>
+    await ipcRenderer.invoke(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL, request),
   renameThread: async (
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> =>

@@ -22,6 +22,8 @@ import type {
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   GetNavigationSnapshotRequest,
+  HandoffThreadWorkspaceRequest,
+  HandoffThreadWorkspaceResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
   ListBackendsRequest,
@@ -82,6 +84,9 @@ export type DesktopApi = {
   restoreWorktree?: (
     request: RestoreWorktreeRequest
   ) => Promise<RestoreWorktreeResponse>;
+  handoffThreadWorkspace?: (
+    request: HandoffThreadWorkspaceRequest
+  ) => Promise<HandoffThreadWorkspaceResponse>;
   renameThread?: (
     request: RenameThreadRequest
   ) => Promise<RenameThreadResponse>;

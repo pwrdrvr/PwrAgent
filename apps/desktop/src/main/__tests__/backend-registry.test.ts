@@ -117,6 +117,29 @@ function createOverlayStoreMock(params?: {
     resetDirectoryLaunchpad: async ({ directoryKey }: { directoryKey: string }) => {
       launchpads.delete(directoryKey);
     },
+    replaceWorkspaceLinkedDirectory: async ({
+      backend,
+      threadId,
+      directory,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      directory: ThreadOverlayState["extraLinkedDirectories"][number];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        extraLinkedDirectories: [directory],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     upsertWorktreeSnapshot: async ({
       backend,
       threadId,
@@ -1528,6 +1551,91 @@ describe("DesktopBackendRegistry", () => {
           removedWorktree: true,
           deletedBranch: false,
         },
+      ],
+    });
+
+    await registry.close();
+  });
+
+  it("hands off a local thread to a worktree and records the new workspace overlay", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Move me",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "local",
+        },
+      ],
+      source: "codex",
+      gitBranch: "feature/handoff",
+      updatedAt: 2,
+    };
+    const overlayStore = createOverlayStoreMock();
+    const handoff = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      direction: "local-to-worktree" as const,
+      workMode: "worktree" as const,
+      branch: "feature/handoff",
+      repositoryPath: "/repo/app",
+      targetPath: "/repo/app/.worktrees/app-feature-handoff",
+      linkedDirectory: {
+        id: "pwragnt-handoff:codex:thread-1",
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/repo/app/.worktrees/app-feature-handoff",
+        kind: "worktree" as const,
+      },
+      warnings: [],
+      completedAt: 1000,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [thread],
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      gitWorkspaceHandoffService: {
+        handoff,
+      } as never,
+    });
+
+    const response = await registry.handoffThreadWorkspace({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      leaveLocalBranch: "main",
+    });
+
+    expect(handoff).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      leaveLocalBranch: "main",
+      repositoryPath: "/repo/app",
+      sourcePath: "/repo/app",
+      sourceBranch: "feature/handoff",
+    });
+    expect(response.workMode).toBe("worktree");
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      extraLinkedDirectories: [
+        expect.objectContaining({
+          id: "pwragnt-handoff:codex:thread-1",
+          kind: "worktree",
+        }),
       ],
     });
 

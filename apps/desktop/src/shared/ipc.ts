@@ -5,6 +5,8 @@ export const APP_SERVER_ARCHIVE_THREAD_CHANNEL = "app-server:archive-thread";
 export const APP_SERVER_RESTORE_THREAD_CHANNEL = "app-server:restore-thread";
 export const APP_SERVER_ARCHIVE_WORKTREE_CHANNEL = "app-server:archive-worktree";
 export const APP_SERVER_RESTORE_WORKTREE_CHANNEL = "app-server:restore-worktree";
+export const APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL =
+  "app-server:handoff-thread-workspace";
 export const APP_SERVER_RENAME_THREAD_CHANNEL = "app-server:rename-thread";
 export const FOCUSED_DIFF_ANALYZE_CHANNEL = "focused-diff:analyze";
 export const BACKEND_LIST_CHANNEL = "backend:list";

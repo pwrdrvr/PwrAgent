@@ -23,6 +23,8 @@ import {
   type BackendModelOption,
   type BackendRateLimitSummary,
   type BackendSummary,
+  type HandoffThreadWorkspaceRequest,
+  type HandoffThreadWorkspaceResponse,
   type ListBackendsRequest,
   type ListBackendsResponse,
   type MaterializeDirectoryLaunchpadRequest,
@@ -64,6 +66,7 @@ import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createReplayClientsFromEnv } from "../testing/replay-runtime";
 import { GitDirectoryService } from "./git-directory-service";
+import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 import {
   createCompositeJsonRpcObserver,
@@ -672,6 +675,7 @@ export class DesktopBackendRegistry {
   private readonly grokClient: BackendClient;
   private readonly overlayStore: OverlayStore;
   private readonly gitDirectoryService: GitDirectoryService;
+  private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly threadTitleGenerationService?: ThreadTitleService;
@@ -699,6 +703,7 @@ export class DesktopBackendRegistry {
     grokClient?: BackendClient;
     overlayStore?: OverlayStore;
     gitDirectoryService?: GitDirectoryService;
+    gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
     worktreeArchiveService?: WorktreeArchiveService;
     createScratchProjectDirectory?: () => Promise<string>;
     threadTitleGenerationService?: ThreadTitleService | null;
@@ -779,6 +784,11 @@ export class DesktopBackendRegistry {
     this.gitDirectoryService = options?.gitDirectoryService ?? new GitDirectoryService();
     this.worktreeArchiveService =
       options?.worktreeArchiveService ?? new WorktreeArchiveService();
+    this.gitWorkspaceHandoffService =
+      options?.gitWorkspaceHandoffService ??
+      new GitWorkspaceHandoffService({
+        worktreeArchiveService: this.worktreeArchiveService,
+      });
     this.createScratchProjectDirectory =
       options?.createScratchProjectDirectory ?? createScratchProjectDirectory;
     this.threadTitleGenerationService =
@@ -987,6 +997,38 @@ export class DesktopBackendRegistry {
       restoredAt: restoredSnapshot.restoredAt ?? Date.now(),
       snapshot: restoredSnapshot,
     };
+  }
+
+  async handoffThreadWorkspace(
+    request: HandoffThreadWorkspaceRequest,
+  ): Promise<HandoffThreadWorkspaceResponse> {
+    const thread = await this.findThreadForWorkspaceHandoff({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
+    const candidate = this.resolveHandoffWorkspaceCandidate(thread, request);
+    const result = await this.gitWorkspaceHandoffService.handoff({
+      ...request,
+      repositoryPath: request.repositoryPath ?? candidate.repositoryPath,
+      sourcePath: request.sourcePath ?? candidate.sourcePath,
+      sourceBranch: request.sourceBranch ?? candidate.sourceBranch,
+    });
+
+    await this.overlayStore.replaceWorkspaceLinkedDirectory({
+      backend: request.backend,
+      threadId: request.threadId,
+      directory: result.linkedDirectory,
+    });
+
+    if (result.archivedSourceWorktree) {
+      await this.overlayStore.upsertWorktreeSnapshot({
+        backend: request.backend,
+        threadId: request.threadId,
+        snapshot: result.archivedSourceWorktree,
+      });
+    }
+
+    return result;
   }
 
   async renameThread(
@@ -1784,6 +1826,63 @@ export class DesktopBackendRegistry {
     return [...activeThreads, ...archivedThreads].find(
       (thread) => thread.id === params.threadId,
     );
+  }
+
+  private async findThreadForWorkspaceHandoff(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<AppServerThreadSummary | undefined> {
+    return await this.listThreads({
+      backend: params.backend,
+      archived: false,
+    })
+      .then((threads) => threads.find((thread) => thread.id === params.threadId))
+      .catch(() => undefined);
+  }
+
+  private resolveHandoffWorkspaceCandidate(
+    thread: AppServerThreadSummary | undefined,
+    request: HandoffThreadWorkspaceRequest,
+  ): {
+    repositoryPath?: string;
+    sourceBranch?: string;
+    sourcePath?: string;
+  } {
+    if (request.repositoryPath && request.sourcePath) {
+      return {
+        repositoryPath: request.repositoryPath,
+        sourceBranch: request.sourceBranch,
+        sourcePath: request.sourcePath,
+      };
+    }
+
+    if (!thread) {
+      throw new Error("Thread workspace metadata is unavailable for handoff.");
+    }
+
+    const directory =
+      request.direction === "worktree-to-local"
+        ? thread.linkedDirectories.find((candidate) => candidate.kind === "worktree")
+        : thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
+          thread.linkedDirectories[0];
+    const sourcePath =
+      request.direction === "worktree-to-local"
+        ? directory?.worktreePath ?? directory?.path
+        : directory?.path ?? thread.projectKey;
+    const repositoryPath =
+      request.direction === "worktree-to-local"
+        ? directory?.path ?? request.repositoryPath
+        : directory?.path ?? thread.projectKey ?? request.repositoryPath;
+
+    if (!sourcePath || !repositoryPath) {
+      throw new Error("Thread does not have an eligible Git workspace for handoff.");
+    }
+
+    return {
+      repositoryPath,
+      sourceBranch: request.sourceBranch ?? thread.observedGitBranch ?? thread.gitBranch,
+      sourcePath,
+    };
   }
 
   private async archiveThreadWorktrees(params: {
