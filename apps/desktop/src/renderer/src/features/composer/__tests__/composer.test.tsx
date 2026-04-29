@@ -1014,8 +1014,9 @@ describe("Composer", () => {
     expect(textarea).toHaveValue("/review ");
   });
 
-  it("shows thread access in the composer and updates it from the select", async () => {
+  it("shows thread access in the composer and opens workspace handoff", async () => {
     const onSetExecutionMode = vi.fn(async () => undefined);
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
 
     render(
       <Composer
@@ -1063,6 +1064,20 @@ describe("Composer", () => {
           }),
         }}
         disabled={false}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "main",
+            branches: ["main", "release"],
+            syncState: "untracked",
+          },
+        }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
         onSetExecutionMode={onSetExecutionMode}
         skills={[]}
         thread={{
@@ -1086,8 +1101,24 @@ describe("Composer", () => {
     );
 
     expect(screen.getByLabelText("Access mode")).toHaveValue("default");
-    expect(screen.getByLabelText("Workspace mode")).toHaveValue("Local (main)");
-    expect(screen.getByLabelText("Workspace mode")).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /Local \(main\)/ }));
+    expect(screen.getByRole("separator")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByLabelText("Leave Local on")).toHaveValue("release");
+    fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "local-to-worktree",
+        repositoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        sourcePath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        sourceBranch: "main",
+        leaveLocalBranch: "release",
+        allowLocalDetach: undefined,
+      });
+    });
 
     fireEvent.change(screen.getByLabelText("Access mode"), {
       target: { value: "full-access" },
@@ -1177,6 +1208,52 @@ describe("Composer", () => {
         "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
         { workMode: "worktree" }
       );
+    });
+  });
+
+  it("shows handoff to local for existing worktree threads", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Worktree thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          gitBranch: "feature/handoff",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgnt",
+              path: "/repo",
+              worktreePath: "/repo/.worktrees/pwragnt-feature",
+              kind: "worktree",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Worktree/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+    expect(screen.getByRole("dialog", { name: "Handoff to Local" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "worktree-to-local",
+        repositoryPath: "/repo",
+        sourcePath: "/repo/.worktrees/pwragnt-feature",
+        sourceBranch: "feature/handoff",
+        leaveLocalBranch: undefined,
+        allowLocalDetach: undefined,
+      });
     });
   });
 

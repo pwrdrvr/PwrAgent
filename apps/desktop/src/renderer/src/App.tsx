@@ -124,6 +124,15 @@ export function App() {
           onActiveTurnIdChange={session.setActiveTurnId}
           onArchiveWorktree={navigation.archiveWorktree}
           onEnsureSkillsLoaded={skills.ensureLoaded}
+          onHandoffThreadWorkspace={
+            navigation.selectedThread
+              ? async (request) =>
+                  await navigation.handoffThreadWorkspace(
+                    navigation.selectedThread!,
+                    request
+                  )
+              : undefined
+          }
           onLoadOlder={session.loadOlder}
           onMaterializeLaunchpad={navigation.materializeDirectoryLaunchpad}
           onPendingStatusChange={session.setPendingStatusText}

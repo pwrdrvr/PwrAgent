@@ -3263,6 +3263,122 @@ textarea {
   max-width: 220px;
 }
 
+.workspace-handoff {
+  position: relative;
+}
+
+.workspace-handoff__button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+
+.workspace-handoff__button:hover,
+.workspace-handoff__button:focus-visible {
+  border-color: var(--accent-border);
+}
+
+.workspace-handoff__button:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.workspace-handoff__menu {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 220px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.workspace-handoff__menu button {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+.workspace-handoff__menu button:hover,
+.workspace-handoff__menu button:focus-visible {
+  background: var(--bg-panel-hover);
+}
+
+.workspace-handoff__menu button:disabled {
+  color: var(--text-muted);
+}
+
+.workspace-handoff__current:disabled {
+  color: var(--text-primary);
+}
+
+.workspace-handoff__separator {
+  height: 1px;
+  margin: 6px 2px;
+  background: var(--border-subtle);
+}
+
+.workspace-handoff-dialog {
+  width: min(460px, 100%);
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.workspace-handoff-dialog h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.workspace-handoff-dialog p {
+  margin: 10px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.workspace-handoff-dialog__field {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.workspace-handoff-dialog__note {
+  color: var(--text-muted);
+}
+
+.workspace-handoff-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
 .composer__checkbox {
   display: inline-flex;
   align-items: center;

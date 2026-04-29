@@ -13,6 +13,7 @@ import type {
   AppServerThreadImagePart,
   AppServerTurnInputItem,
   BackendSummary,
+  HandoffThreadWorkspaceRequest,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationLaunchpadImageAttachment,
@@ -86,6 +87,9 @@ type ComposerProps = {
   thread?: NavigationThreadSummary;
   updatingExecutionMode?: ThreadExecutionMode;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onHandoffThreadWorkspace?: (
+    request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
+  ) => Promise<void>;
   onSetThreadModelSettings?: (
     patch: Partial<
       Pick<
@@ -391,6 +395,12 @@ export function Composer(props: ComposerProps) {
   const scopedThreadDraftsRef = useRef(new Map<string, ComposerDraftState>());
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const [draft, setDraft] = useState("");
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const [handoffDialog, setHandoffDialog] = useState<
+    HandoffThreadWorkspaceRequest["direction"] | undefined
+  >();
+  const [leaveLocalBranch, setLeaveLocalBranch] = useState("");
+  const [handoffSubmitting, setHandoffSubmitting] = useState(false);
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
   const [steering, setSteering] = useState(false);
@@ -1427,6 +1437,58 @@ export function Composer(props: ComposerProps) {
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
+  const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
+  const sourceBranch =
+    props.thread?.observedGitBranch ??
+    props.thread?.gitBranch ??
+    props.directory?.gitStatus?.currentBranch;
+  const branchOptions = getLeaveLocalBranchOptions({
+    currentBranch: sourceBranch,
+    directory: props.directory,
+  });
+  const canHandoffThreadWorkspace = Boolean(
+    props.thread &&
+      threadWorkspace &&
+      props.onHandoffThreadWorkspace &&
+      !sending &&
+      !activeTurnId &&
+      !props.pendingRequestActive &&
+      !props.pendingUserInputActive &&
+      !handoffSubmitting
+  );
+
+  const openHandoffDialog = (
+    direction: HandoffThreadWorkspaceRequest["direction"]
+  ): void => {
+    setWorkspaceMenuOpen(false);
+    setHandoffDialog(direction);
+    if (direction === "local-to-worktree") {
+      setLeaveLocalBranch(branchOptions[0] ?? "");
+    }
+  };
+
+  const submitHandoff = async (): Promise<void> => {
+    if (!threadWorkspace || !props.onHandoffThreadWorkspace) {
+      return;
+    }
+
+    setHandoffSubmitting(true);
+    try {
+      await props.onHandoffThreadWorkspace({
+        direction: handoffDialog!,
+        repositoryPath: threadWorkspace.repositoryPath,
+        sourcePath: threadWorkspace.sourcePath,
+        sourceBranch,
+        leaveLocalBranch:
+          handoffDialog === "local-to-worktree" ? leaveLocalBranch || undefined : undefined,
+        allowLocalDetach:
+          handoffDialog === "local-to-worktree" && !leaveLocalBranch ? true : undefined,
+      });
+      setHandoffDialog(undefined);
+    } finally {
+      setHandoffSubmitting(false);
+    }
+  };
 
   return (
     <form
@@ -1960,16 +2022,44 @@ export function Composer(props: ComposerProps) {
                 </option>
               ))}
             </select>
-          ) : workspaceLabel ? (
-            <select
-              aria-label="Workspace mode"
-              className="composer__select composer__select--compact"
-              disabled
-              value={workspaceLabel}
-              onChange={() => undefined}
-            >
-              <option value={workspaceLabel}>{workspaceLabel}</option>
-            </select>
+          ) : workspaceLabel && threadWorkspace ? (
+            <div className="workspace-handoff">
+              <button
+                aria-expanded={workspaceMenuOpen}
+                aria-haspopup="menu"
+                className="workspace-handoff__button"
+                disabled={!props.onHandoffThreadWorkspace}
+                type="button"
+                onClick={() => setWorkspaceMenuOpen((open) => !open)}
+              >
+                {workspaceLabel}
+                <span aria-hidden="true">⌄</span>
+              </button>
+              {workspaceMenuOpen ? (
+                <div className="workspace-handoff__menu" role="menu">
+                  <button className="workspace-handoff__current" disabled type="button">
+                    {workspaceLabel}
+                  </button>
+                  <div className="workspace-handoff__separator" role="separator" />
+                  <button
+                    disabled={!canHandoffThreadWorkspace}
+                    role="menuitem"
+                    type="button"
+                    onClick={() =>
+                      openHandoffDialog(
+                        threadWorkspace.mode === "worktree"
+                          ? "worktree-to-local"
+                          : "local-to-worktree"
+                      )
+                    }
+                  >
+                    {threadWorkspace.mode === "worktree"
+                      ? "Handoff to Local"
+                      : "Handoff to New Worktree"}
+                  </button>
+                </div>
+              ) : null}
+            </div>
           ) : null}
 
           {props.launchpad &&
@@ -2121,6 +2211,71 @@ export function Composer(props: ComposerProps) {
               <span>Plan mode</span>
             </label>
           ) : null}
+        </div>
+      ) : null}
+
+      {handoffDialog && threadWorkspace ? (
+        <div
+          aria-label={
+            handoffDialog === "local-to-worktree"
+              ? "Handoff to New Worktree"
+              : "Handoff to Local"
+          }
+          className="workspace-handoff-dialog"
+          role="dialog"
+        >
+          <h2>
+            {handoffDialog === "local-to-worktree"
+              ? "Handoff to New Worktree"
+              : "Handoff to Local"}
+          </h2>
+          <p>
+            {handoffDialog === "local-to-worktree"
+              ? "Move this thread's current branch into a new worktree. Dirty tracked and non-ignored files will be stashed and applied in the new worktree."
+              : "Move this worktree branch back to Local. Dirty tracked and non-ignored files will be stashed and applied in Local, then the old worktree will be archived."}
+          </p>
+          {handoffDialog === "local-to-worktree" ? (
+            <label className="workspace-handoff-dialog__field">
+              Leave Local on
+              <select
+                aria-label="Leave Local on"
+                className="composer__select"
+                disabled={handoffSubmitting}
+                value={leaveLocalBranch}
+                onChange={(event) => setLeaveLocalBranch(event.target.value)}
+              >
+                {branchOptions.map((branch) => (
+                  <option key={branch} value={branch}>
+                    {branch}
+                  </option>
+                ))}
+                <option value="">Detached HEAD</option>
+              </select>
+            </label>
+          ) : null}
+          <p className="workspace-handoff-dialog__note">
+            Ignored files are not moved by handoff.
+          </p>
+          <div className="workspace-handoff-dialog__actions">
+            <button
+              className="button button--ghost"
+              disabled={handoffSubmitting}
+              type="button"
+              onClick={() => setHandoffDialog(undefined)}
+            >
+              Cancel
+            </button>
+            <button
+              className="button button--primary"
+              disabled={handoffSubmitting}
+              type="button"
+              onClick={() => {
+                void submitHandoff();
+              }}
+            >
+              {handoffSubmitting ? "Handing off…" : "Handoff"}
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -2492,4 +2647,61 @@ function formatThreadWorkspaceLabel(thread?: NavigationThreadSummary): string | 
   }
 
   return undefined;
+}
+
+type ThreadWorkspace = {
+  mode: "local" | "worktree";
+  repositoryPath: string;
+  sourcePath: string;
+};
+
+function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | undefined {
+  const worktreeDirectory = thread.linkedDirectories.find(
+    (directory) => directory.kind === "worktree"
+  );
+  if (worktreeDirectory) {
+    return {
+      mode: "worktree",
+      repositoryPath: worktreeDirectory.path,
+      sourcePath: worktreeDirectory.worktreePath ?? worktreeDirectory.path,
+    };
+  }
+
+  const localDirectory = thread.linkedDirectories.find(
+    (directory) => directory.kind === "local"
+  );
+  if (localDirectory) {
+    return {
+      mode: "local",
+      repositoryPath: localDirectory.path,
+      sourcePath: localDirectory.path,
+    };
+  }
+
+  if (thread.projectKey) {
+    return {
+      mode: "local",
+      repositoryPath: thread.projectKey,
+      sourcePath: thread.projectKey,
+    };
+  }
+
+  return undefined;
+}
+
+function getLeaveLocalBranchOptions(params: {
+  currentBranch?: string;
+  directory?: NavigationDirectorySummary;
+}): string[] {
+  const currentBranch = params.currentBranch?.trim();
+  const branches = params.directory?.gitStatus?.branches ?? [];
+  const candidates = branches.filter((branch) => branch && branch !== currentBranch);
+  const preferred = ["main", "master", "develop", "trunk"].find((branch) =>
+    candidates.includes(branch)
+  );
+  const ordered = preferred
+    ? [preferred, ...candidates.filter((branch) => branch !== preferred)]
+    : candidates;
+
+  return [...new Set(ordered)];
 }

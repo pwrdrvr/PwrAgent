@@ -17,6 +17,7 @@ import type {
   AppServerThreadReplayPagination,
   AppServerSkillSummary,
   BackendSummary,
+  HandoffThreadWorkspaceRequest,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
@@ -1130,6 +1131,9 @@ type ThreadViewProps = {
     updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
   ) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onHandoffThreadWorkspace?: (
+    request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
+  ) => Promise<void>;
   onSetThreadModelSettings?: (
     patch: Partial<
       Pick<
@@ -1929,6 +1933,7 @@ export function ThreadView(props: ThreadViewProps) {
             onActiveTurnIdChange={props.onActiveTurnIdChange}
             onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
             onPendingStatusChange={props.onPendingStatusChange}
+            onHandoffThreadWorkspace={props.onHandoffThreadWorkspace}
             onSetExecutionMode={props.onSetExecutionMode}
             onSetThreadModelSettings={props.onSetThreadModelSettings}
             pendingRequestActive={Boolean(props.pendingRequest)}
