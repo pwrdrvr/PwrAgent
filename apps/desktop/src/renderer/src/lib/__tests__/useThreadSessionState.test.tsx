@@ -1707,6 +1707,96 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingStatusText).toBe("Thinking");
   });
 
+  it("clears pending MCP interactions when the turn is cancelled", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "mcpServer/elicitation/request",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              requestId: "mcp-request-cancelled",
+              serverName: "playwright",
+              mode: "form",
+              _meta: null,
+              message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
+              requestedSchema: {
+                type: "object",
+                properties: {},
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.pendingMcpInteraction?.requestId).toBe(
+      "mcp-request-cancelled"
+    );
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/cancelled",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "cancelled",
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.pendingMcpInteraction).toBeUndefined();
+    expect(result.current.pendingRequest).toBeUndefined();
+    expect(result.current.pendingUserInput).toBeUndefined();
+    expect(result.current.pendingStatusText).toBeUndefined();
+  });
+
   it("updates and clears pending MCP interactions", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
