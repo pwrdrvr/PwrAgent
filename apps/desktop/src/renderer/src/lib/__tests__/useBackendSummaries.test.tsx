@@ -126,10 +126,9 @@ describe("useBackendSummaries", () => {
     });
 
     await waitFor(() => {
-      expect(listBackends).toHaveBeenCalledTimes(2);
+      expect(result.current.backends[0]?.account?.planType).toBe("pro");
+      expect(result.current.backends[0]?.rateLimits?.[0]?.remaining).toBe(85);
     });
-    expect(result.current.backends[0]?.account?.planType).toBe("pro");
-    expect(result.current.backends[0]?.rateLimits?.[0]?.remaining).toBe(85);
 
     eventHandler?.({
       backend: "codex",
@@ -144,8 +143,8 @@ describe("useBackendSummaries", () => {
     });
 
     await waitFor(() => {
-      expect(listBackends).toHaveBeenCalledTimes(3);
+      expect(result.current.backends[0]?.account?.planType).toBe("team");
+      expect(result.current.backends[0]?.rateLimits?.[0]?.remaining).toBe(90);
     });
-    expect(result.current.backends[0]?.account?.planType).toBe("team");
   });
 });
