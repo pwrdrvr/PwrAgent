@@ -124,6 +124,8 @@ desktop replay scenarios do not exercise Codex sidebar directory identity.
 - `turn-lifecycle/`: turn start, visible Stop button, and clean completion
 - `edited-changes-order/`: edited-file activity that must remain in transcript
   order when expanded
+- `transcript-command-output/`: captured `npm view dive` command output remains
+  inspectable inside collapsed transcript work after expansion
 - `codex-todo-list/`: selected Codex thread renders a persisted transcript task
   plan
 - `codex-directory-parity/`: Codex startup directory list matches Codex Desktop

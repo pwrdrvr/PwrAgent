@@ -2414,6 +2414,19 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.transcript-command__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.transcript-command__copy {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .transcript-command__block,
 .transcript-command__output pre {
   margin: 0;

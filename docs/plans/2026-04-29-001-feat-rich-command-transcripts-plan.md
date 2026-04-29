@@ -1,7 +1,7 @@
 ---
 title: feat: Add rich command output to transcripts
 type: feat
-status: active
+status: completed
 date: 2026-04-29
 origin: docs/brainstorms/2026-04-19-codex-desktop-protocol-parity-requirements.md
 ---
@@ -123,7 +123,7 @@ flowchart TB
     U5 --> U6["Unit 6: Parity hardening and edge cases"]
 ```
 
-- [ ] **Unit 1: Add a structured command-output activity contract**
+- [x] **Unit 1: Add a structured command-output activity contract**
 
 **Goal:** Extend the normalized transcript activity model so a command detail can carry command metadata and output without overloading the display label.
 
@@ -158,7 +158,7 @@ flowchart TB
 **Verification:**
 - The shared transcript contract can represent the `npm view dive` command, output, duration, and success state as data rather than label text.
 
-- [ ] **Unit 2: Normalize persisted command output from `thread/read` and rollout items**
+- [x] **Unit 2: Normalize persisted command output from `thread/read` and rollout items**
 
 **Goal:** Preserve command output when reading completed threads from app-server snapshots or rollout-style response items.
 
@@ -196,7 +196,7 @@ flowchart TB
 **Verification:**
 - Completed-thread replay entries contain rich command details for `npm view dive` without relying on the assistant's final summary text.
 
-- [ ] **Unit 3: Accumulate live command output from protocol notifications**
+- [x] **Unit 3: Accumulate live command output from protocol notifications**
 
 **Goal:** Merge live `item/started`, `item/commandExecution/outputDelta`, and `item/completed` notifications into one pending command detail that survives final read refreshes.
 
@@ -233,7 +233,7 @@ flowchart TB
 **Verification:**
 - The live target-thread sequence produces an inspectable `npm view dive` command block before the final assistant summary, and that block remains after the final read refresh.
 
-- [ ] **Unit 4: Render rich command details in the transcript UI**
+- [x] **Unit 4: Render rich command details in the transcript UI**
 
 **Goal:** Replace the one-line command detail with an inspectable command block inside activity details.
 
@@ -272,7 +272,7 @@ flowchart TB
 **Verification:**
 - The screenshot scenario no longer shows only `npm view dive (373ms)`; expanding the relevant activity reveals a shell-like command block with the captured `dive@0.5.0` output.
 
-- [ ] **Unit 5: Add replay-backed fixtures and E2E coverage for protocol and rollout parity**
+- [x] **Unit 5: Add replay-backed fixtures and E2E coverage for protocol and rollout parity**
 
 **Goal:** Make the target regression reproducible at the fixture and E2E layers.
 
@@ -310,7 +310,7 @@ flowchart TB
 **Verification:**
 - Replay-backed E2E fails on the current single-line behavior and passes only when command output is inspectable from both protocol and rollout restoration paths.
 
-- [ ] **Unit 6: Harden truncation, copying, and failure presentation**
+- [x] **Unit 6: Harden truncation, copying, and failure presentation**
 
 **Goal:** Round out command output inspection so it behaves well for real-world command output beyond the `npm view dive` case.
 

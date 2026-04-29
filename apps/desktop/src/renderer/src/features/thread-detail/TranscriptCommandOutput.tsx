@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { AppServerThreadActivityDetail } from "@pwragnt/shared";
+import { copyText } from "../../lib/copy-text";
 
 type TranscriptCommandOutputProps = {
   detail: AppServerThreadActivityDetail;
@@ -25,6 +26,28 @@ export function TranscriptCommandOutput(props: TranscriptCommandOutputProps) {
         <span className="transcript-command__source">Shell</span>
         {statusText ? (
           <span className="transcript-command__status">{statusText}</span>
+        ) : null}
+      </div>
+      <div className="transcript-command__actions">
+        <button
+          type="button"
+          className="button button--ghost transcript-command__copy"
+          onClick={() => {
+            void copyText(command.displayCommand);
+          }}
+        >
+          Copy command
+        </button>
+        {output ? (
+          <button
+            type="button"
+            className="button button--ghost transcript-command__copy"
+            onClick={() => {
+              void copyText(output);
+            }}
+          >
+            Copy output
+          </button>
         ) : null}
       </div>
       {command.cwd ? (

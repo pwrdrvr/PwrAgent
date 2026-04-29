@@ -1,9 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptCommandOutput } from "../TranscriptCommandOutput";
 
 describe("TranscriptCommandOutput", () => {
+  afterEach(() => {
+    delete (window as Window & { pwragnt?: unknown }).pwragnt;
+    vi.restoreAllMocks();
+  });
+
   it("renders command metadata and captured output", () => {
     render(
       <TranscriptCommandOutput
@@ -79,5 +84,36 @@ describe("TranscriptCommandOutput", () => {
 
     expect(screen.getByText("$ git status")).toBeInTheDocument();
     expect(screen.getByText("No output captured.")).toBeInTheDocument();
+  });
+
+  it("copies command text and full output", () => {
+    const copyText = vi.fn(async () => undefined);
+    Object.defineProperty(window, "pwragnt", {
+      configurable: true,
+      value: {
+        copyText,
+      },
+    });
+
+    render(
+      <TranscriptCommandOutput
+        detail={{
+          id: "cmd-1",
+          kind: "command",
+          label: "npm view dive",
+          status: "completed",
+          command: {
+            displayCommand: "npm view dive",
+            output: "line 1\nline 2",
+          },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy command" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy output" }));
+
+    expect(copyText).toHaveBeenNthCalledWith(1, "npm view dive");
+    expect(copyText).toHaveBeenNthCalledWith(2, "line 1\nline 2");
   });
 });
