@@ -148,7 +148,7 @@ flowchart TB
     U4 --> U5["Unit 5\nFocused E2E coverage"]
 ```
 
-- [ ] **Unit 1: Add shared handoff contracts and overlay mutation support**
+- [x] **Unit 1: Add shared handoff contracts and overlay mutation support**
 
 **Goal:** Define the handoff request/response shape and add overlay-store support for replacing a thread's active workspace metadata.
 
@@ -190,7 +190,7 @@ flowchart TB
 **Verification:**
 - Shared contracts describe handoff without reusing archive-thread cleanup fields, and navigation snapshots can reflect the new workspace from overlay data.
 
-- [ ] **Unit 2: Implement Git workspace handoff transactions**
+- [x] **Unit 2: Implement Git workspace handoff transactions**
 
 **Goal:** Add a focused main-process Git service that can safely move a thread branch between local and worktree checkouts while preserving source dirty state.
 
@@ -250,7 +250,7 @@ flowchart TB
 **Verification:**
 - Temporary-repo tests prove the service preserves source changes, respects Git branch occupancy, and only removes/archives a source worktree after successful branch movement.
 
-- [ ] **Unit 3: Wire handoff through backend registry, IPC, preload, and navigation refresh**
+- [x] **Unit 3: Wire handoff through backend registry, IPC, preload, and navigation refresh**
 
 **Goal:** Expose handoff as a desktop operation and update thread navigation state after successful Git movement.
 
@@ -294,7 +294,7 @@ flowchart TB
 **Verification:**
 - The operation is callable from renderer to main through typed preload contracts, and navigation refresh shows the moved thread in its new workspace mode.
 
-- [ ] **Unit 4: Replace the existing-thread workspace select with a handoff menu and dialogs**
+- [x] **Unit 4: Replace the existing-thread workspace select with a handoff menu and dialogs**
 
 **Goal:** Make workspace handoff visible and usable from the composer/control area for existing threads while preserving launchpad behavior.
 
