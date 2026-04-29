@@ -675,6 +675,8 @@ export class DesktopBackendRegistry {
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly threadTitleGenerationService?: ThreadTitleService;
+  private codexDefaultModels?: BackendModelOption[];
+  private codexDefaultModelsPromise?: Promise<BackendModelOption[]>;
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
@@ -795,6 +797,8 @@ export class DesktopBackendRegistry {
                     : undefined,
                 },
               }));
+
+    void this.readCodexDefaultModelsOnce().catch(() => undefined);
 
     this.subscribeClient("codex", this.codexDefaultClient);
     this.subscribeClient("codex", this.codexFullAccessClient);
@@ -1511,11 +1515,29 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private readCodexDefaultModelsOnce(): Promise<BackendModelOption[]> {
+    if (this.codexDefaultModels) {
+      return Promise.resolve(this.codexDefaultModels);
+    }
+
+    this.codexDefaultModelsPromise ??= readClientModels(this.codexDefaultClient)
+      .then((models) => {
+        this.codexDefaultModels = models;
+        return models;
+      })
+      .catch((error) => {
+        this.codexDefaultModelsPromise = undefined;
+        throw error;
+      });
+
+    return this.codexDefaultModelsPromise;
+  }
+
   private async getBackendLaunchpadOptions(
     backend: AppServerBackendKind,
   ): Promise<BackendLaunchpadOptions | undefined> {
     if (backend === "codex") {
-      const models = await readClientModels(this.codexDefaultClient).catch(() => []);
+      const models = await this.readCodexDefaultModelsOnce().catch(() => []);
       return buildLaunchpadOptions(backend, models);
     }
 
@@ -1588,7 +1610,7 @@ export class DesktopBackendRegistry {
     ] = await Promise.allSettled([
       this.codexDefaultClient.getInitializeResult(),
       this.codexFullAccessClient.getInitializeResult(),
-      readClientModels(this.codexDefaultClient),
+      this.readCodexDefaultModelsOnce(),
       readClientAccount(this.codexDefaultClient),
       readClientRateLimits(this.codexDefaultClient),
     ]);
