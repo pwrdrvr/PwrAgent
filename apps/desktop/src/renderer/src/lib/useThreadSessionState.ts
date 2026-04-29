@@ -38,25 +38,28 @@ export function getContextWindowMoonPhase(usedPercent: number): number {
   if (usedPercent < 10) {
     return 0;
   }
-  if (usedPercent < 20) {
+  if (usedPercent < 22.5) {
     return 1;
   }
   if (usedPercent < 35) {
     return 2;
   }
-  if (usedPercent < 50) {
+  if (usedPercent < 47.5) {
     return 3;
   }
-  if (usedPercent < 70) {
+  if (usedPercent < 60) {
     return 4;
   }
-  if (usedPercent < 90) {
+  if (usedPercent < 72.5) {
     return 5;
   }
-  if (usedPercent <= 100) {
+  if (usedPercent < 85) {
     return 6;
   }
-  return 7;
+  if (usedPercent < 97.5) {
+    return 7;
+  }
+  return 0;
 }
 
 export type ThreadViewportState = {

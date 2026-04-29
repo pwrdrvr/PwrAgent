@@ -34,18 +34,22 @@ describe("useThreadSessionState", () => {
     expect(getContextWindowMoonPhase(0)).toBe(0);
     expect(getContextWindowMoonPhase(9.99)).toBe(0);
     expect(getContextWindowMoonPhase(10)).toBe(1);
-    expect(getContextWindowMoonPhase(19.99)).toBe(1);
-    expect(getContextWindowMoonPhase(20)).toBe(2);
+    expect(getContextWindowMoonPhase(22.49)).toBe(1);
+    expect(getContextWindowMoonPhase(22.5)).toBe(2);
     expect(getContextWindowMoonPhase(34.99)).toBe(2);
     expect(getContextWindowMoonPhase(35)).toBe(3);
-    expect(getContextWindowMoonPhase(49.99)).toBe(3);
-    expect(getContextWindowMoonPhase(50)).toBe(4);
-    expect(getContextWindowMoonPhase(69.99)).toBe(4);
-    expect(getContextWindowMoonPhase(70)).toBe(5);
-    expect(getContextWindowMoonPhase(89.99)).toBe(5);
-    expect(getContextWindowMoonPhase(90)).toBe(6);
-    expect(getContextWindowMoonPhase(100)).toBe(6);
-    expect(getContextWindowMoonPhase(100.01)).toBe(7);
+    expect(getContextWindowMoonPhase(47.49)).toBe(3);
+    expect(getContextWindowMoonPhase(47.5)).toBe(4);
+    expect(getContextWindowMoonPhase(59.99)).toBe(4);
+    expect(getContextWindowMoonPhase(60)).toBe(5);
+    expect(getContextWindowMoonPhase(72.49)).toBe(5);
+    expect(getContextWindowMoonPhase(72.5)).toBe(6);
+    expect(getContextWindowMoonPhase(84.99)).toBe(6);
+    expect(getContextWindowMoonPhase(85)).toBe(7);
+    expect(getContextWindowMoonPhase(97.49)).toBe(7);
+    expect(getContextWindowMoonPhase(97.5)).toBe(0);
+    expect(getContextWindowMoonPhase(100)).toBe(0);
+    expect(getContextWindowMoonPhase(100.01)).toBe(0);
   });
 
   it("keeps the optimistic user message ahead of the completed assistant reply", async () => {
@@ -2353,7 +2357,7 @@ describe("useThreadSessionState", () => {
       inputTokens: undefined,
       modelContextWindow: 128_000,
       outputTokens: undefined,
-      phase: 5,
+      phase: 6,
       reasoningOutputTokens: undefined,
       remainingPercent: 25,
       remainingTokens: 32_000,
