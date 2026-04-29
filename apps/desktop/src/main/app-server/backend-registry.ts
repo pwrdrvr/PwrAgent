@@ -675,6 +675,7 @@ export class DesktopBackendRegistry {
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly threadTitleGenerationService?: ThreadTitleService;
+  private readonly codexDefaultModelsPromise: Promise<BackendModelOption[]>;
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
@@ -795,6 +796,8 @@ export class DesktopBackendRegistry {
                     : undefined,
                 },
               }));
+
+    this.codexDefaultModelsPromise = readClientModels(this.codexDefaultClient).catch(() => []);
 
     this.subscribeClient("codex", this.codexDefaultClient);
     this.subscribeClient("codex", this.codexFullAccessClient);
@@ -1515,7 +1518,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
   ): Promise<BackendLaunchpadOptions | undefined> {
     if (backend === "codex") {
-      const models = await readClientModels(this.codexDefaultClient).catch(() => []);
+      const models = await this.codexDefaultModelsPromise;
       return buildLaunchpadOptions(backend, models);
     }
 
@@ -1588,7 +1591,7 @@ export class DesktopBackendRegistry {
     ] = await Promise.allSettled([
       this.codexDefaultClient.getInitializeResult(),
       this.codexFullAccessClient.getInitializeResult(),
-      readClientModels(this.codexDefaultClient),
+      this.codexDefaultModelsPromise,
       readClientAccount(this.codexDefaultClient),
       readClientRateLimits(this.codexDefaultClient),
     ]);

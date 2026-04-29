@@ -552,6 +552,65 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("reads Codex models once from the default client and reuses them", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+      models: [
+        {
+          id: "gpt-5.4",
+          label: "GPT-5.4",
+          supportsReasoning: true,
+        },
+      ],
+    });
+    const codexFullAccessClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+      models: [
+        {
+          id: "gpt-full-access-only",
+          label: "Full Access Only",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/tmp/pwragnt-scratch",
+    });
+
+    const firstResponse = await registry.listBackends({ includeUnavailable: true });
+    const secondResponse = await registry.listBackends({ includeUnavailable: true });
+    await registry.startThread({ backend: "codex" });
+
+    expect(codexClient.listModelsCallCount).toBe(1);
+    expect(codexFullAccessClient.listModelsCallCount).toBe(0);
+    expect(firstResponse.backends[0]?.launchpadOptions?.models).toMatchObject([
+      {
+        id: "gpt-5.4",
+        label: "GPT-5.4",
+      },
+    ]);
+    expect(secondResponse.backends[0]?.launchpadOptions?.models).toMatchObject([
+      {
+        id: "gpt-5.4",
+        label: "GPT-5.4",
+      },
+    ]);
+    expect(codexClient.lastStartThreadParams?.model).toBe("gpt-5.4");
+
+    await registry.close();
+  });
+
   it("assumes Codex can create threads when initialize omits methods", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
