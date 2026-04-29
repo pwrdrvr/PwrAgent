@@ -1,0 +1,128 @@
+import "@testing-library/jest-dom/vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import type { BackendSummary, NavigationThreadSummary } from "@pwragnt/shared";
+import { ThreadContextPanel } from "../ThreadContextPanel";
+
+afterEach(() => {
+  cleanup();
+});
+
+const baseThread: NavigationThreadSummary = {
+  id: "thread-1",
+  title: "Thread",
+  titleSource: "explicit",
+  source: "codex",
+  linkedDirectories: [],
+  inbox: {
+    inInbox: false,
+  },
+};
+
+const baseBackend: BackendSummary = {
+  kind: "codex",
+  label: "OpenAI",
+  available: true,
+  account: {
+    type: "chatgpt",
+    email: "user@example.com",
+    planType: "pro",
+    requiresOpenaiAuth: false,
+  },
+  methods: ["thread/list", "thread/read"],
+  capabilities: {
+    listThreads: true,
+    createThread: true,
+    resumeThread: true,
+    renameThread: true,
+    readThread: true,
+    startTurn: true,
+    interruptTurn: true,
+    steerTurn: true,
+    transcriptPagination: true,
+    toolUse: true,
+    approvalRequests: true,
+    multiDirectoryThreads: true,
+  },
+  executionModes: [
+    {
+      mode: "default",
+      label: "Default",
+      available: true,
+      isDefault: true,
+    },
+  ],
+  rateLimits: [
+    {
+      name: "5h limit",
+      usedPercent: 7,
+      windowMinutes: 300,
+    },
+    {
+      name: "Weekly limit",
+      usedPercent: 12,
+      windowMinutes: 10_080,
+    },
+    {
+      name: "gpt-5.3-codex-spark 5h limit",
+      limitId: "gpt-5.3-codex-spark",
+      usedPercent: 0,
+      windowMinutes: 300,
+    },
+    {
+      name: "gpt-5.3-codex-spark Weekly limit",
+      limitId: "gpt-5.3-codex-spark",
+      usedPercent: 0,
+      windowMinutes: 10_080,
+    },
+  ],
+};
+
+describe("ThreadContextPanel", () => {
+  it("hides unused Spark rate limits on non-Spark threads", () => {
+    render(<ThreadContextPanel backends={[baseBackend]} pinned thread={baseThread} />);
+
+    expect(screen.getByText(/5h limit: 93% left/)).toBeInTheDocument();
+    expect(screen.getByText(/Weekly limit: 88% left/)).toBeInTheDocument();
+    expect(screen.queryByText(/Spark 5h limit/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Spark Weekly limit/)).not.toBeInTheDocument();
+  });
+
+  it("labels Spark rate limits when the current thread uses Spark", () => {
+    render(
+      <ThreadContextPanel
+        backends={[baseBackend]}
+        pinned
+        thread={{
+          ...baseThread,
+          model: "gpt-5.3-codex-spark",
+        }}
+      />
+    );
+
+    expect(screen.getByText(/Spark 5h limit: 100% left/)).toBeInTheDocument();
+    expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();
+  });
+
+  it("labels Spark rate limits when Spark has usage", () => {
+    render(
+      <ThreadContextPanel
+        backends={[
+          {
+            ...baseBackend,
+            rateLimits: baseBackend.rateLimits?.map((limit) =>
+              limit.limitId === "gpt-5.3-codex-spark" && limit.windowMinutes === 300
+                ? { ...limit, usedPercent: 2 }
+                : limit
+            ),
+          },
+        ]}
+        pinned
+        thread={baseThread}
+      />
+    );
+
+    expect(screen.getByText(/Spark 5h limit: 98% left/)).toBeInTheDocument();
+    expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();
+  });
+});
