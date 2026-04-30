@@ -1362,24 +1362,51 @@ textarea {
   bottom: 20px;
   z-index: 1;
   display: inline-flex;
-  width: 40px;
-  min-height: 40px;
+  width: 42px;
+  height: 42px;
+  min-height: 42px;
   align-items: center;
   justify-content: center;
   padding: 0;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  border-radius: 50%;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
   transform: translateX(-50%);
   border-color: var(--accent-border);
-  background: rgba(10, 10, 10, 0.96);
+  background: var(--accent);
+  color: var(--button-text);
+}
+
+.transcript-list__scroll-bottom:hover {
+  background: var(--accent-strong);
+  color: var(--button-text);
 }
 
 .transcript-list__scroll-bottom-icon {
-  display: inline-flex;
-  width: 12px;
-  height: 12px;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: rotate(45deg) translateY(-2px);
+  display: block;
+  position: relative;
+  width: 18px;
+  height: 18px;
+}
+
+.transcript-list__scroll-bottom-icon::before,
+.transcript-list__scroll-bottom-icon::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  width: 10px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.transcript-list__scroll-bottom-icon::before {
+  left: 1px;
+  transform: rotate(45deg);
+}
+
+.transcript-list__scroll-bottom-icon::after {
+  right: 1px;
+  transform: rotate(-45deg);
 }
 
 .transcript-message {
