@@ -608,19 +608,26 @@ test("directory launchpad skill chips stay text-sized and baseline aligned", asy
         (bottom, rect) => Math.max(bottom, rect.bottom),
         0,
       );
+      const surroundingTop = textRects.reduce(
+        (top, rect) => Math.min(top, rect.top),
+        Number.POSITIVE_INFINITY,
+      );
 
       return {
         chipHeight: chipRect.height,
         fontSize: textStyle.fontSize,
         labelBottom: labelRect.bottom,
         labelFontSize: labelStyle.fontSize,
+        labelTop: labelRect.top,
         surroundingBottom,
+        surroundingTop,
       };
     });
 
     expect(metrics.labelFontSize).toBe(metrics.fontSize);
+    expect(Math.abs(metrics.labelTop - metrics.surroundingTop)).toBeLessThanOrEqual(1);
     expect(Math.abs(metrics.labelBottom - metrics.surroundingBottom)).toBeLessThanOrEqual(
-      3,
+      1,
     );
     expect(metrics.chipHeight).toBeLessThanOrEqual(22);
   } finally {

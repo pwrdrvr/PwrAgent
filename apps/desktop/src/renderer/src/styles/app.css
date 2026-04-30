@@ -3688,7 +3688,7 @@ textarea {
   display: inline-flex;
   margin: 0 3px;
   line-height: inherit;
-  vertical-align: -0.1em;
+  vertical-align: 0.13em;
 }
 
 .composer-rich-input__token:first-child {
@@ -3700,7 +3700,7 @@ textarea {
   gap: 0.35em;
   padding: 0 0.5em;
   font-size: inherit;
-  line-height: 1;
+  line-height: normal;
 }
 
 .composer-rich-input .thread-row__chip-icon {
@@ -3710,7 +3710,7 @@ textarea {
 }
 
 .composer-rich-input .skill-chip__label {
-  line-height: 1;
+  line-height: normal;
 }
 
 .composer__mentioned-skills {
