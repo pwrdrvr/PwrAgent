@@ -1,0 +1,88 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "context-rail-linked-directory-tooltips",
+    "threadId": "thread-linked-directory-tooltips"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-linked-directory-tooltips",
+          "title": "Linked directory tooltip thread",
+          "titleSource": "explicit",
+          "summary": "Context rail linked directory tooltip regression",
+          "source": "codex",
+          "executionMode": "default",
+          "gitBranch": "feature/context-tooltips",
+          "linkedDirectories": [
+            {
+              "id": "worktree-dir",
+              "kind": "worktree",
+              "label": "PwrAgnt",
+              "path": "/repo/PwrAgnt",
+              "worktreePath": "/repo/PwrAgnt/.worktrees/feature-context-tooltips"
+            },
+            {
+              "id": "local-dir",
+              "kind": "local",
+              "label": "LocalCheckout",
+              "path": "/repo/PwrAgnt"
+            }
+          ],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000000000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "assistant",
+            "text": "The linked directory tooltip fixture is loaded."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "assistant",
+            "text": "The linked directory tooltip fixture is loaded."
+          }
+        ],
+        "lastAssistantMessage": "The linked directory tooltip fixture is loaded.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

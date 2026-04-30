@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BackendSummary, NavigationThreadSummary } from "@pwragnt/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
@@ -79,6 +79,52 @@ const baseBackend: BackendSummary = {
 };
 
 describe("ThreadContextPanel", () => {
+  it("shows path tooltips on linked directory labels and kind badges", () => {
+    render(
+      <ThreadContextPanel
+        backends={[baseBackend]}
+        pinned
+        thread={{
+          ...baseThread,
+          linkedDirectories: [
+            {
+              id: "worktree-dir",
+              kind: "worktree",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/github/PwrAgnt",
+              worktreePath:
+                "/Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-molpnvyk",
+            },
+            {
+              id: "local-dir",
+              kind: "local",
+              label: "LocalOnly",
+              path: "/Users/huntharo/github/PwrAgnt",
+            },
+          ],
+        }}
+      />
+    );
+
+    fireEvent.mouseEnter(screen.getByLabelText("Path for PwrAgnt"));
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "/Users/huntharo/github/PwrAgnt"
+    );
+
+    fireEvent.mouseLeave(screen.getByLabelText("Path for PwrAgnt"));
+    fireEvent.mouseEnter(screen.getByLabelText("Path for worktree PwrAgnt"));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("/Users/huntharo/github");
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "launchpad-pwragnt-main-molpnvyk"
+    );
+
+    fireEvent.mouseLeave(screen.getByLabelText("Path for worktree PwrAgnt"));
+    fireEvent.mouseEnter(screen.getByLabelText("Path for local LocalOnly"));
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "/Users/huntharo/github/PwrAgnt"
+    );
+  });
+
   it("hides unused Spark rate limits on non-Spark threads", () => {
     render(<ThreadContextPanel backends={[baseBackend]} pinned thread={baseThread} />);
 
