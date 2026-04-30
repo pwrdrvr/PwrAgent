@@ -344,7 +344,9 @@ export class DiscordAdapter implements DesktopMessagingAdapter {
   }
 
   private get gateway(): DiscordGatewayConnection {
-    this.defaultGateway ??= new DiscordGateway();
+    this.defaultGateway ??= new DiscordGateway({
+      botToken: this.options.config.botToken,
+    });
     return this.options.gateway ?? this.defaultGateway;
   }
 
