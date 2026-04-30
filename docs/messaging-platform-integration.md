@@ -12,6 +12,23 @@ Messaging is disabled unless a channel has both credentials and authorized actor
 IDs. Use stable platform user IDs, not usernames, display names, or guild
 nicknames.
 
+For local development, the preferred path is:
+
+- `pnpm dev:op`
+
+That command reads one 1Password item and maps fields onto the environment
+variables below before launching `pnpm dev`.
+
+Default 1Password item:
+
+- Vault: `Private`
+- Item: `PwrAgnt Messaging`
+
+Override those defaults when needed:
+
+- `PWRAGNT_OP_VAULT`
+- `PWRAGNT_OP_ITEM`
+
 Telegram:
 
 - `PWRAGNT_MESSAGING_TELEGRAM_BOT_TOKEN`
