@@ -1,6 +1,8 @@
 packages:
   - apps/*
   - packages/*
+  - packages/messaging/*
+  - packages/messaging/providers/*
 allowBuilds:
   b: true
   d: true

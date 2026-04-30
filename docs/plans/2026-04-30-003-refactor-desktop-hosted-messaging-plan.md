@@ -175,7 +175,7 @@ flowchart TB
     U7 --> U8["Unit 8: Package/docs/test cleanup"]
 ```
 
-- [ ] **Unit 1: Create the messaging interface package**
+- [x] **Unit 1: Create the messaging interface package**
 
 **Goal:** Define the generic provider contract in an isolated workspace package that desktop and provider packages can import without depending on `agent-core` or arbitrary desktop source.
 

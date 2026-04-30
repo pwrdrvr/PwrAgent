@@ -7,6 +7,7 @@ dist-electron/
 out/
 playwright-report/
 test-results/
+*.tsbuildinfo
 packages/agent-core/.env.local
 .env.local
 excalidraw.log
