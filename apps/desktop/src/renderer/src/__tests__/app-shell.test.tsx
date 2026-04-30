@@ -1389,6 +1389,9 @@ describe("App", () => {
         value: "hello new codex thread"
       }
     });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
 
     await waitFor(() => {
@@ -1675,6 +1678,9 @@ describe("App", () => {
       target: {
         value: "Name this thread something funny and spunky. Something about potatoes."
       }
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled();
     });
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
 
