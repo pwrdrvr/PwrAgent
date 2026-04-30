@@ -1543,6 +1543,19 @@ textarea {
   padding-right: 24px;
 }
 
+.thread-view__launchpad-composer {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-width: 0;
+  margin-top: auto;
+}
+
+.thread-view__launchpad-composer > .composer,
+.thread-view__launchpad-composer > .transcript-panel {
+  width: 100%;
+}
+
 .thread-header__title {
   font-size: 40px;
   font-weight: 700;

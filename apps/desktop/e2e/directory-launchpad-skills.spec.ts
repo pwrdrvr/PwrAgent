@@ -635,3 +635,51 @@ test("directory launchpad skill autocomplete stays inside a small window and scr
     await fixture.cleanup();
   }
 });
+
+test("directory launchpad parks the composer at the bottom for skill autocomplete space", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+    windowSize: {
+      width: 1000,
+      height: 820,
+    },
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const composerSlot = app.window.locator(".thread-view__launchpad-composer");
+    const richInput = app.window.getByTestId("composer-rich-input");
+    const [composerBox, viewport] = await Promise.all([
+      composerSlot.boundingBox(),
+      app.window.evaluate(() => ({
+        height: globalThis.innerHeight,
+        width: globalThis.innerWidth,
+      })),
+    ]);
+    if (!composerBox) {
+      throw new Error("Expected launchpad composer slot to be measurable");
+    }
+    expect(composerBox.y + composerBox.height).toBeGreaterThan(viewport.height - 80);
+
+    await richInput.fill("$");
+    const listbox = app.window.getByRole("listbox", { name: "Skills" });
+    await expect(listbox).toBeVisible();
+
+    const [listboxBox, richInputBox] = await Promise.all([
+      listbox.boundingBox(),
+      richInput.boundingBox(),
+    ]);
+    if (!listboxBox || !richInputBox) {
+      throw new Error("Expected autocomplete and composer input to be measurable");
+    }
+
+    expect(listboxBox.y).toBeGreaterThanOrEqual(0);
+    expect(listboxBox.x + listboxBox.width).toBeLessThanOrEqual(viewport.width);
+    expect(listboxBox.y + listboxBox.height).toBeLessThanOrEqual(richInputBox.y);
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
