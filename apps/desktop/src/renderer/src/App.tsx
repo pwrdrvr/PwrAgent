@@ -134,6 +134,7 @@ export function App() {
               : undefined
           }
           onLoadOlder={session.loadOlder}
+          onLiveTranscriptEntry={session.upsertLiveTranscriptEntry}
           onMaterializeLaunchpad={navigation.materializeDirectoryLaunchpad}
           onPendingStatusChange={session.setPendingStatusText}
           onRefreshNavigation={navigation.refresh}

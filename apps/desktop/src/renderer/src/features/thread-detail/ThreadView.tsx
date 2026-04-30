@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import type {
   AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification,
@@ -1116,6 +1116,7 @@ type ThreadViewProps = {
   onEnsureSkillsLoaded?: () => void | Promise<void>;
   onLoadOlder: () => Promise<void>;
   onRefreshNavigation?: () => Promise<void>;
+  onLiveTranscriptEntry?: (entry: AppServerThreadEntry) => void;
   onMaterializeLaunchpad?: (
     directoryKey: string,
     input?: AppServerTurnInputItem[],
@@ -1367,6 +1368,17 @@ export function ThreadView(props: ThreadViewProps) {
     };
   }, [props.desktopApi, selectedLaunchpad, selectedThreadKey]);
 
+  const publishLiveTranscriptEntry = useCallback(<T extends AppServerThreadEntry,>(entry: T): T => {
+    props.onLiveTranscriptEntry?.(entry);
+    return entry;
+  }, [props.onLiveTranscriptEntry]);
+
+  const liveNotificationTurnId = useCallback(
+    (notificationTurnId?: string): string | undefined =>
+      props.activeTurnId ?? notificationTurnId,
+    [props.activeTurnId]
+  );
+
   useEffect(() => {
     if (!pendingActivityEntry) {
       return;
@@ -1479,19 +1491,48 @@ export function ThreadView(props: ThreadViewProps) {
         const turn = buildCompletedLiveTurnMetadata({
           activeTurnStartedAt: props.activeTurnStartedAt,
           fallbackTurnId:
-            typeof event.notification.params.turnId === "string"
+            props.activeTurnId ??
+            (typeof event.notification.params.turnId === "string"
               ? event.notification.params.turnId
-              : props.activeTurnId,
+              : undefined),
           turn: completedTurnRecord,
         });
-        if (turn) {
+        const liveTurn =
+          turn && props.activeTurnId && turn.id !== props.activeTurnId
+            ? { ...turn, id: props.activeTurnId }
+            : turn;
+        if (liveTurn) {
           const completeEntryTurn = <T extends { turn?: AppServerThreadTurnMetadata }>(
             entry: T | undefined
-          ): T | undefined => (entry ? { ...entry, turn } : undefined);
-          setPendingActivityEntry((current) => completeEntryTurn(current));
-          setPendingToolActivityEntry((current) => completeEntryTurn(current));
-          setPendingProtocolActivityEntry((current) => completeEntryTurn(current));
-          setPendingPlanEntry((current) => completeEntryTurn(current));
+          ): T | undefined => (entry ? { ...entry, turn: liveTurn } : undefined);
+          setPendingActivityEntry((current) => {
+            const next = completeEntryTurn(current);
+            if (next) {
+              publishLiveTranscriptEntry(next);
+            }
+            return next;
+          });
+          setPendingToolActivityEntry((current) => {
+            const next = completeEntryTurn(current);
+            if (next) {
+              publishLiveTranscriptEntry(next);
+            }
+            return next;
+          });
+          setPendingProtocolActivityEntry((current) => {
+            const next = completeEntryTurn(current);
+            if (next) {
+              publishLiveTranscriptEntry(next);
+            }
+            return next;
+          });
+          setPendingPlanEntry((current) => {
+            const next = completeEntryTurn(current);
+            if (next) {
+              publishLiveTranscriptEntry(next);
+            }
+            return next;
+          });
         }
         return;
       }
@@ -1527,9 +1568,11 @@ export function ThreadView(props: ThreadViewProps) {
             }`,
             turn: buildLiveTurnMetadata({
               turnId:
-                typeof event.notification.params.turnId === "string"
-                  ? event.notification.params.turnId
-                  : props.activeTurnId,
+                liveNotificationTurnId(
+                  typeof event.notification.params.turnId === "string"
+                    ? event.notification.params.turnId
+                    : undefined
+                ),
               activeTurnStartedAt: props.activeTurnStartedAt,
             }),
           })
@@ -1543,9 +1586,11 @@ export function ThreadView(props: ThreadViewProps) {
         }
 
         const turnId =
-          typeof event.notification.params.turnId === "string"
-            ? event.notification.params.turnId
-            : props.activeTurnId ?? selectedThread.id;
+          liveNotificationTurnId(
+            typeof event.notification.params.turnId === "string"
+              ? event.notification.params.turnId
+              : undefined
+          ) ?? selectedThread.id;
         setPendingProtocolActivityEntry(
           buildFileChangeOutputEntry({
             delta: event.notification.params.delta,
@@ -1565,9 +1610,9 @@ export function ThreadView(props: ThreadViewProps) {
         const details = item ? buildLiveToolDetails(item) : [];
         if (details.length > 0) {
           const turnId =
-            typeof params.turnId === "string"
-              ? params.turnId
-              : props.activeTurnId ?? selectedThread.id;
+            liveNotificationTurnId(
+              typeof params.turnId === "string" ? params.turnId : undefined
+            ) ?? selectedThread.id;
           const turn = buildLiveTurnMetadata({
             turnId,
             activeTurnStartedAt: props.activeTurnStartedAt,
@@ -1595,9 +1640,9 @@ export function ThreadView(props: ThreadViewProps) {
         if (detail) {
           const params = event.notification.params as Record<string, unknown>;
           const turnId =
-            typeof params.turnId === "string"
-              ? params.turnId
-              : props.activeTurnId ?? selectedThread.id;
+            liveNotificationTurnId(
+              typeof params.turnId === "string" ? params.turnId : undefined
+            ) ?? selectedThread.id;
           const turn = buildLiveTurnMetadata({
             turnId,
             activeTurnStartedAt: props.activeTurnStartedAt,
@@ -1631,9 +1676,9 @@ export function ThreadView(props: ThreadViewProps) {
         }
 
         const turnId =
-          typeof params.turnId === "string"
-            ? params.turnId
-            : props.activeTurnId ?? selectedThread.id;
+          liveNotificationTurnId(
+            typeof params.turnId === "string" ? params.turnId : undefined
+          ) ?? selectedThread.id;
         const turn = buildLiveTurnMetadata({
           turnId,
           activeTurnStartedAt: props.activeTurnStartedAt,
@@ -1658,7 +1703,9 @@ export function ThreadView(props: ThreadViewProps) {
 
         const itemId = getPlanNotificationItemId(params);
         const turnId =
-          getPlanNotificationTurnId(params) ?? props.activeTurnId ?? itemId ?? selectedThread.id;
+          liveNotificationTurnId(getPlanNotificationTurnId(params)) ??
+          itemId ??
+          selectedThread.id;
         const turn = buildLiveTurnMetadata({
           turnId,
           activeTurnStartedAt: props.activeTurnStartedAt,
@@ -1681,8 +1728,7 @@ export function ThreadView(props: ThreadViewProps) {
         if (markdown) {
           const itemId = getPlanNotificationItemId(params);
           const turnId =
-            getPlanNotificationTurnId(params) ??
-            props.activeTurnId ??
+            liveNotificationTurnId(getPlanNotificationTurnId(params)) ??
             itemId ??
             selectedThread.id;
           const turn = buildLiveTurnMetadata({
@@ -1705,9 +1751,9 @@ export function ThreadView(props: ThreadViewProps) {
         const details = item ? buildLiveToolDetails(item) : [];
         if (details.length > 0) {
           const turnId =
-            typeof params.turnId === "string"
-              ? params.turnId
-              : props.activeTurnId ?? selectedThread.id;
+            liveNotificationTurnId(
+              typeof params.turnId === "string" ? params.turnId : undefined
+            ) ?? selectedThread.id;
           const turn = buildLiveTurnMetadata({
             turnId,
             activeTurnStartedAt: props.activeTurnStartedAt,
@@ -1752,9 +1798,11 @@ export function ThreadView(props: ThreadViewProps) {
       const steps = normalizeLivePlanSteps(planRecord.steps);
 
       const turnId =
-        typeof event.notification.params.turnId === "string"
-          ? event.notification.params.turnId
-          : props.activeTurnId ?? selectedThread.id;
+        liveNotificationTurnId(
+          typeof event.notification.params.turnId === "string"
+            ? event.notification.params.turnId
+            : undefined
+        ) ?? selectedThread.id;
       const turn = buildLiveTurnMetadata({
         turnId,
         activeTurnStartedAt: props.activeTurnStartedAt,
@@ -1773,6 +1821,8 @@ export function ThreadView(props: ThreadViewProps) {
     props.activeTurnId,
     props.activeTurnStartedAt,
     props.desktopApi,
+    liveNotificationTurnId,
+    publishLiveTranscriptEntry,
     selectedThread,
   ]);
 
