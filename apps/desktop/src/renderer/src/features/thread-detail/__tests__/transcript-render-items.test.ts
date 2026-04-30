@@ -285,7 +285,99 @@ describe("buildTranscriptRenderItems", () => {
         id: "work:turn-1:tool-2:complete",
         collapsible: true,
         entries: [secondActivity],
+        label: "More work",
+      },
+    ]);
+  });
+
+  it("does not repeat elapsed labels for review-bounded work in one turn", () => {
+    const turn = completedTurn("turn-review", 74_000);
+    const startedReview = review(
+      "review-start",
+      "Review changes against main",
+      turn
+    );
+    const firstActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Read one file",
+      details: [],
+      turn,
+    };
+    const completedReview = review(
+      "review-complete",
+      "Code review",
+      turn
+    );
+    const secondActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-2",
+      summary: "Read another file",
+      details: [],
+      turn,
+    };
+
+    const items = buildTranscriptRenderItems({
+      entries: [startedReview, firstActivity, completedReview, secondActivity],
+    });
+
+    expect(items).toEqual([
+      { type: "entry", entry: startedReview },
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-review:tool-1:complete",
+        collapsible: true,
+        entries: [firstActivity],
+        label: "Worked for 1m 14s",
+      },
+      { type: "entry", entry: completedReview },
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-review:tool-2:complete",
+        collapsible: true,
+        entries: [secondActivity],
+        label: "More work",
+      },
+    ]);
+  });
+
+  it("keeps duplicate entry ids from colliding when grouping completed work", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const firstActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-warning-thread-1",
+      summary: "Warning: first",
+      details: [],
+      turn,
+    };
+    const answer = final("f1", "Interim answer.", turn);
+    const secondActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-warning-thread-1",
+      summary: "Warning: second",
+      details: [],
+      turn,
+    };
+
+    const items = buildTranscriptRenderItems({
+      entries: [firstActivity, answer, secondActivity],
+    });
+
+    expect(items).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:live-warning-thread-1:complete",
+        collapsible: true,
+        entries: [firstActivity],
         label: "Worked for 1m 10s",
+      },
+      { type: "entry", entry: answer },
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:live-warning-thread-1:complete:1",
+        collapsible: true,
+        entries: [secondActivity],
+        label: "More work",
       },
     ]);
   });
@@ -343,6 +435,20 @@ function final(
     role: "assistant",
     phase: "final",
     text,
+    ...(turn ? { turn } : {}),
+  };
+}
+
+function review(
+  id: string,
+  displayText: string,
+  turn?: AppServerThreadMessageEntry["turn"]
+): AppServerThreadEntry {
+  return {
+    type: "review",
+    id,
+    displayText,
+    review: displayText,
     ...(turn ? { turn } : {}),
   };
 }

@@ -110,6 +110,8 @@ function buildCompletedGroups(
   excludeTurnId?: string
 ): RenderGroup[] {
   const groups: RenderGroup[] = [];
+  const groupIds = new Set<string>();
+  const completedWorkTurnIds = new Set<string>();
   let currentEntries: AppServerThreadEntry[] = [];
   let currentTurnId: string | undefined;
 
@@ -129,14 +131,23 @@ function buildCompletedGroups(
 
     const hasWork = hasConcreteWork(currentEntries);
     const firstEntryId = currentEntries[0]?.id ?? groups.length.toString();
+    const baseId = `${hasWork ? "work" : "commentary"}:${currentTurnId}:${firstEntryId}:complete`;
+    const repeatedWorkTurn = hasWork && completedWorkTurnIds.has(currentTurnId);
+    const id = groupIds.has(baseId) ? `${baseId}:${groups.length}` : baseId;
+    groupIds.add(id);
     groups.push({
       collapsible: true,
       entries: currentEntries,
-      id: `${hasWork ? "work" : "commentary"}:${currentTurnId}:${firstEntryId}:complete`,
+      id,
       label: hasWork
-        ? workGroupLabel(turn)
+        ? repeatedWorkTurn
+          ? "More work"
+          : workGroupLabel(turn)
         : previousMessagesLabel(currentEntries.filter(isAssistantCommentaryMessage).length),
     });
+    if (hasWork) {
+      completedWorkTurnIds.add(currentTurnId);
+    }
     currentEntries = [];
     currentTurnId = undefined;
   };
@@ -204,26 +215,26 @@ function renderWithGroups(
   entries: AppServerThreadEntry[],
   groups: RenderGroup[]
 ): TranscriptRenderItem[] {
-  const entryToGroup = new Map<string, RenderGroup>();
-  const groupedEntryIds = new Set<string>();
+  const entryToGroup = new Map<AppServerThreadEntry, RenderGroup>();
+  const groupedEntries = new Set<AppServerThreadEntry>();
 
   for (const group of groups) {
     for (const entry of group.entries) {
-      groupedEntryIds.add(entry.id);
+      groupedEntries.add(entry);
     }
     const firstEntry = group.entries[0];
     if (firstEntry) {
-      entryToGroup.set(firstEntry.id, group);
+      entryToGroup.set(firstEntry, group);
     }
   }
 
   const items: TranscriptRenderItem[] = [];
   for (const entry of entries) {
-    const group = entryToGroup.get(entry.id);
+    const group = entryToGroup.get(entry);
     if (group) {
       items.push({ type: "workPhaseGroup", ...group });
     }
-    if (groupedEntryIds.has(entry.id)) {
+    if (groupedEntries.has(entry)) {
       continue;
     }
 
