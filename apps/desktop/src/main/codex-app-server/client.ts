@@ -996,10 +996,6 @@ function shouldSuppressConversationMessage(
   );
 }
 
-function containsReviewModeEvent(items: Record<string, unknown>[]): boolean {
-  return items.some((item) => Boolean(normalizeReviewEventItem(item)));
-}
-
 function normalizeRenderableImageUrl(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -1115,9 +1111,9 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
   const output: AppServerThreadReplay["messages"] = [];
   const suppressedAssistantTexts = collectReviewSuppressionTexts(value);
 
-  const visit = (node: unknown, insideReviewTurn = false): void => {
+  const visit = (node: unknown): void => {
     if (Array.isArray(node)) {
-      node.forEach((entry) => visit(entry, insideReviewTurn));
+      node.forEach((entry) => visit(entry));
       return;
     }
 
@@ -1126,13 +1122,6 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
       return;
     }
 
-    const childItems = Array.isArray(record.items)
-      ? record.items
-          .map((entry) => asRecord(entry))
-          .filter((entry): entry is Record<string, unknown> => entry !== null)
-      : [];
-    const childrenInsideReviewTurn =
-      insideReviewTurn || containsReviewModeEvent(childItems);
     const role = normalizeConversationRole(
       pickString(record, ["role", "author", "speaker", "source", "type"])
     );
@@ -1140,7 +1129,6 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
     if (
       role &&
       (content.text || content.parts?.length) &&
-      !(insideReviewTurn && role === "user") &&
       !shouldSuppressConversationMessage(record, suppressedAssistantTexts)
     ) {
       output.push({
@@ -1172,7 +1160,7 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
       "response",
       "result"
     ]) {
-      visit(record[key], childrenInsideReviewTurn);
+      visit(record[key]);
     }
   };
 
@@ -2154,7 +2142,6 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
           .map((entry) => asRecord(entry))
           .filter((entry): entry is Record<string, unknown> => entry !== null)
       : [];
-    const turnHasReviewMode = containsReviewModeEvent(rawItems);
     const suppressedAssistantTexts = collectReviewSuppressionTexts(rawItems);
     const pendingActivityItems: Record<string, unknown>[] = [];
 
@@ -2175,10 +2162,7 @@ function extractThreadEntries(value: unknown): AppServerThreadEntry[] {
       const role = normalizeConversationRole(itemType);
       if (role) {
         flushActivityItems();
-        if (
-          (turnHasReviewMode && role === "user") ||
-          shouldSuppressConversationMessage(item, suppressedAssistantTexts)
-        ) {
+        if (shouldSuppressConversationMessage(item, suppressedAssistantTexts)) {
           continue;
         }
         const content = buildMessageContent(item);
