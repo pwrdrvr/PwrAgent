@@ -223,7 +223,7 @@ flowchart TB
 **Verification:**
 - The shared package exposes messaging types that are platform-neutral, and downstream code can build rich intents without importing adapter modules.
 
-- [ ] **Unit 2: Add persistent messaging binding and pending-intent store**
+- [x] **Unit 2: Add persistent messaging binding and pending-intent store**
 
 **Goal:** Persist authorized channel bindings, opaque routing state, pending intent handles, surface refs, delivery metadata, and audit records across desktop restarts.
 

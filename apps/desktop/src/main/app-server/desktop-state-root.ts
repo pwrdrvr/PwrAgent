@@ -35,3 +35,9 @@ export function resolveDesktopOverlayStorePath(
 ): string {
   return path.join(resolveDesktopStateRoot(options), "overlay-state.json");
 }
+
+export function resolveDesktopMessagingStorePath(
+  options?: DesktopStatePathOptions,
+): string {
+  return path.join(resolveDesktopStateRoot(options), "messaging-state.json");
+}

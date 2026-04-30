@@ -53,6 +53,16 @@ export {
   type StoredMessage,
 } from "./persistence/grok-rollout-store.js";
 export {
+  buildMessagingConversationKey,
+  MessagingStore,
+} from "./messaging/messaging-store.js";
+export {
+  CURRENT_MESSAGING_STORE_VERSION,
+  migrateMessagingStoreData,
+  type MessagingDeliveryRecord,
+  type MessagingStoreData,
+} from "./messaging/messaging-migrations.js";
+export {
   asObjectArguments,
   readOptionalBoolean,
   readOptionalPositiveInteger,
