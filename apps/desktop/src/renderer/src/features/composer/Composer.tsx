@@ -59,6 +59,7 @@ type ComposerProps = {
     collaborationMode?: AppServerCollaborationModeRequest,
     reviewTarget?: AppServerReviewTarget
   ) => Promise<void>;
+  onBeforeSendTurn?: () => void;
   onPendingStatusChange?: (status?: string) => void;
   onUpdateLaunchpad?: (
     directoryKey: string,
@@ -996,6 +997,7 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
+    props.onBeforeSendTurn?.();
     props.onPendingStatusChange?.(collaborationMode ? "Planning" : "Thinking");
     const optimisticMessageId = props.addOptimisticUserMessage?.(
       payload.displayText,

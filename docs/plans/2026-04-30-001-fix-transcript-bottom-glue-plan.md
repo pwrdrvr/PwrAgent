@@ -156,7 +156,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Lock the failure down with focused scroll tests**
+- [x] **Unit 1: Lock the failure down with focused scroll tests**
 
 **Goal:** Add tests that express the stricter bottom-glue contract before changing
 implementation behavior.
@@ -207,7 +207,7 @@ current implementation before Unit 2 changes behavior.
   implementation change and describes the desired behavior without relying on
   arbitrary timeouts.
 
-- [ ] **Unit 2: Add explicit bottom-glue ownership to the transcript list**
+- [x] **Unit 2: Add explicit bottom-glue ownership to the transcript list**
 
 **Goal:** Replace implicit bottom-following with a transcript-owned glue state and
 content growth observer.
@@ -257,7 +257,7 @@ content growth observer.
 - Existing transcript-list tests still pass, and the new bottom-glue tests pass
   without weakening the older viewport preservation assertions.
 
-- [ ] **Unit 3: Wire prompt send to reglue without scattering scroll calls**
+- [x] **Unit 3: Wire prompt send to reglue without scattering scroll calls**
 
 **Goal:** Make user send explicitly reglue and scroll bottom before live reply
 content begins, including prompts with image attachments.
@@ -304,7 +304,7 @@ content begins, including prompts with image attachments.
 - User-send behavior works through a single reglue signal, not repeated low-level
   scroll calls spread across composer, thread view, and live event handlers.
 
-- [ ] **Unit 4: Prove the live desktop regression end to end**
+- [x] **Unit 4: Prove the live desktop regression end to end**
 
 **Goal:** Verify the fixed behavior in the Electron replay harness against the
 actual send/live-update flow that exposed the bug.

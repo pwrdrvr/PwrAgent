@@ -88,6 +88,14 @@ test("opens a long transcript at the bottom without downward drift and restores 
     const savedViewport = await list.evaluate((element) => {
       const maxScrollTop = Math.max(element.scrollHeight - element.clientHeight, 0);
       const targetScrollTop = Math.max(320, Math.floor(maxScrollTop / 3));
+      const rect = element.getBoundingClientRect();
+      element.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          clientX: rect.right - 2,
+          clientY: rect.top + 24,
+        })
+      );
       element.scrollTop = targetScrollTop;
       element.dispatchEvent(new Event("scroll", { bubbles: true }));
       return {

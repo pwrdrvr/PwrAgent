@@ -572,7 +572,10 @@ type ThreadViewProps = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
   addOptimisticReviewEntry?: (displayText: string) => string;
-  addOptimisticUserMessage: (text: string) => string;
+  addOptimisticUserMessage: (
+    text: string,
+    imageParts?: AppServerThreadImagePart[]
+  ) => string;
   backendError?: string;
   backends: BackendSummary[];
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
@@ -645,6 +648,7 @@ type ThreadViewProps = {
   ) => Promise<void>;
   onTranscriptViewportChange?: (viewport?: {
     distanceFromBottom: number;
+    isGluedToBottom?: boolean;
     scrollTop: number;
   }) => void;
   onUpdateLaunchpad?: (
@@ -670,6 +674,7 @@ type ThreadViewProps = {
   removeOptimisticMessage: (id: string) => void;
   transcriptViewport?: {
     distanceFromBottom: number;
+    isGluedToBottom?: boolean;
     scrollTop: number;
   };
 };
@@ -694,6 +699,7 @@ export function ThreadView(props: ThreadViewProps) {
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
   const [contextRailPinned, setContextRailPinned] = useState(false);
   const [contextRailResizing, setContextRailResizing] = useState(false);
+  const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
   const [contextRailWidth, setContextRailWidth] = useState(380);
   const [launchpadMaterializing, setLaunchpadMaterializing] = useState(false);
 
@@ -1456,6 +1462,7 @@ export function ThreadView(props: ThreadViewProps) {
               pendingUserInput={props.pendingUserInput}
               pendingStatusText={props.pendingStatusText}
               restoredViewport={props.transcriptViewport}
+              reglueRequestKey={transcriptReglueRequestKey}
               skills={props.skills}
               pendingProtocolActivityEntry={pendingProtocolActivityEntry}
               threadId={`${selectedThread!.source}:${selectedThread!.id}`}
@@ -1495,6 +1502,9 @@ export function ThreadView(props: ThreadViewProps) {
                 ? async () => !(await checkSelectedThreadBranchDrift("turn"))
                 : undefined
             }
+            onBeforeSendTurn={() => {
+              setTranscriptReglueRequestKey((current) => current + 1);
+            }}
             onSetExecutionMode={props.onSetExecutionMode}
             onSetThreadModelSettings={props.onSetThreadModelSettings}
             pendingRequestActive={Boolean(props.pendingRequest)}

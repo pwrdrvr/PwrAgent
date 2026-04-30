@@ -6,13 +6,26 @@ import { TranscriptList } from "../TranscriptList";
 describe("TranscriptList", () => {
   let scrollHeight = 480;
   let clientHeight = 240;
+  let clientWidth = 320;
+  let offsetWidth = 336;
   let scrollToMock: ReturnType<typeof vi.fn>;
   let createObjectURLMock: ReturnType<typeof vi.fn>;
   let revokeObjectURLMock: ReturnType<typeof vi.fn>;
 
+  function scrollAwayWithScrollbar(element: HTMLElement, scrollTop: number) {
+    fireEvent.pointerDown(element, {
+      clientX: clientWidth + 8,
+      clientY: 24,
+    });
+    element.scrollTop = scrollTop;
+    fireEvent.scroll(element);
+  }
+
   beforeEach(() => {
     scrollHeight = 480;
     clientHeight = 240;
+    clientWidth = 320;
+    offsetWidth = 336;
     scrollToMock = vi.fn(function scrollTo(
       this: HTMLElement,
       options?: number | ScrollToOptions,
@@ -37,6 +50,37 @@ describe("TranscriptList", () => {
       configurable: true,
       get() {
         return clientHeight;
+      }
+    });
+
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get() {
+        return clientWidth;
+      }
+    });
+
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+      configurable: true,
+      get() {
+        return offsetWidth;
+      }
+    });
+
+    Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+      configurable: true,
+      value() {
+        return {
+          bottom: clientHeight,
+          height: clientHeight,
+          left: 0,
+          right: offsetWidth,
+          top: 0,
+          width: offsetWidth,
+          x: 0,
+          y: 0,
+          toJSON: () => undefined,
+        };
       }
     });
 
@@ -1180,8 +1224,7 @@ describe("TranscriptList", () => {
     );
 
     const list = screen.getByRole("list");
-    list.scrollTop = 72;
-    fireEvent.scroll(list);
+    scrollAwayWithScrollbar(list, 72);
 
     rerender(
       <TranscriptList
@@ -1241,6 +1284,77 @@ describe("TranscriptList", () => {
     expect(list.scrollTop).toBe(72);
   });
 
+  it("restores a generically scrolled glued thread back to the bottom", () => {
+    const { rerender } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-1-message-1",
+            role: "user",
+            text: "Thread one first message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-2",
+            role: "assistant",
+            text: "Thread one second message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 60;
+    fireEvent.scroll(list);
+
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-2-message-1",
+            role: "user",
+            text: "Thread two first message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-2"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "thread-1-message-1",
+            role: "user",
+            text: "Thread one first message"
+          },
+          {
+            type: "message",
+            id: "thread-1-message-2",
+            role: "assistant",
+            text: "Thread one second message"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(480);
+  });
+
   it("does not re-arm auto-scroll while a cached transcript is refreshing", () => {
     const { rerender } = render(
       <TranscriptList
@@ -1272,8 +1386,7 @@ describe("TranscriptList", () => {
     );
 
     const list = screen.getByRole("list");
-    list.scrollTop = 72;
-    fireEvent.scroll(list);
+    scrollAwayWithScrollbar(list, 72);
     scrollToMock.mockClear();
 
     rerender(
@@ -1562,6 +1675,162 @@ describe("TranscriptList", () => {
     expect(list.scrollTop).toBe(1340);
   });
 
+  it("does not unglue from generic scroll events while following the bottom", () => {
+    const entries = Array.from({ length: 24 }, (_, index) => ({
+      type: "message" as const,
+      id: `generic-scroll-message-${index + 1}`,
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      text: `Generic scroll transcript message ${index + 1}`
+    }));
+    scrollHeight = 720;
+    const { rerender } = render(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 480;
+    fireEvent.scroll(list);
+
+    list.scrollTop = 120;
+    fireEvent.scroll(list);
+
+    scrollHeight = 880;
+    rerender(
+      <TranscriptList
+        entries={[
+          ...entries,
+          {
+            type: "message",
+            id: "assistant-live-append",
+            role: "assistant",
+            text: "This live append should still pull the glued transcript to the bottom."
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingStatusText="Thinking"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(880);
+  });
+
+  it("reglues and scrolls to bottom when a send request arrives", () => {
+    const entries = Array.from({ length: 20 }, (_, index) => ({
+      type: "message" as const,
+      id: `reglue-message-${index + 1}`,
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      text: `Reglue transcript message ${index + 1}`
+    }));
+    scrollHeight = 720;
+    const { rerender } = render(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    scrollAwayWithScrollbar(list, 96);
+
+    rerender(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        reglueRequestKey={1}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+    expect(list.scrollTop).toBe(720);
+
+    scrollHeight = 840;
+    rerender(
+      <TranscriptList
+        entries={[
+          ...entries,
+          {
+            type: "message",
+            id: "reglued-user-prompt",
+            role: "user",
+            text: "This prompt should stay at the bottom after send."
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingStatusText="Thinking"
+        reglueRequestKey={1}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(840);
+  });
+
+  it("keeps the bottom pinned when rendered content grows after layout", () => {
+    let resizeCallback: ResizeObserverCallback | undefined;
+    const OriginalResizeObserver = globalThis.ResizeObserver;
+    class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback;
+      }
+
+      observe = vi.fn();
+      disconnect = vi.fn();
+      unobserve = vi.fn();
+    }
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      value: ResizeObserverMock,
+    });
+
+    try {
+      const entries = Array.from({ length: 18 }, (_, index) => ({
+        type: "message" as const,
+        id: `resize-message-${index + 1}`,
+        role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+        text: `Resize transcript message ${index + 1}`
+      }));
+      scrollHeight = 720;
+      render(
+        <TranscriptList
+          entries={entries}
+          loading={false}
+          loadingMore={false}
+          threadId="thread-1"
+          onLoadOlder={async () => undefined}
+        />
+      );
+
+      const list = screen.getByRole("list");
+      list.scrollTop = 480;
+      fireEvent.scroll(list);
+
+      scrollHeight = 860;
+      resizeCallback?.([], {} as ResizeObserver);
+
+      expect(list.scrollTop).toBe(860);
+    } finally {
+      Object.defineProperty(globalThis, "ResizeObserver", {
+        configurable: true,
+        value: OriginalResizeObserver,
+      });
+    }
+  });
+
   it("does not move the reader when new messages arrive below an older viewport", () => {
     const entries = Array.from({ length: 16 }, (_, index) => ({
       type: "message" as const,
@@ -1581,8 +1850,7 @@ describe("TranscriptList", () => {
     );
 
     const list = screen.getByRole("list");
-    list.scrollTop = 96;
-    fireEvent.scroll(list);
+    scrollAwayWithScrollbar(list, 96);
 
     scrollHeight = 920;
     rerender(

@@ -1,9 +1,21 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+
+async function expectAtTranscriptBottom(list: Locator) {
+  await expect
+    .poll(async () =>
+      await list.evaluate((element) =>
+        Math.round(
+          Math.max(element.scrollHeight - element.clientHeight - element.scrollTop, 0)
+        )
+      )
+    )
+    .toBeLessThanOrEqual(4);
+}
 
 test("preserves live assistant commentary messages, exploration activity, and final answer", async () => {
   const app = await launchElectronApp({
@@ -27,7 +39,9 @@ test("preserves live assistant commentary messages, exploration activity, and fi
     ).toBeVisible();
 
     const transcript = app.window.getByRole("region", { name: "Transcript" });
+    const list = app.window.locator(".transcript-list__items");
     await expect(transcript).toContainText("Ready to brainstorm Telegram support.");
+    await expectAtTranscriptBottom(list);
     const hydratedWorkToggle = transcript.getByRole("button", {
       name: /Worked for 1m 10s/
     });
@@ -49,15 +63,18 @@ test("preserves live assistant commentary messages, exploration activity, and fi
 
     await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
     await expect(app.window.getByRole("status")).toContainText("Thinking");
+    await expectAtTranscriptBottom(list);
 
     await app.advance({ stepId: "turn-started-1" });
     await app.advance({ stepId: "tool-search-started-1" });
     await expect(transcript).toContainText("Explored 1 item");
+    await expectAtTranscriptBottom(list);
 
     await app.advance({ stepId: "assistant-message-1a" });
     await app.advance({ stepId: "assistant-message-1b" });
     await expect(transcript).toContainText("Using ce:brainstorm for this.");
     await expect(transcript).toContainText("What would it take to add Telegram support?");
+    await expectAtTranscriptBottom(list);
 
     await app.advance({ stepId: "tool-search-completed-1" });
     await app.advance({ stepId: "tool-command-started-1" });
@@ -74,12 +91,14 @@ test("preserves live assistant commentary messages, exploration activity, and fi
     expect(transcriptText.indexOf("The broad search was too noisy")).toBeGreaterThan(
       transcriptText.indexOf("Using ce:brainstorm for this.")
     );
+    await expectAtTranscriptBottom(list);
 
     await app.advance({ stepId: "tool-command-completed-1" });
     await app.advance({ stepId: "assistant-message-3" });
     await expect(transcript).toContainText("Using ce:brainstorm for this.");
     await expect(transcript).toContainText("The broad search was too noisy");
     await expect(transcript).toContainText("The existing product direction is thread-first");
+    await expectAtTranscriptBottom(list);
 
     await app.advance({ stepId: "assistant-message-4" });
     await app.advance({ stepId: "assistant-message-5" });
@@ -91,6 +110,7 @@ test("preserves live assistant commentary messages, exploration activity, and fi
     await expect(transcript.getByText("From the repo scan, Telegram should probably")).toBeVisible();
     await expect(transcript.getByText("The v1 shape should probably focus")).toBeVisible();
     await expect(transcript.getByText("I’m ready to turn that into requirements")).toBeVisible();
+    await expectAtTranscriptBottom(list);
 
     const commandSummary = transcript.getByRole("button", {
       name: /rg -n "Telegram\|telegram\|webhook" docs apps packages/i
@@ -106,6 +126,7 @@ test("preserves live assistant commentary messages, exploration activity, and fi
 
     await expect(app.window.getByRole("button", { name: "Stop" })).toHaveCount(0);
     await expect(app.window.getByText("Thinking")).toHaveCount(0);
+    await expectAtTranscriptBottom(list);
     const workedForToggle = transcript.getByRole("button", {
       name: /Worked for 8m/
     }).first();

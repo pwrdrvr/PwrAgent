@@ -76,6 +76,7 @@ export function getContextWindowMoonPhase(usedPercent: number): number {
 
 export type ThreadViewportState = {
   distanceFromBottom: number;
+  isGluedToBottom?: boolean;
   scrollTop: number;
 };
 
@@ -2200,13 +2201,15 @@ export function useThreadSessionState(params: {
           Number.isFinite(viewport.distanceFromBottom)
             ? {
                 distanceFromBottom: Math.max(0, viewport.distanceFromBottom),
+                isGluedToBottom: viewport.isGluedToBottom,
                 scrollTop: Math.max(0, viewport.scrollTop),
               }
             : undefined;
 
         if (
           current.viewport?.scrollTop === nextViewport?.scrollTop &&
-          current.viewport?.distanceFromBottom === nextViewport?.distanceFromBottom
+          current.viewport?.distanceFromBottom === nextViewport?.distanceFromBottom &&
+          current.viewport?.isGluedToBottom === nextViewport?.isGluedToBottom
         ) {
           return current;
         }
