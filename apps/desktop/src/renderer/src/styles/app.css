@@ -297,7 +297,7 @@ textarea {
 .thread-header__title,
 .thread-empty-state h2 {
   margin: 0;
-  line-height: 1.05;
+  line-height: 1.16;
 }
 
 .sidebar__section {
@@ -620,8 +620,10 @@ textarea {
 }
 
 .thread-row__title {
+  padding-bottom: 2px;
   font-size: 14px;
   font-weight: 600;
+  line-height: 1.25;
 }
 
 .thread-row__time,
@@ -1132,7 +1134,6 @@ textarea {
 
 .thread-header--launchpad .thread-header__title {
   font-size: 34px;
-  line-height: 1.05;
 }
 
 .thread-header__eyebrow-row {
@@ -1146,10 +1147,11 @@ textarea {
   min-width: 0;
   margin: 0;
   overflow: hidden;
+  padding-bottom: 2px;
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 700;
-  line-height: 1;
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
