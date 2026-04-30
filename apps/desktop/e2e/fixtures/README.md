@@ -122,6 +122,9 @@ desktop replay scenarios do not exercise Codex sidebar directory identity.
 
 - `approval-pending/`: pending approval card and waiting composer state
 - `turn-lifecycle/`: turn start, visible Stop button, and clean completion
+- `stale-thinking-indicator/`: captured premature idle plus completion sequence
+  that must clear the thread-list thinking indicator while retaining live
+  activity
 - `edited-changes-order/`: edited-file activity that must remain in transcript
   order when expanded
 - `transcript-command-output/`: captured `npm view dive` command output remains
