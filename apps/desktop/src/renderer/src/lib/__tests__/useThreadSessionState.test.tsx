@@ -557,6 +557,308 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingAssistantMessage).toBeUndefined();
   });
 
+  it("keeps live read activity in receipt order between assistant messages", async () => {
+    let now = 10_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: {
+              id: "turn-1",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-1",
+            delta: "First commentary.",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "read-1",
+              type: "commandExecution",
+              command: "sed -n '1,40p' src/one.ts",
+              commandActions: [{ type: "read", path: "src/one.ts" }],
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-2",
+            delta: "The first scan shows this is a deep brainstorm.",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "read-2",
+              type: "commandExecution",
+              command: "rg -n transcript src",
+              commandActions: [{ type: "search", path: "src" }],
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Final answer." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.map((entry) =>
+        entry.type === "message"
+          ? `message:${entry.text}`
+          : entry.type === "activity"
+            ? `activity:${entry.summary}`
+            : entry.type
+      )
+    ).toEqual([
+      "message:First commentary.",
+      "activity:Explored 1 item",
+      "message:The first scan shows this is a deep brainstorm.",
+      "activity:Explored 1 item",
+      "message:Final answer.",
+    ]);
+    expect(
+      result.current.entries
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.phase)
+    ).toEqual(["commentary", "commentary", "final"]);
+  });
+
+  it("preserves session-owned live activity across thread switches and hydration", async () => {
+    let now = 20_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries:
+            threadId === "thread-1"
+              ? [
+                  {
+                    type: "message" as const,
+                    id: "thread-1-history",
+                    role: "assistant" as const,
+                    text: "Hydrated response without rich live activity.",
+                  },
+                ]
+              : [],
+          messages:
+            threadId === "thread-1"
+              ? [
+                  {
+                    id: "thread-1-history",
+                    role: "assistant" as const,
+                    text: "Hydrated response without rich live activity.",
+                  },
+                ]
+              : [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const thread1 = buildThread({ id: "thread-1", updatedAt: 1_000 });
+    const thread1Updated = buildThread({ id: "thread-1", updatedAt: 2_000 });
+    const thread2 = buildThread({ id: "thread-2", updatedAt: 1_500 });
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: thread1,
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: {
+              id: "turn-1",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "read-1",
+              type: "commandExecution",
+              command: "sed -n '1,40p' src/one.ts",
+              commandActions: [{ type: "read", path: "src/one.ts" }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      "thread-1-history",
+      "live-tools-turn-1-1",
+    ]);
+
+    rerender({ thread: thread2 });
+
+    await waitFor(() => {
+      expect(result.current.response?.threadId).toBe("thread-2");
+    });
+
+    rerender({ thread: thread1Updated });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.entries.map((entry) => entry.id)).toEqual([
+        "thread-1-history",
+        "live-tools-turn-1-1",
+      ]);
+    });
+  });
+
   it("keeps streamed assistant commentary below the optimistic user prompt", async () => {
     let agentEventHandler:
       | ((event: {

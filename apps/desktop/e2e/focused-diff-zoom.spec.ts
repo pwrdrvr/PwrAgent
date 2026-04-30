@@ -25,6 +25,7 @@ test("eligible diffs fall back to deterministic zoomed-out context", async () =>
 
     const activityToggle = app.window.getByRole("button", { name: /Edited 1 file/i });
     await activityToggle.click();
+    await app.window.getByRole("button", { name: /Update example.ts/i }).click();
 
     await expect(app.window.getByText("7 lines skipped")).toBeVisible();
     await expect(app.window.getByRole("button", { name: "Zoom in" })).toBeVisible();
@@ -64,6 +65,7 @@ test("focused diff overrides can hide low-signal hunks end-to-end", async () => 
     ).toBeVisible();
 
     await app.window.getByRole("button", { name: /Edited 1 file/i }).click();
+    await app.window.getByRole("button", { name: /Update example.ts/i }).click();
 
     await expect(app.window.getByText("1 hunk hidden, 6 lines skipped")).toBeVisible();
     await expect(app.window.getByText("// refreshed comment")).toHaveCount(0);

@@ -1480,6 +1480,10 @@ textarea {
   color: var(--text-muted);
 }
 
+.transcript-work-phase-group__content[hidden] {
+  display: none !important;
+}
+
 .transcript-work-phase-group__content:not([hidden]) {
   display: contents;
 }
@@ -2389,16 +2393,57 @@ textarea {
   line-height: 1.45;
 }
 
+.transcript-activity__detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.transcript-activity__detail-toggle {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.transcript-activity__detail-toggle .transcript-activity__chevron {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+}
+
+.transcript-activity__detail-toggle[aria-expanded="true"] .transcript-activity__chevron {
+  transform: rotate(225deg);
+}
+
 .transcript-activity__detail-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--text-primary);
 }
 
 .transcript-activity__detail-stats {
   display: inline-flex;
+  flex: 0 0 auto;
   gap: 8px;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.transcript-activity__detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 18px;
 }
 
 .transcript-activity__detail-stat--added {

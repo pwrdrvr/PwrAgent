@@ -133,6 +133,23 @@ function insertPendingEntry(
     return;
   }
 
+  const pendingCreatedAt = entryCreatedAt(pendingEntry);
+  const timedIndex =
+    typeof pendingCreatedAt === "number"
+      ? entries.findIndex((entry) => {
+          const entryCreated = entryCreatedAt(entry);
+          return (
+            entry.turn?.id === pendingTurnId &&
+            typeof entryCreated === "number" &&
+            entryCreated > pendingCreatedAt
+          );
+        })
+      : -1;
+  if (timedIndex !== -1) {
+    entries.splice(timedIndex, 0, pendingEntry);
+    return;
+  }
+
   const finalMessageIndex = entries.findLastIndex(
     (entry) => entry.turn?.id === pendingTurnId && isAssistantFinalMessage(entry)
   );

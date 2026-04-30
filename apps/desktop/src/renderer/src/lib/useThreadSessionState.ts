@@ -5,6 +5,8 @@ import type {
   AppServerPendingRequestNotification,
   AppServerReadThreadResponse,
   AppServerReviewOutput,
+  AppServerThreadActivityDetail,
+  AppServerThreadActivityEntry,
   AppServerToolRequestUserInputNotification,
   AppServerThreadEntry,
   AppServerThreadMessage,
@@ -25,6 +27,16 @@ import {
   createMcpElicitationState,
   type PendingMcpInteractionState,
 } from "../features/thread-detail/mcp-elicitation";
+import {
+  appendCommandOutputDelta,
+  buildLiveActivityEntry,
+  buildLiveToolDetails,
+  buildMcpProgressDetail,
+  getNotificationItem,
+  mergeActivityDetails,
+  summarizeActivityStatus,
+  summarizeLiveActivity,
+} from "../features/thread-detail/live-transcript-activity";
 
 const MAX_VIEW_ONLY_THREADS = 10;
 const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
@@ -95,6 +107,7 @@ type ThreadSessionEntry = {
   loading: boolean;
   loadingMore: boolean;
   needsHydrationAfterCompletion: boolean;
+  nextLiveEntrySequence: number;
   optimisticEntries: AppServerThreadEntry[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingMcpInteraction?: PendingMcpInteractionState;
@@ -116,6 +129,7 @@ function createEmptyThreadSessionEntry(): ThreadSessionEntry {
     loading: false,
     loadingMore: false,
     needsHydrationAfterCompletion: false,
+    nextLiveEntrySequence: 1,
     optimisticEntries: [],
   };
 }
@@ -156,14 +170,35 @@ function mergeTranscriptEntries(
     }
 
     const optimisticTurnId = optimisticEntry.turn?.id;
-    const shouldInsertBeforeTerminal =
-      Boolean(optimisticTurnId) && optimisticEntry.type !== "message";
-    const terminalIndex = shouldInsertBeforeTerminal
-      ? merged.findIndex(
-          (entry) =>
-            entry.turn?.id === optimisticTurnId && isTerminalTurnEntry(entry)
-        )
-      : -1;
+    const optimisticCreatedAt =
+      typeof optimisticEntry.createdAt === "number"
+        ? optimisticEntry.createdAt
+        : undefined;
+    const timedIndex =
+      optimisticTurnId && typeof optimisticCreatedAt === "number"
+        ? merged.findIndex((entry) => {
+            const entryCreatedAt =
+              typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+            return (
+              entry.turn?.id === optimisticTurnId &&
+              typeof entryCreatedAt === "number" &&
+              entryCreatedAt > optimisticCreatedAt
+            );
+          })
+        : -1;
+
+    if (timedIndex !== -1) {
+      merged.splice(timedIndex, 0, optimisticEntry);
+      continue;
+    }
+
+    const terminalIndex =
+      optimisticTurnId && !isTerminalTurnEntry(optimisticEntry)
+        ? merged.findIndex(
+            (entry) =>
+              entry.turn?.id === optimisticTurnId && isTerminalTurnEntry(entry)
+          )
+        : -1;
 
     if (terminalIndex !== -1) {
       merged.splice(terminalIndex, 0, optimisticEntry);
@@ -224,8 +259,44 @@ function pruneOptimisticEntries(
       );
     }
 
+    if (entry.type === "activity") {
+      return !response.replay.entries.some(
+        (candidate) =>
+          candidate.type === "activity" &&
+          activityEntriesMatch(candidate, entry)
+      );
+    }
+
     return !response.replay.entries.some((candidate) => candidate.id === entry.id);
   });
+}
+
+function activityEntriesMatch(
+  candidate: AppServerThreadActivityEntry,
+  optimisticEntry: AppServerThreadActivityEntry
+): boolean {
+  if (candidate.id === optimisticEntry.id) {
+    return true;
+  }
+
+  if (optimisticEntry.details.length === 0) {
+    return false;
+  }
+
+  return optimisticEntry.details.every((detail) =>
+    candidate.details.some((candidateDetail) => {
+      if (candidateDetail.id === detail.id) {
+        return true;
+      }
+      if (detail.command?.displayCommand) {
+        return candidateDetail.command?.displayCommand === detail.command.displayCommand;
+      }
+      if (detail.fileDiff?.diff) {
+        return candidateDetail.fileDiff?.diff === detail.fileDiff.diff;
+      }
+      return false;
+    })
+  );
 }
 
 function reviewEntriesMatch(
@@ -590,6 +661,151 @@ function withCompletedResponseTurnMetadata(
           : entry
       ),
     },
+  };
+}
+
+function flushPendingAssistantToOptimistic(
+  current: ThreadSessionEntry
+): ThreadSessionEntry {
+  if (!current.pendingAssistantMessage) {
+    return current;
+  }
+
+  return {
+    ...current,
+    optimisticEntries: mergeItems(current.optimisticEntries, [
+      current.pendingAssistantMessage,
+    ]),
+    pendingAssistantMessage: undefined,
+  };
+}
+
+function updateActivityEntry(
+  entry: AppServerThreadActivityEntry,
+  details: AppServerThreadActivityDetail[],
+  turn: AppServerThreadTurnMetadata | undefined
+): AppServerThreadActivityEntry {
+  const mergedDetails = mergeActivityDetails(entry.details, details);
+  return {
+    ...entry,
+    summary: summarizeLiveActivity(mergedDetails),
+    status: summarizeActivityStatus(mergedDetails),
+    details: mergedDetails,
+    ...(entry.turn ?? turn ? { turn: entry.turn ?? turn } : {}),
+  };
+}
+
+function upsertLiveActivityEntry(
+  current: ThreadSessionEntry,
+  params: {
+    details: AppServerThreadActivityDetail[];
+    now: number;
+    threadId: string;
+    turn?: AppServerThreadTurnMetadata;
+  }
+): ThreadSessionEntry {
+  if (params.details.length === 0) {
+    return current;
+  }
+
+  const flushed = flushPendingAssistantToOptimistic(current);
+  const incomingIds = new Set(params.details.map((detail) => detail.id));
+  const matchingIndex = flushed.optimisticEntries.findIndex(
+    (entry): entry is AppServerThreadActivityEntry =>
+      entry.type === "activity" &&
+      entry.details.some((detail) => incomingIds.has(detail.id))
+  );
+
+  if (matchingIndex !== -1) {
+    const optimisticEntries = [...flushed.optimisticEntries];
+    const existing = optimisticEntries[matchingIndex] as AppServerThreadActivityEntry;
+    optimisticEntries[matchingIndex] = updateActivityEntry(
+      existing,
+      params.details,
+      params.turn
+    );
+    return {
+      ...flushed,
+      expectOwnUpdate: true,
+      interacted: true,
+      lastTouchedAt: params.now,
+      optimisticEntries,
+    };
+  }
+
+  const lastOptimisticEntry = flushed.optimisticEntries[flushed.optimisticEntries.length - 1];
+  const canMergeWithLastActivity =
+    lastOptimisticEntry?.type === "activity" &&
+    lastOptimisticEntry.turn?.id === params.turn?.id;
+
+  if (canMergeWithLastActivity) {
+    return {
+      ...flushed,
+      expectOwnUpdate: true,
+      interacted: true,
+      lastTouchedAt: params.now,
+      optimisticEntries: [
+        ...flushed.optimisticEntries.slice(0, -1),
+        updateActivityEntry(
+          lastOptimisticEntry as AppServerThreadActivityEntry,
+          params.details,
+          params.turn
+        ),
+      ],
+    };
+  }
+
+  const id = `live-tools-${params.turn?.id ?? params.threadId}-${flushed.nextLiveEntrySequence}`;
+  return {
+    ...flushed,
+    expectOwnUpdate: true,
+    interacted: true,
+    lastTouchedAt: params.now,
+    nextLiveEntrySequence: flushed.nextLiveEntrySequence + 1,
+    optimisticEntries: [
+      ...flushed.optimisticEntries,
+      buildLiveActivityEntry({
+        id,
+        createdAt: params.now,
+        details: params.details,
+        turn: params.turn,
+      }),
+    ],
+  };
+}
+
+function appendLiveCommandOutputDelta(
+  current: ThreadSessionEntry,
+  params: {
+    delta: string;
+    itemId: string;
+    now: number;
+  }
+): ThreadSessionEntry {
+  const matchingIndex = current.optimisticEntries.findIndex(
+    (entry): entry is AppServerThreadActivityEntry =>
+      entry.type === "activity" &&
+      entry.details.some((detail) => detail.id === params.itemId)
+  );
+  if (matchingIndex === -1) {
+    return current;
+  }
+
+  const optimisticEntries = [...current.optimisticEntries];
+  optimisticEntries[matchingIndex] = appendCommandOutputDelta(
+    optimisticEntries[matchingIndex] as AppServerThreadActivityEntry,
+    {
+      delta: params.delta,
+      itemId: params.itemId,
+    }
+  );
+
+  return {
+    ...current,
+    expectOwnUpdate: true,
+    interacted: true,
+    lastTouchedAt: params.now,
+    optimisticEntries,
   };
 }
 
@@ -1234,6 +1450,29 @@ export function useThreadSessionState(params: {
           };
         }
 
+        if (event.notification.method === "item/started") {
+          const item = getNotificationItem(event.notification.params);
+          const details = item ? buildLiveToolDetails(item) : [];
+          if (details.length === 0) {
+            return current;
+          }
+
+          const turn = buildTurnMetadata({
+            fallbackId:
+              typeof event.notification.params.turnId === "string"
+                ? event.notification.params.turnId
+                : current.activeTurnId,
+            fallbackStartedAt: current.activeTurnStartedAt,
+            fallbackStatus: "in_progress",
+          });
+          return upsertLiveActivityEntry(current, {
+            details,
+            now: nextLastTouchedAt,
+            threadId: notificationThreadId,
+            turn,
+          });
+        }
+
         if (
           event.notification.method === "item/agentMessage/delta" &&
           typeof event.notification.params.itemId === "string" &&
@@ -1283,6 +1522,51 @@ export function useThreadSessionState(params: {
             },
             response: flushedResponse,
           };
+        }
+
+        if (event.notification.method === "item/mcpToolCall/progress") {
+          const detail = buildMcpProgressDetail(event.notification.params);
+          if (!detail) {
+            return current;
+          }
+
+          const turn = buildTurnMetadata({
+            fallbackId:
+              typeof event.notification.params.turnId === "string"
+                ? event.notification.params.turnId
+                : current.activeTurnId,
+            fallbackStartedAt: current.activeTurnStartedAt,
+            fallbackStatus: "in_progress",
+          });
+          return upsertLiveActivityEntry(current, {
+            details: [detail],
+            now: nextLastTouchedAt,
+            threadId: notificationThreadId,
+            turn,
+          });
+        }
+
+        if (event.notification.method === "item/commandExecution/outputDelta") {
+          const params = event.notification.params as Record<string, unknown>;
+          const delta =
+            typeof params.delta === "string"
+              ? params.delta
+              : "";
+          const itemId =
+            typeof params.itemId === "string"
+              ? params.itemId
+              : typeof params.item_id === "string"
+                ? params.item_id
+                : undefined;
+          if (!delta || !itemId) {
+            return current;
+          }
+
+          return appendLiveCommandOutputDelta(current, {
+            delta,
+            itemId,
+            now: nextLastTouchedAt,
+          });
         }
 
         if (event.notification.method === "turn/started") {
@@ -1385,6 +1669,25 @@ export function useThreadSessionState(params: {
               response: nextResponse,
             };
           }
+
+          const item = getNotificationItem(event.notification.params);
+          const details = item ? buildLiveToolDetails(item) : [];
+          if (details.length > 0) {
+            const turn = buildTurnMetadata({
+              fallbackId:
+                typeof event.notification.params.turnId === "string"
+                  ? event.notification.params.turnId
+                  : current.activeTurnId,
+              fallbackStartedAt: current.activeTurnStartedAt,
+              fallbackStatus: "completed",
+            });
+            return upsertLiveActivityEntry(current, {
+              details,
+              now: nextLastTouchedAt,
+              threadId: notificationThreadId,
+              turn,
+            });
+          }
         }
 
         if (event.notification.method === "turn/completed") {
@@ -1421,7 +1724,11 @@ export function useThreadSessionState(params: {
               .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
               .map((entry) =>
                 entry.turn?.id === completedTurn?.id
-                  ? { ...entry, turn: completedTurn }
+                  ? withTurnMetadataAndPhase(
+                    entry,
+                    completedTurn,
+                    unphasedAssistantCompletionPhase
+                  )
                   : entry
               ),
             ...(current.pendingAssistantMessage

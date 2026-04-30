@@ -136,6 +136,8 @@ desktop replay scenarios do not exercise Codex sidebar directory identity.
   plan UI
 - `live-agent-messages/`: live assistant commentary stream items, tool usage,
   and final answer preservation during one active turn
+- `plan-autocomplete-order/`: captured active-turn ordering where earlier
+  command/file-change activity must remain above later assistant commentary
 - `long-thread-scroll-stability/`: very tall transcript opens at bottom without
   drift and restores a saved viewport on reselect
 - `thread-scroll-restore/`: cached thread reselection preserves transcript

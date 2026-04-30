@@ -1,0 +1,278 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "plan-autocomplete-order",
+    "sourceCaptureId": "2026-04-30T02-23-08-345Z-codex-full-access",
+    "threadId": "thread-plan-autocomplete-order"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list",
+          "turn/start"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-plan-autocomplete-order",
+          "title": "Plan autocomplete ordering replay",
+          "titleSource": "explicit",
+          "summary": "Replay seeded from plan autocomplete live-order capture",
+          "source": "codex",
+          "executionMode": "full-access",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1777563725000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Plan autocomplete interactions need real Electron coverage."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "Ready to continue plan autocomplete coverage."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Plan autocomplete interactions need real Electron coverage."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "Ready to continue plan autocomplete coverage."
+          }
+        ],
+        "lastUserMessage": "Plan autocomplete interactions need real Electron coverage.",
+        "lastAssistantMessage": "Ready to continue plan autocomplete coverage.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "turn-start-1",
+      "kind": "response",
+      "method": "turn/start",
+      "result": {
+        "threadId": "thread-plan-autocomplete-order",
+        "turnId": "turn-plan-autocomplete-order"
+      }
+    },
+    {
+      "id": "status-active-1",
+      "kind": "notification",
+      "notification": {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "thread-plan-autocomplete-order",
+          "status": {
+            "type": "active",
+            "activeFlags": []
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-plan-autocomplete-order",
+          "turn": {
+            "id": "turn-plan-autocomplete-order",
+            "status": "inProgress",
+            "startedAt": 1777562700
+          }
+        }
+      }
+    },
+    {
+      "id": "typecheck-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-plan-autocomplete-order",
+          "turnId": "turn-plan-autocomplete-order",
+          "item": {
+            "id": "command-typecheck",
+            "type": "commandExecution",
+            "toolName": "shell_command",
+            "status": "inProgress",
+            "command": "/bin/zsh -lc 'pnpm --filter @pwragnt/desktop typecheck'"
+          }
+        }
+      }
+    },
+    {
+      "id": "vitest-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-plan-autocomplete-order",
+          "turnId": "turn-plan-autocomplete-order",
+          "item": {
+            "id": "command-vitest",
+            "type": "commandExecution",
+            "toolName": "shell_command",
+            "status": "inProgress",
+            "command": "/bin/zsh -lc 'pnpm --filter @pwragnt/desktop exec vitest run --environment jsdom src/renderer/src/features/composer/__tests__/composer.test.tsx'"
+          }
+        }
+      }
+    },
+    {
+      "id": "vitest-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-plan-autocomplete-order",
+          "turnId": "turn-plan-autocomplete-order",
+          "item": {
+            "id": "command-vitest",
+            "type": "commandExecution",
+            "toolName": "shell_command",
+            "status": "completed",
+            "command": "/bin/zsh -lc 'pnpm --filter @pwragnt/desktop exec vitest run --environment jsdom src/renderer/src/features/composer/__tests__/composer.test.tsx'",
+            "exitCode": 0,
+            "durationMs": 3038
+          }
+        }
+      }
+    },
+    {
+      "id": "typecheck-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-plan-autocomplete-order",
+          "turnId": "turn-plan-autocomplete-order",
+          "item": {
+            "id": "command-typecheck",
+            "type": "commandExecution",
+            "toolName": "shell_command",
+            "status": "completed",
+            "command": "/bin/zsh -lc 'pnpm --filter @pwragnt/desktop typecheck'",
+            "exitCode": 0,
+            "durationMs": 9410
+          }
+        }
+      }
+    },
+    {
+      "id": "file-change-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/fileChange/outputDelta",
+        "params": {
+          "threadId": "thread-plan-autocomplete-order",
+          "turnId": "turn-plan-autocomplete-order",
+          "itemId": "file-change-composer",
+          "delta": "M apps/desktop/src/renderer/src/features/composer/Composer.tsx\n"
+        }
+      }
+    },
+    {
+      "id": "assistant-focused-tests-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "thread-plan-autocomplete-order",
+          "turnId": "turn-plan-autocomplete-order",
+          "itemId": "assistant-focused-tests",
+          "delta": "The focused composer tests and desktop typecheck are back to green. I’m moving to the Electron coverage now because Backspace plus undo needs a real browser editing engine; jsdom doesn’t implement the native contenteditable history stack."
+        }
+      }
+    },
+    {
+      "id": "e2e-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-plan-autocomplete-order",
+          "turnId": "turn-plan-autocomplete-order",
+          "item": {
+            "id": "command-e2e",
+            "type": "commandExecution",
+            "toolName": "shell_command",
+            "status": "inProgress",
+            "command": "/bin/zsh -lc 'pnpm --filter @pwragnt/desktop test:e2e -- directory-launchpad-skills.spec.ts'"
+          }
+        }
+      }
+    },
+    {
+      "id": "e2e-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-plan-autocomplete-order",
+          "turnId": "turn-plan-autocomplete-order",
+          "item": {
+            "id": "command-e2e",
+            "type": "commandExecution",
+            "toolName": "shell_command",
+            "status": "failed",
+            "command": "/bin/zsh -lc 'pnpm --filter @pwragnt/desktop test:e2e -- directory-launchpad-skills.spec.ts'",
+            "exitCode": 1,
+            "durationMs": 17563
+          }
+        }
+      }
+    },
+    {
+      "id": "assistant-electron-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "thread-plan-autocomplete-order",
+          "turnId": "turn-plan-autocomplete-order",
+          "itemId": "assistant-electron",
+          "delta": "Electron showed the plain contenteditable route is not enough: Chromium didn’t remove the non-editable inline span with Backspace in this structure. I’m adding a narrow composer history path for skill-token deletion so Backspace removes the chip and Cmd/Ctrl-Z restores that chip without taking over normal text undo."
+        }
+      }
+    }
+  ]
+}

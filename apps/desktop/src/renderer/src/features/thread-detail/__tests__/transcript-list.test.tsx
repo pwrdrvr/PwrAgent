@@ -522,7 +522,102 @@ describe("TranscriptList", () => {
     expect(screen.getByText("Update useThreadSessionState.ts")).toBeInTheDocument();
     expect(screen.getAllByText("-2")[0]).toBeInTheDocument();
     expect(screen.getAllByText("+1")[0]).toBeInTheDocument();
+    expect(screen.queryByText("function messageMatchesOptimisticEntry(")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Update useThreadSessionState.ts/i }));
+
     expect(screen.getByText("function messageMatchesOptimisticEntry(")).toBeInTheDocument();
+  });
+
+  it("inserts pending activity by event time among optimistic turn entries", () => {
+    const activeTurn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 1_000,
+    };
+
+    render(
+      <TranscriptList
+        activeTurnId="turn-1"
+        activeTurnStartedAt={1_000}
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Keep testing the composer."
+          },
+          {
+            type: "activity",
+            id: "activity-1",
+            summary: "Used 2 tools",
+            createdAt: 1_500,
+            details: [
+              {
+                id: "detail-1",
+                kind: "command",
+                label: "pnpm --filter @pwragnt/desktop typecheck"
+              }
+            ],
+            turn: activeTurn
+          },
+          {
+            type: "message",
+            id: "message-2",
+            role: "assistant",
+            phase: "commentary",
+            text: "The focused composer tests are green.",
+            createdAt: 3_000,
+            turn: activeTurn
+          },
+          {
+            type: "activity",
+            id: "activity-2",
+            summary: "pnpm --filter @pwragnt/desktop test",
+            createdAt: 4_000,
+            details: [
+              {
+                id: "detail-2",
+                kind: "command",
+                label: "pnpm --filter @pwragnt/desktop test:e2e -- directory-launchpad-skills.spec.ts"
+              }
+            ],
+            turn: activeTurn
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingActivityEntry={{
+          type: "activity",
+          id: "pending-file-change-1",
+          summary: "Changed 1 file",
+          createdAt: 2_000,
+          details: [
+            {
+              id: "pending-detail-1",
+              kind: "write",
+              label: "Update Composer.tsx",
+              path: "/repo/apps/desktop/src/renderer/src/features/composer/Composer.tsx"
+            }
+          ],
+          turn: activeTurn
+        }}
+        pendingStatusText="Thinking"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const transcriptText = document.body.textContent ?? "";
+    const firstActivityIndex = transcriptText.indexOf("Used 2 tools");
+    const changedIndex = transcriptText.indexOf("Changed 1 file");
+    const commentaryIndex = transcriptText.indexOf("The focused composer tests are green.");
+    const laterActivityIndex = transcriptText.indexOf("pnpm --filter @pwragnt/desktop test");
+
+    expect(firstActivityIndex).toBeGreaterThanOrEqual(0);
+    expect(changedIndex).toBeGreaterThan(firstActivityIndex);
+    expect(commentaryIndex).toBeGreaterThan(changedIndex);
+    expect(laterActivityIndex).toBeGreaterThan(commentaryIndex);
   });
 
   it("keeps just-finished live tool activity reachable when the final message arrives", async () => {
@@ -911,6 +1006,8 @@ describe("TranscriptList", () => {
     fireEvent.click(screen.getByRole("button", { name: /Edited 1 file/i }));
 
     expect(screen.getByText("Update TranscriptList.tsx")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Update TranscriptList.tsx/i }));
+
     expect(screen.getByText("const b = 2;")).toBeInTheDocument();
     expect(screen.getByText("const c = 3;")).toBeInTheDocument();
     expect(screen.queryByText("2 unmodified lines skipped")).not.toBeInTheDocument();

@@ -5,7 +5,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
-test("preserves live assistant commentary messages, tool usage, and final answer", async () => {
+test("preserves live assistant commentary messages, exploration activity, and final answer", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       specDir,
@@ -52,7 +52,7 @@ test("preserves live assistant commentary messages, tool usage, and final answer
 
     await app.advance({ stepId: "turn-started-1" });
     await app.advance({ stepId: "tool-search-started-1" });
-    await expect(transcript).toContainText("Searching Web");
+    await expect(transcript).toContainText("Explored 1 item");
 
     await app.advance({ stepId: "assistant-message-1a" });
     await app.advance({ stepId: "assistant-message-1b" });
@@ -92,13 +92,15 @@ test("preserves live assistant commentary messages, tool usage, and final answer
     await expect(transcript.getByText("The v1 shape should probably focus")).toBeVisible();
     await expect(transcript.getByText("I’m ready to turn that into requirements")).toBeVisible();
 
-    const toolSummary = transcript.getByRole("button", { name: /Used 2 tools/i });
-    await expect(toolSummary).toBeVisible();
-    await toolSummary.click();
-    await expect(transcript).toContainText("Searched Web (8.4s)");
+    const commandSummary = transcript.getByRole("button", {
+      name: /rg -n "Telegram\|telegram\|webhook" docs apps packages/i
+    }).first();
+    await expect(commandSummary).toBeVisible();
+    await commandSummary.click();
     await expect(transcript).toContainText(
       'rg -n "Telegram|telegram|webhook" docs apps packages (1.1s)'
     );
+    await commandSummary.click();
 
     await app.advance({ stepId: "turn-completed-1" });
 
@@ -106,7 +108,7 @@ test("preserves live assistant commentary messages, tool usage, and final answer
     await expect(app.window.getByText("Thinking")).toHaveCount(0);
     const workedForToggle = transcript.getByRole("button", {
       name: /Worked for 8m/
-    });
+    }).first();
     await expect(workedForToggle).toBeVisible();
     await expect(workedForToggle).toHaveAttribute("aria-expanded", "false");
     await expect(transcript.getByText("Using ce:brainstorm for this.")).toBeHidden();
@@ -118,7 +120,12 @@ test("preserves live assistant commentary messages, tool usage, and final answer
     await expect(transcript.getByText("Using ce:brainstorm for this.")).toBeVisible();
     await expect(transcript.getByText("The broad search was too noisy")).toBeVisible();
     await expect(transcript.getByText("The existing product direction is thread-first")).toBeVisible();
-    await expect(transcript.getByRole("button", { name: /Used 2 tools/i })).toBeVisible();
+    await expect(transcript.getByRole("button", { name: /Explored 1 item/i })).toBeVisible();
+    await expect(
+      transcript.getByRole("button", {
+        name: /rg -n "Telegram\|telegram\|webhook" docs apps packages/i
+      }).first()
+    ).toBeVisible();
     await expect(transcript).toContainText(
       "From the repo scan: Telegram support is probably not another model provider."
     );
@@ -135,7 +142,7 @@ test("preserves live assistant commentary messages, tool usage, and final answer
     await expect(transcript.getByText("Using ce:brainstorm for this.")).toBeHidden();
     await expect(transcript.getByText("The broad search was too noisy")).toBeHidden();
     await expect(transcript.getByText("The existing product direction is thread-first")).toBeHidden();
-    await expect(transcript.getByRole("button", { name: /Used 2 tools/i })).toBeHidden();
+    await expect(transcript.getByRole("button", { name: /Explored 1 item/i })).toBeHidden();
   } finally {
     await app.close();
   }
