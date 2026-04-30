@@ -1,17 +1,18 @@
 import type { NavigationThreadSummary } from "@pwragnt/shared";
-import { Fragment } from "react";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 
 type ThreadMetaChipsProps = {
   hasApprovalRequest?: boolean;
   includeLinkedDirectories?: boolean;
+  linkedDirectoryMode?: "label" | "kind";
   thread: NavigationThreadSummary;
 };
 
 export function ThreadMetaChips({
   hasApprovalRequest = false,
   includeLinkedDirectories = false,
+  linkedDirectoryMode = "label",
   thread,
 }: ThreadMetaChipsProps) {
   const branchDrifted =
@@ -20,65 +21,95 @@ export function ThreadMetaChips({
     thread.observedGitBranch !== thread.gitBranch;
   const linkedDirectoryChips = includeLinkedDirectories
     ? thread.linkedDirectories.length > 0
-      ? thread.linkedDirectories.flatMap((directory) => [
-          (
-            <span
-              aria-label={`Copy path for ${directory.label}`}
-              key={`${thread.id}:${directory.id}:root`}
-              className="thread-row__chip path-copy-target tooltip-target"
-              role="button"
-              tabIndex={0}
-              data-tooltip={formatCopyTooltip(directory.path)}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                void copyText(directory.path);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" && event.key !== " ") {
-                  return;
-                }
+      ? linkedDirectoryMode === "kind"
+        ? [
+            ...new Map(
+              thread.linkedDirectories.map((directory) => [
+                directory.kind,
+                (
+                  <span
+                    aria-label={
+                      directory.kind === "worktree"
+                        ? `Copy path for worktree ${directory.label}`
+                        : `Copy local path for ${directory.label}`
+                    }
+                    key={`${thread.id}:${directory.kind}:location-kind`}
+                    className="thread-row__chip path-copy-target tooltip-target thread-row__chip--mono"
+                    role="button"
+                    tabIndex={0}
+                    data-tooltip={formatCopyTooltip(
+                      directory.kind === "worktree"
+                        ? directory.worktreePath ?? directory.path
+                        : directory.path
+                    )}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void copyText(
+                        directory.kind === "worktree"
+                          ? directory.worktreePath ?? directory.path
+                          : directory.path
+                      );
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") {
+                        return;
+                      }
 
-                event.preventDefault();
-                event.stopPropagation();
-                void copyText(directory.path);
-              }}
-            >
-              <span aria-hidden="true" className="thread-row__chip-icon">
-                {directory.worktreePath ? "🔀" : "📁"}
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void copyText(
+                        directory.kind === "worktree"
+                          ? directory.worktreePath ?? directory.path
+                          : directory.path
+                      );
+                    }}
+                  >
+                    {directory.kind}
+                  </span>
+                ),
+              ]),
+            ).values(),
+          ]
+        : thread.linkedDirectories.map((directory) => {
+            const copyPath =
+              directory.kind === "worktree"
+                ? directory.worktreePath ?? directory.path
+                : directory.path;
+            return (
+              <span
+                aria-label={
+                  directory.kind === "worktree"
+                    ? `Copy path for worktree ${directory.label}`
+                    : `Copy path for ${directory.label}`
+                }
+                key={`${thread.id}:${directory.id}:root`}
+                className="thread-row__chip path-copy-target tooltip-target"
+                role="button"
+                tabIndex={0}
+                data-tooltip={formatCopyTooltip(copyPath)}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void copyText(copyPath);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") {
+                    return;
+                  }
+
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void copyText(copyPath);
+                }}
+              >
+                <span aria-hidden="true" className="thread-row__chip-icon">
+                  {directory.kind === "worktree" ? "🔀" : "📁"}
+                </span>
+                {directory.label}
               </span>
-              {directory.label}
-            </span>
-          ),
-          directory.worktreePath ? (
-            <span
-              aria-label={`Copy path for worktree ${directory.label}`}
-              key={`${thread.id}:${directory.id}:worktree`}
-              className="thread-row__chip path-copy-target tooltip-target thread-row__chip--mono"
-              role="button"
-              tabIndex={0}
-              data-tooltip={formatCopyTooltip(directory.worktreePath ?? directory.path)}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                void copyText(directory.worktreePath ?? directory.path);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" && event.key !== " ") {
-                  return;
-                }
-
-                event.preventDefault();
-                event.stopPropagation();
-                void copyText(directory.worktreePath ?? directory.path);
-              }}
-            >
-              worktree
-            </span>
-          ) : (
-            <Fragment key={`${thread.id}:${directory.id}:worktree`} />
-          ),
-        ])
+            );
+          })
       : (
           <span className="thread-row__chip thread-row__chip--muted">
             No linked directory

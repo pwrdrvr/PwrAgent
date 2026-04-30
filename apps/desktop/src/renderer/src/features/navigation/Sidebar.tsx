@@ -227,10 +227,14 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuCanArchive = contextMenu
     ? canArchiveThread(contextMenu.thread)
     : false;
-  const contextMenuLocalPath = contextMenu?.thread.linkedDirectories[0]?.path;
+  const contextMenuLocalPath = contextMenu?.thread.linkedDirectories.find(
+    (directory) => directory.kind === "local"
+  )?.path;
   const contextMenuWorktreePath = contextMenu?.thread.linkedDirectories.find(
-    (directory) => directory.kind === "worktree" && directory.worktreePath
-  )?.worktreePath;
+    (directory) => directory.kind === "worktree"
+  );
+  const contextMenuWorktreeCopyPath =
+    contextMenuWorktreePath?.worktreePath ?? contextMenuWorktreePath?.path;
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
   const contextMenuHasTopActions = contextMenuCanRename || contextMenuCanArchive;
 
@@ -412,11 +416,11 @@ export function Sidebar(props: SidebarProps) {
             >
               Copy Thread ID
             </button>
-            {contextMenuWorktreePath ? (
+            {contextMenuWorktreeCopyPath ? (
               <button
                 role="menuitem"
                 type="button"
-                onClick={() => copyFromContextMenu(contextMenuWorktreePath)}
+                onClick={() => copyFromContextMenu(contextMenuWorktreeCopyPath)}
               >
                 Copy Worktree Path
               </button>
