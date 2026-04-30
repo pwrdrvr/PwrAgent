@@ -1,0 +1,184 @@
+import { describe, expect, it } from "vitest";
+import {
+  MESSAGING_DELIVERY_OUTCOMES,
+  MESSAGING_INBOUND_EVENT_KINDS,
+  MESSAGING_SURFACE_INTENT_KINDS,
+  type MessagingApprovalIntent,
+  type MessagingInboundMediaEvent,
+  type MessagingMessageIntent,
+  type MessagingThreadPickerIntent,
+} from "@pwragnt/shared";
+
+describe("messaging surface contract", () => {
+  it("enumerates the first-release semantic intent and inbound event kinds", () => {
+    expect(MESSAGING_SURFACE_INTENT_KINDS).toEqual([
+      "message",
+      "status",
+      "progress",
+      "thread_picker",
+      "project_picker",
+      "single_select",
+      "multi_select",
+      "questionnaire",
+      "approval",
+      "confirmation",
+      "error",
+      "dismiss",
+    ]);
+    expect(MESSAGING_INBOUND_EVENT_KINDS).toEqual([
+      "text",
+      "command",
+      "callback",
+      "media",
+      "lifecycle",
+    ]);
+    expect(MESSAGING_DELIVERY_OUTCOMES).toContain("presented_new");
+    expect(MESSAGING_DELIVERY_OUTCOMES).toContain("unsupported");
+  });
+
+  it("describes a thread picker without platform payload fields", () => {
+    const intent = {
+      id: "intent-thread-picker",
+      kind: "thread_picker",
+      bindingId: "binding-1",
+      createdAt: 1000,
+      fallbackText: "Reply with a number, Next, Back, or Cancel.",
+      navigation: {
+        backend: "codex",
+        fetchedAt: 1000,
+        unchanged: false,
+      },
+      page: {
+        pageIndex: 0,
+        pageSize: 5,
+        totalItems: 1,
+        items: [
+          {
+            id: "thread-1",
+            title: "Messaging plan",
+            titleSource: "explicit",
+            linkedDirectories: [],
+            source: "codex",
+            inbox: {
+              inInbox: false,
+            },
+          },
+        ],
+        actions: [
+          {
+            id: "bind:thread-1",
+            label: "Bind",
+            style: "primary",
+            fallbackText: "1",
+          },
+          {
+            id: "page:next",
+            label: "Next",
+            style: "navigation",
+            fallbackText: "next",
+          },
+        ],
+      },
+    } satisfies MessagingThreadPickerIntent;
+
+    expect(JSON.stringify(intent)).not.toMatch(/telegram|discord|callback_data|custom_id/);
+  });
+
+  it("describes mixed markdown and image message parts", () => {
+    const intent = {
+      id: "intent-message",
+      kind: "message",
+      createdAt: 1000,
+      role: "assistant",
+      parts: [
+        {
+          type: "text",
+          text: "Use `pnpm test` after the change.\n\n```ts\nexpect(ok).toBe(true)\n```",
+          markdown: "markdown",
+        },
+        {
+          type: "image",
+          url: "data:image/png;base64,abc",
+          alt: "Generated screenshot",
+          source: "assistant",
+        },
+      ],
+    } satisfies MessagingMessageIntent;
+
+    expect(intent.parts).toHaveLength(2);
+    expect(intent.parts[0]).toMatchObject({ markdown: "markdown" });
+  });
+
+  it("keeps approval audit data separate from adapter action payloads", () => {
+    const intent = {
+      id: "intent-approval",
+      kind: "approval",
+      createdAt: 1000,
+      title: "Allow command",
+      body: "Run test command?",
+      fallbackText: "Reply yes, no, cancel, or yes for this session.",
+      audit: {
+        actor: {
+          platformUserId: "telegram-user-1",
+          username: "display-only",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "chat-1",
+            kind: "dm",
+          },
+        },
+        backend: "codex",
+        threadId: "thread-1",
+        action: "approval.requested",
+        occurredAt: 1000,
+      },
+      decisions: [
+        {
+          id: "approval:accept",
+          label: "Allow",
+          decision: "accept",
+          style: "primary",
+          fallbackText: "yes",
+        },
+        {
+          id: "approval:decline",
+          label: "Decline",
+          decision: "decline",
+          style: "danger",
+          fallbackText: "no",
+        },
+      ],
+    } satisfies MessagingApprovalIntent;
+
+    expect(intent.audit?.actor.platformUserId).toBe("telegram-user-1");
+    expect(JSON.stringify(intent.decisions)).not.toContain("telegram-user-1");
+  });
+
+  it("marks inbound media as unsupported by default", () => {
+    const event = {
+      id: "event-media",
+      kind: "media",
+      actor: {
+        platformUserId: "discord-user-1",
+      },
+      channel: {
+        channel: "discord",
+        conversation: {
+          id: "channel-1",
+          kind: "channel",
+        },
+      },
+      receivedAt: 1000,
+      media: {
+        type: "file",
+        name: "voice.m4a",
+        mimeType: "audio/mp4",
+      },
+      disposition: "unsupported",
+    } satisfies MessagingInboundMediaEvent;
+
+    expect(event.disposition).toBe("unsupported");
+  });
+});

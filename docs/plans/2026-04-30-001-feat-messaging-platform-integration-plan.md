@@ -185,7 +185,7 @@ flowchart TB
     U7 --> U8
 ```
 
-- [ ] **Unit 1: Define shared messaging surface contracts**
+- [x] **Unit 1: Define shared messaging surface contracts**
 
 **Goal:** Add the portable TypeScript contract for channel-agnostic outbound intents, inbound events, binding records, opaque surface state, delivery results, and actor/audit envelopes.
 
