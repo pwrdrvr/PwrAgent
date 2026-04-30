@@ -33,6 +33,7 @@ import {
   readEnvList,
   readEnvString,
 } from "./desktop-settings-env";
+import { discoverCodexCommands } from "./codex-discovery";
 
 type DesktopSettingsServiceOptions = {
   configPath?: string;
@@ -77,6 +78,10 @@ export class DesktopSettingsService {
       GROK_API_KEY_ENV,
       secretStorage.available,
     );
+    const codexDiscovery = await discoverCodexCommands({
+      configuredCommand: config.models?.codex?.path,
+      env: this.env,
+    });
 
     return {
       fetchedAt: this.now(),
@@ -134,18 +139,7 @@ export class DesktopSettingsService {
       models: {
         codex: {
           path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),
-          discovery: {
-            selectedCommand:
-              readEnvString(this.env, CODEX_COMMAND_ENV)
-              || config.models?.codex?.path
-              || undefined,
-            selectedSource: readEnvString(this.env, CODEX_COMMAND_ENV)
-              ? "env"
-              : config.models?.codex?.path
-                ? "config"
-                : undefined,
-            candidates: [],
-          },
+          discovery: codexDiscovery,
         },
         grok: {
           apiKey: grokApiKey,
@@ -184,6 +178,13 @@ export class DesktopSettingsService {
     return (
       readEnvString(this.env, GROK_API_KEY_ENV)
       || (await this.options.secretStore.getSecret("grokApiKey"))
+    );
+  }
+
+  resolveGrokApiKeySync(): string | undefined {
+    return (
+      readEnvString(this.env, GROK_API_KEY_ENV)
+      || this.options.secretStore.getSecretSync?.("grokApiKey")
     );
   }
 

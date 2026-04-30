@@ -57,6 +57,7 @@ import {
 } from "../../shared/ipc";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { getMainLogger } from "../log";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const appServerLog = getMainLogger("pwragnt:app-server");
@@ -373,7 +374,9 @@ class DesktopAppServerService {
       return this.focusedDiffService;
     }
 
-    this.focusedDiffService = new FocusedDiffService();
+    this.focusedDiffService = new FocusedDiffService({
+      apiKey: getDesktopSettingsService().resolveGrokApiKeySync(),
+    });
     return this.focusedDiffService;
   }
 }

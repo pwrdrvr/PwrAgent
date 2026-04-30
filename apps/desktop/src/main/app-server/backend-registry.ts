@@ -83,10 +83,12 @@ import {
 } from "./protocol-log-observer";
 import {
   ThreadTitleGenerationService,
+  GrokThreadTitleGenerator,
   type ThreadTitleGenerator,
   type ThreadTitleGenerationResult,
 } from "./thread-title-generation-service";
 import { getMainLogger } from "../log";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 
 type InitializeResult = {
   serverInfo?: {
@@ -884,11 +886,15 @@ export class DesktopBackendRegistry {
         backend: "grok",
       }),
     ]);
+    const settingsService = getDesktopSettingsService();
+    const codexCommand = settingsService.resolveCodexCommandPreference();
+    const grokApiKey = settingsService.resolveGrokApiKeySync();
 
     this.codexDefaultClient =
       options?.codexClient ??
       replayClients?.codexDefaultClient ??
       new CodexAppServerClient({
+        command: codexCommand,
         connectionObserver: codexDefaultObserver,
       });
     this.codexFullAccessClient =
@@ -896,12 +902,14 @@ export class DesktopBackendRegistry {
       replayClients?.codexFullAccessClient ??
       new CodexAppServerClient({
         args: buildCodexClientArgs("full-access"),
+        command: codexCommand,
         connectionObserver: codexFullAccessObserver,
       });
     this.grokClient =
       options?.grokClient ??
       replayClients?.grokClient ??
       new GrokAppServerClient({
+        apiKey: grokApiKey,
         connectionObserver: grokObserver,
       });
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
@@ -929,6 +937,9 @@ export class DesktopBackendRegistry {
                           this.codexDefaultClient.generateTitle!(params),
                       }
                     : undefined,
+                  grok: new GrokThreadTitleGenerator({
+                    apiKey: grokApiKey,
+                  }),
                 },
               }));
 

@@ -21,6 +21,7 @@ type SecretFile = Partial<Record<DesktopSettingsSecretName, SecretRecord>>;
 
 export interface DesktopSecretStore {
   describe(): DesktopSettingsSecretStorageState;
+  getSecretSync?(name: DesktopSettingsSecretName): string | undefined;
   getSecret(name: DesktopSettingsSecretName): Promise<string | undefined>;
   setSecret(name: DesktopSettingsSecretName, value: string): Promise<void>;
   deleteSecret(name: DesktopSettingsSecretName): Promise<void>;
@@ -63,7 +64,7 @@ export class FileBackedSafeStorageSecretStore implements DesktopSecretStore {
     };
   }
 
-  async getSecret(name: DesktopSettingsSecretName): Promise<string | undefined> {
+  getSecretSync(name: DesktopSettingsSecretName): string | undefined {
     const record = this.readRecords()[name];
     if (!record?.ciphertext) {
       return undefined;
@@ -72,6 +73,10 @@ export class FileBackedSafeStorageSecretStore implements DesktopSecretStore {
     return this.safeStorage.decryptString(
       Buffer.from(record.ciphertext, "base64"),
     );
+  }
+
+  async getSecret(name: DesktopSettingsSecretName): Promise<string | undefined> {
+    return this.getSecretSync(name);
   }
 
   async setSecret(name: DesktopSettingsSecretName, value: string): Promise<void> {
@@ -128,8 +133,12 @@ export class MemoryDesktopSecretStore implements DesktopSecretStore {
     return this.state;
   }
 
-  async getSecret(name: DesktopSettingsSecretName): Promise<string | undefined> {
+  getSecretSync(name: DesktopSettingsSecretName): string | undefined {
     return this.values.get(name);
+  }
+
+  async getSecret(name: DesktopSettingsSecretName): Promise<string | undefined> {
+    return this.getSecretSync(name);
   }
 
   async setSecret(name: DesktopSettingsSecretName, value: string): Promise<void> {
