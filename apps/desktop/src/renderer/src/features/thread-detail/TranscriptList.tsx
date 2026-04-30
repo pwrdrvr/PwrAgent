@@ -5,7 +5,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type PointerEvent as ReactPointerEvent
 } from "react";
 import type {
   AppServerPendingRequestNotification,
@@ -83,7 +82,6 @@ type ScrollSnapshot = {
 };
 
 const BOTTOM_THRESHOLD_PX = 24;
-const SCROLLBAR_HIT_SLOP_PX = 16;
 type ScrollBottomMode = "instant" | "smooth";
 
 function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
@@ -271,9 +269,9 @@ export function TranscriptList(props: TranscriptListProps) {
   const scrollContentRef = useRef<HTMLDivElement>(null);
   const snapshotRef = useRef<ScrollSnapshot | undefined>(undefined);
   const savedViewportsRef = useRef(new Map<string, TranscriptViewport>());
+  const appliedReglueRequestKeyRef = useRef(0);
   const shouldScrollToBottomRef = useRef(true);
   const isGluedToBottomRef = useRef(true);
-  const pendingScrollbarUnglueRef = useRef(false);
   const [hasContentBelow, setHasContentBelow] = useState(false);
   const [expandedCommentaryGroupIds, setExpandedCommentaryGroupIds] = useState(
     () => new Set<string>()
@@ -409,10 +407,8 @@ export function TranscriptList(props: TranscriptListProps) {
     const isAtBottom = Boolean(snapshot && snapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX);
     if (isAtBottom) {
       isGluedToBottomRef.current = true;
-      pendingScrollbarUnglueRef.current = false;
-    } else if (pendingScrollbarUnglueRef.current) {
+    } else {
       isGluedToBottomRef.current = false;
-      pendingScrollbarUnglueRef.current = false;
     }
     setHasContentBelow(Boolean(snapshot && !isAtBottom));
     if (snapshot?.threadId) {
@@ -440,29 +436,12 @@ export function TranscriptList(props: TranscriptListProps) {
     }
 
     isGluedToBottomRef.current = true;
-    pendingScrollbarUnglueRef.current = false;
     syncScrollState();
   }, [syncScrollState]);
 
-  const notePotentialScrollbarUnglue = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      const container = scrollContainerRef.current;
-      if (!container || container.scrollHeight <= container.clientHeight) {
-        pendingScrollbarUnglueRef.current = false;
-        return;
-      }
-
-      const rect = container.getBoundingClientRect();
-      const distanceFromRight = rect.right - event.clientX;
-      const gutterWidth = Math.max(container.offsetWidth - container.clientWidth, 0);
-      const isInScrollbarGutter =
-        gutterWidth > 0
-          ? event.clientX >= rect.right - gutterWidth
-          : distanceFromRight >= 0 && distanceFromRight <= SCROLLBAR_HIT_SLOP_PX;
-      pendingScrollbarUnglueRef.current = isInScrollbarGutter;
-    },
-    []
-  );
+  const disableBottomGlue = useCallback(() => {
+    isGluedToBottomRef.current = false;
+  }, []);
 
   useEffect(() => {
     if (props.loading && props.entries.length === 0) {
@@ -474,7 +453,11 @@ export function TranscriptList(props: TranscriptListProps) {
     if (typeof props.reglueRequestKey !== "number" || props.reglueRequestKey <= 0) {
       return;
     }
+    if (appliedReglueRequestKeyRef.current === props.reglueRequestKey) {
+      return;
+    }
 
+    appliedReglueRequestKeyRef.current = props.reglueRequestKey;
     scrollToBottom("instant");
   }, [props.reglueRequestKey, scrollToBottom]);
 
@@ -495,7 +478,6 @@ export function TranscriptList(props: TranscriptListProps) {
     if (!container || props.entries.length === 0) {
       snapshotRef.current = undefined;
       isGluedToBottomRef.current = true;
-      pendingScrollbarUnglueRef.current = false;
       setHasContentBelow(false);
       return;
     }
@@ -551,7 +533,6 @@ export function TranscriptList(props: TranscriptListProps) {
           scrollToBottom("instant");
         } else {
           isGluedToBottomRef.current = false;
-          pendingScrollbarUnglueRef.current = false;
           container.scrollTop = Math.min(
             Math.max(0, restoredViewport.scrollTop),
             Math.max(container.scrollHeight - container.clientHeight, 0)
@@ -573,9 +554,8 @@ export function TranscriptList(props: TranscriptListProps) {
       shouldScrollToBottomRef.current = false;
       return;
     } else if (
-      (hasAppendedMessages && previousSnapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX) ||
-      (hasAppendedMessages && isGluedToBottomRef.current) ||
-      hasGrownWhileFollowingBottom
+      isGluedToBottomRef.current &&
+      (hasAppendedMessages || hasGrownWhileFollowingBottom)
     ) {
       scrollToBottom("instant");
       return;
@@ -649,8 +629,12 @@ export function TranscriptList(props: TranscriptListProps) {
         ref={scrollContainerRef}
         className="transcript-list__items"
         role="list"
+        onWheel={(event) => {
+          if (event.deltaY < 0) {
+            disableBottomGlue();
+          }
+        }}
         onScroll={syncScrollState}
-        onPointerDown={notePotentialScrollbarUnglue}
       >
         <div ref={scrollContentRef} className="transcript-list__content">
           {transcriptRenderItems.map((item) => {

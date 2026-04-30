@@ -168,3 +168,70 @@ test("preserves live assistant commentary messages, exploration activity, and fi
     await app.close();
   }
 });
+
+test("does not pull the reader back to the bottom while assistant output streams", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      specDir,
+      "fixtures/live-agent-messages/replay.fixture.json"
+    ),
+    windowSize: {
+      width: 900,
+      height: 520,
+    },
+  });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /Telegram brainstorm replay/i })
+      .first()
+      .click();
+
+    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    const list = app.window.locator(".transcript-list__items");
+
+    await app.window
+      .getByLabel("Reply")
+      .fill("What would it take to add Telegram support?");
+    await app.window.getByRole("button", { name: "Send" }).click();
+
+    await app.advance({ stepId: "turn-started-1" });
+    await app.advance({ stepId: "tool-search-started-1" });
+    await app.advance({ stepId: "assistant-message-1a" });
+    await app.advance({ stepId: "assistant-message-1b" });
+    await app.advance({ stepId: "tool-search-completed-1" });
+    await app.advance({ stepId: "tool-command-started-1" });
+    await app.advance({ stepId: "assistant-message-2" });
+    await app.advance({ stepId: "tool-command-completed-1" });
+    await app.advance({ stepId: "assistant-message-3" });
+
+    await expect(transcript).toContainText("The existing product direction is thread-first");
+
+    const beforeScroll = await list.evaluate((element) => {
+      const maxScrollTop = Math.max(element.scrollHeight - element.clientHeight, 0);
+      if (maxScrollTop <= 80) {
+        throw new Error("Expected streamed transcript to overflow before scroll-away");
+      }
+
+      return Math.round(element.scrollTop);
+    });
+    await list.hover();
+    await app.window.mouse.wheel(0, -320);
+
+    await expect
+      .poll(async () => await list.evaluate((element) => Math.round(element.scrollTop)))
+      .toBeLessThan(beforeScroll);
+    const savedScrollTop = await list.evaluate((element) => Math.round(element.scrollTop));
+
+    await app.advance({ stepId: "assistant-message-4" });
+    await app.advance({ stepId: "assistant-message-5" });
+    await app.advance({ stepId: "assistant-message-6" });
+
+    await expect(transcript).toContainText("I’m ready to turn that into requirements");
+    await expect
+      .poll(async () => await list.evaluate((element) => Math.round(element.scrollTop)))
+      .toBe(savedScrollTop);
+  } finally {
+    await app.close();
+  }
+});
