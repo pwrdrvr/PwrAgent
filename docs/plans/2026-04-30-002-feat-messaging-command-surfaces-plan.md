@@ -445,7 +445,7 @@ flowchart TB
 **Verification:**
 - Approval prompts are readable in Telegram, preserve audit/request context, and support both driving-friendly text replies and button clicks.
 
-- [ ] **Unit 7: Update operational docs, manual smoke checklist, and PR notes**
+- [x] **Unit 7: Update operational docs, manual smoke checklist, and PR notes**
 
 **Goal:** Document how the new command surfaces are configured and manually verified, including Telegram command registration behavior.
 
