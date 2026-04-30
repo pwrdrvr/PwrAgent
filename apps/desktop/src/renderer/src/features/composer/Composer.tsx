@@ -586,6 +586,40 @@ function adjustSkillTokenIndexesForTextChange(params: {
   });
 }
 
+function rankSkillAutocompleteMatch(
+  skill: AppServerSkillSummary,
+  normalizedQuery: string,
+): number | undefined {
+  if (!normalizedQuery) {
+    return 0;
+  }
+
+  const name = skill.name.toLowerCase();
+  const shortDescription = skill.shortDescription?.toLowerCase() ?? "";
+  const description = skill.description?.toLowerCase() ?? "";
+
+  if (name === normalizedQuery) {
+    return 0;
+  }
+  if (name.startsWith(`${normalizedQuery}:`)) {
+    return 1;
+  }
+  if (name.startsWith(normalizedQuery)) {
+    return 2;
+  }
+  if (name.includes(normalizedQuery)) {
+    return 3;
+  }
+  if (shortDescription.includes(normalizedQuery)) {
+    return 4;
+  }
+  if (description.includes(normalizedQuery)) {
+    return 5;
+  }
+
+  return undefined;
+}
+
 function useDismissableMenu<T extends HTMLElement>(
   open: boolean,
   onDismiss: () => void,
@@ -851,21 +885,25 @@ export function Composer(props: ComposerProps) {
     }
 
     const normalizedQuery = trigger.query.trim().toLowerCase();
-    return props.skills.filter((skill) => {
-      if (!skill.path) {
-        return false;
-      }
-
-      if (!normalizedQuery) {
-        return true;
-      }
-
-      return (
-        skill.name.toLowerCase().includes(normalizedQuery) ||
-        skill.description?.toLowerCase().includes(normalizedQuery) ||
-        skill.shortDescription?.toLowerCase().includes(normalizedQuery)
-      );
-    });
+    return props.skills
+      .map((skill, index) => ({
+        index,
+        score: skill.path
+          ? rankSkillAutocompleteMatch(skill, normalizedQuery)
+          : undefined,
+        skill,
+      }))
+      .filter(
+        (match): match is { index: number; score: number; skill: AppServerSkillSummary } =>
+          match.score !== undefined
+      )
+      .sort((left, right) => {
+        if (left.score !== right.score) {
+          return left.score - right.score;
+        }
+        return left.index - right.index;
+      })
+      .map((match) => match.skill);
   }, [props.skills, trigger]);
   const filteredSlashCommands = useMemo(() => {
     if (!slashTrigger) {

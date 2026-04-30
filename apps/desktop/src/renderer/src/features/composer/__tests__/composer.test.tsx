@@ -2201,6 +2201,68 @@ describe("Composer", () => {
     });
   });
 
+  it("prioritizes skill name prefix matches over description-only matches", () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        skills={[
+          {
+            name: "adversarial-document-reviewer",
+            description: "Conditional reviewer used for CE document stress-testing.",
+            path: "/Users/huntharo/.codex/skills/adversarial-document-reviewer/SKILL.md",
+            enabled: true,
+          },
+          {
+            name: "ce:plan",
+            description: "Transform requirements into implementation plans.",
+            path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+            enabled: true,
+          },
+          {
+            name: "ce:work",
+            description: "Execute implementation plans.",
+            path: "/Users/huntharo/.codex/skills/ce-work/SKILL.md",
+            enabled: true,
+          },
+          {
+            name: "architecture-strategist",
+            description: "Analyzes patterns and design integrity.",
+            path: "/Users/huntharo/.codex/skills/architecture-strategist/SKILL.md",
+            enabled: true,
+          },
+        ]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "$ce" },
+    });
+
+    const options = within(screen.getByRole("listbox", { name: "Skills" }))
+      .getAllByRole("button")
+      .map((option) => option.textContent ?? "");
+
+    expect(options[0]).toContain("$ce:plan");
+    expect(options[1]).toContain("$ce:work");
+    expect(options.slice(2).join(" ")).toContain("$adversarial-document-reviewer");
+  });
+
   it("removes selected skill chips without leaving raw mention text", async () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
