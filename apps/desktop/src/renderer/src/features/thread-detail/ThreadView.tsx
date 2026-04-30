@@ -1938,6 +1938,16 @@ export function ThreadView(props: ThreadViewProps) {
       (backend) => backend.kind === selectedLaunchpad.backend
     );
     const syncLabel = formatDirectorySync(props.selectedDirectory);
+    const workspaceLabel =
+      props.selectedDirectory.kind === "workspace"
+        ? "Workspace"
+        : selectedLaunchpad.workMode === "worktree"
+          ? "New worktree"
+          : "Local checkout";
+    const launchpadTitle =
+      props.selectedDirectory.kind === "workspace"
+        ? "New thread"
+        : selectedLaunchpad.directoryLabel;
     const handleMaterializeLaunchpad: NonNullable<
       ThreadViewProps["onMaterializeLaunchpad"]
     > = async (directoryKey, input, collaborationMode, reviewTarget) => {
@@ -1972,15 +1982,13 @@ export function ThreadView(props: ThreadViewProps) {
                 {formatExecutionModeLabel(selectedLaunchpad.executionMode)}
               </span>
             </div>
-            <h2 className="thread-header__title">{selectedLaunchpad.directoryLabel}</h2>
+            <h2 className="thread-header__title">{launchpadTitle}</h2>
           </div>
 
           <div className="thread-header__stats">
             <div>
               <span className="thread-header__stat-label">Workspace</span>
-              <strong>
-                {selectedLaunchpad.workMode === "worktree" ? "New worktree" : "Local checkout"}
-              </strong>
+              <strong>{workspaceLabel}</strong>
             </div>
             <div>
               <span className="thread-header__stat-label">Branch</span>

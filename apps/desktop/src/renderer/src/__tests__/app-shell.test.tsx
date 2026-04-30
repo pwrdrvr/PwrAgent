@@ -600,9 +600,9 @@ describe("App", () => {
       })
     );
     let launchpadState = {
-      directoryKey: "unlinked:new-thread",
-      directoryKind: "unlinked" as const,
-      directoryLabel: "New thread",
+      directoryKey: "workspace:new-thread",
+      directoryKind: "workspace" as const,
+      directoryLabel: "Workspaces",
       backend: "grok" as const,
       executionMode: "default" as const,
       prompt: "",
@@ -896,7 +896,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
-        directoryKey: "unlinked:new-thread",
+        directoryKey: "workspace:new-thread",
         input: [
           {
             type: "text",
@@ -1226,9 +1226,9 @@ describe("App", () => {
         }),
         ensureDirectoryLaunchpad: async () => ({
           launchpad: {
-            directoryKey: "unlinked:new-thread",
-            directoryKind: "unlinked" as const,
-            directoryLabel: "New thread",
+            directoryKey: "workspace:new-thread",
+            directoryKind: "workspace" as const,
+            directoryLabel: "Workspaces",
             backend: "codex" as const,
             executionMode: "default" as const,
             prompt: "",
@@ -1250,8 +1250,8 @@ describe("App", () => {
         }) => ({
           launchpad: {
             directoryKey,
-            directoryKind: "unlinked" as const,
-            directoryLabel: "New thread",
+            directoryKind: "workspace" as const,
+            directoryLabel: "Workspaces",
             backend: "codex" as const,
             executionMode: "default" as const,
             prompt: typeof patch.prompt === "string" ? patch.prompt : "",
@@ -1294,7 +1294,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
-        directoryKey: "unlinked:new-thread",
+        directoryKey: "workspace:new-thread",
         input: [{ type: "text", text: "hello new codex thread" }]
       });
     });
@@ -1513,9 +1513,9 @@ describe("App", () => {
         }),
         ensureDirectoryLaunchpad: async () => ({
           launchpad: {
-            directoryKey: "unlinked:new-thread",
-            directoryKind: "unlinked" as const,
-            directoryLabel: "New thread",
+            directoryKey: "workspace:new-thread",
+            directoryKind: "workspace" as const,
+            directoryLabel: "Workspaces",
             backend: "codex" as const,
             executionMode: "default" as const,
             prompt: "",
@@ -1537,8 +1537,8 @@ describe("App", () => {
         }) => ({
           launchpad: {
             directoryKey,
-            directoryKind: "unlinked" as const,
-            directoryLabel: "New thread",
+            directoryKind: "workspace" as const,
+            directoryLabel: "Workspaces",
             backend: "codex" as const,
             executionMode: "default" as const,
             prompt: typeof patch.prompt === "string" ? patch.prompt : "",
@@ -1578,7 +1578,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
-        directoryKey: "unlinked:new-thread",
+        directoryKey: "workspace:new-thread",
         input: [
           {
             type: "text",
