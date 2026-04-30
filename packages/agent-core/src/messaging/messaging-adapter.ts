@@ -5,6 +5,8 @@ import type {
   MessagingInboundEvent,
   NavigationSnapshot,
   MessagingSurfaceIntent,
+  StartThreadRequest,
+  StartThreadResponse,
   StartTurnRequest,
   StartTurnResponse,
   SubmitServerRequestRequest,
@@ -19,6 +21,7 @@ export type MessagingBackendBridge = {
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot>;
+  startThread?(request: StartThreadRequest): Promise<StartThreadResponse>;
   startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
   submitServerRequest?(
     request: SubmitServerRequestRequest,

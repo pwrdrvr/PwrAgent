@@ -208,7 +208,7 @@ flowchart TB
 **Verification:**
 - Store snapshots are restart-safe, redacted, and can represent both an unpinned browser surface and a pinned status surface.
 
-- [ ] **Unit 2: Build the channel-neutral `/resume` browser**
+- [x] **Unit 2: Build the channel-neutral `/resume` browser**
 
 **Goal:** Replace the simple first-page thread picker with a browser-like resume flow for recents, projects, project-specific threads, and new-thread starts.
 

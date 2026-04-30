@@ -24,6 +24,7 @@ export type StartThreadRequest = {
   sandbox?: string;
   serviceTier?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 };
 
 export type StartThreadResponse = {

@@ -4,6 +4,8 @@ import type {
   NavigationSnapshot,
   StartTurnRequest,
   StartTurnResponse,
+  StartThreadRequest,
+  StartThreadResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
 } from "@pwragnt/shared";
@@ -45,6 +47,10 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {
     return await this.registry.startTurn(request);
+  }
+
+  async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {
+    return await this.registry.startThread(request);
   }
 
   async submitServerRequest(

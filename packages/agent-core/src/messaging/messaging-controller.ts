@@ -5,6 +5,8 @@ import type {
   AppServerPendingRequestNotification,
   AppServerToolRequestUserInputNotification,
   MessagingBindingRecord,
+  MessagingBrowseSessionRecord,
+  MessagingDeliveryResult,
   MessagingInboundCallbackEvent,
   MessagingInboundCommandEvent,
   MessagingInboundEvent,
@@ -12,7 +14,6 @@ import type {
   MessagingJsonValue,
   MessagingMessageIntent,
   MessagingPendingIntentRecord,
-  MessagingSurfaceAction,
   MessagingSurfaceIntent,
   ThreadIdentifier,
 } from "@pwragnt/shared";
@@ -24,14 +25,20 @@ import {
   buildErrorIntent,
   buildQuestionnaireIntent,
   buildStatusIntent,
-  buildThreadPickerIntent,
 } from "./messaging-renderer.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
 import { actionsForIntent } from "./deterministic-interaction-mapper.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
+import {
+  buildResumeIntent,
+  directoryForProjectSelection,
+  parseResumeCommandArgs,
+  RESUME_BROWSER_PAGE_SIZE,
+  selectProjectFromValue,
+  selectThreadFromValue,
+} from "./messaging-resume-browser.js";
 
-const DEFAULT_PICKER_PAGE_SIZE = 5;
 const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 
 export type MessagingControllerOptions = {
@@ -193,8 +200,13 @@ export class MessagingController {
 
   private async handleCommand(event: MessagingInboundCommandEvent): Promise<void> {
     const command = event.command.replace(/^\//, "").toLowerCase();
-    if (command === "threads" || command === "thread" || command === "bind") {
-      await this.presentThreadPicker(event);
+    if (
+      command === "resume" ||
+      command === "threads" ||
+      command === "thread" ||
+      command === "bind"
+    ) {
+      await this.presentResumeBrowser(event);
       return;
     }
 
@@ -203,13 +215,13 @@ export class MessagingController {
         id: this.newIntentId("help"),
         createdAt: this.now(),
         title: "PwrAgnt",
-        body: "Use /threads to choose a thread to control from this conversation.",
+        body: "Use /resume to choose a thread to control from this conversation.",
         actions: [
           {
-            id: "command:threads",
-            label: "Threads",
+            id: "command:resume",
+            label: "Resume",
             style: "primary",
-            fallbackText: "/threads",
+            fallbackText: "/resume",
           },
         ],
       }),
@@ -225,7 +237,7 @@ export class MessagingController {
         ...event,
         kind: "command",
         command,
-        args: [],
+        args: parseTextCommandArgs(event.text),
         rawText: event.text,
       });
       return;
@@ -278,13 +290,13 @@ export class MessagingController {
           createdAt: this.now(),
           title: "Choose a thread",
           body: "Bind this conversation to a PwrAgnt thread before sending instructions.",
-          fallbackText: "Reply /threads to choose a thread.",
+          fallbackText: "Reply /resume to choose a thread.",
           actions: [
             {
-              id: "command:threads",
-              label: "Threads",
+              id: "command:resume",
+              label: "Resume",
               style: "primary",
-              fallbackText: "/threads",
+              fallbackText: "/resume",
             },
           ],
         }),
@@ -325,6 +337,12 @@ export class MessagingController {
         command,
         rawText: `/${command}`,
       });
+      return;
+    }
+
+    const browseAction = readBrowseAction(event);
+    if (browseAction) {
+      await this.handleBrowseCallback(event, browseAction);
       return;
     }
 
@@ -375,7 +393,7 @@ export class MessagingController {
         id: this.newIntentId("expired-callback"),
         createdAt: this.now(),
         title: "Action expired",
-        body: "That action is no longer available. Use /threads to refresh.",
+        body: "That action is no longer available. Use /resume to refresh.",
         recoverable: true,
       }),
       undefined,
@@ -404,41 +422,346 @@ export class MessagingController {
     });
   }
 
-  private async presentThreadPicker(event: MessagingInboundEvent): Promise<void> {
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
-    const actions = navigation.threads
-      .slice(0, DEFAULT_PICKER_PAGE_SIZE)
-      .map((thread, index): MessagingSurfaceAction => ({
-        id: `bind:${thread.source}:${thread.id}`,
-        label: `${index + 1}. ${thread.title}`,
-        style: "primary",
-        fallbackText: String(index + 1),
-        value: {
-          backend: thread.source,
-          threadId: thread.id,
-        },
-      }));
-    if (navigation.threads.length > DEFAULT_PICKER_PAGE_SIZE) {
-      actions.push({
-        id: "page:next",
-        label: "Next",
-        style: "navigation",
-        fallbackText: "next",
-      });
+  private async presentResumeBrowser(event: MessagingInboundCommandEvent): Promise<void> {
+    const parsed = parseResumeCommandArgs(event.args);
+    if (parsed.error) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("resume-error"),
+          createdAt: this.now(),
+          title: "Resume command error",
+          body: parsed.error,
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
     }
 
-    const intent = buildThreadPickerIntent({
-      id: this.newIntentId("thread-picker"),
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+      filter: parsed.query,
+    });
+    const selectedDirectory = parsed.cwd
+      ? navigation.directories.find(
+          (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
+        )
+      : undefined;
+    const session: MessagingBrowseSessionRecord = {
+      id: this.newIntentId("browse"),
+      allowedActorIds: [event.actor.platformUserId],
+      channel: event.channel,
       createdAt: this.now(),
-      fallbackText: "Reply with a number to bind, or Next for more threads.",
+      updatedAt: this.now(),
+      expiresAt: this.now() + this.pendingIntentTtlMs,
+      launchAction: parsed.launchAction,
+      mode: selectedDirectory && parsed.mode === "recents" ? "project_threads" : parsed.mode,
+      pageIndex: 0,
+      pageSize: RESUME_BROWSER_PAGE_SIZE,
+      preferences: parsed.preferences
+        ? {
+            ...parsed.preferences,
+            updatedAt: this.now(),
+          }
+        : undefined,
+      query: parsed.query,
+      selectedProject: selectedDirectory
+        ? {
+            directoryKey: selectedDirectory.key,
+            label: selectedDirectory.label,
+            path: selectedDirectory.path,
+          }
+        : undefined,
+    };
+    await this.renderResumeBrowser(session, navigation, event);
+  }
+
+  private async handleBrowseCallback(
+    event: MessagingInboundCallbackEvent,
+    actionId: string,
+  ): Promise<void> {
+    const session = await this.options.store.findActiveBrowseSessionForChannel({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      now: this.now(),
+    });
+    if (!session) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("expired-browse"),
+          createdAt: this.now(),
+          title: "Action expired",
+          body: "That browser action is no longer available. Use /resume to refresh.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+      filter: session.query,
+    });
+    const nextSession = {
+      ...session,
+      updatedAt: this.now(),
+    };
+
+    if (actionId === "browse:page:next") {
+      await this.renderResumeBrowser(
+        { ...nextSession, pageIndex: nextSession.pageIndex + 1 },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:page:prev") {
+      await this.renderResumeBrowser(
+        { ...nextSession, pageIndex: Math.max(0, nextSession.pageIndex - 1) },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:mode:projects") {
+      await this.renderResumeBrowser(
+        {
+          ...nextSession,
+          launchAction: "resume_thread",
+          mode: "projects",
+          pageIndex: 0,
+          selectedProject: undefined,
+        },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:mode:recents") {
+      await this.renderResumeBrowser(
+        {
+          ...nextSession,
+          launchAction: "resume_thread",
+          mode: "recents",
+          pageIndex: 0,
+          selectedProject: undefined,
+        },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:mode:new") {
+      await this.renderResumeBrowser(
+        {
+          ...nextSession,
+          launchAction: "start_new_thread",
+          mode: "new_project",
+          pageIndex: 0,
+          selectedProject: undefined,
+        },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:cancel") {
+      await this.options.store.deleteBrowseSession(session.id);
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("browse-cancelled"),
+          createdAt: this.now(),
+          title: "Resume cancelled",
+          body: "No thread binding changed.",
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:select-project") {
+      const project = selectProjectFromValue(event.value);
+      if (!project) {
+        await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
+      if (session.launchAction === "start_new_thread") {
+        await this.startNewThreadFromProject(event, session, navigation, project);
+        return;
+      }
+      await this.renderResumeBrowser(
+        {
+          ...nextSession,
+          mode: "project_threads",
+          pageIndex: 0,
+          selectedProject: project,
+        },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:select-thread") {
+      const target = selectThreadFromValue(event.value);
+      if (!target) {
+        await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
+      const binding = await this.bindChannelToThread(event, target);
+      await this.applyBrowseBindingMetadata(binding, session, navigation, target);
+      await this.options.store.deleteBrowseSession(session.id);
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("bound"),
+          createdAt: this.now(),
+          title: "Thread bound",
+          body: "Messages in this conversation will route to the selected thread.",
+          fallbackText: "Send a message to continue the thread.",
+        }),
+        binding,
+      );
+      return;
+    }
+
+    await this.deliverInvalidBrowseSelection(event);
+  }
+
+  private async renderResumeBrowser(
+    session: MessagingBrowseSessionRecord,
+    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.options.store.upsertBrowseSession(session);
+    const intent = buildResumeIntent({
+      id: this.newIntentId("resume"),
+      createdAt: this.now(),
       navigation,
-      pageSize: DEFAULT_PICKER_PAGE_SIZE,
-      actions,
+      session,
     });
     await this.storePendingIntent(intent, undefined, event);
-    await this.deliver(intent, undefined, event);
+    const result = await this.deliver(intent, undefined, event);
+    if (!result.surface) {
+      return;
+    }
+
+    await this.options.store.upsertBrowseSession({
+      ...session,
+      surface: result.surface,
+      updatedAt: this.now(),
+    });
+    await this.options.store.upsertPendingIntent({
+      id: intent.id,
+      channel: event.channel,
+      intent,
+      allowedActorIds: [event.actor.platformUserId],
+      createdAt: this.now(),
+      expiresAt: this.now() + this.pendingIntentTtlMs,
+      surface: result.surface,
+    });
+  }
+
+  private async startNewThreadFromProject(
+    event: MessagingInboundCallbackEvent,
+    session: MessagingBrowseSessionRecord,
+    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    project: NonNullable<ReturnType<typeof selectProjectFromValue>>,
+  ): Promise<void> {
+    if (!this.options.backend.startThread) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("new-thread-unavailable"),
+          createdAt: this.now(),
+          title: "New thread unavailable",
+          body: "This backend does not support starting a thread from messaging yet.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    const directory = directoryForProjectSelection(navigation, project);
+    const preferences = session.preferences;
+    const started = await this.options.backend.startThread({
+      backend: navigation.launchpadDefaults.backend,
+      cwd: directory?.path ?? project.path,
+      executionMode: preferences?.executionMode ?? navigation.launchpadDefaults.executionMode,
+      fastMode: preferences?.fastMode ?? navigation.launchpadDefaults.fastMode,
+      model: preferences?.model ?? navigation.launchpadDefaults.model,
+      reasoningEffort:
+        preferences?.reasoningEffort ?? navigation.launchpadDefaults.reasoningEffort,
+      serviceTier: preferences?.serviceTier ?? navigation.launchpadDefaults.serviceTier,
+    });
+    const binding = await this.bindChannelToThread(event, {
+      backend: started.backend,
+      threadId: started.threadId,
+    });
+    const updatedBinding = await this.options.store.upsertBinding({
+      ...binding,
+      preferences,
+      threadDisplay: {
+        directoryPath: directory?.path ?? project.path,
+        projectLabel: directory?.label ?? project.label,
+      },
+      updatedAt: this.now(),
+    });
+    await this.options.store.deleteBrowseSession(session.id);
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("new-thread-bound"),
+        createdAt: this.now(),
+        title: "Thread started",
+        body: `Started and bound a new thread for ${project.label}.`,
+        fallbackText: "Send a message to continue the new thread.",
+      }),
+      updatedBinding,
+    );
+  }
+
+  private async applyBrowseBindingMetadata(
+    binding: MessagingBindingRecord,
+    session: MessagingBrowseSessionRecord,
+    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
+    target: { backend: AppServerBackendKind; threadId: ThreadIdentifier },
+  ): Promise<void> {
+    const thread = navigation.threads.find(
+      (candidate) => candidate.source === target.backend && candidate.id === target.threadId,
+    );
+    const directory = session.selectedProject
+      ? directoryForProjectSelection(navigation, session.selectedProject)
+      : undefined;
+    await this.options.store.upsertBinding({
+      ...binding,
+      preferences: session.preferences,
+      threadDisplay: {
+        directoryPath: directory?.path ?? thread?.linkedDirectories[0]?.path,
+        projectLabel: directory?.label ?? thread?.linkedDirectories[0]?.label,
+        threadTitle: thread?.title,
+        worktreePath: thread?.linkedDirectories.find((item) => item.kind === "worktree")
+          ?.worktreePath,
+      },
+      updatedAt: this.now(),
+    });
+  }
+
+  private async deliverInvalidBrowseSelection(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("invalid-browse-selection"),
+        createdAt: this.now(),
+        title: "Invalid selection",
+        body: "That resume selection is no longer available. Use /resume to refresh.",
+        recoverable: true,
+      }),
+      undefined,
+      event,
+    );
   }
 
   private async bindChannelToThread(
@@ -504,7 +827,7 @@ export class MessagingController {
     intent: MessagingSurfaceIntent,
     binding?: MessagingBindingRecord,
     event?: MessagingInboundEvent,
-  ): Promise<void> {
+  ): Promise<MessagingDeliveryResult> {
     const routedIntent = this.withRoutingAudit(intent, binding, event);
     const result = await this.options.adapter.deliver(routedIntent);
     await this.options.store.recordDelivery({
@@ -513,6 +836,7 @@ export class MessagingController {
       bindingId: binding?.id ?? intent.bindingId,
       intentId: routedIntent.id,
     });
+    return result;
   }
 
   private withRoutingAudit(
@@ -560,6 +884,11 @@ function readCommandAction(event: MessagingInboundCallbackEvent): string | undef
   return match?.[1]?.toLowerCase();
 }
 
+function readBrowseAction(event: MessagingInboundCallbackEvent): string | undefined {
+  const actionId = event.actionId ?? event.interaction.id;
+  return actionId.startsWith("browse:") ? actionId : undefined;
+}
+
 function parseTextCommand(text: string): string | undefined {
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) {
@@ -567,6 +896,15 @@ function parseTextCommand(text: string): string | undefined {
   }
 
   return trimmed.slice(1).split(/\s+/, 1)[0]?.toLowerCase();
+}
+
+function parseTextCommandArgs(text: string): string[] {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("/")) {
+    return [];
+  }
+
+  return trimmed.slice(1).split(/\s+/).slice(1).filter(Boolean);
 }
 
 function readBindingTarget(

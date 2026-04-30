@@ -10,6 +10,7 @@ import type {
   MessagingInboundTextEvent,
   MessagingSurfaceIntent,
   NavigationSnapshot,
+  StartThreadRequest,
   StartTurnRequest,
   SubmitServerRequestRequest,
 } from "@pwragnt/shared";
@@ -42,7 +43,7 @@ describe("MessagingController", () => {
     expect(harness.delivered).toHaveLength(1);
     expect(harness.delivered[0]).toMatchObject({
       kind: "thread_picker",
-      fallbackText: "Reply with a number to bind, or Next for more threads.",
+      fallbackText: expect.stringContaining("Showing recent PwrAgnt threads."),
     });
     expect(JSON.stringify(harness.delivered[0])).not.toMatch(/callback_data|custom_id/);
     await expect(harness.store.getPendingIntent(harness.delivered[0]!.id, { now: 1000 }))
@@ -51,6 +52,82 @@ describe("MessagingController", () => {
           channel: "telegram",
         },
       });
+  });
+
+  it("shows projects from /resume --projects and filters threads after a project click", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --projects"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      fallbackText: expect.stringContaining("Choose a project"),
+      page: {
+        items: [
+          expect.objectContaining({
+            label: "PwrAgnt",
+          }),
+        ],
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragnt",
+          label: "PwrAgnt",
+          path: "/repo/pwragnt",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "thread_picker",
+      fallbackText: expect.stringContaining("PwrAgnt"),
+      page: {
+        items: [
+          expect.objectContaining({
+            id: "thread-1",
+          }),
+        ],
+      },
+    });
+  });
+
+  it("starts a new thread from /resume --new project selection", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragnt",
+          label: "PwrAgnt",
+          path: "/repo/pwragnt",
+        },
+      }),
+    );
+
+    expect(harness.startThread).toHaveBeenCalledWith({
+      backend: "codex",
+      cwd: "/repo/pwragnt",
+      executionMode: "default",
+      fastMode: undefined,
+      model: undefined,
+      reasoningEffort: undefined,
+      serviceTier: undefined,
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "new-thread-1",
+      threadDisplay: {
+        projectLabel: "PwrAgnt",
+      },
+    });
   });
 
   it("binds a callback-selected thread to the channel", async () => {
@@ -338,6 +415,7 @@ async function createHarness(): Promise<{
   controller: MessagingController;
   delivered: MessagingSurfaceIntent[];
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
+  startThread: ReturnType<typeof vi.fn>;
   startTurn: ReturnType<typeof vi.fn>;
   submitServerRequest: ReturnType<typeof vi.fn>;
   store: MessagingStore;
@@ -359,6 +437,11 @@ async function createHarness(): Promise<{
     }),
   };
   const getNavigationSnapshot = vi.fn(async () => buildNavigationSnapshot());
+  const startThread = vi.fn(async (request: StartThreadRequest) => ({
+    backend: request.backend,
+    threadId: "new-thread-1",
+    executionMode: request.executionMode ?? "default",
+  }));
   const startTurn = vi.fn(async (request: StartTurnRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -372,6 +455,7 @@ async function createHarness(): Promise<{
   }));
   const backend: MessagingBackendBridge = {
     getNavigationSnapshot,
+    startThread,
     startTurn,
     submitServerRequest,
   };
@@ -386,6 +470,7 @@ async function createHarness(): Promise<{
     }),
     delivered,
     getNavigationSnapshot,
+    startThread,
     startTurn,
     submitServerRequest,
     store,
@@ -403,14 +488,32 @@ function buildNavigationSnapshot(): NavigationSnapshot {
         title: "Thread one",
         titleSource: "explicit",
         source: "codex",
-        linkedDirectories: [],
+        linkedDirectories: [
+          {
+            id: "directory:pwragnt",
+            kind: "local",
+            label: "PwrAgnt",
+            path: "/repo/pwragnt",
+          },
+        ],
         inbox: {
           inInbox: false,
         },
+        updatedAt: 1000,
       },
     ],
     inboxThreadKeys: [],
-    directories: [],
+    directories: [
+      {
+        key: "directory:pwragnt",
+        kind: "directory",
+        label: "PwrAgnt",
+        path: "/repo/pwragnt",
+        threadKeys: ["codex:thread-1"],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 1000,
+      },
+    ],
     launchpadDefaults: {
       backend: "codex",
       executionMode: "default",
@@ -422,7 +525,8 @@ function buildCommandEvent(
   rawText: string,
   actor: { platformUserId: string; username?: string } = { platformUserId: "user-1" },
 ): MessagingInboundEvent & { kind: "command" } {
-  const command = rawText.replace(/^\//, "").split(/\s+/, 1)[0] ?? "";
+  const parts = rawText.replace(/^\//, "").split(/\s+/).filter(Boolean);
+  const command = parts[0] ?? "";
   return {
     id: "event-command",
     kind: "command",
@@ -435,7 +539,7 @@ function buildCommandEvent(
       },
     },
     command,
-    args: [],
+    args: parts.slice(1),
     rawText,
     receivedAt: 1000,
   };
