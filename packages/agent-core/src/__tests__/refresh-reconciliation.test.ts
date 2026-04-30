@@ -131,6 +131,76 @@ describe("refresh reconciliation", () => {
     expect(snapshot.threads[0]?.observedGitBranch).toBe("fix/testing-detached-head");
   });
 
+  it("uses overlay branch metadata when a workspace handoff updates the checkout", async () => {
+    const store = await createStore();
+
+    await store.replaceWorkspaceLinkedDirectory({
+      backend: "codex",
+      threadId: "thread-1",
+      gitBranch: "feat/thread-workspace-handoff-plan",
+      directory: {
+        id: "pwragnt-handoff:codex:thread-1",
+        kind: "worktree",
+        label: "PwrAgnt",
+        path: "/repo",
+        worktreePath: "/repo/.worktrees/pwragnt-feature",
+      },
+    });
+
+    const snapshot = await store.reconcileNavigationSnapshot({
+      backend: "codex",
+      fetchedAt: 1000,
+      threads: [
+        buildThread({
+          gitBranch: "fix/context-rail-slide-reflow",
+          observedGitBranch: "main",
+        }),
+      ],
+    });
+
+    expect(snapshot.threads[0]?.gitBranch).toBe("feat/thread-workspace-handoff-plan");
+    expect(snapshot.threads[0]?.observedGitBranch).toBe(
+      "feat/thread-workspace-handoff-plan",
+    );
+  });
+
+  it("uses observed handoff branch metadata when legacy overlay state has no expected branch", async () => {
+    const store = await createStore();
+
+    await store.addLinkedDirectory({
+      backend: "codex",
+      threadId: "thread-1",
+      directory: {
+        id: "pwragnt-handoff:codex:thread-1",
+        kind: "worktree",
+        label: "PwrAgnt",
+        path: "/repo",
+        worktreePath: "/repo/.worktrees/pwragnt-feature",
+      },
+    });
+    await store.setThreadObservedBranch({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feat/thread-workspace-handoff-plan",
+    });
+
+    const snapshot = await store.reconcileNavigationSnapshot({
+      backend: "codex",
+      fetchedAt: 1000,
+      threads: [
+        buildThread({
+          gitBranch: "fix/context-rail-slide-reflow",
+          observedGitBranch: "feat/thread-workspace-handoff-plan",
+        }),
+      ],
+    });
+
+    expect(snapshot.threads[0]?.gitBranch).toBe("feat/thread-workspace-handoff-plan");
+    expect(snapshot.threads[0]?.observedGitBranch).toBe(
+      "feat/thread-workspace-handoff-plan",
+    );
+  });
+
   it("tracks mixed-backend threads with duplicate ids independently in aggregate snapshots", async () => {
     const store = await createStore();
 

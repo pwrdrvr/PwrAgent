@@ -186,6 +186,37 @@ describe("ProtocolCaptureStore", () => {
     });
   });
 
+  it("resets the index and keeps capturing when capture index JSON is malformed", async () => {
+    const rootDir = await createTempDir();
+    cleanupPaths.push(rootDir);
+    const indexPath = path.join(rootDir, "index.json");
+    const store = new ProtocolCaptureStore({
+      backend: "codex",
+      captureId: "capture-with-bad-index",
+      rootDir,
+    });
+
+    await fs.writeFile(indexPath, "", "utf8");
+
+    await store.append({
+      direction: "outbound",
+      raw: '{"jsonrpc":"2.0","id":"rpc-1","method":"initialize","params":{}}',
+      envelope: {
+        id: "rpc-1",
+        method: "initialize",
+        params: {},
+      },
+    });
+
+    const index = JSON.parse(
+      await fs.readFile(indexPath, "utf8"),
+    ) as Record<string, { backend: string; captureId: string }>;
+    expect(index["capture-with-bad-index"]).toMatchObject({
+      backend: "codex",
+      captureId: "capture-with-bad-index",
+    });
+  });
+
   it("reads capture files with parsed envelopes and optional redactions", async () => {
     const rootDir = await createTempDir();
     cleanupPaths.push(rootDir);

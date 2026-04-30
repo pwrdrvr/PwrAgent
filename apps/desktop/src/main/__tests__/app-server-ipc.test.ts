@@ -4,6 +4,7 @@ import type {
   ArchiveThreadRequest,
   AppServerListThreadsRequest,
   GetNavigationSnapshotRequest,
+  HandoffThreadWorkspaceRequest,
   MarkThreadSeenRequest,
   RenameThreadRequest,
   RestoreWorktreeRequest,
@@ -101,6 +102,24 @@ const restoreWorktree = vi.fn(async (request: RestoreWorktreeRequest) => ({
     ignoredFilesExcluded: true,
   },
 }));
+const handoffThreadWorkspace = vi.fn(async (request: HandoffThreadWorkspaceRequest) => ({
+  backend: request.backend,
+  threadId: request.threadId,
+  direction: request.direction,
+  workMode: request.direction === "local-to-worktree" ? "worktree" as const : "local" as const,
+  branch: request.sourceBranch ?? "feature/handoff",
+  repositoryPath: request.repositoryPath ?? "/repo",
+  targetPath: "/repo/.worktrees/app-feature-handoff",
+  linkedDirectory: {
+    id: "pwragnt-handoff:codex:thread-1",
+    label: "app",
+    path: request.repositoryPath ?? "/repo",
+    worktreePath: "/repo/.worktrees/app-feature-handoff",
+    kind: "worktree" as const,
+  },
+  warnings: [],
+  completedAt: 5000,
+}));
 const renameThread = vi.fn(async (request: RenameThreadRequest) => ({
   backend: request.backend ?? "codex",
   threadId: request.threadId,
@@ -173,6 +192,7 @@ vi.mock("../app-server/backend-registry", () => ({
     restoreThread,
     archiveWorktree,
     restoreWorktree,
+    handoffThreadWorkspace,
     renameThread,
     listThreads,
     readThread,
@@ -187,6 +207,7 @@ describe("app server ipc", () => {
     restoreThread.mockClear();
     archiveWorktree.mockClear();
     restoreWorktree.mockClear();
+    handoffThreadWorkspace.mockClear();
     renameThread.mockClear();
     listThreads.mockClear();
     readThread.mockClear();
@@ -373,6 +394,47 @@ describe("app server ipc", () => {
         snapshotRef: "refs/codex/snapshots/snapshot-1",
         state: "restored",
       }),
+    });
+  });
+
+  it("hands off thread workspaces through the app-server IPC handler", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL } = await import("../../shared/ipc");
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL)?.({}, {
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      repositoryPath: "/repo",
+      sourcePath: "/repo",
+      sourceBranch: "feature/handoff",
+      leaveLocalBranch: "main",
+    } satisfies HandoffThreadWorkspaceRequest);
+
+    expect(handoffThreadWorkspace).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      repositoryPath: "/repo",
+      sourcePath: "/repo",
+      sourceBranch: "feature/handoff",
+      leaveLocalBranch: "main",
+    });
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      workMode: "worktree",
+      branch: "feature/handoff",
+      repositoryPath: "/repo",
+      targetPath: "/repo/.worktrees/app-feature-handoff",
+      linkedDirectory: expect.objectContaining({
+        kind: "worktree",
+      }),
+      warnings: [],
+      completedAt: 5000,
     });
   });
 

@@ -5,6 +5,7 @@ import type {
   AppServerReviewTarget,
   AppServerThreadImagePart,
   AppServerTurnInputItem,
+  HandoffThreadWorkspaceRequest,
   LinkedDirectorySummary,
   NavigationDirectorySummary,
   NavigationLaunchpadDefaults,
@@ -100,6 +101,26 @@ function threadInboxEqual(
   );
 }
 
+function retainedBranchDriftPairsEqual(
+  left: NavigationThreadSummary["retainedBranchDriftPairs"],
+  right: NavigationThreadSummary["retainedBranchDriftPairs"]
+): boolean {
+  const leftPairs = left ?? [];
+  const rightPairs = right ?? [];
+  if (leftPairs.length !== rightPairs.length) {
+    return false;
+  }
+
+  return leftPairs.every((pair, index) => {
+    const candidate = rightPairs[index];
+    return (
+      candidate?.expectedBranch === pair.expectedBranch &&
+      candidate.observedBranch === pair.observedBranch &&
+      candidate.retainedAt === pair.retainedAt
+    );
+  });
+}
+
 function threadSummariesEqual(
   left: NavigationThreadSummary,
   right: NavigationThreadSummary
@@ -120,6 +141,10 @@ function threadSummariesEqual(
     left.reasoningEffort === right.reasoningEffort &&
     left.serviceTier === right.serviceTier &&
     left.fastMode === right.fastMode &&
+    retainedBranchDriftPairsEqual(
+      left.retainedBranchDriftPairs,
+      right.retainedBranchDriftPairs
+    ) &&
     linkedDirectoriesEqual(left.linkedDirectories, right.linkedDirectories) &&
     worktreeSnapshotsEqual(left.worktreeSnapshots, right.worktreeSnapshots) &&
     threadInboxEqual(left.inbox, right.inbox)
@@ -700,6 +725,10 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     snapshotRef: string,
     worktreePath: string
   ) => Promise<void>;
+  handoffThreadWorkspace: (
+    thread: NavigationThreadSummary,
+    request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
+  ) => Promise<void>;
   renameThread: (thread: NavigationThreadSummary, name: string) => Promise<void>;
   snapshot?: NavigationSnapshot;
   threads: NavigationThreadSummary[];
@@ -708,6 +737,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const archiveThreadRequest = desktopApi?.archiveThread;
   const archiveWorktreeRequest = desktopApi?.archiveWorktree;
   const restoreWorktreeRequest = desktopApi?.restoreWorktree;
+  const handoffThreadWorkspaceRequest = desktopApi?.handoffThreadWorkspace;
   const renameThreadRequest = desktopApi?.renameThread;
   const setThreadExecutionMode = desktopApi?.setThreadExecutionMode;
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
@@ -1130,14 +1160,28 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
 
   const selectedDirectory = useMemo(() => {
     const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
+    if (launchpadDirectoryKey) {
+      return directories.find((directory) => directory.key === launchpadDirectoryKey);
+    }
+
+    if (!selectedThreadKey) {
+      return undefined;
+    }
+
+    return directories.find((directory) =>
+      directory.threadKeys.includes(selectedThreadKey)
+    );
+  }, [directories, selectedItemKey, selectedThreadKey]);
+
+  const selectedLaunchpad = useMemo(() => {
+    const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
     if (!launchpadDirectoryKey) {
       return undefined;
     }
 
-    return directories.find((directory) => directory.key === launchpadDirectoryKey);
+    return directories.find((directory) => directory.key === launchpadDirectoryKey)
+      ?.launchpad;
   }, [directories, selectedItemKey]);
-
-  const selectedLaunchpad = selectedDirectory?.launchpad;
 
   useEffect(() => {
     releaseRetainedUnreadThread(selectedItemKey);
@@ -1558,6 +1602,36 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     [refresh, restoreWorktreeRequest]
   );
 
+  const handoffThreadWorkspace = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
+    ): Promise<void> => {
+      if (!handoffThreadWorkspaceRequest) {
+        const error = new Error("Desktop bridge is missing handoffThreadWorkspace().");
+        setWorktreeArchiveError(error.message);
+        throw error;
+      }
+
+      setWorktreeArchiveError(undefined);
+      setArchiveThreadError(undefined);
+
+      try {
+        await handoffThreadWorkspaceRequest({
+          ...request,
+          backend: thread.source,
+          threadId: thread.id,
+        });
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setWorktreeArchiveError(message);
+        throw error;
+      }
+    },
+    [handoffThreadWorkspaceRequest, refresh]
+  );
+
   const renameThread = useCallback(
     async (thread: NavigationThreadSummary, name: string): Promise<void> => {
       const nextName = name.trim();
@@ -1770,6 +1844,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     archiveThread,
     archiveWorktree,
     restoreWorktree,
+    handoffThreadWorkspace,
     renameThread,
     snapshot: state.response,
     threads,

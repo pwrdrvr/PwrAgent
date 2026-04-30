@@ -17,6 +17,7 @@ import type {
   AppServerThreadReplayPagination,
   AppServerSkillSummary,
   BackendSummary,
+  HandoffThreadWorkspaceRequest,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
@@ -1114,6 +1115,7 @@ type ThreadViewProps = {
   onActiveTurnIdChange?: (turnId?: string) => void;
   onEnsureSkillsLoaded?: () => void | Promise<void>;
   onLoadOlder: () => Promise<void>;
+  onRefreshNavigation?: () => Promise<void>;
   onMaterializeLaunchpad?: (
     directoryKey: string,
     input?: AppServerTurnInputItem[],
@@ -1130,6 +1132,9 @@ type ThreadViewProps = {
     updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
   ) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onHandoffThreadWorkspace?: (
+    request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
+  ) => Promise<void>;
   onSetThreadModelSettings?: (
     patch: Partial<
       Pick<
@@ -1178,6 +1183,14 @@ type ThreadViewProps = {
   };
 };
 
+type BranchDriftDialogState = {
+  checkedAt?: number;
+  expectedBranch: string;
+  observedBranch: string;
+  reason: "focus" | "turn";
+  threadKey: string;
+};
+
 export function ThreadView(props: ThreadViewProps) {
   const [pendingActivityEntry, setPendingActivityEntry] =
     useState<AppServerThreadActivityEntry>();
@@ -1214,6 +1227,145 @@ export function ThreadView(props: ThreadViewProps) {
 
   const selectedThread = props.selectedThread;
   const selectedLaunchpad = props.selectedLaunchpad;
+  const [branchDriftDialog, setBranchDriftDialog] =
+    useState<BranchDriftDialogState>();
+  const [branchDriftError, setBranchDriftError] = useState<string>();
+  const [branchDriftBusy, setBranchDriftBusy] = useState(false);
+
+  const selectedThreadKey = selectedThread
+    ? `${selectedThread.source}:${selectedThread.id}`
+    : undefined;
+
+  const branchDriftRetained = (
+    thread: NavigationThreadSummary,
+    expectedBranch: string,
+    observedBranch: string,
+  ): boolean =>
+    (thread.retainedBranchDriftPairs ?? []).some(
+      (pair) =>
+        pair.expectedBranch === expectedBranch &&
+        pair.observedBranch === observedBranch,
+    );
+
+  const canWarnForBranchDrift = (expectedBranch?: string, observedBranch?: string): boolean =>
+    Boolean(
+      expectedBranch &&
+        observedBranch &&
+        expectedBranch !== "HEAD" &&
+        observedBranch !== "HEAD" &&
+        expectedBranch !== observedBranch,
+    );
+
+  const showBranchDriftDialog = (
+    thread: NavigationThreadSummary,
+    expectedBranch: string,
+    observedBranch: string,
+    reason: BranchDriftDialogState["reason"],
+    checkedAt?: number,
+  ): boolean => {
+    if (!canWarnForBranchDrift(expectedBranch, observedBranch)) {
+      return false;
+    }
+
+    if (branchDriftRetained(thread, expectedBranch, observedBranch)) {
+      return false;
+    }
+
+    setBranchDriftError(undefined);
+    setBranchDriftDialog({
+      checkedAt,
+      expectedBranch,
+      observedBranch,
+      reason,
+      threadKey: `${thread.source}:${thread.id}`,
+    });
+    return true;
+  };
+
+  const checkSelectedThreadBranchDrift = async (
+    reason: BranchDriftDialogState["reason"],
+  ): Promise<boolean> => {
+    const thread = selectedThread;
+    if (!thread?.gitBranch || !props.desktopApi?.checkThreadBranchDrift) {
+      return false;
+    }
+
+    try {
+      const result = await props.desktopApi.checkThreadBranchDrift({
+        backend: thread.source,
+        threadId: thread.id,
+      });
+      if (result.observedBranch !== thread.observedGitBranch) {
+        await props.onRefreshNavigation?.();
+      }
+      if (
+        !result.drifted ||
+        !result.expectedBranch ||
+        !result.observedBranch ||
+        !canWarnForBranchDrift(result.expectedBranch, result.observedBranch)
+      ) {
+        setBranchDriftDialog((current) =>
+          current?.threadKey === `${thread.source}:${thread.id}` ? undefined : current,
+        );
+        return false;
+      }
+
+      return showBranchDriftDialog(
+        thread,
+        result.expectedBranch,
+        result.observedBranch,
+        reason,
+        result.checkedAt,
+      );
+    } catch {
+      return false;
+    }
+  };
+
+  useEffect(() => {
+    setBranchDriftDialog(undefined);
+    setBranchDriftError(undefined);
+  }, [selectedThreadKey]);
+
+  useEffect(() => {
+    const thread = selectedThread;
+    const expectedBranch = thread?.gitBranch;
+    const observedBranch = thread?.observedGitBranch;
+    if (
+      !thread ||
+      !expectedBranch ||
+      !observedBranch ||
+      !canWarnForBranchDrift(expectedBranch, observedBranch)
+    ) {
+      if (thread) {
+        setBranchDriftDialog((current) =>
+          current?.threadKey === `${thread.source}:${thread.id}` ? undefined : current,
+        );
+      }
+      return;
+    }
+
+    showBranchDriftDialog(thread, expectedBranch, observedBranch, "focus");
+  }, [selectedThread]);
+
+  useEffect(() => {
+    if (!selectedThread || selectedLaunchpad) {
+      return;
+    }
+
+    void checkSelectedThreadBranchDrift("focus");
+    const intervalId = window.setInterval(() => {
+      void checkSelectedThreadBranchDrift("focus");
+    }, 30_000);
+    const unsubscribeFocus = props.desktopApi?.onWindowFocus?.(() => {
+      void checkSelectedThreadBranchDrift("focus");
+    });
+
+    return () => {
+      window.clearInterval(intervalId);
+      unsubscribeFocus?.();
+    };
+  }, [props.desktopApi, selectedLaunchpad, selectedThreadKey]);
 
   useEffect(() => {
     if (!pendingActivityEntry) {
@@ -1929,6 +2081,12 @@ export function ThreadView(props: ThreadViewProps) {
             onActiveTurnIdChange={props.onActiveTurnIdChange}
             onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
             onPendingStatusChange={props.onPendingStatusChange}
+            onHandoffThreadWorkspace={props.onHandoffThreadWorkspace}
+            onBeforeStartTurn={
+              selectedThread?.gitBranch && props.desktopApi?.checkThreadBranchDrift
+                ? async () => !(await checkSelectedThreadBranchDrift("turn"))
+                : undefined
+            }
             onSetExecutionMode={props.onSetExecutionMode}
             onSetThreadModelSettings={props.onSetThreadModelSettings}
             pendingRequestActive={Boolean(props.pendingRequest)}
@@ -1967,6 +2125,114 @@ export function ThreadView(props: ThreadViewProps) {
             setExpandedImage(undefined);
           }}
         />
+      ) : null}
+
+      {branchDriftDialog && selectedThread ? (
+        <div className="workspace-handoff-modal">
+          <div
+            aria-labelledby="branch-drift-title"
+            aria-modal="true"
+            className="workspace-handoff-dialog"
+            role="dialog"
+          >
+            <h2 id="branch-drift-title">Thread branch changed</h2>
+            <p>
+              This thread was working on branch{" "}
+              <strong>{branchDriftDialog.expectedBranch}</strong> and now has moved to branch{" "}
+              <strong>{branchDriftDialog.observedBranch}</strong>.
+            </p>
+            <p>
+              Some context understood by the agent may have changed. Asking the agent to
+              continue with a change that is no longer available on the current branch will not
+              work.
+            </p>
+            <dl className="workspace-handoff-dialog__summary">
+              <div>
+                <dt>Expected branch</dt>
+                <dd>{branchDriftDialog.expectedBranch}</dd>
+              </div>
+              <div>
+                <dt>Current branch</dt>
+                <dd>{branchDriftDialog.observedBranch}</dd>
+              </div>
+            </dl>
+            {branchDriftError ? (
+              <p className="workspace-handoff-dialog__error">{branchDriftError}</p>
+            ) : null}
+            <div className="workspace-handoff-dialog__actions">
+              <button
+                className="button-secondary"
+                disabled={branchDriftBusy}
+                title={
+                  branchDriftDialog.reason === "turn"
+                    ? "Cancel this send and leave the expected branch unchanged."
+                    : "Keep the detected branch warning visible so you can switch back to the expected branch."
+                }
+                type="button"
+                onClick={async () => {
+                  if (branchDriftDialog.reason === "turn") {
+                    setBranchDriftDialog(undefined);
+                    return;
+                  }
+
+                  if (!props.desktopApi?.retainThreadBranchDrift || !selectedThread) {
+                    setBranchDriftDialog(undefined);
+                    return;
+                  }
+
+                  setBranchDriftBusy(true);
+                  setBranchDriftError(undefined);
+                  try {
+                    await props.desktopApi.retainThreadBranchDrift({
+                      backend: selectedThread.source,
+                      threadId: selectedThread.id,
+                      expectedBranch: branchDriftDialog.expectedBranch,
+                      observedBranch: branchDriftDialog.observedBranch,
+                    });
+                    await props.onRefreshNavigation?.();
+                    setBranchDriftDialog(undefined);
+                  } catch (error) {
+                    setBranchDriftError(error instanceof Error ? error.message : String(error));
+                  } finally {
+                    setBranchDriftBusy(false);
+                  }
+                }}
+              >
+                {branchDriftDialog.reason === "turn"
+                  ? "Cancel"
+                  : "Retain Expected Branch"}
+              </button>
+              <button
+                className="button-primary"
+                disabled={branchDriftBusy}
+                type="button"
+                onClick={async () => {
+                  if (!props.desktopApi?.updateThreadExpectedBranch || !selectedThread) {
+                    return;
+                  }
+
+                  setBranchDriftBusy(true);
+                  setBranchDriftError(undefined);
+                  try {
+                    await props.desktopApi.updateThreadExpectedBranch({
+                      backend: selectedThread.source,
+                      threadId: selectedThread.id,
+                      branch: branchDriftDialog.observedBranch,
+                    });
+                    await props.onRefreshNavigation?.();
+                    setBranchDriftDialog(undefined);
+                  } catch (error) {
+                    setBranchDriftError(error instanceof Error ? error.message : String(error));
+                  } finally {
+                    setBranchDriftBusy(false);
+                  }
+                }}
+              >
+                Update Expected Branch
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
     </section>

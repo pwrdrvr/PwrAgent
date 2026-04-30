@@ -400,6 +400,8 @@ textarea {
 .composer__review-input:focus,
 .composer__review-option:focus,
 .composer__attachment-remove:focus,
+.composer-dropdown__button:focus,
+.composer-dropdown__option:focus,
 .button:focus-visible,
 .thread-row:focus-visible,
 .transcript-activity__toggle:focus-visible,
@@ -408,7 +410,9 @@ textarea {
 .composer__review-input:focus-visible,
 .composer__review-option:focus-visible,
 .composer__checkbox input:focus-visible,
-.composer__attachment-remove:focus-visible {
+.composer__attachment-remove:focus-visible,
+.composer-dropdown__button:focus-visible,
+.composer-dropdown__option:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
@@ -3259,6 +3263,7 @@ textarea {
   background-repeat: no-repeat;
   background-size: 5px 5px;
   color: var(--text-primary);
+  font-size: 14px;
 }
 
 .composer__select:focus,
@@ -3281,13 +3286,203 @@ textarea {
   border-radius: 6px;
   background: var(--bg-input);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .composer__select--compact {
   min-width: 0;
   width: auto;
   max-width: 220px;
+}
+
+.composer-dropdown {
+  position: relative;
+  min-width: 168px;
+}
+
+.composer-dropdown--compact {
+  min-width: 0;
+  width: auto;
+  max-width: 220px;
+}
+
+.composer-dropdown__button {
+  width: 100%;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 10px 0 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+}
+
+.composer-dropdown__button:hover,
+.composer-dropdown__button:focus-visible {
+  border-color: var(--accent-border);
+}
+
+.composer-dropdown__button:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.composer-dropdown__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-dropdown__chevron {
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.composer-dropdown__menu {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: max(100%, 220px);
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.composer-dropdown__option {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+}
+
+.composer-dropdown__option:hover:not(:disabled),
+.composer-dropdown__option:focus-visible:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.composer-dropdown__option:disabled {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+.composer-dropdown__check {
+  width: 14px;
+  flex: 0 0 14px;
+  color: var(--accent-bright);
+  text-align: center;
+}
+
+.composer-dropdown__separator {
+  height: 1px;
+  margin: 6px 2px;
+  background: var(--border-subtle);
+}
+
+.workspace-handoff-modal {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 58%);
+}
+
+.workspace-handoff-dialog {
+  width: min(460px, 100%);
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.workspace-handoff-dialog h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.workspace-handoff-dialog p {
+  margin: 10px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.workspace-handoff-dialog__summary {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.workspace-handoff-dialog__summary div {
+  min-width: 0;
+}
+
+.workspace-handoff-dialog__summary dt {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.workspace-handoff-dialog__summary dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.workspace-handoff-dialog__field {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.workspace-handoff-dialog__note {
+  color: var(--text-muted);
+}
+
+.workspace-handoff-dialog__error {
+  color: var(--danger-text);
+}
+
+.workspace-handoff-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
 }
 
 .composer__checkbox {

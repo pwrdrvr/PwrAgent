@@ -1,12 +1,16 @@
 import { BrowserWindow, ipcMain } from "electron";
 import type {
   AgentEvent,
+  CheckThreadBranchDriftRequest,
+  CheckThreadBranchDriftResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  RetainThreadBranchDriftRequest,
+  RetainThreadBranchDriftResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -21,12 +25,16 @@ import type {
   StartTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  UpdateThreadExpectedBranchRequest,
+  UpdateThreadExpectedBranchResponse,
 } from "@pwragnt/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
   AGENT_EVENT_CHANNEL,
+  AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
@@ -34,6 +42,7 @@ import {
   AGENT_START_TURN_CHANNEL,
   AGENT_STEER_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
+  AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   BACKEND_LIST_CHANNEL,
 } from "../../shared/ipc";
 import { getMainLogger } from "../log";
@@ -338,6 +347,39 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL);
+  ipcMain.handle(
+    AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
+    async (
+      _event,
+      request: CheckThreadBranchDriftRequest,
+    ): Promise<CheckThreadBranchDriftResponse> => {
+      return await registry.checkThreadBranchDrift(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL);
+  ipcMain.handle(
+    AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
+    async (
+      _event,
+      request: UpdateThreadExpectedBranchRequest,
+    ): Promise<UpdateThreadExpectedBranchResponse> => {
+      return await registry.updateThreadExpectedBranch(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL);
+  ipcMain.handle(
+    AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
+    async (
+      _event,
+      request: RetainThreadBranchDriftRequest,
+    ): Promise<RetainThreadBranchDriftResponse> => {
+      return await registry.retainThreadBranchDrift(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.handle(
     AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -372,6 +414,9 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL);
+  ipcMain.removeHandler(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL);
+  ipcMain.removeHandler(AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL);
+  ipcMain.removeHandler(AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL);
   ipcMain.removeHandler(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL);
 }

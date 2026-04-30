@@ -121,6 +121,35 @@ function migrateLaunchpadImageAttachments(
   return attachments.length > 0 ? attachments : undefined;
 }
 
+function migrateRetainedBranchDriftPairs(
+  value: unknown,
+): ThreadOverlayState["retainedBranchDriftPairs"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const pairs = value.flatMap((item) => {
+    const record = asRecord(item);
+    if (
+      !record ||
+      typeof record.expectedBranch !== "string" ||
+      typeof record.observedBranch !== "string"
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        expectedBranch: record.expectedBranch,
+        observedBranch: record.observedBranch,
+        retainedAt: typeof record.retainedAt === "number" ? record.retainedAt : Date.now(),
+      },
+    ];
+  });
+
+  return pairs.length > 0 ? pairs : undefined;
+}
+
 export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
   const record = asRecord(raw);
   if (!record) {
@@ -264,6 +293,14 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
               typeof threadRecord.fastMode === "boolean"
                 ? threadRecord.fastMode
                 : undefined,
+            gitBranch:
+              typeof threadRecord.gitBranch === "string"
+                ? threadRecord.gitBranch
+                : undefined,
+            observedGitBranch:
+              typeof threadRecord.observedGitBranch === "string"
+                ? threadRecord.observedGitBranch
+                : undefined,
             lastSeenAt:
               typeof threadRecord.lastSeenAt === "number"
                 ? threadRecord.lastSeenAt
@@ -280,6 +317,9 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
               typeof threadRecord.snoozedUntil === "number"
                 ? threadRecord.snoozedUntil
                 : undefined,
+            retainedBranchDriftPairs: migrateRetainedBranchDriftPairs(
+              threadRecord.retainedBranchDriftPairs,
+            ),
             extraLinkedDirectories: Array.isArray(threadRecord.extraLinkedDirectories)
               ? (threadRecord.extraLinkedDirectories as ThreadOverlayState["extraLinkedDirectories"])
               : [],

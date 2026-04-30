@@ -99,6 +99,64 @@ describe("OverlayStore", () => {
     ]);
   });
 
+  it("replaces the active workspace linked directory while preserving unrelated links", async () => {
+    const store = await createStore();
+
+    await store.addLinkedDirectory({
+      backend: "codex",
+      threadId: "thread-1",
+      directory: {
+        id: "/repo",
+        kind: "local",
+        label: "repo",
+        path: "/repo",
+      },
+    });
+    await store.addLinkedDirectory({
+      backend: "codex",
+      threadId: "thread-1",
+      directory: {
+        id: "/other",
+        kind: "local",
+        label: "other",
+        path: "/other",
+      },
+    });
+
+    await store.replaceWorkspaceLinkedDirectory({
+      backend: "codex",
+      threadId: "thread-1",
+      gitBranch: "feature/handoff",
+      directory: {
+        id: "pwragnt-handoff:codex:thread-1",
+        kind: "worktree",
+        label: "repo",
+        path: "/repo",
+        worktreePath: "/repo/.worktrees/repo-feature",
+      },
+    });
+
+    await expect(
+      store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      gitBranch: "feature/handoff",
+      observedGitBranch: "feature/handoff",
+      extraLinkedDirectories: [
+        {
+          id: "/other",
+          kind: "local",
+          path: "/other",
+        },
+        {
+          id: "pwragnt-handoff:codex:thread-1",
+          kind: "worktree",
+          path: "/repo",
+          worktreePath: "/repo/.worktrees/repo-feature",
+        },
+      ],
+    });
+  });
+
   it("stores worktree snapshot metadata by backend-qualified thread", async () => {
     const store = await createStore();
 

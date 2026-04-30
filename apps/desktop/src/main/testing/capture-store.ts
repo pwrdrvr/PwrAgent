@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { getMainLogger } from "../log";
 
 export type ProtocolCaptureEventRecord = {
   backend: "codex" | "grok";
@@ -49,6 +51,7 @@ type CaptureIndexEntry = {
 };
 
 const indexWriteQueues = new Map<string, Promise<void>>();
+const protocolCaptureLog = getMainLogger("pwragnt:protocol-capture");
 
 export async function readProtocolCaptureFile(
   filePath: string,
@@ -196,24 +199,56 @@ export class ProtocolCaptureStore {
       updatedAt: Date.now()
     };
     current[this.params.captureId] = nextEntry;
-    await fs.writeFile(this.indexFilePath, JSON.stringify(current, null, 2), "utf8");
+    await writeJsonFileAtomically(this.indexFilePath, current);
   }
 }
 
 async function readIndex(filePath: string): Promise<Record<string, CaptureIndexEntry>> {
+  let contents: string;
   try {
-    const contents = await fs.readFile(filePath, "utf8");
-    const parsed = JSON.parse(contents) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {};
-    }
-    return parsed as Record<string, CaptureIndexEntry>;
+    contents = await fs.readFile(filePath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return {};
     }
     throw error;
   }
+
+  if (!contents.trim()) {
+    protocolCaptureLog.warn("protocol capture index was empty; resetting index", {
+      path: filePath
+    });
+    return {};
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents) as unknown;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    protocolCaptureLog.warn("protocol capture index was invalid JSON; resetting index", {
+      path: filePath,
+      error: message
+    });
+    return {};
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    protocolCaptureLog.warn("protocol capture index had unexpected shape; resetting index", {
+      path: filePath
+    });
+    return {};
+  }
+  return parsed as Record<string, CaptureIndexEntry>;
+}
+
+async function writeJsonFileAtomically(
+  filePath: string,
+  value: Record<string, CaptureIndexEntry>,
+): Promise<void> {
+  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  await fs.writeFile(tempPath, JSON.stringify(value, null, 2), "utf8");
+  await fs.rename(tempPath, filePath);
 }
 
 function getEnvelopeKind(envelope: {

@@ -34,6 +34,17 @@ afterEach(() => {
   cleanup();
 });
 
+function openDropdown(label: string): HTMLElement {
+  const dropdown = screen.getByLabelText(label);
+  fireEvent.click(dropdown);
+  return dropdown;
+}
+
+function chooseDropdownOption(label: string, optionName: string): void {
+  openDropdown(label);
+  fireEvent.click(screen.getByRole("option", { name: optionName }));
+}
+
 function backendSummary(
   kind: "codex" | "grok",
   launchpadOptions?: BackendSummary["launchpadOptions"],
@@ -783,9 +794,7 @@ describe("Composer", () => {
 
     expect(screen.getByText("Fast mode")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Model"), {
-      target: { value: "gpt-5.2" },
-    });
+    chooseDropdownOption("Model", "GPT-5.2");
 
     await waitFor(() => {
       expect(onSetThreadModelSettings).toHaveBeenCalledWith({
@@ -1014,8 +1023,9 @@ describe("Composer", () => {
     expect(textarea).toHaveValue("/review ");
   });
 
-  it("shows thread access in the composer and updates it from the select", async () => {
+  it("shows thread access in the composer and opens workspace handoff", async () => {
     const onSetExecutionMode = vi.fn(async () => undefined);
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
 
     render(
       <Composer
@@ -1063,6 +1073,22 @@ describe("Composer", () => {
           }),
         }}
         disabled={false}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "feat/thread-workspace-handoff-plan",
+            defaultBranch: "main",
+            branches: ["feat/thread-workspace-handoff-plan", "release", "main"],
+            handoffBranches: ["main", "release"],
+            syncState: "untracked",
+          },
+        }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
         onSetExecutionMode={onSetExecutionMode}
         skills={[]}
         thread={{
@@ -1071,7 +1097,7 @@ describe("Composer", () => {
           titleSource: "explicit",
           source: "codex",
           executionMode: "default",
-          gitBranch: "main",
+          gitBranch: "fix/context-rail-slide-reflow",
           linkedDirectories: [
             {
               id: "dir-1",
@@ -1086,12 +1112,33 @@ describe("Composer", () => {
     );
 
     expect(screen.getByLabelText("Access mode")).toHaveValue("default");
-    expect(screen.getByLabelText("Workspace mode")).toHaveValue("Local (main)");
-    expect(screen.getByLabelText("Workspace mode")).toBeDisabled();
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    expect(screen.getByRole("separator")).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByLabelText("Reply"));
+    expect(
+      screen.queryByRole("menuitem", { name: "Handoff to New Worktree" })
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog.closest(".workspace-handoff-modal")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("feat/thread-workspace-handoff-plan");
+    expect(screen.getByLabelText("Leave Local on")).toHaveValue("main");
+    expect(screen.queryByRole("option", { name: "Detached HEAD" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
-    fireEvent.change(screen.getByLabelText("Access mode"), {
-      target: { value: "full-access" },
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "local-to-worktree",
+        repositoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        sourcePath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        sourceBranch: "feat/thread-workspace-handoff-plan",
+        leaveLocalBranch: "main",
+      });
     });
+
+    chooseDropdownOption("Access mode", "Full Access");
 
     await waitFor(() => {
       expect(onSetExecutionMode).toHaveBeenCalledWith("full-access");
@@ -1167,16 +1214,62 @@ describe("Composer", () => {
     const workspaceMode = screen.getByLabelText("Workspace mode");
     expect(workspaceMode).toBeEnabled();
     expect(workspaceMode).toHaveValue("local");
+    fireEvent.click(workspaceMode);
     expect(screen.getByRole("option", { name: "Local (main)" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "New worktree" })).toBeInTheDocument();
 
-    fireEvent.change(workspaceMode, { target: { value: "worktree" } });
+    fireEvent.click(screen.getByRole("option", { name: "New worktree" }));
 
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
         "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
         { workMode: "worktree" }
       );
+    });
+  });
+
+  it("shows handoff to local for existing worktree threads", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Worktree thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          gitBranch: "feature/handoff",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgnt",
+              path: "/repo",
+              worktreePath: "/repo/.worktrees/pwragnt-feature",
+              kind: "worktree",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+    expect(screen.getByRole("dialog", { name: "Handoff to Local" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "worktree-to-local",
+        repositoryPath: "/repo",
+        sourcePath: "/repo/.worktrees/pwragnt-feature",
+        sourceBranch: "feature/handoff",
+        leaveLocalBranch: undefined,
+      });
     });
   });
 

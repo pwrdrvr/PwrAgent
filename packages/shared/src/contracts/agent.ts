@@ -111,6 +111,44 @@ export type SetThreadModelSettingsRequest = {
 
 export type SetThreadModelSettingsResponse = SetThreadModelSettingsRequest;
 
+export type CheckThreadBranchDriftRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type CheckThreadBranchDriftResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  expectedBranch?: string;
+  observedBranch?: string;
+  drifted: boolean;
+  checkedAt: number;
+};
+
+export type UpdateThreadExpectedBranchRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  branch: string;
+};
+
+export type UpdateThreadExpectedBranchResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  branch: string;
+  updatedAt: number;
+};
+
+export type RetainThreadBranchDriftRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  expectedBranch: string;
+  observedBranch: string;
+};
+
+export type RetainThreadBranchDriftResponse = RetainThreadBranchDriftRequest & {
+  retainedAt: number;
+};
+
 export type SubmitServerRequestRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

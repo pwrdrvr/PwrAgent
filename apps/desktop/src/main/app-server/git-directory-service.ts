@@ -76,6 +76,57 @@ function parseGitWorktreeEntries(output: string): WorktreeEntry[] {
   return entries;
 }
 
+function parseGitLines(output: string): string[] {
+  return output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function resolveDefaultBranch(params: {
+  branches: string[];
+  remoteHead: string;
+}): string | undefined {
+  const remoteHead = params.remoteHead.replace(/^origin\//, "").trim();
+  if (remoteHead && params.branches.includes(remoteHead)) {
+    return remoteHead;
+  }
+
+  return (
+    ["main", "master", "develop", "trunk"].find((branch) =>
+      params.branches.includes(branch),
+    ) ?? params.branches[0]
+  );
+}
+
+function orderHandoffBranches(params: {
+  branches: string[];
+  currentBranch: string;
+  defaultBranch?: string;
+  worktreeList: string;
+}): string[] {
+  const occupiedBranches = new Set(
+    parseGitWorktreeEntries(params.worktreeList)
+      .map((entry) => entry.branch)
+      .filter((branch): branch is string => Boolean(branch)),
+  );
+  const candidates = params.branches.filter(
+    (branch) =>
+      branch &&
+      branch !== params.currentBranch &&
+      !occupiedBranches.has(branch),
+  );
+  const defaultBranch =
+    params.defaultBranch && candidates.includes(params.defaultBranch)
+      ? params.defaultBranch
+      : undefined;
+  const ordered = defaultBranch
+    ? [defaultBranch, ...candidates.filter((branch) => branch !== defaultBranch)]
+    : candidates;
+
+  return [...new Set(ordered)];
+}
+
 function isProtectedBranch(branch?: string): boolean {
   return !branch || ["main", "master", "develop", "trunk"].includes(branch);
 }
@@ -162,11 +213,18 @@ export class GitDirectoryService {
   private async loadDirectoryStatus(
     cwd: string,
   ): Promise<NavigationDirectoryGitStatus | undefined> {
-    const [currentBranch, branches] = await Promise.all([
+    const [currentBranch, branchesOutput, remoteHead, worktreeList] = await Promise.all([
       runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ""),
-      runGit(cwd, ["for-each-ref", "refs/heads", "--format=%(refname:short)"]).catch(
+      runGit(cwd, [
+        "for-each-ref",
+        "refs/heads",
+        "--sort=-committerdate",
+        "--format=%(refname:short)",
+      ]).catch(() => ""),
+      runGit(cwd, ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]).catch(
         () => "",
       ),
+      runGit(cwd, ["worktree", "list", "--porcelain"]).catch(() => ""),
     ]);
     const upstreamBranch = await runGit(cwd, [
       "rev-parse",
@@ -178,10 +236,21 @@ export class GitDirectoryService {
       return undefined;
     }
 
+    const branches = parseGitLines(branchesOutput);
+    const defaultBranch = resolveDefaultBranch({ branches, remoteHead });
+    const handoffBranches = orderHandoffBranches({
+      branches,
+      currentBranch,
+      defaultBranch,
+      worktreeList,
+    });
+
     if (!upstreamBranch) {
       return {
         currentBranch,
-        branches: branches ? branches.split("\n").filter(Boolean) : [],
+        defaultBranch,
+        branches,
+        handoffBranches,
         syncState: "untracked",
       };
     }
@@ -211,7 +280,9 @@ export class GitDirectoryService {
       upstreamBranch,
       ahead,
       behind,
-      branches: branches ? branches.split("\n").filter(Boolean) : [],
+      defaultBranch,
+      branches,
+      handoffBranches,
       syncState,
     };
   }

@@ -16,15 +16,32 @@ import { buildDirectorySummaries } from "./directory-navigation";
 function dedupeLinkedDirectories(
   directories: LinkedDirectorySummary[],
 ): LinkedDirectorySummary[] {
+  let overlayWorkspace: LinkedDirectorySummary | undefined;
+  for (const directory of directories) {
+    if (directory.id.startsWith("pwragnt-handoff:")) {
+      overlayWorkspace = directory;
+    }
+  }
+  const filteredDirectories = overlayWorkspace
+    ? directories.filter(
+        (directory) =>
+          directory.id === overlayWorkspace.id ||
+          (directory.kind !== "local" && directory.kind !== "worktree"),
+      )
+    : directories;
   const byId = new Map<string, LinkedDirectorySummary>();
 
-  for (const directory of directories) {
+  for (const directory of filteredDirectories) {
     byId.set(directory.id, directory);
   }
 
   return [...byId.values()].sort((left, right) =>
     left.label.localeCompare(right.label),
   );
+}
+
+function hasHandoffWorkspace(directories: LinkedDirectorySummary[]): boolean {
+  return directories.some((directory) => directory.id.startsWith("pwragnt-handoff:"));
 }
 
 export function materializeNavigationThreads(params: {
@@ -43,9 +60,17 @@ export function materializeNavigationThreads(params: {
       ...thread.linkedDirectories,
       ...(overlay?.extraLinkedDirectories ?? []),
     ]);
+    const overlayGitBranch =
+      overlay?.gitBranch ??
+      (overlay?.observedGitBranch && hasHandoffWorkspace(overlay.extraLinkedDirectories)
+        ? overlay.observedGitBranch
+        : undefined);
 
     return {
       ...thread,
+      gitBranch: overlayGitBranch ?? thread.gitBranch,
+      observedGitBranch: overlay?.observedGitBranch ?? thread.observedGitBranch,
+      retainedBranchDriftPairs: overlay?.retainedBranchDriftPairs,
       executionMode: overlay?.executionMode ?? thread.executionMode ?? "default",
       model: overlay?.model ?? thread.model,
       reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
@@ -121,6 +146,11 @@ export function buildNavigationSnapshotHash(params: {
       updatedAt: thread.updatedAt ?? null,
       gitBranch: thread.gitBranch ?? null,
       observedGitBranch: thread.observedGitBranch ?? null,
+      retainedBranchDriftPairs: (thread.retainedBranchDriftPairs ?? []).map((pair) => ({
+        expectedBranch: pair.expectedBranch,
+        observedBranch: pair.observedBranch,
+        retainedAt: pair.retainedAt,
+      })),
       executionMode: thread.executionMode ?? "default",
       model: thread.model ?? null,
       reasoningEffort: thread.reasoningEffort ?? null,
@@ -169,10 +199,12 @@ export function buildNavigationSnapshotHash(params: {
       gitStatus: directory.gitStatus
         ? {
             currentBranch: directory.gitStatus.currentBranch ?? null,
+            defaultBranch: directory.gitStatus.defaultBranch ?? null,
             upstreamBranch: directory.gitStatus.upstreamBranch ?? null,
             ahead: directory.gitStatus.ahead ?? null,
             behind: directory.gitStatus.behind ?? null,
             branches: directory.gitStatus.branches ?? [],
+            handoffBranches: directory.gitStatus.handoffBranches ?? [],
             syncState: directory.gitStatus.syncState ?? null,
           }
         : null,

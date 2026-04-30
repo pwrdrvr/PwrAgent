@@ -343,6 +343,44 @@ export type ArchiveWorktreeResponse = {
   snapshot: WorktreeSnapshotSummary;
 };
 
+export type ThreadWorkspaceHandoffDirection =
+  | "local-to-worktree"
+  | "worktree-to-local";
+
+export type ThreadWorkspaceHandoffStashSummary = {
+  ref?: string;
+  message: string;
+  path: string;
+  applied: boolean;
+  dropped: boolean;
+};
+
+export type HandoffThreadWorkspaceRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  direction: ThreadWorkspaceHandoffDirection;
+  repositoryPath?: string;
+  sourcePath?: string;
+  sourceBranch?: string;
+  leaveLocalBranch?: string;
+};
+
+export type HandoffThreadWorkspaceResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  direction: ThreadWorkspaceHandoffDirection;
+  workMode: "local" | "worktree";
+  branch?: string;
+  repositoryPath: string;
+  targetPath: string;
+  linkedDirectory: LinkedDirectorySummary;
+  archivedSourceWorktree?: WorktreeSnapshotSummary;
+  sourceStash?: ThreadWorkspaceHandoffStashSummary;
+  destinationStash?: ThreadWorkspaceHandoffStashSummary;
+  warnings: string[];
+  completedAt: number;
+};
+
 export type RestoreWorktreeRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

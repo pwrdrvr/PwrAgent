@@ -20,6 +20,7 @@ export type ThreadInboxState = {
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
+  retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   optimisticUserMessage?: {
     text: string;
     imageParts?: AppServerThreadImagePart[];
@@ -65,10 +66,12 @@ export type NavigationLaunchpadImageAttachment = {
 
 export type NavigationDirectoryGitStatus = {
   currentBranch?: string;
+  defaultBranch?: string;
   upstreamBranch?: string;
   ahead?: number;
   behind?: number;
   branches?: string[];
+  handoffBranches?: string[];
   syncState?:
     | "in-sync"
     | "ahead"
@@ -135,12 +138,21 @@ export type ThreadOverlayState = {
   reasoningEffort?: string;
   serviceTier?: string;
   fastMode?: boolean;
+  gitBranch?: string;
+  observedGitBranch?: string;
   lastSeenAt?: number;
   lastSeenUpdatedAt?: number;
   dismissedAt?: number;
   snoozedUntil?: number;
+  retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   extraLinkedDirectories: LinkedDirectorySummary[];
   worktreeSnapshots?: WorktreeSnapshotSummary[];
+};
+
+export type ThreadBranchDriftPair = {
+  expectedBranch: string;
+  observedBranch: string;
+  retainedAt: number;
 };
 
 export type DirectoryLaunchpadOverlayState = NavigationLaunchpadDraft;

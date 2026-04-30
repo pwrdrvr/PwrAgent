@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -48,6 +48,37 @@ describe("GitDirectoryService", () => {
       cwd: repoDir,
       workMode: "local",
     });
+  });
+
+  it("reports default and available handoff branches", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    runGit(repoDir, ["branch", "older"]);
+    runGit(repoDir, ["checkout", "-B", "recent"]);
+    execFileSync("git", ["-C", repoDir, "commit", "--allow-empty", "-m", "Recent branch"], {
+      env: {
+        ...process.env,
+        GIT_AUTHOR_DATE: "2030-01-01T00:00:00Z",
+        GIT_COMMITTER_DATE: "2030-01-01T00:00:00Z",
+      },
+      stdio: "ignore",
+    });
+    runGit(repoDir, ["checkout", "main"]);
+    const occupiedPath = path.join(repoDir, ".worktrees", "release");
+    await mkdir(path.dirname(occupiedPath), { recursive: true });
+    runGit(repoDir, ["worktree", "add", occupiedPath, "release"]);
+    const service = new GitDirectoryService();
+
+    const status = await service.readDirectoryStatus({ path: repoDir });
+
+    expect(status).toMatchObject({
+      currentBranch: "main",
+      defaultBranch: "main",
+    });
+    expect(status?.branches).toEqual(
+      expect.arrayContaining(["main", "release", "older"]),
+    );
+    expect(status?.handoffBranches).toEqual(["recent", "older"]);
   });
 
   it("creates a detached worktree from the selected base branch without creating a new branch", async () => {

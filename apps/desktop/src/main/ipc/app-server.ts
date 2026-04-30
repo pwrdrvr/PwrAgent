@@ -17,6 +17,8 @@ import type {
   FocusedDiffAnalysisRequest,
   FocusedDiffAnalysisResponse,
   GetNavigationSnapshotRequest,
+  HandoffThreadWorkspaceRequest,
+  HandoffThreadWorkspaceResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   NavigationSnapshot,
@@ -41,6 +43,7 @@ import {
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
+  APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
   APP_SERVER_RESTORE_THREAD_CHANNEL,
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
@@ -224,6 +227,22 @@ class DesktopAppServerService {
       threadId: request.threadId,
       worktreePath: request.worktreePath,
       snapshotRef: response.snapshot.snapshotRef,
+    });
+
+    return response;
+  }
+
+  async handoffThreadWorkspace(
+    request: HandoffThreadWorkspaceRequest,
+  ): Promise<HandoffThreadWorkspaceResponse> {
+    const response = await getDesktopBackendRegistry().handoffThreadWorkspace(request);
+
+    logDebug("handoffThreadWorkspace", {
+      backend: request.backend,
+      threadId: request.threadId,
+      direction: request.direction,
+      workMode: response.workMode,
+      targetPath: response.targetPath,
     });
 
     return response;
@@ -431,6 +450,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.restoreWorktree(request);
     },
   );
+  ipcMain.removeHandler(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
+    async (
+      _event,
+      request: HandoffThreadWorkspaceRequest,
+    ): Promise<HandoffThreadWorkspaceResponse> => {
+      return await appServerService.handoffThreadWorkspace(request);
+    },
+  );
   ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
   ipcMain.handle(
     APP_SERVER_RENAME_THREAD_CHANNEL,
@@ -511,6 +540,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_RESTORE_THREAD_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_WORKTREE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTORE_WORKTREE_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
