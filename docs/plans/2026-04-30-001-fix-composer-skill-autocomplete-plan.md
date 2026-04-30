@@ -1,7 +1,7 @@
 ---
 title: fix: Repair composer skill autocomplete interactions
 type: fix
-status: active
+status: complete
 date: 2026-04-30
 deepened: 2026-04-30
 ---
@@ -105,7 +105,7 @@ The important boundary is that `Draft` remains the source of truth. The visual e
 
 ## Implementation Units
 
-- [ ] **Unit 1: Introduce inline skill tokens in the composer input**
+- [x] **Unit 1: Introduce inline skill tokens in the composer input**
 
 **Goal:** Replace the detached `composer__mentioned-skills` mirror row with inline, deletable skill chips inside the composer text-entry surface while preserving canonical draft state.
 
@@ -154,7 +154,7 @@ The important boundary is that `Draft` remains the source of truth. The visual e
 - Screen-reader-oriented queries still find the composer as `Reply` or `New thread`, and chip delete controls have stable accessible names.
 - Existing composer tests for send, steer, slash command, image paste/drop, and draft persistence still pass.
 
-- [ ] **Unit 2: Make autocomplete keyboard selection focus-safe**
+- [x] **Unit 2: Make autocomplete keyboard selection focus-safe**
 
 **Goal:** Ensure Enter selects the active autocomplete item and closes the popup whether focus is on the textarea, listbox, or option button.
 
@@ -188,7 +188,7 @@ The important boundary is that `Draft` remains the source of truth. The visual e
 **Verification:**
 - There is no focus state where Enter submits the whole turn or does nothing while an autocomplete option is visually active.
 
-- [ ] **Unit 3: Make autocomplete placement viewport-aware and scrollable**
+- [x] **Unit 3: Make autocomplete placement viewport-aware and scrollable**
 
 **Goal:** Keep the autocomplete popup inside the Electron window and internally scrollable across desktop and narrow viewports.
 
@@ -224,7 +224,7 @@ The important boundary is that `Draft` remains the source of truth. The visual e
 - Visual inspection or Playwright screenshots show the popup fully within the app bounds at desktop and narrow viewport sizes.
 - Keyboard navigation can reach offscreen items through internal popup scrolling.
 
-- [ ] **Unit 4: Add focused E2E coverage for the reported interaction contract**
+- [x] **Unit 4: Add focused E2E coverage for the reported interaction contract**
 
 **Goal:** Prove the full user-reported flow in an Electron-backed scenario rather than relying only on component tests.
 

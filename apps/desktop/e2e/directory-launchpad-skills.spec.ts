@@ -12,6 +12,19 @@ async function createDirectoryLaunchpadSkillsFixture(): Promise<{
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-launchpad-skills-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
   await mkdir(repoDir, { recursive: true });
+  const generatedSkills = Array.from({ length: 24 }, (_, index) => {
+    const skillNumber = String(index + 1).padStart(2, "0");
+    return {
+      name: `zz-scroll-skill-${skillNumber}`,
+      description: `Generated skill ${skillNumber} for autocomplete overflow coverage.`,
+      path: path.join(
+        rootDir,
+        `.codex/skills/zz-scroll-skill-${skillNumber}/SKILL.md`,
+      ),
+      enabled: true,
+      scope: "user",
+    };
+  });
 
   execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" });
   execFileSync("git", ["checkout", "-B", "main"], { cwd: repoDir, stdio: "ignore" });
@@ -129,6 +142,7 @@ async function createDirectoryLaunchpadSkillsFixture(): Promise<{
                     enabled: true,
                     scope: "local",
                   },
+                  ...generatedSkills,
                 ],
               },
             ],
@@ -149,6 +163,17 @@ async function createDirectoryLaunchpadSkillsFixture(): Promise<{
   };
 }
 
+async function openDirectoryLaunchpad(app: Awaited<ReturnType<typeof launchElectronApp>>) {
+  await app.window.getByRole("button", { name: "directories" }).click();
+  await app.window
+    .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
+    .click();
+
+  await expect(
+    app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
+  ).toBeVisible();
+}
+
 test("directory launchpad loads skill autocomplete from user and local scope", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
@@ -156,14 +181,7 @@ test("directory launchpad loads skill autocomplete from user and local scope", a
   });
 
   try {
-    await app.window.getByRole("button", { name: "directories" }).click();
-    await app.window
-      .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
-      .click();
-
-    await expect(
-      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
-    ).toBeVisible();
+    await openDirectoryLaunchpad(app);
 
     await app.window.getByRole("textbox", { name: "New thread" }).fill("$");
 
@@ -173,6 +191,98 @@ test("directory launchpad loads skill autocomplete from user and local scope", a
     await expect(
       app.window.getByRole("button", { name: /\$desktop-e2e-fixture-seeding/i }),
     ).toBeVisible();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad skill autocomplete selects focused options as removable inline chips", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const textbox = app.window.getByRole("textbox", { name: "New thread" });
+    await textbox.fill("$front");
+
+    const option = app.window.getByRole("button", { name: /\$frontend-design/i });
+    await option.focus();
+    await expect(option).toBeFocused();
+    await app.window.keyboard.press("Enter");
+
+    await expect(app.window.getByRole("listbox", { name: "Skills" })).toBeHidden();
+
+    const richInput = app.window.getByTestId("composer-rich-input");
+    const chip = richInput.locator(".skill-chip", { hasText: "$frontend-design" });
+    await expect(chip).toBeVisible();
+    await expect(chip).toHaveAttribute(
+      "data-tooltip",
+      /\/Users\/huntharo\/\.codex\/skills\/frontend-design\/SKILL\.md$/,
+    );
+
+    const [chipBox, inputBox] = await Promise.all([
+      chip.boundingBox(),
+      richInput.boundingBox(),
+    ]);
+    if (!chipBox || !inputBox) {
+      throw new Error("Expected selected skill chip and composer input to be measurable");
+    }
+    expect(chipBox.y).toBeGreaterThanOrEqual(inputBox.y);
+    expect(chipBox.y + chipBox.height).toBeLessThanOrEqual(
+      inputBox.y + inputBox.height,
+    );
+
+    await chip.getByRole("button", { name: "Remove $frontend-design" }).click();
+    await expect(chip).toBeHidden();
+    await expect(textbox).toHaveValue("");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad skill autocomplete stays inside a small window and scrolls", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+    windowSize: {
+      width: 760,
+      height: 520,
+    },
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    await app.window.getByRole("textbox", { name: "New thread" }).fill("$");
+
+    const listbox = app.window.getByRole("listbox", { name: "Skills" });
+    await expect(listbox).toBeVisible();
+
+    const [listboxBox, viewport, scrollMetrics] = await Promise.all([
+      listbox.boundingBox(),
+      app.window.evaluate(() => ({
+        height: globalThis.innerHeight,
+        width: globalThis.innerWidth,
+      })),
+      listbox.evaluate((element) => ({
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+      })),
+    ]);
+    if (!listboxBox) {
+      throw new Error("Expected autocomplete listbox to be measurable");
+    }
+
+    expect(listboxBox.x).toBeGreaterThanOrEqual(0);
+    expect(listboxBox.y).toBeGreaterThanOrEqual(0);
+    expect(listboxBox.x + listboxBox.width).toBeLessThanOrEqual(viewport.width);
+    expect(listboxBox.y + listboxBox.height).toBeLessThanOrEqual(viewport.height);
+    expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
   } finally {
     await app.close();
     await fixture.cleanup();

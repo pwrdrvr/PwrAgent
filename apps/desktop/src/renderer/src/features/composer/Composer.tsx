@@ -2,6 +2,7 @@ import {
   type ReactNode,
   type ClipboardEvent,
   type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
   useId,
   useMemo,
@@ -33,11 +34,15 @@ import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import {
   findSkillTrigger,
   hydrateSkillLabelsWithMarkdown,
-  insertSkillLabel,
   listMentionedSkills,
+  parseSkillMentionParts,
+  buildSkillMentionMarkdown,
 } from "../../lib/skill-mentions";
 import { parseReviewCommand } from "../../../../shared/review-command";
-import { SkillChip } from "./SkillChip";
+import {
+  ComposerRichInput,
+  type ComposerSkillToken,
+} from "./ComposerRichInput";
 
 type ComposerProps = {
   activeTurnId?: string;
@@ -169,6 +174,7 @@ type ReviewConfigState = {
 type ComposerDraftState = {
   draft: string;
   imageAttachments: ComposerImageAttachment[];
+  skillTokens: ComposerSkillToken[];
 };
 
 const DEFAULT_REASONING_EFFORT = "medium";
@@ -452,6 +458,134 @@ function HighlightedAutocompleteLabel(props: {
   );
 }
 
+function createComposerSkillToken(
+  skill: AppServerSkillSummary,
+  index: number,
+): ComposerSkillToken {
+  return {
+    ...skill,
+    id: `${skill.path ?? skill.name}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    index,
+  };
+}
+
+function clampSkillTokenIndex(index: number, draft: string): number {
+  return Math.max(0, Math.min(index, draft.length));
+}
+
+function serializeDraftWithSkillTokens(
+  draft: string,
+  skillTokens: ComposerSkillToken[],
+): string {
+  if (skillTokens.length === 0) {
+    return draft;
+  }
+
+  const sortedTokens = [...skillTokens].sort((left, right) => {
+    if (left.index !== right.index) {
+      return left.index - right.index;
+    }
+    return left.id.localeCompare(right.id);
+  });
+
+  let output = "";
+  let cursor = 0;
+  for (const token of sortedTokens) {
+    const index = clampSkillTokenIndex(token.index, draft);
+    output += draft.slice(cursor, index);
+    output += buildSkillMentionMarkdown(token);
+    cursor = index;
+  }
+
+  output += draft.slice(cursor);
+  return output;
+}
+
+function hydrateComposerDraft(
+  canonicalDraft: string,
+  skills: AppServerSkillSummary[],
+): {
+  draft: string;
+  skillTokens: ComposerSkillToken[];
+} {
+  let draft = "";
+  const skillTokens: ComposerSkillToken[] = [];
+
+  for (const part of parseSkillMentionParts(canonicalDraft)) {
+    if (part.type === "text") {
+      draft += part.text;
+      continue;
+    }
+
+    const matchingSkill =
+      skills.find((skill) => skill.path === part.path) ??
+      skills.find((skill) => skill.name === part.name);
+    skillTokens.push(
+      createComposerSkillToken(
+        matchingSkill ?? {
+          name: part.name,
+          path: part.path,
+        },
+        draft.length,
+      ),
+    );
+  }
+
+  return { draft, skillTokens };
+}
+
+function adjustSkillTokenIndexesForTextChange(params: {
+  currentDraft: string;
+  nextDraft: string;
+  skillTokens: ComposerSkillToken[];
+}): ComposerSkillToken[] {
+  const { currentDraft, nextDraft, skillTokens } = params;
+  if (currentDraft === nextDraft || skillTokens.length === 0) {
+    return skillTokens;
+  }
+
+  let prefixLength = 0;
+  while (
+    prefixLength < currentDraft.length &&
+    prefixLength < nextDraft.length &&
+    currentDraft[prefixLength] === nextDraft[prefixLength]
+  ) {
+    prefixLength += 1;
+  }
+
+  let suffixLength = 0;
+  while (
+    suffixLength < currentDraft.length - prefixLength &&
+    suffixLength < nextDraft.length - prefixLength &&
+    currentDraft[currentDraft.length - 1 - suffixLength] ===
+      nextDraft[nextDraft.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1;
+  }
+
+  const currentChangedEnd = currentDraft.length - suffixLength;
+  const nextChangedEnd = nextDraft.length - suffixLength;
+  const delta = nextChangedEnd - currentChangedEnd;
+
+  return skillTokens.map((token) => {
+    if (token.index <= prefixLength) {
+      return token;
+    }
+
+    if (token.index >= currentChangedEnd) {
+      return {
+        ...token,
+        index: clampSkillTokenIndex(token.index + delta, nextDraft),
+      };
+    }
+
+    return {
+      ...token,
+      index: clampSkillTokenIndex(prefixLength, nextDraft),
+    };
+  });
+}
+
 function useDismissableMenu<T extends HTMLElement>(
   open: boolean,
   onDismiss: () => void,
@@ -600,6 +734,7 @@ function ComposerApplicationButton(props: {
 
 export function Composer(props: ComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputWrapRef = useRef<HTMLDivElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
@@ -633,8 +768,14 @@ export function Composer(props: ComposerProps) {
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>([]);
   const [planModeEnabled, setPlanModeEnabled] = useState(false);
+  const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>([]);
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
+  const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
+  const [autocompleteLayout, setAutocompleteLayout] = useState<{
+    maxHeight: number;
+    placement: "above" | "below";
+  }>({ maxHeight: 320, placement: "above" });
   const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
   const [reviewConfig, setReviewConfig] = useState<ReviewConfigState>();
   const isLaunchpad = Boolean(props.launchpad && props.directory);
@@ -650,6 +791,30 @@ export function Composer(props: ComposerProps) {
   const selectionStart = inputRef.current?.selectionStart ?? draft.length;
   const isThreadComposerScope = (scopeKey: string): boolean =>
     scopeKey.startsWith("thread:");
+  const canonicalDraft = useMemo(
+    () => serializeDraftWithSkillTokens(draft, skillTokens),
+    [draft, skillTokens]
+  );
+  const hasComposerContent = draft.trim().length > 0 || skillTokens.length > 0;
+  const setComposerDraftFromCanonical = (nextDraft: string): void => {
+    const hydrated = hydrateComposerDraft(nextDraft, props.skills);
+    setDraft(hydrated.draft);
+    setSkillTokens(hydrated.skillTokens);
+  };
+  const clearComposerDraft = (): void => {
+    setDraft("");
+    setSkillTokens([]);
+  };
+  const updateVisibleDraft = (nextDraft: string): void => {
+    setSkillTokens((current) =>
+      adjustSkillTokenIndexesForTextChange({
+        currentDraft: draft,
+        nextDraft,
+        skillTokens: current,
+      })
+    );
+    setDraft(nextDraft);
+  };
   const saveThreadComposerDraft = (
     scopeKey: string,
     state: ComposerDraftState,
@@ -658,7 +823,11 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    if (!state.draft.trim() && state.imageAttachments.length === 0) {
+    if (
+      !state.draft.trim() &&
+      state.skillTokens.length === 0 &&
+      state.imageAttachments.length === 0
+    ) {
       scopedThreadDraftsRef.current.delete(scopeKey);
       return;
     }
@@ -710,11 +879,24 @@ export function Composer(props: ComposerProps) {
         command.description.toLowerCase().includes(typed.slice(1))
     );
   }, [draft, slashTrigger]);
-  const displayedAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
+  const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
     ? "skills"
     : slashTrigger && filteredSlashCommands.length > 0
       ? "slash"
       : undefined;
+  const autocompleteKey =
+    availableAutocompleteKind === "skills" && trigger
+      ? `skills:${trigger.start}:${trigger.end}:${trigger.query}`
+      : availableAutocompleteKind === "slash" && slashTrigger
+        ? `slash:${slashTrigger.start}:${slashTrigger.end}:${draft.slice(
+            slashTrigger.start,
+            slashTrigger.end,
+          )}`
+        : undefined;
+  const displayedAutocompleteKind =
+    autocompleteKey && autocompleteKey === dismissedAutocompleteKey
+      ? undefined
+      : availableAutocompleteKind;
   const autocompleteKind: AutocompleteKind | undefined =
     displayedAutocompleteKind === "slash" &&
     parseReviewCommand(draft) &&
@@ -726,10 +908,6 @@ export function Composer(props: ComposerProps) {
     displayedAutocompleteKind === "skills" ? activeSkillIndex : activeSlashIndex;
   const autocompleteLength =
     displayedAutocompleteKind === "skills" ? filteredSkills.length : filteredSlashCommands.length;
-  const mentionedSkills = useMemo(
-    () => listMentionedSkills(draft, props.skills),
-    [draft, props.skills]
-  );
   const reviewBranchOptions = useMemo(
     () => buildReviewBranchOptions({
       directory: props.directory,
@@ -748,6 +926,7 @@ export function Composer(props: ComposerProps) {
     saveThreadComposerDraft(previousScopeKey, {
       draft,
       imageAttachments,
+      skillTokens,
     });
 
     activeComposerScopeKeyRef.current = composerScopeKey;
@@ -761,6 +940,7 @@ export function Composer(props: ComposerProps) {
       const saved = scopedThreadDraftsRef.current.get(composerScopeKey);
       setDraft(saved?.draft ?? "");
       setImageAttachments(saved?.imageAttachments ?? []);
+      setSkillTokens(saved?.skillTokens ?? []);
     }
     setSending(false);
     setInterrupting(false);
@@ -770,7 +950,7 @@ export function Composer(props: ComposerProps) {
     setReviewConfig(undefined);
     setQueuedTurn(undefined);
     setPendingSteer(undefined);
-  }, [composerScopeKey]);
+  }, [composerScopeKey, draft, imageAttachments, skillTokens]);
 
   useEffect(() => {
     setActiveSkillIndex(0);
@@ -788,6 +968,38 @@ export function Composer(props: ComposerProps) {
     autocompleteOptionRefs.current[activeAutocompleteIndex]?.scrollIntoView?.({
       block: "nearest",
     });
+  }, [activeAutocompleteIndex, displayedAutocompleteKind]);
+
+  useEffect(() => {
+    if (!displayedAutocompleteKind) {
+      return;
+    }
+
+    const updateAutocompleteLayout = (): void => {
+      const inputWrap = inputWrapRef.current;
+      if (!inputWrap) {
+        return;
+      }
+
+      const viewportPadding = 12;
+      const gap = 10;
+      const rect = inputWrap.getBoundingClientRect();
+      const availableAbove = rect.top - viewportPadding - gap;
+      const availableBelow = window.innerHeight - rect.bottom - viewportPadding - gap;
+      const placement =
+        availableAbove >= 180 || availableAbove >= availableBelow ? "above" : "below";
+      const available = placement === "above" ? availableAbove : availableBelow;
+      setAutocompleteLayout({
+        placement,
+        maxHeight: Math.max(140, Math.min(320, available)),
+      });
+    };
+
+    updateAutocompleteLayout();
+    window.addEventListener("resize", updateAutocompleteLayout);
+    return () => {
+      window.removeEventListener("resize", updateAutocompleteLayout);
+    };
   }, [activeAutocompleteIndex, displayedAutocompleteKind]);
 
   useEffect(() => {
@@ -809,7 +1021,7 @@ export function Composer(props: ComposerProps) {
     }
 
     hydratedLaunchpadKeyRef.current = props.launchpad?.directoryKey;
-    setDraft(props.launchpad?.prompt ?? "");
+    setComposerDraftFromCanonical(props.launchpad?.prompt ?? "");
     setImageAttachments(props.launchpad?.imageAttachments ?? []);
     setSending(false);
     setInterrupting(false);
@@ -819,7 +1031,7 @@ export function Composer(props: ComposerProps) {
     setReviewConfig(undefined);
     setQueuedTurn(undefined);
     setPendingSteer(undefined);
-  }, [isLaunchpad, props.launchpad?.directoryKey]);
+  }, [isLaunchpad, props.launchpad?.directoryKey, props.launchpad?.prompt, props.skills]);
 
   useEffect(() => {
     if (!props.thread) {
@@ -913,7 +1125,7 @@ export function Composer(props: ComposerProps) {
         setSteering(false);
         if (pendingSteer?.status === "pending") {
           if (queuedTurn) {
-            setDraft(pendingSteer.text);
+            setComposerDraftFromCanonical(pendingSteer.text);
             setImageAttachments(pendingSteer.imageAttachments);
           } else {
             setQueuedTurn({
@@ -963,21 +1175,21 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    if (draft === launchpad.prompt) {
+    if (canonicalDraft === launchpad.prompt) {
       return;
     }
 
     const timeout = window.setTimeout(() => {
       void props.onUpdateLaunchpad?.(launchpad.directoryKey, {
         imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
-        prompt: draft,
+        prompt: canonicalDraft,
       });
     }, 250);
 
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [draft, imageAttachments, launchpad, props.onUpdateLaunchpad]);
+  }, [canonicalDraft, imageAttachments, launchpad, props.onUpdateLaunchpad]);
 
   const submitReviewCommand = async (reviewCommand: {
     displayText: string;
@@ -1003,7 +1215,7 @@ export function Composer(props: ComposerProps) {
           undefined,
           reviewCommand.target
         );
-        setDraft("");
+        clearComposerDraft();
         setReviewConfig(undefined);
         setImageAttachments([]);
       } catch (error) {
@@ -1035,7 +1247,7 @@ export function Composer(props: ComposerProps) {
       updateActiveTurnId(response.turnId);
       props.onActiveTurnIdChange?.(response.turnId);
       clearThreadComposerDraft(composerScopeKey);
-      setDraft("");
+      clearComposerDraft();
       setReviewConfig(undefined);
     } catch (error) {
       if (optimisticReviewId) {
@@ -1080,7 +1292,7 @@ export function Composer(props: ComposerProps) {
 
     const payload = queued
       ? buildTurnPayload(queued.text, queued.imageAttachments)
-      : buildTurnPayload(draft, imageAttachments);
+      : buildTurnPayload(canonicalDraft, imageAttachments);
     if (payload.input.length === 0 || props.disabled) {
       return;
     }
@@ -1127,7 +1339,7 @@ export function Composer(props: ComposerProps) {
         setQueuedTurn(undefined);
       } else {
         clearThreadComposerDraft(composerScopeKey);
-        setDraft("");
+        clearComposerDraft();
         setImageAttachments([]);
         if (collaborationMode) {
           setPlanModeEnabled(false);
@@ -1160,7 +1372,7 @@ export function Composer(props: ComposerProps) {
   }, [activeTurnId, queuedTurn, sending, props.disabled, props.launchpad]);
 
   const queueCurrentDraft = (): void => {
-    if (!draft.trim() && imageAttachments.length === 0) {
+    if (!hasComposerContent && imageAttachments.length === 0) {
       return;
     }
     if (queuedTurn) {
@@ -1169,11 +1381,11 @@ export function Composer(props: ComposerProps) {
     }
 
     setQueuedTurn({
-      text: draft,
+      text: canonicalDraft,
       imageAttachments,
     });
     clearThreadComposerDraft(composerScopeKey);
-    setDraft("");
+    clearComposerDraft();
     setImageAttachments([]);
     setReviewConfig(undefined);
     setSendError(undefined);
@@ -1263,7 +1475,7 @@ export function Composer(props: ComposerProps) {
       status: "pending",
     });
     clearThreadComposerDraft(composerScopeKey);
-    setDraft("");
+    clearComposerDraft();
     setImageAttachments([]);
     setReviewConfig(undefined);
     return true;
@@ -1282,7 +1494,7 @@ export function Composer(props: ComposerProps) {
     }
 
     createPendingSteer({
-      text: draft,
+      text: canonicalDraft,
       imageAttachments,
     });
   };
@@ -1330,7 +1542,7 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const payload = buildTurnPayload(draft, imageAttachments);
+    const payload = buildTurnPayload(canonicalDraft, imageAttachments);
     const collaborationMode = planModeEnabled && supportsPlanMode
       ? ({
           mode: "plan",
@@ -1354,7 +1566,7 @@ export function Composer(props: ComposerProps) {
           payload.input,
           collaborationMode
         );
-        setDraft("");
+        clearComposerDraft();
         setImageAttachments([]);
         if (collaborationMode) {
           setPlanModeEnabled(false);
@@ -1414,21 +1626,31 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const inserted = insertSkillLabel({
-      draft,
-      skill,
-      selectionStart: inputRef.current.selectionStart ?? draft.length,
-      selectionEnd: inputRef.current.selectionEnd ?? draft.length,
-    });
-    if (!inserted) {
+    const selectionStart = inputRef.current.selectionStart ?? draft.length;
+    const selectionEnd = inputRef.current.selectionEnd ?? selectionStart;
+    const trigger = findSkillTrigger(draft, selectionStart);
+    if (!trigger) {
       return;
     }
 
-    setDraft(inserted.nextDraft);
+    const before = draft.slice(0, trigger.start);
+    const after = draft.slice(Math.max(trigger.end, selectionEnd));
+    const nextAfter = after.length > 0 && !/^\s/.test(after) ? ` ${after}` : after;
+    const nextDraft = `${before}${nextAfter}`;
+    const tokenIndex = before.length;
+    setSkillTokens((current) => [
+      ...adjustSkillTokenIndexesForTextChange({
+        currentDraft: draft,
+        nextDraft,
+        skillTokens: current,
+      }),
+      createComposerSkillToken(skill, tokenIndex),
+    ]);
+    setDraft(nextDraft);
     setActiveSkillIndex(0);
     requestAnimationFrame(() => {
       inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(inserted.nextSelection, inserted.nextSelection);
+      inputRef.current?.setSelectionRange(tokenIndex, tokenIndex);
     });
   };
 
@@ -1450,7 +1672,7 @@ export function Composer(props: ComposerProps) {
     const nextDraft = `${before}${command.insertText}${needsTrailingSpace ? " " : ""}${after}`;
     const nextSelection = before.length + command.insertText.length + (needsTrailingSpace ? 1 : 0);
 
-    setDraft(nextDraft);
+    updateVisibleDraft(nextDraft);
     setActiveSlashIndex(0);
     requestAnimationFrame(() => {
       inputRef.current?.focus();
@@ -1464,6 +1686,7 @@ export function Composer(props: ComposerProps) {
       saveThreadComposerDraft(composerScopeKey, {
         draft,
         imageAttachments: nextAttachments,
+        skillTokens,
       });
       persistLaunchpadImageAttachments(nextAttachments);
       return nextAttachments;
@@ -1479,7 +1702,7 @@ export function Composer(props: ComposerProps) {
 
     void props.onUpdateLaunchpad(props.launchpad.directoryKey, {
       imageAttachments: attachments.length > 0 ? attachments : undefined,
-      prompt: draft,
+      prompt: canonicalDraft,
     });
   };
 
@@ -1516,7 +1739,7 @@ export function Composer(props: ComposerProps) {
 
   const attachImages = async (files: ComposerImageFile[]): Promise<void> => {
     const pasteScope = pasteScopeRef.current;
-    const pasteDraft = draft;
+    const pasteDraft = canonicalDraft;
     const pasteImageAttachments = imageAttachments;
     const pasteLaunchpad = props.launchpad;
     const updateLaunchpad = props.onUpdateLaunchpad;
@@ -1582,10 +1805,12 @@ export function Composer(props: ComposerProps) {
         const saved = scopedThreadDraftsRef.current.get(pasteScope.key) ?? {
           draft: "",
           imageAttachments: [],
+          skillTokens: [],
         };
         saveThreadComposerDraft(pasteScope.key, {
           draft: saved.draft,
           imageAttachments: [...saved.imageAttachments, ...nextAttachments],
+          skillTokens: saved.skillTokens,
         });
         return;
       }
@@ -1595,6 +1820,7 @@ export function Composer(props: ComposerProps) {
         saveThreadComposerDraft(pasteScope.key, {
           draft,
           imageAttachments: mergedAttachments,
+          skillTokens,
         });
         persistLaunchpadImageAttachments(mergedAttachments);
         return mergedAttachments;
@@ -1795,6 +2021,98 @@ export function Composer(props: ComposerProps) {
     !sourceBranch ||
     (handoffDialog === "local-to-worktree" && !leaveLocalBranch);
 
+  const removeSkillToken = (id: string): void => {
+    setSkillTokens((current) => current.filter((skill) => skill.id !== id));
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+  };
+
+  const removeAdjacentSkillToken = (key: "Backspace" | "Delete"): boolean => {
+    const input = inputRef.current;
+    if (!input || input.selectionStart !== input.selectionEnd) {
+      return false;
+    }
+
+    const caret = input.selectionStart ?? draft.length;
+    const token = skillTokens.find((candidate) => candidate.index === caret);
+    if (!token) {
+      return false;
+    }
+
+    setSkillTokens((current) =>
+      current.filter((candidate) => candidate.id !== token.id)
+    );
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(caret, caret);
+    });
+    return key === "Backspace" || key === "Delete";
+  };
+
+  const commitActiveAutocomplete = (): void => {
+    if (autocompleteKind === "skills") {
+      applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
+      return;
+    }
+
+    applySlashCommand(
+      filteredSlashCommands[activeSlashIndex] ?? filteredSlashCommands[0]!
+    );
+  };
+
+  const handleAutocompleteKeyDown = (
+    event: ReactKeyboardEvent<HTMLElement>,
+  ): void => {
+    if (!hasAutocomplete) {
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (autocompleteKind === "skills") {
+        setActiveSkillIndex((current) =>
+          Math.min(current + 1, autocompleteLength - 1)
+        );
+      } else {
+        setActiveSlashIndex((current) =>
+          Math.min(current + 1, autocompleteLength - 1)
+        );
+      }
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (autocompleteKind === "skills") {
+        setActiveSkillIndex((current) => Math.max(current - 1, 0));
+      } else {
+        setActiveSlashIndex((current) => Math.max(current - 1, 0));
+      }
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (autocompleteKey) {
+        setDismissedAutocompleteKey(autocompleteKey);
+      }
+      setActiveSkillIndex(0);
+      setActiveSlashIndex(0);
+      requestAnimationFrame(() => inputRef.current?.focus());
+      return;
+    }
+
+    const optionHasFocus = event.currentTarget !== inputRef.current;
+    if (
+      (event.key === "Enter" && !event.shiftKey) ||
+      (event.key === " " && optionHasFocus)
+    ) {
+      event.preventDefault();
+      commitActiveAutocomplete();
+    }
+  };
+
   return (
     <form
       className="composer"
@@ -1829,7 +2147,7 @@ export function Composer(props: ComposerProps) {
                   className="composer__secondary-action"
                   type="button"
                   onClick={() => {
-                    setDraft(pendingSteer.text);
+                    setComposerDraftFromCanonical(pendingSteer.text);
                     setImageAttachments(pendingSteer.imageAttachments);
                     setPendingSteer(undefined);
                     requestAnimationFrame(() => inputRef.current?.focus());
@@ -1878,7 +2196,7 @@ export function Composer(props: ComposerProps) {
               className="composer__secondary-action"
               type="button"
               onClick={() => {
-                setDraft(queuedTurn.text);
+                setComposerDraftFromCanonical(queuedTurn.text);
                 setImageAttachments(queuedTurn.imageAttachments);
                 setQueuedTurn(undefined);
                 requestAnimationFrame(() => inputRef.current?.focus());
@@ -1899,29 +2217,22 @@ export function Composer(props: ComposerProps) {
         </div>
       ) : null}
 
-      {mentionedSkills.length > 0 ? (
-        <div className="composer__mentioned-skills" aria-label="Mentioned skills">
-          {mentionedSkills.map((skill) => (
-            <SkillChip key={skill.path ?? skill.name} skill={skill} />
-          ))}
-        </div>
-      ) : null}
-
-      <div className="composer__input-wrap">
-        <textarea
+      <div className="composer__input-wrap" ref={inputWrapRef}>
+        <ComposerRichInput
           ref={inputRef}
           id="thread-composer"
-          className="composer__input"
-          disabled={launchpadSubmitting || (props.disabled && !draft)}
+          disabled={launchpadSubmitting || (props.disabled && !hasComposerContent)}
+          label={isLaunchpad ? "New thread" : "Reply"}
+          onRemoveSkillToken={removeSkillToken}
           placeholder={
             isLaunchpad
               ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`
               : "Reply to this thread"
           }
+          skillTokens={skillTokens}
           value={draft}
-          onChange={(event) => {
-            const nextDraft = event.target.value;
-            setDraft(nextDraft);
+          onChange={(nextDraft) => {
+            updateVisibleDraft(nextDraft);
             if (nextDraft.trim() !== "/review") {
               setReviewConfig(undefined);
             }
@@ -1936,59 +2247,31 @@ export function Composer(props: ComposerProps) {
           }}
           onKeyDown={(event) => {
             if (!hasAutocomplete) {
+              if (
+                (event.key === "Backspace" || event.key === "Delete") &&
+                removeAdjacentSkillToken(event.key)
+              ) {
+                event.preventDefault();
+                return;
+              }
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 void submitTurn(event.metaKey ? "steer" : "default");
-              }
+            }
               return;
             }
 
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              if (autocompleteKind === "skills") {
-                setActiveSkillIndex((current) =>
-                  Math.min(current + 1, autocompleteLength - 1)
-                );
-              } else {
-                setActiveSlashIndex((current) =>
-                  Math.min(current + 1, autocompleteLength - 1)
-                );
-              }
-              return;
-            }
-
-            if (event.key === "ArrowUp") {
-              event.preventDefault();
-              if (autocompleteKind === "skills") {
-                setActiveSkillIndex((current) => Math.max(current - 1, 0));
-              } else {
-                setActiveSlashIndex((current) => Math.max(current - 1, 0));
-              }
-              return;
-            }
-
-            if (event.key === "Escape") {
-              event.preventDefault();
-              setActiveSkillIndex(0);
-              setActiveSlashIndex(0);
-              return;
-            }
-
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              if (autocompleteKind === "skills") {
-                applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
-              } else {
-                applySlashCommand(
-                  filteredSlashCommands[activeSlashIndex] ?? filteredSlashCommands[0]!
-                );
-              }
-            }
+            handleAutocompleteKeyDown(event);
           }}
         />
 
         {displayedAutocompleteKind === "skills" ? (
-          <div className="composer__autocomplete" role="listbox" aria-label="Skills">
+          <div
+            className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+            role="listbox"
+            aria-label="Skills"
+            style={{ maxHeight: autocompleteLayout.maxHeight }}
+          >
             {filteredSkills.map((skill, index) => (
               <button
                 key={skill.path ?? skill.name}
@@ -1997,6 +2280,7 @@ export function Composer(props: ComposerProps) {
                 }}
                 aria-selected={index === activeSkillIndex}
                 className={`composer__autocomplete-option${index === activeSkillIndex ? " is-active" : ""}`}
+                tabIndex={index === activeSkillIndex ? 0 : -1}
                 type="button"
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -2005,6 +2289,10 @@ export function Composer(props: ComposerProps) {
                 onClick={() => {
                   applySkill(skill);
                 }}
+                onFocus={() => {
+                  setActiveSkillIndex(index);
+                }}
+                onKeyDown={handleAutocompleteKeyDown}
               >
                 <span className="composer__autocomplete-title">
                   <span aria-hidden="true">🧰</span>
@@ -2020,7 +2308,12 @@ export function Composer(props: ComposerProps) {
             ))}
           </div>
         ) : displayedAutocompleteKind === "slash" ? (
-          <div className="composer__autocomplete" role="listbox" aria-label="Commands">
+          <div
+            className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+            role="listbox"
+            aria-label="Commands"
+            style={{ maxHeight: autocompleteLayout.maxHeight }}
+          >
             {filteredSlashCommands.map((command, index) => (
               <button
                 key={command.id}
@@ -2029,6 +2322,7 @@ export function Composer(props: ComposerProps) {
                 }}
                 aria-selected={index === activeSlashIndex}
                 className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
+                tabIndex={index === activeSlashIndex ? 0 : -1}
                 type="button"
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -2037,6 +2331,10 @@ export function Composer(props: ComposerProps) {
                 onClick={() => {
                   applySlashCommand(command);
                 }}
+                onFocus={() => {
+                  setActiveSlashIndex(index);
+                }}
+                onKeyDown={handleAutocompleteKeyDown}
               >
                 <span className="composer__autocomplete-title">
                   <span className="composer__autocomplete-token" aria-hidden="true">/</span>
@@ -2679,7 +2977,7 @@ export function Composer(props: ComposerProps) {
               props.disabled ||
               steering ||
               (!activeTurnId && sending) ||
-              (!draft.trim() && imageAttachments.length === 0)
+              (!hasComposerContent && imageAttachments.length === 0)
             }
             type="submit"
           >

@@ -426,6 +426,7 @@ textarea {
 .thread-row:focus,
 .transcript-activity__toggle:focus,
 .composer__input:focus,
+.composer-rich-input:focus-within,
 .composer__select:focus,
 .composer__review-input:focus,
 .composer__review-option:focus,
@@ -436,6 +437,7 @@ textarea {
 .thread-row:focus-visible,
 .transcript-activity__toggle:focus-visible,
 .composer__input:focus-visible,
+.composer-rich-input:focus-within,
 .composer__select:focus-visible,
 .composer__review-input:focus-visible,
 .composer__review-option:focus-visible,
@@ -804,7 +806,8 @@ textarea {
 }
 
 .tooltip-target[data-tooltip]:hover::after,
-.tooltip-target[data-tooltip]:focus-visible::after {
+.tooltip-target[data-tooltip]:focus-visible::after,
+.tooltip-target[data-tooltip]:focus-within::after {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
@@ -3135,6 +3138,42 @@ textarea {
   border: 1px solid var(--border-subtle);
 }
 
+.skill-chip--removable {
+  gap: 6px;
+  padding-right: 4px;
+}
+
+.skill-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skill-chip__remove {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.skill-chip__remove:hover,
+.skill-chip__remove:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
 .context-rail {
   display: flex;
   position: fixed;
@@ -3604,6 +3643,43 @@ textarea {
 
 .composer__input-wrap {
   position: relative;
+}
+
+.composer-rich-input {
+  display: flex;
+  min-height: 144px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+
+.composer-rich-input.is-disabled {
+  opacity: 0.72;
+}
+
+.composer-rich-input__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.composer-rich-input__textarea {
+  min-height: 0;
+  flex: 1 1 auto;
+  resize: vertical;
+  padding: 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+}
+
+.composer-rich-input__textarea:focus,
+.composer-rich-input__textarea:focus-visible {
+  outline: 0;
 }
 
 .composer__mentioned-skills {
@@ -4105,7 +4181,6 @@ textarea {
   position: absolute;
   right: 0;
   left: 0;
-  bottom: calc(100% + 10px);
   z-index: 20;
   display: flex;
   flex-direction: column;
@@ -4120,6 +4195,14 @@ textarea {
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.34);
   scrollbar-color: var(--border-strong) transparent;
   scrollbar-width: thin;
+}
+
+.composer__autocomplete--above {
+  bottom: calc(100% + 10px);
+}
+
+.composer__autocomplete--below {
+  top: calc(100% + 10px);
 }
 
 .composer__autocomplete-option {
