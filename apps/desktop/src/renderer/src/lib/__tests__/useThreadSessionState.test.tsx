@@ -1998,6 +1998,114 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingStatusText).toBe("Thinking");
   });
 
+  it("does not reintroduce thinking when a request resolves after turn completion", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/tool/requestUserInput",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              itemId: "input-1",
+              requestId: "input-request-1",
+              questions: [
+                {
+                  id: "approach",
+                  header: "Approach",
+                  question: "Which path should I take?",
+                  isOther: false,
+                  isSecret: false,
+                  options: [
+                    {
+                      label: "Small patch (Recommended)",
+                      description: "Keep this scoped.",
+                    },
+                  ],
+                },
+              ],
+            },
+          } as any,
+        });
+      }
+    });
+
+    expect(result.current.activeTurnId).toBe("turn-1");
+    expect(result.current.pendingStatusText).toBe("Waiting for input");
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+        listener({
+          backend: "codex",
+          notification: {
+            method: "serverRequest/resolved",
+            params: {
+              threadId: "thread-1",
+              requestId: "input-request-1",
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.pendingUserInput).toBeUndefined();
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+  });
+
   it("surfaces MCP elicitations as pending MCP interactions instead of approval", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
