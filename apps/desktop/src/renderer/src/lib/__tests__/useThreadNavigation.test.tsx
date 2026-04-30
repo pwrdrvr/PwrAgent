@@ -9,6 +9,21 @@ describe("useThreadNavigation", () => {
     vi.restoreAllMocks();
   });
 
+  function createDeferred<T>(): {
+    promise: Promise<T>;
+    resolve: (value: T) => void;
+    reject: (error: unknown) => void;
+  } {
+    let resolve: (value: T) => void = () => undefined;
+    let reject: (error: unknown) => void = () => undefined;
+    const promise = new Promise<T>((promiseResolve, promiseReject) => {
+      resolve = promiseResolve;
+      reject = promiseReject;
+    });
+
+    return { promise, resolve, reject };
+  }
+
   it("clears a directory attention count after the selected thread is marked seen", async () => {
     const markThreadSeen = vi.fn(async () => ({
       backend: "codex" as const,
@@ -577,6 +592,129 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread?.observedGitBranch).toBe("HEAD");
     expect(result.current.directories[0]?.threadKeys).toEqual(["codex:thread-new"]);
     expect(result.current.directories[0]?.needsAttentionCount).toBe(1);
+  });
+
+  it("does not let a materialized thread refresh override a newer user thread selection", async () => {
+    const directoryKey = "directory:/Users/huntharo/github/PwrAgnt";
+    const refreshedSnapshot = createDeferred<Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshot"]>>>>();
+    const initialSnapshot = {
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "thread-existing",
+          title: "Existing thread",
+          titleSource: "explicit" as const,
+          summary: "Existing thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory" as const,
+          label: "PwrAgnt",
+          path: "/Users/huntharo/github/PwrAgnt",
+          threadKeys: ["codex:thread-existing"],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey,
+            directoryKind: "directory" as const,
+            directoryLabel: "PwrAgnt",
+            directoryPath: "/Users/huntharo/github/PwrAgnt",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt: "Start the focus regression thread",
+            workMode: "worktree" as const,
+            branchName: "main",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    };
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockImplementationOnce(async () => await refreshedSnapshot.promise);
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-new",
+      executionMode: "default" as const,
+      workMode: "worktree" as const,
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-existing");
+    });
+
+    let materializePromise: Promise<void> | undefined;
+    act(() => {
+      materializePromise = result.current.materializeDirectoryLaunchpad(directoryKey);
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-new");
+    });
+
+    act(() => {
+      result.current.selectThread(
+        result.current.threads.find((thread) => thread.id === "thread-existing")!,
+      );
+    });
+    expect(result.current.selectedThread?.id).toBe("thread-existing");
+
+    await act(async () => {
+      refreshedSnapshot.resolve({
+        ...initialSnapshot,
+        threads: [
+          {
+            id: "thread-new",
+            title: "Fresh focus thread",
+            titleSource: "derived" as const,
+            summary: undefined,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: {
+              inInbox: true,
+              reason: "new-thread" as const,
+            },
+            updatedAt: 2_000,
+          },
+          ...initialSnapshot.threads,
+        ],
+        directories: [
+          {
+            ...initialSnapshot.directories[0]!,
+            launchpad: undefined,
+            threadKeys: ["codex:thread-new", "codex:thread-existing"],
+            needsAttentionCount: 1,
+          },
+        ],
+      });
+      await materializePromise;
+    });
+
+    expect(result.current.selectedThread?.id).toBe("thread-existing");
   });
 
   it("does not keep a directory launchpad selected when a thread in that directory is selected", async () => {

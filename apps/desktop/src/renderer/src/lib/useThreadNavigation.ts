@@ -578,6 +578,26 @@ function getFallbackSelectionKey(
     : undefined;
 }
 
+function resolveRefreshSelectionKey(
+  response: NavigationSnapshot,
+  currentSelectionKey: string | undefined,
+  preferredSelectionKey: string | undefined,
+  optimisticThreadKey?: string
+): string | undefined {
+  if (currentSelectionKey) {
+    return currentSelectionKey;
+  }
+
+  if (
+    preferredSelectionKey &&
+    hasSelectionKey(response, preferredSelectionKey, optimisticThreadKey)
+  ) {
+    return preferredSelectionKey;
+  }
+
+  return getFallbackSelectionKey(response, optimisticThreadKey);
+}
+
 function buildOptimisticThreadFromLaunchpad(params: {
   directory?: NavigationDirectorySummary;
   launchpad: NavigationLaunchpadDraft;
@@ -873,16 +893,12 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         }
 
         setSelectedItemKey((current) => {
-          const candidate = preferredSelectionKey ?? current;
-          if (candidate && hasSelectionKey(response, candidate, optimisticThreadKey)) {
-            return candidate;
-          }
-
-          if (candidate) {
-            return candidate;
-          }
-
-          return getFallbackSelectionKey(response, optimisticThreadKey);
+          return resolveRefreshSelectionKey(
+            response,
+            current,
+            preferredSelectionKey,
+            optimisticThreadKey
+          );
         });
       } catch (error) {
         setState((current) => ({
