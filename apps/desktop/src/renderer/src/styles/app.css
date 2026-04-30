@@ -1362,6 +1362,12 @@ textarea {
   padding-bottom: 4px;
 }
 
+.transcript-list__content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .transcript-list__scroll-bottom {
   position: absolute;
   left: 50%;
