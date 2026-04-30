@@ -7,6 +7,7 @@ type ThreadRowProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
   compact?: boolean;
   includeLinkedDirectories?: boolean;
+  linkedDirectoryMode?: "label" | "kind";
   selectedThreadKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   thread: NavigationThreadSummary;
@@ -56,6 +57,7 @@ export function ThreadRow(props: ThreadRowProps) {
         <ThreadMetaChips
           hasApprovalRequest={props.approvalRequestThreadKeys?.[threadKey] === true}
           includeLinkedDirectories={props.includeLinkedDirectories}
+          linkedDirectoryMode={props.linkedDirectoryMode}
           thread={props.thread}
         />
       </button>

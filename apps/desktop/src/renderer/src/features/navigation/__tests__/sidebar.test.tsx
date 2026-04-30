@@ -172,6 +172,92 @@ describe("Sidebar", () => {
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
   });
 
+  it("keeps recents to a single worktree indicator on the directory chip", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
+      name: /Cross-project cleanup/i,
+    });
+
+    expect(within(threadButton).getByLabelText("Copy path for worktree PwrAgnt")).toHaveTextContent(
+      "PwrAgnt"
+    );
+    expect(within(threadButton).queryByText("worktree")).not.toBeInTheDocument();
+  });
+
+  it("shows local versus worktree location chips in directory rows", () => {
+    const localThread = {
+      ...sharedThread,
+      id: "thread-local",
+      title: "Local cleanup",
+      linkedDirectories: [
+        {
+          id: "dir-a",
+          label: "PwrAgnt",
+          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          kind: "local" as const,
+        },
+      ],
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[
+          {
+            ...directories[0],
+            threadKeys: ["codex:thread-1", "codex:thread-local"],
+          },
+        ]}
+        inboxThreads={[sharedThread, localThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[sharedThread, localThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    fireEvent.click(
+      within(browseSection as HTMLElement).getByRole("button", { name: "PwrAgnt1" })
+    );
+    const worktreeThreadButton = within(browseSection as HTMLElement).getByRole("button", {
+      name: /Cross-project cleanup/i,
+    });
+    const localThreadButton = within(browseSection as HTMLElement).getByRole("button", {
+      name: /Local cleanup/i,
+    });
+
+    expect(within(worktreeThreadButton).getByText("worktree")).toBeInTheDocument();
+    expect(within(worktreeThreadButton).queryByText("PwrAgnt")).not.toBeInTheDocument();
+    expect(within(localThreadButton).getByText("local")).toBeInTheDocument();
+  });
+
   it("opens the directory launchpad from the plus button", () => {
     const onOpenLaunchpad = vi.fn(async () => undefined);
 
@@ -427,7 +513,6 @@ describe("Sidebar", () => {
       "Archive Thread",
       "Copy Thread ID",
       "Copy Worktree Path",
-      "Copy Local Path",
       "Copy Branch Name",
     ]);
   });
@@ -552,10 +637,6 @@ describe("Sidebar", () => {
     cleanup();
 
     renderMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Local Path" }));
-    cleanup();
-
-    renderMenu();
     fireEvent.click(screen.getByRole("menuitem", { name: "Copy Branch Name" }));
 
     expect(copyText).toHaveBeenNthCalledWith(1, "thread-1");
@@ -563,8 +644,7 @@ describe("Sidebar", () => {
       2,
       "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt"
     );
-    expect(copyText).toHaveBeenNthCalledWith(3, "/Users/huntharo/pwrdrvr/PwrAgnt");
-    expect(copyText).toHaveBeenNthCalledWith(4, "codex/thread-centric-ui");
+    expect(copyText).toHaveBeenNthCalledWith(3, "codex/thread-centric-ui");
   });
 
   it("hides optional copy actions without matching thread metadata", () => {
@@ -887,11 +967,9 @@ describe("Sidebar", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy path for PwrAgnt" }));
     fireEvent.click(screen.getByRole("button", { name: "Copy path for worktree PwrAgnt" }));
 
-    expect(copyText).toHaveBeenCalledWith("/Users/huntharo/pwrdrvr/PwrAgnt");
-    expect(copyText).toHaveBeenNthCalledWith(2, "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt");
+    expect(copyText).toHaveBeenCalledWith("/Users/huntharo/.codex/worktrees/0f38/PwrAgnt");
     expect(
       screen.queryByText("Line up the desktop shell with the app server")
     ).not.toBeInTheDocument();

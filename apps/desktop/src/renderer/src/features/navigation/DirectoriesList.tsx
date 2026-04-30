@@ -148,6 +148,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
                         key={`${directory.key}:${buildThreadIdentityKey(thread.source, thread.id)}`}
                         approvalRequestThreadKeys={props.approvalRequestThreadKeys}
                         compact
+                        includeLinkedDirectories
+                        linkedDirectoryMode="kind"
                         selectedThreadKey={props.selectedItemKey}
                         thinkingThreadKeys={props.thinkingThreadKeys}
                         thread={thread}
