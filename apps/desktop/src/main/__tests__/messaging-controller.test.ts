@@ -520,6 +520,13 @@ describe("MessagingController", () => {
         }),
       ],
     });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildTextEvent("who are you").channel),
+    ).resolves.toMatchObject({
+      activeTurn: {
+        status: "completed",
+      },
+    });
   });
 
   it("ignores turn completion events that do not include output text", async () => {

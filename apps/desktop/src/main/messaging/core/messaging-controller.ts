@@ -156,15 +156,18 @@ export class MessagingController {
 
       const assistantText = assistantTextForBackendEvent(event);
       if (assistantText && !lifecycle && currentBinding.activeTurn?.status === "working") {
-        await this.signalTurnActivity(
-          currentBinding,
-          {
+        currentBinding = await this.options.store.upsertBinding({
+          ...currentBinding,
+          activeTurn: {
             ...currentBinding.activeTurn,
             status: "completed",
             updatedAt: this.now(),
           },
-          { force: true },
-        );
+          updatedAt: this.now(),
+        });
+        await this.signalTurnActivity(currentBinding, currentBinding.activeTurn!, {
+          force: true,
+        });
       }
       if (assistantText) {
         await this.deliverAssistantMessage(assistantText, event, currentBinding);
