@@ -614,6 +614,42 @@ describe("TelegramAdapter", () => {
     expect("getFile" in api).toBe(false);
   });
 
+  it("ignores Telegram messages authored by bots", async () => {
+    const events: MessagingInboundEvent[] = [];
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      pollOnStart: false,
+    });
+
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    await adapter.handleUpdate({
+      update_id: 6,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        from: {
+          first_name: "Claw",
+          id: 8378950683,
+          is_bot: true,
+          username: "huntharo_bot",
+        },
+        message_id: 105,
+      },
+    });
+
+    expect(events).toEqual([]);
+  });
+
   it("sends image message intents through sendPhoto", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({

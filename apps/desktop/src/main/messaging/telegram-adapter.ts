@@ -291,6 +291,10 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
       return;
     }
 
+    if (message.from.is_bot) {
+      return;
+    }
+
     if (!message.text) {
       await listener({
         id: `telegram:update:${updateId}:message:${message.message_id}`,
