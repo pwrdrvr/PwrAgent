@@ -291,7 +291,7 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
       return;
     }
 
-    if (message.from.is_bot) {
+    if (message.pinned_message || this.isOwnBotUser(message.from)) {
       return;
     }
 
@@ -537,6 +537,16 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
       isBot: user?.is_bot,
       username: user?.username,
     };
+  }
+
+  private isOwnBotUser(user: TelegramMessage["from"]): boolean {
+    const botId = this.configuredBotId();
+    return Boolean(botId && user?.is_bot && String(user.id) === botId);
+  }
+
+  private configuredBotId(): string | undefined {
+    const id = this.options.config.botToken.split(":", 1)[0];
+    return /^\d+$/.test(id) ? id : undefined;
   }
 
   private routingStateFromMessage(message: TelegramMessage): MessagingAdapterState {

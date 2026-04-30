@@ -29,6 +29,7 @@ export type TelegramMessage = {
     file_id: string;
     file_size?: number;
   }>;
+  pinned_message?: TelegramMessage;
   text?: string;
   video?: {
     file_id: string;

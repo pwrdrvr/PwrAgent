@@ -614,7 +614,7 @@ describe("TelegramAdapter", () => {
     expect("getFile" in api).toBe(false);
   });
 
-  it("ignores Telegram messages authored by bots", async () => {
+  it("ignores Telegram pin service messages", async () => {
     const events: MessagingInboundEvent[] = [];
     const api = createApi();
     const adapter = new TelegramAdapter({
@@ -638,16 +638,110 @@ describe("TelegramAdapter", () => {
           type: "private",
         },
         from: {
+          id: 42,
+          is_bot: false,
+        },
+        message_id: 105,
+        pinned_message: {
+          chat: {
+            id: 777,
+            type: "private",
+          },
+          from: {
+            first_name: "Claw",
+            id: 8378950683,
+            is_bot: true,
+            username: "huntharo_bot",
+          },
+          message_id: 104,
+          text: "Binding: Thread one",
+        },
+      },
+    });
+
+    expect(events).toEqual([]);
+  });
+
+  it("ignores Telegram messages authored by the configured bot", async () => {
+    const events: MessagingInboundEvent[] = [];
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramApi,
+      config: {
+        channel: "telegram",
+        botToken: "8378950683:telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      pollOnStart: false,
+    });
+
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    await adapter.handleUpdate({
+      update_id: 7,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        from: {
           first_name: "Claw",
           id: 8378950683,
           is_bot: true,
           username: "huntharo_bot",
         },
-        message_id: 105,
+        message_id: 106,
+        text: "Binding: Thread one",
       },
     });
 
     expect(events).toEqual([]);
+  });
+
+  it("does not ignore Telegram messages authored by other bots", async () => {
+    const events: MessagingInboundEvent[] = [];
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramApi,
+      config: {
+        channel: "telegram",
+        botToken: "8378950683:telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      pollOnStart: false,
+    });
+
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    await adapter.handleUpdate({
+      update_id: 8,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        from: {
+          first_name: "Other Bot",
+          id: 12345,
+          is_bot: true,
+          username: "other_bot",
+        },
+        message_id: 107,
+        text: "hello from another bot",
+      },
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      actor: {
+        isBot: true,
+        platformUserId: "12345",
+        username: "other_bot",
+      },
+      kind: "text",
+      text: "hello from another bot",
+    });
   });
 
   it("sends image message intents through sendPhoto", async () => {
