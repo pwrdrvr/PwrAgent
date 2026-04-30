@@ -24,6 +24,10 @@ import {
 } from "./ipc/settings";
 import { initializeMainLogger } from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
+import {
+  disposeDesktopMessagingRuntime,
+  getDesktopMessagingRuntime,
+} from "./messaging/messaging-runtime";
 import { createMainWindow } from "./window";
 
 const APP_NAME = "PwrAgnt";
@@ -71,6 +75,7 @@ export function bootstrapApp(): void {
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
     }
+    await getDesktopMessagingRuntime().start();
     createMainWindow({
       startupCpuProfiler,
     });
@@ -99,6 +104,7 @@ export function bootstrapApp(): void {
     if (isDevelopment) {
       disposeRuntimeIdentityIpcHandlers();
     }
+    void disposeDesktopMessagingRuntime();
     void disposeAppServerIpcHandlers();
   });
 }

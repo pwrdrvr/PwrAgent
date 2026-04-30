@@ -353,7 +353,7 @@ flowchart TB
 **Verification:**
 - Voice-like fallback phrases work for expected controls, while unrelated instructions still reach the bound agent thread.
 
-- [ ] **Unit 5: Wire the desktop main-process messaging runtime**
+- [x] **Unit 5: Wire the desktop main-process messaging runtime**
 
 **Goal:** Start and stop messaging adapters from Electron main, connect the controller to `DesktopBackendRegistry`, resolve local config/state paths, and expose safe lifecycle behavior for local MVP use.
 
