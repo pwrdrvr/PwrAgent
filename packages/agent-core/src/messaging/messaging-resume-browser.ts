@@ -5,6 +5,7 @@ import type {
   MessagingBrowseMode,
   MessagingBrowseSelectedProject,
   MessagingBrowseSessionRecord,
+  MessagingJsonValue,
   MessagingProjectPickerIntent,
   MessagingSurfaceAction,
   MessagingThreadPickerIntent,
@@ -220,17 +221,23 @@ function buildProjectPickerIntent(params: {
   const allProjects = projectsForSession(params.navigation, params.session);
   const page = paginate(allProjects, params.session.pageIndex, params.session.pageSize);
   const actions: MessagingSurfaceAction[] = [
-    ...page.items.map((project, index) => ({
-      id: "browse:select-project",
-      label: `${page.startIndex + index + 1}. ${project.label} (${project.threadKeys.length})`,
-      style: "primary" as const,
-      fallbackText: String(index + 1),
-      value: {
+    ...page.items.map((project, index) => {
+      const value: Record<string, MessagingJsonValue> = {
         directoryKey: project.key,
         label: project.label,
-        path: project.path,
-      },
-    })),
+      };
+      if (typeof project.path === "string") {
+        value.path = project.path;
+      }
+
+      return {
+        id: "browse:select-project",
+        label: `${page.startIndex + index + 1}. ${project.label} (${project.threadKeys.length})`,
+        style: "primary" as const,
+        fallbackText: String(index + 1),
+        value,
+      };
+    }),
     ...navigationActions(params.session, page.pageIndex, page.totalPages),
   ];
 

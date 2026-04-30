@@ -12,8 +12,11 @@ import type {
 import { TelegramAdapter } from "../messaging/telegram-adapter";
 import type {
   TelegramApi,
+  TelegramEditMessageTextRequest,
+  TelegramPinChatMessageRequest,
   TelegramSendMessageRequest,
   TelegramSendPhotoRequest,
+  TelegramUnpinChatMessageRequest,
 } from "../messaging/telegram-api";
 import { TELEGRAM_CALLBACK_DATA_LIMIT_BYTES } from "../messaging/telegram-formatting";
 
@@ -62,17 +65,41 @@ describe("TelegramAdapter", () => {
                 text: "1. Thread one",
               }),
             ],
+            [
+              expect.objectContaining({
+                text: "2. Thread two",
+              }),
+            ],
+            [
+              expect.objectContaining({
+                text: "Projects",
+              }),
+            ],
+            [
+              expect.objectContaining({
+                text: "New",
+              }),
+            ],
+            [
+              expect.objectContaining({
+                text: "Cancel",
+              }),
+            ],
           ],
         },
       }),
     );
     const request = harness.api.sendMessage.mock.calls.at(-1)?.[0];
     const callbackData = request?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data;
+    const secondCallbackData =
+      request?.reply_markup?.inline_keyboard[1]?.[0]?.callback_data;
     expect(callbackData).toMatch(/^tg:/);
     expect(Buffer.byteLength(callbackData ?? "", "utf8")).toBeLessThanOrEqual(
       TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
     );
     expect(callbackData).not.toContain("thread-1");
+    expect(secondCallbackData).toMatch(/^tg:/);
+    expect(secondCallbackData).not.toBe(callbackData);
   });
 
   it("clears an existing webhook before starting local long polling", async () => {
@@ -114,8 +141,20 @@ describe("TelegramAdapter", () => {
     expect(api.setMyCommands).toHaveBeenCalledWith({
       commands: [
         {
+          command: "resume",
+          description: "Resume or start a PwrAgnt thread",
+        },
+        {
           command: "threads",
           description: "Choose a PwrAgnt thread",
+        },
+        {
+          command: "status",
+          description: "Show the current PwrAgnt binding",
+        },
+        {
+          command: "detach",
+          description: "Detach this chat from PwrAgnt",
         },
         {
           command: "bind",
@@ -123,6 +162,208 @@ describe("TelegramAdapter", () => {
         },
       ],
     });
+  });
+
+  it("edits target Telegram messages for managed surface updates", async () => {
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      now: () => 1000,
+      pollOnStart: false,
+    });
+
+    const result = await adapter.deliver({
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      createdAt: 1000,
+      delivery: {
+        mode: "update",
+        fallback: "present_new",
+      },
+      id: "intent-update",
+      kind: "confirmation",
+      targetSurface: {
+        channel: "telegram",
+        id: "200",
+        state: {
+          opaque: {
+            chatId: 777,
+            messageId: 200,
+          },
+        },
+      },
+      title: "Updated",
+      body: "This was edited.",
+      actions: [],
+    });
+
+    expect(api.editMessageText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: 777,
+        message_id: 200,
+        text: expect.stringContaining("Updated"),
+      }),
+    );
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      outcome: "updated",
+      surface: {
+        id: "200",
+      },
+    });
+  });
+
+  it("falls back to a new message when Telegram edit fails", async () => {
+    const api = createApi();
+    api.editMessageText.mockRejectedValueOnce(
+      new Error("message is not editable anymore"),
+    );
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      now: () => 1000,
+      pollOnStart: false,
+    });
+
+    const result = await adapter.deliver({
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      createdAt: 1000,
+      delivery: {
+        mode: "update",
+        fallback: "present_new",
+      },
+      id: "intent-update",
+      kind: "confirmation",
+      targetSurface: {
+        channel: "telegram",
+        id: "200",
+        state: {
+          opaque: {
+            chatId: 777,
+            messageId: 200,
+          },
+        },
+      },
+      title: "Updated",
+      body: "This was reposted.",
+      actions: [],
+    });
+
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: 777,
+        text: expect.stringContaining("Updated"),
+      }),
+    );
+    expect(result).toMatchObject({
+      outcome: "presented_new",
+      surface: {
+        id: "200",
+      },
+    });
+  });
+
+  it("pins and unpins Telegram status surfaces when requested", async () => {
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      now: () => 1000,
+      pollOnStart: false,
+    });
+
+    const pinResult = await adapter.deliver({
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      createdAt: 1000,
+      delivery: {
+        pin: true,
+      },
+      id: "intent-status",
+      kind: "status",
+      status: "idle",
+      text: "Binding: active",
+    });
+
+    expect(api.pinChatMessage).toHaveBeenCalledWith({
+      chat_id: 777,
+      disable_notification: true,
+      message_id: 200,
+    });
+    expect(pinResult.outcome).toBe("pinned");
+
+    const unpinResult = await adapter.deliver({
+      createdAt: 1000,
+      delivery: {
+        unpin: true,
+      },
+      id: "intent-dismiss",
+      kind: "dismiss",
+      reason: "detached",
+      targetSurface: {
+        channel: "telegram",
+        id: "200",
+        state: {
+          opaque: {
+            chatId: 777,
+            messageId: 200,
+          },
+        },
+      },
+    });
+
+    expect(api.unpinChatMessage).toHaveBeenCalledWith({
+      chat_id: 777,
+      message_id: 200,
+    });
+    expect(unpinResult.outcome).toBe("unpinned");
   });
 
   it("resolves callback handles and acknowledges callback queries", async () => {
@@ -170,6 +411,74 @@ describe("TelegramAdapter", () => {
     expect(harness.api.answerCallbackQuery).toHaveBeenCalledWith({
       callback_query_id: "callback-1",
     });
+    await expect(
+      harness.store.findActiveBindingForChannel({
+        channel: "telegram",
+        conversation: {
+          id: "777",
+          kind: "dm",
+        },
+      }),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+  });
+
+  it("resolves persisted callback handles after adapter restart", async () => {
+    const harness = await createControllerHarness();
+
+    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.handleUpdate({
+      update_id: 1,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        from: {
+          id: 42,
+          is_bot: false,
+        },
+        message_id: 100,
+        text: "/threads",
+      },
+    });
+    const callbackData =
+      harness.api.sendMessage.mock.calls.at(-1)?.[0].reply_markup?.inline_keyboard[0]?.[0]
+        ?.callback_data ?? "";
+    const restartedAdapter = new TelegramAdapter({
+      api: harness.api as unknown as TelegramApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      now: () => 1000,
+      pollOnStart: false,
+      store: harness.store,
+    });
+    await restartedAdapter.start((event) => harness.controller.handleInboundEvent(event));
+
+    await restartedAdapter.handleUpdate({
+      callback_query: {
+        data: callbackData,
+        from: {
+          id: 42,
+          is_bot: false,
+        },
+        id: "callback-1",
+        message: {
+          chat: {
+            id: 777,
+            type: "private",
+          },
+          message_id: 101,
+        },
+      },
+      update_id: 2,
+    });
+
     await expect(
       harness.store.findActiveBindingForChannel({
         channel: "telegram",
@@ -385,6 +694,7 @@ async function createControllerHarness(): Promise<{
     },
     now: () => 1000,
     pollOnStart: false,
+    store,
   });
   const controller = new MessagingController({
     adapter,
@@ -410,17 +720,28 @@ async function createControllerHarness(): Promise<{
 function createApi(): {
   answerCallbackQuery: ReturnType<typeof vi.fn>;
   deleteWebhook: ReturnType<typeof vi.fn>;
+  editMessageText: ReturnType<typeof vi.fn>;
   getUpdates: ReturnType<typeof vi.fn>;
   getWebhookInfo: ReturnType<typeof vi.fn>;
+  pinChatMessage: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   sendPhoto: ReturnType<typeof vi.fn>;
   setMyCommands: ReturnType<typeof vi.fn>;
+  unpinChatMessage: ReturnType<typeof vi.fn>;
 } {
   return {
     answerCallbackQuery: vi.fn(async () => true),
     deleteWebhook: vi.fn(async () => true),
+    editMessageText: vi.fn(async (request: TelegramEditMessageTextRequest) => ({
+      chat: {
+        id: Number(request.chat_id),
+        type: "private",
+      },
+      message_id: request.message_id,
+    })),
     getUpdates: vi.fn(async () => []),
     getWebhookInfo: vi.fn(async () => ({ url: "" })),
+    pinChatMessage: vi.fn(async (_request: TelegramPinChatMessageRequest) => true),
     sendMessage: vi.fn(async (request: TelegramSendMessageRequest) => ({
       chat: {
         id: Number(request.chat_id),
@@ -436,6 +757,7 @@ function createApi(): {
       message_id: 201,
     })),
     setMyCommands: vi.fn(async () => true),
+    unpinChatMessage: vi.fn(async (_request: TelegramUnpinChatMessageRequest) => true),
   };
 }
 
@@ -458,6 +780,16 @@ function buildNavigationSnapshot(): NavigationSnapshot {
         linkedDirectories: [],
         source: "codex",
         title: "Thread one",
+        titleSource: "explicit",
+      },
+      {
+        id: "thread-2",
+        inbox: {
+          inInbox: false,
+        },
+        linkedDirectories: [],
+        source: "codex",
+        title: "Thread two",
         titleSource: "explicit",
       },
     ],

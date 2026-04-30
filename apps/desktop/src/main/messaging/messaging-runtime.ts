@@ -1,5 +1,6 @@
 import {
   MessagingController,
+  type MessagingStore,
   type MessagingBackendBridge,
 } from "@pwragnt/agent-core";
 import type {
@@ -28,6 +29,7 @@ export type DesktopMessagingAdapter = {
 
 export type DesktopMessagingAdapterFactory = (params: {
   config: DesktopMessagingConfig;
+  store: MessagingStore;
 }) => DesktopMessagingAdapter[];
 
 const messagingLog = getMainLogger("pwragnt:messaging");
@@ -54,8 +56,10 @@ export class DesktopMessagingRuntime {
     }
     this.started = true;
 
+    const store = getDesktopMessagingStore();
     const configuredAdapters = this.options.adapterFactory({
       config: this.options.config,
+      store,
     });
 
     for (const adapter of configuredAdapters) {
@@ -66,7 +70,7 @@ export class DesktopMessagingRuntime {
             ? this.options.config.telegram?.authorizedActorIds ?? []
             : this.options.config.discord?.authorizedActorIds ?? [],
         backend: this.options.backendBridge,
-        store: getDesktopMessagingStore(),
+        store,
       });
 
       try {
@@ -141,9 +145,12 @@ export function resetDesktopMessagingRuntimeForTests(): void {
 
 function createConfiguredAdapters(params: {
   config: DesktopMessagingConfig;
+  store: MessagingStore;
 }): DesktopMessagingAdapter[] {
   return [
-    ...(params.config.telegram ? [createTelegramAdapter(params.config.telegram)] : []),
+    ...(params.config.telegram
+      ? [createTelegramAdapter(params.config.telegram, params.store)]
+      : []),
     ...(params.config.discord ? [createDiscordAdapter(params.config.discord)] : []),
   ];
 }

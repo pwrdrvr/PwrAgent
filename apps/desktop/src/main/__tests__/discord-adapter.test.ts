@@ -68,6 +68,18 @@ describe("DiscordAdapter", () => {
               expect.objectContaining({
                 label: "1. Thread one",
               }),
+              expect.objectContaining({
+                label: "2. Thread two",
+              }),
+              expect.objectContaining({
+                label: "Projects",
+              }),
+              expect.objectContaining({
+                label: "New",
+              }),
+              expect.objectContaining({
+                label: "Cancel",
+              }),
             ],
             type: 1,
           },
@@ -75,11 +87,14 @@ describe("DiscordAdapter", () => {
       }),
     );
     const customId = request?.components?.[0]?.components[0]?.custom_id;
+    const secondCustomId = request?.components?.[0]?.components[1]?.custom_id;
     expect(customId).toMatch(/^dc:/);
     expect(Buffer.byteLength(customId ?? "", "utf8")).toBeLessThanOrEqual(
       DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES,
     );
     expect(customId).not.toContain("thread-1");
+    expect(secondCustomId).toMatch(/^dc:/);
+    expect(secondCustomId).not.toBe(customId);
   });
 
   it("resolves component custom IDs and acknowledges interactions", async () => {
@@ -467,6 +482,16 @@ function buildNavigationSnapshot(): NavigationSnapshot {
         linkedDirectories: [],
         source: "codex",
         title: "Thread one",
+        titleSource: "explicit",
+      },
+      {
+        id: "thread-2",
+        inbox: {
+          inInbox: false,
+        },
+        linkedDirectories: [],
+        source: "codex",
+        title: "Thread two",
         titleSource: "explicit",
       },
     ],

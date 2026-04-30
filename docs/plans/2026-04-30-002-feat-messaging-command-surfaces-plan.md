@@ -255,7 +255,7 @@ flowchart TB
 **Verification:**
 - The controller can drive the complete resume browser with a fake adapter, without Telegram or Discord fields leaking into rendered intents.
 
-- [ ] **Unit 3: Add adapter edit, pin, unpin, and command registration capabilities**
+- [x] **Unit 3: Add adapter edit, pin, unpin, and command registration capabilities**
 
 **Goal:** Let adapters render command surfaces as managed messages instead of one-off messages, with Telegram implementing edit/pin/unpin first.
 

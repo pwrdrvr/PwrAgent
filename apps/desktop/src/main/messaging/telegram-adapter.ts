@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { MessagingStore } from "@pwragnt/agent-core";
 import type {
   MessagingAdapterState,
   MessagingDeliveryResult,
@@ -19,9 +20,9 @@ import {
 } from "./telegram-api";
 import {
   actionsForTelegramIntent,
-  buildTelegramKeyboard,
   splitTelegramHtml,
   TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
+  type TelegramInlineKeyboardMarkup,
   textForTelegramIntent,
 } from "./telegram-formatting";
 
@@ -32,6 +33,12 @@ const TRANSIENT_ERROR_BACKOFF_MS = 2_000;
 type TelegramCallbackBinding = {
   actionId: string;
   value?: MessagingJsonValue;
+};
+
+type TelegramDeliveryTarget = {
+  chatId: number | string;
+  messageId?: number;
+  messageThreadId?: number;
 };
 
 export class TelegramAdapter implements DesktopMessagingAdapter {
@@ -51,6 +58,7 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
       now?: () => number;
       pollOnStart?: boolean;
       sleep?: (ms: number) => Promise<void>;
+      store?: MessagingStore;
     },
   ) {}
 
@@ -67,8 +75,20 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
     await this.api.setMyCommands({
       commands: [
         {
+          command: "resume",
+          description: "Resume or start a PwrAgnt thread",
+        },
+        {
           command: "threads",
           description: "Choose a PwrAgnt thread",
+        },
+        {
+          command: "status",
+          description: "Show the current PwrAgnt binding",
+        },
+        {
+          command: "detach",
+          description: "Detach this chat from PwrAgnt",
         },
         {
           command: "bind",
@@ -90,14 +110,6 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
   }
 
   async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
-    if (intent.kind === "dismiss") {
-      return {
-        channel: this.channel,
-        deliveredAt: this.now(),
-        outcome: "unsupported",
-      };
-    }
-
     const target = this.resolveTarget(intent);
     if (!target) {
       return {
@@ -108,15 +120,70 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
       };
     }
 
+    if (intent.kind === "dismiss") {
+      if (intent.delivery?.unpin && target.messageId) {
+        await this.api.unpinChatMessage({
+          chat_id: target.chatId,
+          message_id: target.messageId,
+        });
+        return {
+          channel: this.channel,
+          deliveredAt: this.now(),
+          outcome: "unpinned",
+          surface: intent.targetSurface,
+        };
+      }
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "unsupported",
+        surface: intent.targetSurface,
+      };
+    }
+
     const actions = actionsForTelegramIntent(intent);
-    const replyMarkup = buildTelegramKeyboard(actions, (action) =>
-      this.createCallbackData(intent, action),
-    );
+    const replyMarkup = await this.buildReplyMarkup(intent, actions);
     const text = textForTelegramIntent(intent);
     const image = this.firstImageUrl(intent);
     const sentMessages: TelegramSentMessage[] = [];
+    let outcome: MessagingDeliveryResult["outcome"] = "presented";
 
-    if (image) {
+    if (
+      intent.delivery?.mode === "update" &&
+      target.messageId &&
+      !image &&
+      Buffer.byteLength(text || " ", "utf8") <= 4096
+    ) {
+      try {
+        sentMessages.push(
+          await this.api.editMessageText({
+            chat_id: target.chatId,
+            disable_web_page_preview: true,
+            message_id: target.messageId,
+            message_thread_id: target.messageThreadId,
+            parse_mode: "HTML",
+            reply_markup: replyMarkup,
+            text: text || " ",
+          }),
+        );
+        outcome = "updated";
+      } catch (error) {
+        if (intent.delivery.fallback !== "present_new") {
+          throw error;
+        }
+        sentMessages.push(
+          await this.api.sendMessage({
+            chat_id: target.chatId,
+            disable_web_page_preview: true,
+            message_thread_id: target.messageThreadId,
+            parse_mode: "HTML",
+            reply_markup: replyMarkup,
+            text: text || " ",
+          }),
+        );
+        outcome = "presented_new";
+      }
+    } else if (image) {
       sentMessages.push(
         await this.api.sendPhoto({
           caption: text.slice(0, 1024) || undefined,
@@ -145,10 +212,23 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
     }
 
     const lastMessage = sentMessages.at(-1);
+    if (intent.delivery?.pin && lastMessage) {
+      try {
+        await this.api.pinChatMessage({
+          chat_id: target.chatId,
+          disable_notification: true,
+          message_id: lastMessage.message_id,
+        });
+        outcome = "pinned";
+      } catch {
+        // Keep the visible status message even if the chat cannot pin it.
+      }
+    }
+
     return {
       channel: this.channel,
       deliveredAt: this.now(),
-      outcome: "presented",
+      outcome,
       surface: lastMessage
         ? {
             channel: this.channel,
@@ -270,14 +350,24 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
       return;
     }
 
+    const channel = this.channelFromMessage(message);
     const binding = callbackQuery.data
       ? this.callbackBindings.get(callbackQuery.data)
       : undefined;
+    const persistedBinding =
+      !binding && callbackQuery.data && this.options.store
+        ? await this.options.store.resolveCallbackHandle({
+            actorId: String(callbackQuery.from.id),
+            channel,
+            handle: callbackQuery.data,
+            now: this.now(),
+          })
+        : undefined;
     await listener({
       id: `telegram:update:${updateId}:callback:${callbackQuery.id}`,
       kind: "callback",
       actor: this.actorFromUser(callbackQuery.from),
-      channel: this.channelFromMessage(message),
+      channel,
       interaction: {
         channel: this.channel,
         id: callbackQuery.data ?? "",
@@ -287,19 +377,41 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
           },
         },
       },
-      actionId: binding?.actionId,
-      value: binding?.value,
+      actionId: binding?.actionId ?? persistedBinding?.actionId,
+      value: binding?.value ?? persistedBinding?.value,
       receivedAt: this.now(),
       routingState: this.routingStateFromMessage(message),
     });
   }
 
-  private createCallbackData(
+  private async buildReplyMarkup(
+    intent: MessagingSurfaceIntent,
+    actions: MessagingSurfaceAction[],
+  ): Promise<TelegramInlineKeyboardMarkup | undefined> {
+    const buttons = await Promise.all(
+      actions
+        .filter((action) => !action.disabled)
+        .map(async (action) => ({
+          text: action.label,
+          callback_data: await this.createCallbackData(intent, action),
+        })),
+    );
+
+    if (buttons.length === 0) {
+      return undefined;
+    }
+
+    return {
+      inline_keyboard: buttons.map((button) => [button]),
+    };
+  }
+
+  private async createCallbackData(
     intent: MessagingSurfaceIntent,
     action: MessagingSurfaceAction,
-  ): string {
+  ): Promise<string> {
     const handle = `tg:${createHash("sha256")
-      .update(`${intent.id}:${action.id}`)
+      .update(JSON.stringify([intent.id, action.id, action.value ?? null]))
       .digest("base64url")
       .slice(0, 18)}`;
     if (Buffer.byteLength(handle, "utf8") > TELEGRAM_CALLBACK_DATA_LIMIT_BYTES) {
@@ -310,22 +422,44 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
       actionId: action.id,
       value: action.value,
     });
+    if (this.options.store && intent.audit) {
+      await this.options.store.upsertCallbackHandle({
+        id: `telegram-callback:${handle}`,
+        actionId: action.id,
+        allowedActorIds: [intent.audit.actor.platformUserId],
+        bindingId: intent.bindingId,
+        channel: intent.audit.channel,
+        createdAt: this.now(),
+        expiresAt: this.now() + 15 * 60 * 1000,
+        handle,
+        pendingIntentId: intent.id,
+        surface: intent.targetSurface,
+        updatedAt: this.now(),
+        value: action.value,
+      });
+    }
     return handle;
   }
 
-  private resolveTarget(
-    intent: MessagingSurfaceIntent,
-  ): { chatId: number | string; messageThreadId?: number } | undefined {
-    const opaque = intent.audit?.channel
+  private resolveTarget(intent: MessagingSurfaceIntent): TelegramDeliveryTarget | undefined {
+    if (intent.delivery?.mode === "update" || intent.kind === "dismiss") {
+      return (
+        this.telegramStateFromSurface(intent.targetSurface?.state) ??
+        (intent.audit?.channel
+          ? this.telegramStateFromChannel(intent.audit.channel.conversation)
+          : undefined)
+      );
+    }
+
+    return intent.audit?.channel
       ? this.telegramStateFromChannel(intent.audit.channel.conversation)
       : this.telegramStateFromSurface(intent.targetSurface?.state);
-    return opaque;
   }
 
   private telegramStateFromChannel(channel: {
     id: string;
     parentId?: string;
-  }): { chatId: number | string; messageThreadId?: number } | undefined {
+  }): TelegramDeliveryTarget | undefined {
     if (channel.parentId) {
       return {
         chatId: parseTelegramIdentifier(channel.parentId),
@@ -340,13 +474,14 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
 
   private telegramStateFromSurface(
     state: MessagingAdapterState | undefined,
-  ): { chatId: number | string; messageThreadId?: number } | undefined {
+  ): TelegramDeliveryTarget | undefined {
     const opaque = state?.opaque;
     if (!opaque || typeof opaque !== "object" || Array.isArray(opaque)) {
       return undefined;
     }
 
     const chatId = opaque.chatId;
+    const messageId = opaque.messageId;
     const messageThreadId = opaque.messageThreadId;
     if (typeof chatId !== "string" && typeof chatId !== "number") {
       return undefined;
@@ -354,6 +489,7 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
 
     return {
       chatId,
+      messageId: typeof messageId === "number" ? messageId : undefined,
       messageThreadId:
         typeof messageThreadId === "number" ? messageThreadId : undefined,
     };
@@ -428,9 +564,11 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
 
 export function createTelegramAdapter(
   config: TelegramMessagingConfig,
+  store?: MessagingStore,
 ): TelegramAdapter {
   return new TelegramAdapter({
     config,
+    store,
   });
 }
 

@@ -89,6 +89,17 @@ export type TelegramSentMessage = {
   message_id: number;
 };
 
+export type TelegramPinChatMessageRequest = {
+  chat_id: number | string;
+  disable_notification?: boolean;
+  message_id: number;
+};
+
+export type TelegramUnpinChatMessageRequest = {
+  chat_id: number | string;
+  message_id?: number;
+};
+
 export class TelegramApiError extends Error {
   constructor(
     message: string,
@@ -154,8 +165,25 @@ export class TelegramApi {
     return await this.request<TelegramSentMessage>("editMessageText", request);
   }
 
+  async editMessageReplyMarkup(
+    request: Pick<
+      TelegramEditMessageTextRequest,
+      "chat_id" | "message_id" | "message_thread_id" | "reply_markup"
+    >,
+  ): Promise<TelegramSentMessage> {
+    return await this.request<TelegramSentMessage>("editMessageReplyMarkup", request);
+  }
+
   async sendPhoto(request: TelegramSendPhotoRequest): Promise<TelegramSentMessage> {
     return await this.request<TelegramSentMessage>("sendPhoto", request);
+  }
+
+  async pinChatMessage(request: TelegramPinChatMessageRequest): Promise<boolean> {
+    return await this.request<boolean>("pinChatMessage", request);
+  }
+
+  async unpinChatMessage(request: TelegramUnpinChatMessageRequest): Promise<boolean> {
+    return await this.request<boolean>("unpinChatMessage", request);
   }
 
   async answerCallbackQuery(params: {

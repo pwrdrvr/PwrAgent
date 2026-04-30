@@ -254,7 +254,7 @@ export class DiscordAdapter implements DesktopMessagingAdapter {
     action: MessagingSurfaceAction,
   ): string {
     const customId = `dc:${createHash("sha256")
-      .update(`${intent.id}:${action.id}`)
+      .update(JSON.stringify([intent.id, action.id, action.value ?? null]))
       .digest("base64url")
       .slice(0, 24)}`;
     if (Buffer.byteLength(customId, "utf8") > DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES) {
