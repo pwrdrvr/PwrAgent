@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, stat, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, stat, writeFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -91,5 +91,31 @@ describe("WorktreeArchiveService", () => {
       false,
     );
     expect(await git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
+  });
+
+  it("resolves the primary repository when the repository path points at the worktree", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragnt-worktree-archive-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "repo-feature");
+    await mkdir(repoPath);
+    await git(repoPath, ["init", "-b", "main"]);
+    await git(repoPath, ["config", "user.email", "test@example.com"]);
+    await git(repoPath, ["config", "user.name", "Test User"]);
+    await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
+    await git(repoPath, ["add", "."]);
+    await git(repoPath, ["commit", "-m", "initial"]);
+    await git(repoPath, ["worktree", "add", "--detach", worktreePath, "main"]);
+
+    const service = new WorktreeArchiveService();
+    const snapshot = await service.archive({
+      backend: "codex",
+      threadId: "thread-1",
+      repositoryPath: worktreePath,
+      worktreePath,
+      now: 1000,
+    });
+
+    expect(snapshot.repositoryPath).toBe(await realpath(repoPath));
+    expect(await pathExists(worktreePath)).toBe(false);
   });
 });
