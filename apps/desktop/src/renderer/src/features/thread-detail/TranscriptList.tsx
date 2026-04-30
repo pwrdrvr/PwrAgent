@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent
+} from "react";
 import type {
   AppServerPendingRequestNotification,
   AppServerThreadActivityEntry,
@@ -22,6 +30,12 @@ import type { PendingQuestionnaireState } from "./questionnaire";
 import type { PendingMcpInteractionState } from "./mcp-elicitation";
 import { buildTranscriptRenderItems } from "./transcript-render-items";
 
+type TranscriptViewport = {
+  distanceFromBottom: number;
+  isGluedToBottom?: boolean;
+  scrollTop: number;
+};
+
 type TranscriptListProps = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
@@ -39,17 +53,12 @@ type TranscriptListProps = {
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
   pagination?: AppServerThreadReplayPagination;
-  restoredViewport?: {
-    distanceFromBottom: number;
-    scrollTop: number;
-  };
+  restoredViewport?: TranscriptViewport;
+  reglueRequestKey?: number;
   threadId?: string;
   skills?: AppServerSkillSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
-  onViewportChange?: (viewport?: {
-    distanceFromBottom: number;
-    scrollTop: number;
-  }) => void;
+  onViewportChange?: (viewport?: TranscriptViewport) => void;
   onRespondToPendingRequest?: (decision: "approve" | "decline" | "cancel") => Promise<void>;
   onPendingMcpInteractionChange?: (state: PendingMcpInteractionState) => void;
   onSubmitPendingMcpInteraction?: (
@@ -74,6 +83,7 @@ type ScrollSnapshot = {
 };
 
 const BOTTOM_THRESHOLD_PX = 24;
+const SCROLLBAR_HIT_SLOP_PX = 16;
 type ScrollBottomMode = "instant" | "smooth";
 
 function isAssistantFinalMessage(entry: AppServerThreadEntry): boolean {
@@ -258,12 +268,12 @@ function pendingRequestPrompt(request: AppServerPendingRequestNotification): str
 export function TranscriptList(props: TranscriptListProps) {
   const skills = props.skills ?? [];
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollContentRef = useRef<HTMLDivElement>(null);
   const snapshotRef = useRef<ScrollSnapshot | undefined>(undefined);
-  const savedViewportsRef = useRef(
-    new Map<string, { distanceFromBottom: number; scrollTop: number }>()
-  );
+  const savedViewportsRef = useRef(new Map<string, TranscriptViewport>());
   const shouldScrollToBottomRef = useRef(true);
-  const isFollowingBottomRef = useRef(true);
+  const isGluedToBottomRef = useRef(true);
+  const pendingScrollbarUnglueRef = useRef(false);
   const [hasContentBelow, setHasContentBelow] = useState(false);
   const [expandedCommentaryGroupIds, setExpandedCommentaryGroupIds] = useState(
     () => new Set<string>()
@@ -396,13 +406,19 @@ export function TranscriptList(props: TranscriptListProps) {
   const syncScrollState = useCallback(() => {
     const snapshot = captureSnapshot();
     snapshotRef.current = snapshot;
-    isFollowingBottomRef.current = Boolean(
-      snapshot && snapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX
-    );
-    setHasContentBelow(Boolean(snapshot && snapshot.distanceFromBottom > BOTTOM_THRESHOLD_PX));
+    const isAtBottom = Boolean(snapshot && snapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX);
+    if (isAtBottom) {
+      isGluedToBottomRef.current = true;
+      pendingScrollbarUnglueRef.current = false;
+    } else if (pendingScrollbarUnglueRef.current) {
+      isGluedToBottomRef.current = false;
+      pendingScrollbarUnglueRef.current = false;
+    }
+    setHasContentBelow(Boolean(snapshot && !isAtBottom));
     if (snapshot?.threadId) {
       savedViewportsRef.current.set(snapshot.threadId, {
         distanceFromBottom: snapshot.distanceFromBottom,
+        isGluedToBottom: isGluedToBottomRef.current,
         scrollTop: snapshot.scrollTop,
       });
     }
@@ -423,15 +439,44 @@ export function TranscriptList(props: TranscriptListProps) {
       container.scrollTop = container.scrollHeight;
     }
 
-    isFollowingBottomRef.current = true;
+    isGluedToBottomRef.current = true;
+    pendingScrollbarUnglueRef.current = false;
     syncScrollState();
   }, [syncScrollState]);
+
+  const notePotentialScrollbarUnglue = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const container = scrollContainerRef.current;
+      if (!container || container.scrollHeight <= container.clientHeight) {
+        pendingScrollbarUnglueRef.current = false;
+        return;
+      }
+
+      const rect = container.getBoundingClientRect();
+      const distanceFromRight = rect.right - event.clientX;
+      const gutterWidth = Math.max(container.offsetWidth - container.clientWidth, 0);
+      const isInScrollbarGutter =
+        gutterWidth > 0
+          ? event.clientX >= rect.right - gutterWidth
+          : distanceFromRight >= 0 && distanceFromRight <= SCROLLBAR_HIT_SLOP_PX;
+      pendingScrollbarUnglueRef.current = isInScrollbarGutter;
+    },
+    []
+  );
 
   useEffect(() => {
     if (props.loading && props.entries.length === 0) {
       shouldScrollToBottomRef.current = true;
     }
   }, [props.entries.length, props.loading]);
+
+  useEffect(() => {
+    if (typeof props.reglueRequestKey !== "number" || props.reglueRequestKey <= 0) {
+      return;
+    }
+
+    scrollToBottom("instant");
+  }, [props.reglueRequestKey, scrollToBottom]);
 
   useEffect(() => {
     return () => {
@@ -449,7 +494,8 @@ export function TranscriptList(props: TranscriptListProps) {
     const container = scrollContainerRef.current;
     if (!container || props.entries.length === 0) {
       snapshotRef.current = undefined;
-      isFollowingBottomRef.current = true;
+      isGluedToBottomRef.current = true;
+      pendingScrollbarUnglueRef.current = false;
       setHasContentBelow(false);
       return;
     }
@@ -488,7 +534,7 @@ export function TranscriptList(props: TranscriptListProps) {
         previousSnapshot.threadId === props.threadId &&
         previousSnapshot.firstMessageId === firstMessageId &&
         !hasPrependedMessages &&
-        isFollowingBottomRef.current &&
+        isGluedToBottomRef.current &&
         container.scrollHeight > previousSnapshot.scrollHeight
     );
 
@@ -497,9 +543,15 @@ export function TranscriptList(props: TranscriptListProps) {
       container.scrollTop = previousSnapshot.scrollTop + heightDelta;
     } else if (previousSnapshot?.threadId !== props.threadId) {
       if (restoredViewport) {
-        if (restoredViewport.distanceFromBottom <= BOTTOM_THRESHOLD_PX) {
+        const shouldRestoreBottom =
+          restoredViewport.isGluedToBottom ??
+          restoredViewport.distanceFromBottom <= BOTTOM_THRESHOLD_PX;
+        if (shouldRestoreBottom) {
+          isGluedToBottomRef.current = true;
           scrollToBottom("instant");
         } else {
+          isGluedToBottomRef.current = false;
+          pendingScrollbarUnglueRef.current = false;
           container.scrollTop = Math.min(
             Math.max(0, restoredViewport.scrollTop),
             Math.max(container.scrollHeight - container.clientHeight, 0)
@@ -522,6 +574,7 @@ export function TranscriptList(props: TranscriptListProps) {
       return;
     } else if (
       (hasAppendedMessages && previousSnapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX) ||
+      (hasAppendedMessages && isGluedToBottomRef.current) ||
       hasGrownWhileFollowingBottom
     ) {
       scrollToBottom("instant");
@@ -544,6 +597,25 @@ export function TranscriptList(props: TranscriptListProps) {
     scrollToBottom,
     syncScrollState,
   ]);
+
+  useEffect(() => {
+    const content = scrollContentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") {
+      return undefined;
+    }
+
+    const observer = new ResizeObserver(() => {
+      if (isGluedToBottomRef.current) {
+        scrollToBottom("instant");
+      } else {
+        syncScrollState();
+      }
+    });
+    observer.observe(content);
+    return () => {
+      observer.disconnect();
+    };
+  }, [scrollToBottom, syncScrollState]);
 
   if (props.loading && props.entries.length === 0 && !hasPendingContent) {
     return <p className="transcript-empty">Loading transcript…</p>;
@@ -578,119 +650,122 @@ export function TranscriptList(props: TranscriptListProps) {
         className="transcript-list__items"
         role="list"
         onScroll={syncScrollState}
+        onPointerDown={notePotentialScrollbarUnglue}
       >
-        {transcriptRenderItems.map((item) => {
-          if (item.type === "workPhaseGroup") {
-            return (
-              <TranscriptWorkPhaseGroup
-                key={item.id}
-                collapsible={item.collapsible}
-                entries={item.entries}
-                expanded={expandedCommentaryGroupIds.has(item.id)}
-                label={item.label}
+        <div ref={scrollContentRef} className="transcript-list__content">
+          {transcriptRenderItems.map((item) => {
+            if (item.type === "workPhaseGroup") {
+              return (
+                <TranscriptWorkPhaseGroup
+                  key={item.id}
+                  collapsible={item.collapsible}
+                  entries={item.entries}
+                  expanded={expandedCommentaryGroupIds.has(item.id)}
+                  label={item.label}
+                  skills={skills}
+                  onOpenImage={props.onOpenImage}
+                  onToggle={() => {
+                    toggleCommentaryGroup(item.id);
+                  }}
+                />
+              );
+            }
+
+            const entry = item.entry;
+            return entry.type === "activity" ? (
+              <TranscriptActivity key={entry.id} entry={entry} />
+            ) : entry.type === "plan" ? (
+              <TranscriptPlan key={entry.id} entry={entry} />
+            ) : entry.type === "review" ? (
+              <TranscriptReview key={entry.id} entry={entry} />
+            ) : (
+              <TranscriptMessage
+                key={entry.id}
+                message={entry}
                 skills={skills}
                 onOpenImage={props.onOpenImage}
-                onToggle={() => {
-                  toggleCommentaryGroup(item.id);
-                }}
               />
             );
-          }
-
-          const entry = item.entry;
-          return entry.type === "activity" ? (
-            <TranscriptActivity key={entry.id} entry={entry} />
-          ) : entry.type === "plan" ? (
-            <TranscriptPlan key={entry.id} entry={entry} />
-          ) : entry.type === "review" ? (
-            <TranscriptReview key={entry.id} entry={entry} />
-          ) : (
-            <TranscriptMessage
-              key={entry.id}
-              message={entry}
-              skills={skills}
-              onOpenImage={props.onOpenImage}
-            />
-          );
-        })}
-        {props.pendingStatusText ? (
-          <div className="transcript-list__pending" role="status">
-            <ThinkingScanner />
-            <span>{props.pendingStatusText}</span>
-          </div>
-        ) : null}
-        {props.pendingUserInput ? (
-          <PendingQuestionnaire
-            busy={props.pendingRequestBusy}
-            state={props.pendingUserInput}
-            onChange={(state) => {
-              props.onPendingUserInputChange?.(state);
-            }}
-            onSubmit={async (state) => {
-              await props.onSubmitPendingUserInput?.(state);
-            }}
-          />
-        ) : null}
-        {props.pendingMcpInteraction ? (
-          <PendingMcpInteraction
-            busy={props.pendingRequestBusy}
-            state={props.pendingMcpInteraction}
-            onChange={(state) => {
-              props.onPendingMcpInteractionChange?.(state);
-            }}
-            onSubmit={async (state, action) => {
-              await props.onSubmitPendingMcpInteraction?.(state, action);
-            }}
-          />
-        ) : null}
-        {props.pendingRequest ? (
-          <div className="transcript-request" role="group" aria-label="Pending approval">
-            <div className="transcript-request__header">
-              <span className="thread-row__chip thread-row__chip--mode">
-                Approval needed
-              </span>
-              <span className="transcript-message__time">
-                {props.pendingRequest.method}
-              </span>
+          })}
+          {props.pendingStatusText ? (
+            <div className="transcript-list__pending" role="status">
+              <ThinkingScanner />
+              <span>{props.pendingStatusText}</span>
             </div>
-            <ThreadMarkdown
-              className="transcript-request__prompt"
-              text={pendingRequestPrompt(props.pendingRequest)}
+          ) : null}
+          {props.pendingUserInput ? (
+            <PendingQuestionnaire
+              busy={props.pendingRequestBusy}
+              state={props.pendingUserInput}
+              onChange={(state) => {
+                props.onPendingUserInputChange?.(state);
+              }}
+              onSubmit={async (state) => {
+                await props.onSubmitPendingUserInput?.(state);
+              }}
             />
-            <div className="transcript-request__actions">
-              <button
-                className="button button--primary"
-                disabled={props.pendingRequestBusy}
-                type="button"
-                onClick={() => {
-                  void props.onRespondToPendingRequest?.("approve");
-                }}
-              >
-                Approve
-              </button>
-              <button
-                className="button button--ghost"
-                disabled={props.pendingRequestBusy}
-                type="button"
-                onClick={() => {
-                  void props.onRespondToPendingRequest?.("decline");
-                }}
-              >
-                Decline
-              </button>
-              <button
-                className="button button--ghost"
-                disabled={props.pendingRequestBusy}
-                type="button"
-                onClick={() => {
-                  void props.onRespondToPendingRequest?.("cancel");
-                }}
-              >
-                Cancel turn
-              </button>
+          ) : null}
+          {props.pendingMcpInteraction ? (
+            <PendingMcpInteraction
+              busy={props.pendingRequestBusy}
+              state={props.pendingMcpInteraction}
+              onChange={(state) => {
+                props.onPendingMcpInteractionChange?.(state);
+              }}
+              onSubmit={async (state, action) => {
+                await props.onSubmitPendingMcpInteraction?.(state, action);
+              }}
+            />
+          ) : null}
+          {props.pendingRequest ? (
+            <div className="transcript-request" role="group" aria-label="Pending approval">
+              <div className="transcript-request__header">
+                <span className="thread-row__chip thread-row__chip--mode">
+                  Approval needed
+                </span>
+                <span className="transcript-message__time">
+                  {props.pendingRequest.method}
+                </span>
+              </div>
+              <ThreadMarkdown
+                className="transcript-request__prompt"
+                text={pendingRequestPrompt(props.pendingRequest)}
+              />
+              <div className="transcript-request__actions">
+                <button
+                  className="button button--primary"
+                  disabled={props.pendingRequestBusy}
+                  type="button"
+                  onClick={() => {
+                    void props.onRespondToPendingRequest?.("approve");
+                  }}
+                >
+                  Approve
+                </button>
+                <button
+                  className="button button--ghost"
+                  disabled={props.pendingRequestBusy}
+                  type="button"
+                  onClick={() => {
+                    void props.onRespondToPendingRequest?.("decline");
+                  }}
+                >
+                  Decline
+                </button>
+                <button
+                  className="button button--ghost"
+                  disabled={props.pendingRequestBusy}
+                  type="button"
+                  onClick={() => {
+                    void props.onRespondToPendingRequest?.("cancel");
+                  }}
+                >
+                  Cancel turn
+                </button>
+              </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
       </div>
 
       {hasContentBelow ? (

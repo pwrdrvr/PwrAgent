@@ -69,6 +69,14 @@ test("restores the saved transcript viewport when reselecting a cached thread", 
       .toBe(true);
 
     await list.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      element.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          clientX: rect.right - 2,
+          clientY: rect.top + 24,
+        })
+      );
       element.scrollTop = 0;
       element.dispatchEvent(new Event("scroll", { bubbles: true }));
     });
