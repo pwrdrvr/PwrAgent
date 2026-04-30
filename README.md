@@ -13,6 +13,16 @@ Thread-centric coding agent desktop app.
 - `packages/shared` - shared contracts and types
 - `packages/agent-core` - agent runtime and domain services
 
+## Messaging Integrations
+
+Telegram and Discord adapters can be enabled from the desktop main process with
+PwrAgnt-prefixed environment variables and allowlisted platform user IDs. Setup,
+security notes, and smoke validation live in
+[docs/messaging-platform-integration.md](docs/messaging-platform-integration.md).
+The channel adapter boundary for future Mattermost, Feishu/Lark, Slack, Matrix,
+or mobile integrations is documented in
+[docs/messaging-adapter-contract.md](docs/messaging-adapter-contract.md).
+
 ## Testing
 
 - `pnpm test`

@@ -496,7 +496,7 @@ flowchart TB
 **Verification:**
 - Discord can complete bind, picker navigation, free-form turn routing, approval/questionnaire actions, markdown/code rendering, and image response delivery against mocked Gateway/REST tests plus manual smoke validation.
 
-- [ ] **Unit 8: Add docs, adapter extension guidance, and manual smoke validation**
+- [x] **Unit 8: Add docs, adapter extension guidance, and manual smoke validation**
 
 **Goal:** Document setup, security posture, troubleshooting, manual Telegram/Discord validation, and the adapter contract for future Mattermost/Feishu/Lark implementations.
 
