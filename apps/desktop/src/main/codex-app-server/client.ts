@@ -1965,13 +1965,26 @@ function summarizeActivityItems(
           continue;
         }
 
+        if (actionType === "listFiles" || actionType === "search") {
+          inspectedFiles += 1;
+          const label =
+            actionType === "listFiles"
+              ? actionPath
+                ? `Listed ${path.basename(actionPath) || actionPath}`
+                : "Listed files"
+              : "Ran search";
+          pushActivityDetail(details, {
+            id: detailId,
+            kind: "read",
+            label: appendElapsedLabel(label, elapsedMs),
+            ...(actionPath ? { path: actionPath } : {}),
+            status: itemStatus
+          });
+          continue;
+        }
+
         commandsRun += 1;
-        const label =
-          actionType === "listFiles"
-            ? "Listed files"
-            : actionType === "search"
-              ? "Ran search"
-              : fallbackName?.trim() || formatCommandLabel(command);
+        const label = fallbackName?.trim() || formatCommandLabel(command);
         pushActivityDetail(details, {
           id: detailId,
           kind: "command",

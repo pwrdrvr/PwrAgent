@@ -522,6 +522,10 @@ describe("TranscriptList", () => {
     expect(screen.getByText("Update useThreadSessionState.ts")).toBeInTheDocument();
     expect(screen.getAllByText("-2")[0]).toBeInTheDocument();
     expect(screen.getAllByText("+1")[0]).toBeInTheDocument();
+    expect(screen.queryByText("function messageMatchesOptimisticEntry(")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Update useThreadSessionState.ts/i }));
+
     expect(screen.getByText("function messageMatchesOptimisticEntry(")).toBeInTheDocument();
   });
 
@@ -911,6 +915,8 @@ describe("TranscriptList", () => {
     fireEvent.click(screen.getByRole("button", { name: /Edited 1 file/i }));
 
     expect(screen.getByText("Update TranscriptList.tsx")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Update TranscriptList.tsx/i }));
+
     expect(screen.getByText("const b = 2;")).toBeInTheDocument();
     expect(screen.getByText("const c = 3;")).toBeInTheDocument();
     expect(screen.queryByText("2 unmodified lines skipped")).not.toBeInTheDocument();

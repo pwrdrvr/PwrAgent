@@ -127,7 +127,7 @@ flowchart TB
     U5 --> U6
 ```
 
-- [ ] **Unit 1: Add a session-owned live segment model**
+- [x] **Unit 1: Add a session-owned live segment model**
 
 **Goal:** Represent current-process live transcript entries in event order inside `useThreadSessionState.ts`.
 
@@ -163,7 +163,7 @@ flowchart TB
 **Verification:**
 - The session state can express the target capture order without relying on `ThreadView.tsx` local pending activity buckets.
 
-- [ ] **Unit 2: Move live tool/activity accumulation out of `ThreadView.tsx`**
+- [x] **Unit 2: Move live tool/activity accumulation out of `ThreadView.tsx`**
 
 **Goal:** Ensure live tool, command, read/search, MCP status, file-change, and plan activity is accumulated by the session owner and rendered as ordered entries.
 
@@ -198,7 +198,7 @@ flowchart TB
 **Verification:**
 - Live activity no longer grows an old activity entry above newer assistant text.
 
-- [ ] **Unit 3: Preserve current-process live activity through hydration**
+- [x] **Unit 3: Preserve current-process live activity through hydration**
 
 **Goal:** Prevent `thread/read` refreshes and navigation reselects from wiping rich live entries that cannot be restored from app-server snapshots.
 
@@ -231,7 +231,7 @@ flowchart TB
 **Verification:**
 - Clicking away from `019dde4b-4979-7220-938e-ca79eb4e34c4` and back does not remove live activity segments captured in the current app process.
 
-- [ ] **Unit 4: Correct activity classification and summaries**
+- [x] **Unit 4: Correct activity classification and summaries**
 
 **Goal:** Stop counting file reads/searches/listing as "Used tools" and produce summaries that match the user's mental model.
 
@@ -267,7 +267,7 @@ flowchart TB
 **Verification:**
 - The target capture no longer shows read-file work as a growing "Used 12 tools" group.
 
-- [ ] **Unit 5: Make expanded activity sections compact and inspectable**
+- [x] **Unit 5: Make expanded activity sections compact and inspectable**
 
 **Goal:** Make read-heavy activity expansion usable by adding nested grouped disclosures and keeping command output hidden until the specific command detail is expanded.
 
