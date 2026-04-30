@@ -295,6 +295,73 @@ test("directory launchpad keyboard typing updates the rich input once", async ()
   }
 });
 
+test("directory launchpad skill autocomplete supports active keyboard selection", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const richInput = app.window.getByTestId("composer-rich-input");
+    await richInput.focus();
+    await app.window.keyboard.type("$");
+
+    const listbox = app.window.getByRole("listbox", { name: "Skills" });
+    await expect(listbox).toBeVisible();
+    await expect(richInput).toHaveAttribute("aria-expanded", "true");
+
+    const firstActiveOption = listbox.locator('[aria-selected="true"]');
+    const firstActiveOptionId = await firstActiveOption.getAttribute("id");
+    expect(firstActiveOptionId).toBeTruthy();
+    await expect(richInput).toHaveAttribute(
+      "aria-activedescendant",
+      firstActiveOptionId ?? "",
+    );
+
+    await app.window.keyboard.press("ArrowDown");
+    const secondActiveOption = listbox.locator('[aria-selected="true"]');
+    const secondActiveOptionId = await secondActiveOption.getAttribute("id");
+    expect(secondActiveOptionId).toBeTruthy();
+    expect(secondActiveOptionId).not.toBe(firstActiveOptionId);
+    const secondActiveSkillLabel = (
+      (await secondActiveOption
+        .locator(".composer__autocomplete-title")
+        .textContent())?.match(/\$[A-Za-z0-9:_-]+/)?.[0] ??
+      ""
+    );
+    expect(secondActiveSkillLabel).toBeTruthy();
+    await expect(richInput).toHaveAttribute(
+      "aria-activedescendant",
+      secondActiveOptionId ?? "",
+    );
+
+    await app.window.keyboard.press("Tab");
+    await expect(listbox).toBeHidden();
+    await expect(
+      richInput.locator(".skill-chip", { hasText: secondActiveSkillLabel }),
+    ).toBeVisible();
+
+    await richInput.focus();
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await app.window.keyboard.press("Delete");
+    await expect(richInput).toHaveAttribute("data-value", "");
+    await expect(richInput.locator(".skill-chip")).toHaveCount(0);
+
+    await app.window.keyboard.type("$ce:pl");
+    await app.window.keyboard.press("Enter");
+    await expect(
+      richInput.locator(".skill-chip", { hasText: "$ce:plan" }),
+    ).toBeVisible();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("directory launchpad preserves multiple skill chips across boundary edits", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({

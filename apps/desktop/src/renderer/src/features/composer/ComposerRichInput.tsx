@@ -28,6 +28,9 @@ export type ComposerRichInputHandle = {
 };
 
 type ComposerRichInputProps = {
+  ariaActiveDescendant?: string;
+  ariaControls?: string;
+  ariaExpanded?: boolean;
   disabled?: boolean;
   id: string;
   label: string;
@@ -778,6 +781,9 @@ export const ComposerRichInput = forwardRef<
       ref={editorRef}
       id={props.id}
       aria-label={props.label}
+      aria-activedescendant={props.ariaActiveDescendant}
+      aria-controls={props.ariaControls}
+      aria-expanded={props.ariaExpanded}
       aria-multiline="true"
       className={`composer-rich-input${props.disabled ? " is-disabled" : ""}${props.value || props.skillTokens.length > 0 ? "" : " is-empty"}`}
       contentEditable={!props.disabled}

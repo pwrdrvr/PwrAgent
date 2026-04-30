@@ -789,6 +789,8 @@ export function Composer(props: ComposerProps) {
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const skillListboxId = useId();
+  const slashListboxId = useId();
   const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
   const composerScopeKey = props.launchpad
     ? `launchpad:${props.launchpad.directoryKey}`
@@ -978,6 +980,16 @@ export function Composer(props: ComposerProps) {
     displayedAutocompleteKind === "skills" ? activeSkillIndex : activeSlashIndex;
   const autocompleteLength =
     displayedAutocompleteKind === "skills" ? filteredSkills.length : filteredSlashCommands.length;
+  const autocompleteListboxId =
+    displayedAutocompleteKind === "skills"
+      ? skillListboxId
+      : displayedAutocompleteKind === "slash"
+        ? slashListboxId
+        : undefined;
+  const activeAutocompleteOptionId =
+    autocompleteListboxId && displayedAutocompleteKind
+      ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
+      : undefined;
   const reviewBranchOptions = useMemo(
     () => buildReviewBranchOptions({
       directory: props.directory,
@@ -2509,9 +2521,13 @@ export function Composer(props: ComposerProps) {
 
     const optionHasFocus = event.currentTarget instanceof HTMLButtonElement;
     if (
-      (event.key === "Enter" && !event.shiftKey) ||
+      (event.key === "Tab" && !event.shiftKey) ||
+      event.key === "Enter" ||
       (event.key === " " && optionHasFocus)
     ) {
+      if (event.key === "Enter" && event.shiftKey) {
+        return;
+      }
       event.preventDefault();
       commitActiveAutocomplete();
     }
@@ -2625,6 +2641,9 @@ export function Composer(props: ComposerProps) {
         <ComposerRichInput
           ref={inputRef}
           id="thread-composer"
+          ariaActiveDescendant={activeAutocompleteOptionId}
+          ariaControls={autocompleteListboxId}
+          ariaExpanded={hasAutocomplete}
           disabled={launchpadSubmitting || (props.disabled && !hasComposerContent)}
           label={isLaunchpad ? "New thread" : "Reply"}
           placeholder={
@@ -2736,11 +2755,13 @@ export function Composer(props: ComposerProps) {
             className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
             role="listbox"
             aria-label="Skills"
+            id={skillListboxId}
             style={{ maxHeight: autocompleteLayout.maxHeight }}
           >
             {filteredSkills.map((skill, index) => (
               <button
                 key={skill.path ?? skill.name}
+                id={`${skillListboxId}-option-${index}`}
                 ref={(node) => {
                   autocompleteOptionRefs.current[index] = node;
                 }}
@@ -2778,11 +2799,13 @@ export function Composer(props: ComposerProps) {
             className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
             role="listbox"
             aria-label="Commands"
+            id={slashListboxId}
             style={{ maxHeight: autocompleteLayout.maxHeight }}
           >
             {filteredSlashCommands.map((command, index) => (
               <button
                 key={command.id}
+                id={`${slashListboxId}-option-${index}`}
                 ref={(node) => {
                   autocompleteOptionRefs.current[index] = node;
                 }}
