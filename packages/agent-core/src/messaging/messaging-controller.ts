@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   AgentEvent,
   AppServerBackendKind,
@@ -60,6 +60,7 @@ export type MessagingControllerOptions = {
 
 export class MessagingController {
   private readonly authorizedActorIds: Set<string>;
+  private readonly deliveredAssistantMessageKeys = new Set<string>();
   private readonly now: () => number;
   private readonly pendingIntentTtlMs: number;
   private readonly interactionMapper: MessagingInteractionMapper;
@@ -139,37 +140,9 @@ export class MessagingController {
         });
       }
 
-      if (event.notification.method === "turn/completed") {
-        const turn = (
-          event.notification.params as {
-            turn: {
-              output: Array<{ text?: string }>;
-            };
-          }
-        ).turn;
-        const text = turn.output
-          .map((item) => item.text ?? "")
-          .join("\n\n")
-          .trim();
-        if (text) {
-          await this.deliver(
-            {
-              id: this.newIntentId("assistant-message"),
-              kind: "message",
-              bindingId: currentBinding.id,
-              createdAt: this.now(),
-              role: "assistant",
-              parts: [
-                {
-                  type: "text",
-                  text,
-                  markdown: "markdown",
-                },
-              ],
-            },
-            currentBinding,
-          );
-        }
+      const assistantText = assistantTextForBackendEvent(event);
+      if (assistantText) {
+        await this.deliverAssistantMessage(assistantText, event, currentBinding);
       }
 
       if (lifecycle) {
@@ -486,6 +459,36 @@ export class MessagingController {
         decision,
       },
     });
+  }
+
+  private async deliverAssistantMessage(
+    text: string,
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    const key = assistantMessageDeliveryKey(event, text);
+    if (this.deliveredAssistantMessageKeys.has(key)) {
+      return;
+    }
+    this.deliveredAssistantMessageKeys.add(key);
+
+    await this.deliver(
+      {
+        id: this.newIntentId("assistant-message"),
+        kind: "message",
+        bindingId: binding.id,
+        createdAt: this.now(),
+        role: "assistant",
+        parts: [
+          {
+            type: "text",
+            text,
+            markdown: "markdown",
+          },
+        ],
+      },
+      binding,
+    );
   }
 
   private async presentResumeBrowser(event: MessagingInboundCommandEvent): Promise<void> {
@@ -1395,6 +1398,65 @@ function readStatusAction(event: MessagingInboundCallbackEvent): string | undefi
 function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefined {
   const params = event.notification.params as { threadId?: unknown };
   return typeof params.threadId === "string" ? params.threadId : undefined;
+}
+
+function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
+  if (event.notification.method === "item/completed") {
+    const params = event.notification.params as {
+      item?: {
+        text?: unknown;
+        type?: unknown;
+      };
+    };
+    if (params.item?.type !== "agentMessage" || typeof params.item.text !== "string") {
+      return undefined;
+    }
+    return params.item.text.trim() || undefined;
+  }
+
+  if (event.notification.method === "turn/completed") {
+    const params = event.notification.params as {
+      turn?: {
+        output?: unknown;
+      };
+    };
+    if (!Array.isArray(params.turn?.output)) {
+      return undefined;
+    }
+    const text = params.turn.output
+      .map((item) =>
+        item && typeof item === "object" && "text" in item
+          ? (item as { text?: unknown }).text
+          : undefined,
+      )
+      .filter((value): value is string => typeof value === "string")
+      .join("\n\n")
+      .trim();
+    return text || undefined;
+  }
+
+  return undefined;
+}
+
+function assistantMessageDeliveryKey(event: AgentEvent, text: string): string {
+  const params = event.notification.params as {
+    threadId?: unknown;
+    turn?: { id?: unknown };
+    turnId?: unknown;
+  };
+  const threadId = typeof params.threadId === "string" ? params.threadId : "";
+  const turnId =
+    typeof params.turnId === "string"
+      ? params.turnId
+      : typeof params.turn?.id === "string"
+        ? params.turn.id
+        : "";
+  return [
+    event.backend,
+    threadId,
+    turnId,
+    createHash("sha256").update(text).digest("base64url"),
+  ].join("\0");
 }
 
 function turnLifecycleForBackendEvent(

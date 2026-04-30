@@ -392,6 +392,63 @@ describe("MessagingController", () => {
     });
   });
 
+  it("routes completed assistant item text to active thread bindings", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "item-1",
+            type: "agentMessage",
+            text: "I am Codex.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      parts: [
+        expect.objectContaining({
+          text: "I am Codex.",
+        }),
+      ],
+    });
+  });
+
+  it("ignores turn completion events that do not include output text", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+          },
+        },
+      },
+    } as unknown as AgentEvent);
+
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: completed"),
+    });
+  });
+
   it("presents Plan questionnaires as semantic questionnaire intents", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(
