@@ -636,6 +636,63 @@ test("directory launchpad skill chips stay text-sized and baseline aligned", asy
   }
 });
 
+test("directory launchpad types at the clicked text caret between skill chips", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const richInput = app.window.getByTestId("composer-rich-input");
+    await richInput.focus();
+    await typeSkillChip(app, "$ce:brainstorm", /\$ce:brainstorm/i);
+    await app.window.keyboard.type(" Cats like hats. ");
+    await typeSkillChip(app, "$ce:plan", /\$ce:plan/i);
+    await expect(richInput).toHaveAttribute("data-value", " Cats like hats. ");
+
+    const clickPoint = await richInput.evaluate((element) => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      const textNode = Array.from(
+        {
+          [Symbol.iterator]: function* () {
+            let node = walker.nextNode();
+            while (node) {
+              yield node;
+              node = walker.nextNode();
+            }
+          },
+        } as Iterable<Node>,
+      ).find((node) => node.nodeValue?.includes("Cats like hats"));
+      if (!textNode) {
+        throw new Error("Expected text between skill chips");
+      }
+
+      const offset = textNode.nodeValue?.indexOf("hats") ?? -1;
+      if (offset < 0) {
+        throw new Error("Expected target word in text node");
+      }
+
+      const range = document.createRange();
+      range.setStart(textNode, offset);
+      range.setEnd(textNode, offset + 1);
+      const rect = range.getBoundingClientRect();
+      return {
+        x: rect.left + 1,
+        y: rect.top + rect.height / 2,
+      };
+    });
+
+    await app.window.mouse.click(clickPoint.x, clickPoint.y);
+    await app.window.keyboard.type("I");
+    await expect(richInput).toHaveAttribute("data-value", " Cats like Ihats. ");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("directory launchpad deletes a persisted skill chip with repeated backspace", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-saved-launchpad-"));

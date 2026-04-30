@@ -788,6 +788,11 @@ export const ComposerRichInput = forwardRef<
     replaceSelection(event.currentTarget, event.key);
   };
 
+  const handleClick = (event: MouseEvent<HTMLDivElement>): void => {
+    pendingSelectionIndexRef.current = undefined;
+    props.onClick?.(event);
+  };
+
   return (
     <div
       ref={editorRef}
@@ -805,7 +810,7 @@ export const ComposerRichInput = forwardRef<
       role="textbox"
       suppressContentEditableWarning
       tabIndex={props.disabled ? -1 : 0}
-      onClick={props.onClick}
+      onClick={handleClick}
       onDragOver={props.onDragOver}
       onDrop={props.onDrop}
       onChange={handleInput}
