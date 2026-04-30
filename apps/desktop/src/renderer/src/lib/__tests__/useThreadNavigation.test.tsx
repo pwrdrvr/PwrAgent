@@ -451,6 +451,73 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.needsAttentionCount).toBe(0);
   });
 
+  it("restores focus to the selected thread when archive fails", async () => {
+    const navigationSnapshot = {
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "thread-archived",
+          title: "Archive target",
+          titleSource: "explicit" as const,
+          summary: "This thread should regain focus when archive fails",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 2_000,
+        },
+        {
+          id: "thread-fallback",
+          title: "Fallback thread",
+          titleSource: "explicit" as const,
+          summary: "This thread is selected optimistically during archive",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    };
+    const getNavigationSnapshot = vi.fn(async () => navigationSnapshot);
+    const archiveThread = vi.fn(async () => {
+      throw new Error("Archive failed");
+    });
+
+    const desktopApi: DesktopApi = {
+      archiveThread,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-archived");
+    });
+
+    await act(async () => {
+      await result.current.archiveThread(result.current.threads[0]!);
+    });
+
+    expect(result.current.archiveThreadError).toBe("Archive failed");
+    expect(result.current.threads.map((thread) => thread.id)).toEqual([
+      "thread-archived",
+      "thread-fallback",
+    ]);
+    expect(result.current.selectedThread?.id).toBe("thread-archived");
+  });
+
   it("renames a thread and refreshes navigation with the explicit title", async () => {
     let threadTitle = "First thread";
     const renameThread = vi.fn(async ({ name }: { name: string }) => {

@@ -582,17 +582,21 @@ function resolveRefreshSelectionKey(
   response: NavigationSnapshot,
   currentSelectionKey: string | undefined,
   preferredSelectionKey: string | undefined,
-  optimisticThreadKey?: string
+  optimisticThreadKey?: string,
+  forcePreferredSelection = false
 ): string | undefined {
-  if (currentSelectionKey) {
-    return currentSelectionKey;
-  }
-
   if (
     preferredSelectionKey &&
+    (forcePreferredSelection ||
+      currentSelectionKey === preferredSelectionKey ||
+      !currentSelectionKey) &&
     hasSelectionKey(response, preferredSelectionKey, optimisticThreadKey)
   ) {
     return preferredSelectionKey;
+  }
+
+  if (currentSelectionKey) {
+    return currentSelectionKey;
   }
 
   return getFallbackSelectionKey(response, optimisticThreadKey);
@@ -793,6 +797,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const refreshInFlightRef = useRef(false);
   const queuedRefreshRef = useRef<
     | {
+        forcePreferredSelection?: boolean;
         preferredOptimisticThread?: NavigationThreadSummary;
         preferredSelectionKey?: string;
       }
@@ -834,7 +839,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const performRefresh = useCallback(
     async (
       preferredSelectionKey?: string,
-      preferredOptimisticThread?: NavigationThreadSummary
+      preferredOptimisticThread?: NavigationThreadSummary,
+      forcePreferredSelection = false
     ): Promise<void> => {
       if (!desktopApi?.getNavigationSnapshot) {
         setState({
@@ -897,7 +903,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
             response,
             current,
             preferredSelectionKey,
-            optimisticThreadKey
+            optimisticThreadKey,
+            forcePreferredSelection
           );
         });
       } catch (error) {
@@ -915,9 +922,11 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const refresh = useCallback(
     async (
       preferredSelectionKey?: string,
-      preferredOptimisticThread?: NavigationThreadSummary
+      preferredOptimisticThread?: NavigationThreadSummary,
+      forcePreferredSelection = false
     ): Promise<void> => {
       const initialRequest = {
+        forcePreferredSelection,
         preferredOptimisticThread,
         preferredSelectionKey,
       };
@@ -935,7 +944,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           queuedRefreshRef.current = undefined;
           await performRefresh(
             nextRequest.preferredSelectionKey,
-            nextRequest.preferredOptimisticThread
+            nextRequest.preferredOptimisticThread,
+            nextRequest.forcePreferredSelection
           );
           nextRequest = queuedRefreshRef.current;
         }
@@ -949,9 +959,11 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const scheduleRefresh = useCallback(
     (
       preferredSelectionKey?: string,
-      preferredOptimisticThread?: NavigationThreadSummary
+      preferredOptimisticThread?: NavigationThreadSummary,
+      forcePreferredSelection = false
     ): void => {
       queuedRefreshRef.current = {
+        forcePreferredSelection,
         preferredOptimisticThread,
         preferredSelectionKey,
       };
@@ -970,7 +982,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
 
         void refresh(
           nextRequest.preferredSelectionKey,
-          nextRequest.preferredOptimisticThread
+          nextRequest.preferredOptimisticThread,
+          nextRequest.forcePreferredSelection
         );
       }, 0);
     },
@@ -1561,7 +1574,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       } catch (error) {
         suppressedArchivedThreadKeysRef.current.delete(threadKey);
         setArchiveThreadError(error instanceof Error ? error.message : String(error));
-        await refresh(threadKey);
+        await refresh(threadKey, undefined, true);
       }
     },
     [archiveThreadRequest, optimisticThread, refresh, state.response]
