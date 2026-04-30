@@ -32,10 +32,12 @@ type ComposerRichInputProps = {
   label: string;
   onChange: (value: string, skillTokens?: ComposerSkillToken[]) => void;
   onBeforeInput?: (event: FormEvent<HTMLDivElement>) => void;
+  onBeforeInputCapture?: (event: FormEvent<HTMLDivElement>) => void;
   onClick?: (event: MouseEvent<HTMLDivElement>) => void;
   onDragOver?: (event: DragEvent<HTMLDivElement>) => void;
   onDrop?: (event: DragEvent<HTMLDivElement>) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+  onKeyDownCapture?: (event: KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
   placeholder: string;
   skillTokens: ComposerSkillToken[];
@@ -473,8 +475,10 @@ export const ComposerRichInput = forwardRef<
       onDragOver={props.onDragOver}
       onDrop={props.onDrop}
       onChange={handleInput}
+      onBeforeInputCapture={props.onBeforeInputCapture}
       onBeforeInput={props.onBeforeInput}
       onInput={handleInput}
+      onKeyDownCapture={props.onKeyDownCapture}
       onKeyDown={props.onKeyDown}
       onPaste={props.onPaste}
     >

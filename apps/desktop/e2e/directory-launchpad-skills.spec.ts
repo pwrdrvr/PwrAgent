@@ -8,6 +8,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 async function createDirectoryLaunchpadSkillsFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
+  repoDir: string;
 }> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-launchpad-skills-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
@@ -133,6 +134,13 @@ async function createDirectoryLaunchpadSkillsFixture(): Promise<{
                     scope: "user",
                   },
                   {
+                    name: "ce:brainstorm",
+                    description: "Explore requirements before writing implementation plans.",
+                    path: "/Users/huntharo/.codex/skills/ce-brainstorm/SKILL.md",
+                    enabled: true,
+                    scope: "user",
+                  },
+                  {
                     name: "desktop-e2e-fixture-seeding",
                     description: "Replay-backed desktop E2E fixtures.",
                     path: path.join(
@@ -157,10 +165,54 @@ async function createDirectoryLaunchpadSkillsFixture(): Promise<{
 
   return {
     fixturePath,
+    repoDir,
     cleanup: async () => {
       await rm(rootDir, { recursive: true, force: true });
     },
   };
+}
+
+async function seedPersistedDirectoryLaunchpad(params: {
+  repoDir: string;
+  stateRoot: string;
+}): Promise<void> {
+  await mkdir(params.stateRoot, { recursive: true });
+  const directoryKey = `directory:${params.repoDir}`;
+  await writeFile(
+    path.join(params.stateRoot, "overlay-state.json"),
+    JSON.stringify(
+      {
+        version: 5,
+        backends: {},
+        launchpadDefaults: {
+          backend: "codex",
+          executionMode: "full-access",
+          workMode: "worktree",
+          reasoningEffort: "high",
+        },
+        directoryLaunchpads: {
+          [directoryKey]: {
+            directoryKey,
+            directoryKind: "directory",
+            directoryLabel: "FixtureRepo",
+            directoryPath: params.repoDir,
+            backend: "codex",
+            executionMode: "full-access",
+            prompt: "[$ce:brainstorm](/Users/huntharo/.codex/skills/ce-brainstorm/SKILL.md) ",
+            workMode: "worktree",
+            branchName: "main",
+            reasoningEffort: "high",
+            createdAt: 1760000000000,
+            updatedAt: 1760000000000,
+          },
+        },
+        threads: {},
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
 }
 
 async function openDirectoryLaunchpad(app: Awaited<ReturnType<typeof launchElectronApp>>) {
@@ -271,6 +323,48 @@ test("directory launchpad skill autocomplete selects focused options as undoable
   } finally {
     await app.close();
     await fixture.cleanup();
+  }
+});
+
+test("directory launchpad deletes a persisted skill chip with repeated backspace", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-saved-launchpad-"));
+  await seedPersistedDirectoryLaunchpad({
+    repoDir: fixture.repoDir,
+    stateRoot,
+  });
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+    env: {
+      PWRAGNT_STATE_ROOT: stateRoot,
+    },
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const richInput = app.window.getByTestId("composer-rich-input");
+    const chip = richInput.locator(".skill-chip", { hasText: "$ce:brainstorm" });
+    await expect(chip).toBeVisible();
+
+    await richInput.evaluate((element) => {
+      element.focus();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      range.collapse(false);
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    });
+    await app.window.keyboard.press("Backspace");
+    await app.window.keyboard.press("Backspace");
+
+    await expect(chip).toBeHidden();
+    await expect(app.window.locator("body")).not.toContainText("Renderer error");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+    await rm(stateRoot, { recursive: true, force: true });
   }
 });
 

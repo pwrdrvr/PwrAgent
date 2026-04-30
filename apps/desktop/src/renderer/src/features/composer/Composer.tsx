@@ -143,6 +143,13 @@ type DeletedSkillTokenHistoryEntry = {
 
 const COMPOSER_SKILL_TOKEN_SELECTOR = "[data-composer-skill-token-id]";
 
+type SkillTokenDeletionEvent = {
+  currentTarget: HTMLElement;
+  preventDefault: () => void;
+  stopPropagation: () => void;
+  target: EventTarget | null;
+};
+
 type ComposerImageFile = {
   file: File;
   type: string;
@@ -2106,26 +2113,38 @@ export function Composer(props: ComposerProps) {
     );
   };
 
-  const findEventTargetSkillToken = (
-    event: ReactKeyboardEvent<HTMLElement> | ReactFormEvent<HTMLElement>,
-  ): ComposerSkillToken | undefined => {
+  const findEventTargetSkillTokenId = (
+    event: SkillTokenDeletionEvent,
+  ): string | undefined => {
     const target = event.target;
     if (!(target instanceof Element)) {
       return undefined;
     }
 
     const tokenElement = target.closest(COMPOSER_SKILL_TOKEN_SELECTOR);
-    const tokenId = tokenElement instanceof HTMLElement
+    return tokenElement instanceof HTMLElement
       ? tokenElement.dataset.composerSkillTokenId
-      : undefined;
-    return tokenId
-      ? skillTokens.find((candidate) => candidate.id === tokenId)
       : undefined;
   };
 
-  const findSelectedSkillToken = (
+  const selectionBelongsToEditor = (editor: HTMLElement): boolean => {
+    const ownerDocument = editor.ownerDocument;
+    const selection = ownerDocument.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return editor.contains(ownerDocument.activeElement);
+    }
+
+    const range = selection.getRangeAt(0);
+    return (
+      editor.contains(range.startContainer) ||
+      editor.contains(range.endContainer) ||
+      range.intersectsNode(editor)
+    );
+  };
+
+  const findSelectedSkillTokenId = (
     editor: HTMLElement,
-  ): ComposerSkillToken | undefined => {
+  ): string | undefined => {
     const selection = editor.ownerDocument.getSelection();
     if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
       return undefined;
@@ -2135,10 +2154,62 @@ export function Composer(props: ComposerProps) {
     const tokenElement = Array.from(
       editor.querySelectorAll<HTMLElement>(COMPOSER_SKILL_TOKEN_SELECTOR),
     ).find((candidate) => range.intersectsNode(candidate));
-    const tokenId = tokenElement?.dataset.composerSkillTokenId;
-    return tokenId
-      ? skillTokens.find((candidate) => candidate.id === tokenId)
-      : undefined;
+    return tokenElement?.dataset.composerSkillTokenId;
+  };
+
+  const shouldGuardBoundarySkillDeletion = (editor: HTMLElement): boolean => {
+    const selection = editor.ownerDocument.getSelection();
+    if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
+      return false;
+    }
+
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.startContainer)) {
+      return false;
+    }
+
+    return (
+      range.startContainer.nodeType !== Node.TEXT_NODE || range.startOffset === 0
+    );
+  };
+
+  const shouldGuardNativeTextDeletion = (
+    editor: HTMLElement,
+    direction: "backward" | "forward",
+  ): boolean => {
+    const selection = editor.ownerDocument.getSelection();
+    if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
+      return false;
+    }
+
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.startContainer)) {
+      return false;
+    }
+
+    if (range.startContainer.nodeType !== Node.TEXT_NODE) {
+      return true;
+    }
+
+    const textLength = range.startContainer.nodeValue?.length ?? 0;
+    return direction === "backward"
+      ? range.startOffset === 0
+      : range.startOffset >= textLength;
+  };
+
+  const findBoundarySkillToken = (
+    caret: number,
+    direction: "backward" | "forward",
+  ): ComposerSkillToken | undefined => {
+    if (direction === "forward") {
+      return [...skillTokens]
+        .sort((left, right) => left.index - right.index)
+        .find((candidate) => candidate.index >= caret);
+    }
+
+    return [...skillTokens]
+      .sort((left, right) => right.index - left.index)
+      .find((candidate) => candidate.index <= caret);
   };
 
   const removeSkillToken = (
@@ -2160,7 +2231,7 @@ export function Composer(props: ComposerProps) {
   };
 
   const removeEditorSkillToken = (
-    event: ReactKeyboardEvent<HTMLElement> | ReactFormEvent<HTMLElement>,
+    event: SkillTokenDeletionEvent,
     direction: "backward" | "forward",
   ): boolean => {
     if (!inputRef.current) {
@@ -2168,19 +2239,136 @@ export function Composer(props: ComposerProps) {
     }
 
     const caret = Math.min(inputRef.current.selectionStart, draft.length);
+    const tokenId =
+      findEventTargetSkillTokenId(event) ??
+      findSelectedSkillTokenId(event.currentTarget);
     const token =
-      findEventTargetSkillToken(event) ??
-      findSelectedSkillToken(event.currentTarget) ??
-      skillTokens.find((candidate) => candidate.index === caret);
+      (tokenId
+        ? skillTokens.find((candidate) => candidate.id === tokenId)
+        : undefined) ??
+      skillTokens.find((candidate) => candidate.index === caret) ??
+      (shouldGuardBoundarySkillDeletion(event.currentTarget)
+        ? findBoundarySkillToken(caret, direction)
+        : undefined);
     if (!token) {
+      if (tokenId) {
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
       return false;
     }
 
     event.preventDefault();
+    event.stopPropagation();
     removeSkillToken(token, token.index);
     void direction;
     return true;
   };
+
+  const deleteEditorText = (
+    event: SkillTokenDeletionEvent,
+    direction: "backward" | "forward",
+  ): boolean => {
+    if (!inputRef.current) {
+      return false;
+    }
+
+    const caret = Math.min(inputRef.current.selectionStart, draft.length);
+    const deleteStart = direction === "backward" ? Math.max(0, caret - 1) : caret;
+    const deleteEnd =
+      direction === "backward" ? caret : Math.min(draft.length, caret + 1);
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (deleteStart === deleteEnd) {
+      return true;
+    }
+
+    const nextDraft = `${draft.slice(0, deleteStart)}${draft.slice(deleteEnd)}`;
+    updateVisibleDraft(nextDraft);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(deleteStart, deleteStart);
+    });
+    return true;
+  };
+
+  const deleteEditorContent = (
+    event: SkillTokenDeletionEvent,
+    direction: "backward" | "forward",
+  ): boolean =>
+    removeEditorSkillToken(event, direction) ||
+    (shouldGuardNativeTextDeletion(event.currentTarget, direction)
+      ? deleteEditorText(event, direction)
+      : false);
+
+  useEffect(() => {
+    const ownerDocument = inputWrapRef.current?.ownerDocument ?? document;
+    const getEditor = (): HTMLElement | undefined =>
+      inputWrapRef.current?.querySelector<HTMLElement>(
+        '[data-testid="composer-rich-input"]',
+      ) ?? undefined;
+
+    const handleDocumentKeyDown = (event: KeyboardEvent): void => {
+      if (
+        event.defaultPrevented ||
+        (event.key !== "Backspace" && event.key !== "Delete")
+      ) {
+        return;
+      }
+
+      const editor = getEditor();
+      if (!editor || !selectionBelongsToEditor(editor)) {
+        return;
+      }
+
+      deleteEditorContent(
+        {
+          currentTarget: editor,
+          target: event.target,
+          preventDefault: () => event.preventDefault(),
+          stopPropagation: () => event.stopPropagation(),
+        },
+        event.key === "Backspace" ? "backward" : "forward",
+      );
+    };
+    const handleDocumentBeforeInput = (event: InputEvent): void => {
+      if (
+        event.defaultPrevented ||
+        (event.inputType !== "deleteContentBackward" &&
+          event.inputType !== "deleteContentForward")
+      ) {
+        return;
+      }
+
+      const editor = getEditor();
+      if (!editor || !selectionBelongsToEditor(editor)) {
+        return;
+      }
+
+      deleteEditorContent(
+        {
+          currentTarget: editor,
+          target: event.target,
+          preventDefault: () => event.preventDefault(),
+          stopPropagation: () => event.stopPropagation(),
+        },
+        event.inputType === "deleteContentBackward" ? "backward" : "forward",
+      );
+    };
+
+    ownerDocument.addEventListener("keydown", handleDocumentKeyDown, true);
+    ownerDocument.addEventListener("beforeinput", handleDocumentBeforeInput, true);
+    return () => {
+      ownerDocument.removeEventListener("keydown", handleDocumentKeyDown, true);
+      ownerDocument.removeEventListener(
+        "beforeinput",
+        handleDocumentBeforeInput,
+        true,
+      );
+    };
+  });
 
   const restoreDeletedSkillToken = (
     event: ReactKeyboardEvent<HTMLElement>,
@@ -2391,36 +2579,73 @@ export function Composer(props: ComposerProps) {
             setActiveSkillIndex(0);
             setActiveSlashIndex(0);
           }}
-          onBeforeInput={(event) => {
+          onBeforeInputCapture={(event) => {
             const inputType = (event.nativeEvent as InputEvent).inputType;
             if (
               inputType === "deleteContentBackward" &&
-              removeEditorSkillToken(event, "backward")
+              deleteEditorContent(event, "backward")
             ) {
               return;
             }
             if (
               inputType === "deleteContentForward" &&
-              removeEditorSkillToken(event, "forward")
+              deleteEditorContent(event, "forward")
             ) {
               return;
             }
           }}
-          onKeyDown={(event) => {
-            if (restoreDeletedSkillToken(event)) {
+          onBeforeInput={(event) => {
+            if (event.defaultPrevented) {
               return;
             }
-
+            const inputType = (event.nativeEvent as InputEvent).inputType;
+            if (
+              inputType === "deleteContentBackward" &&
+              deleteEditorContent(event, "backward")
+            ) {
+              return;
+            }
+            if (
+              inputType === "deleteContentForward" &&
+              deleteEditorContent(event, "forward")
+            ) {
+              return;
+            }
+          }}
+          onKeyDownCapture={(event) => {
             if (
               event.key === "Backspace" &&
-              removeEditorSkillToken(event, "backward")
+              deleteEditorContent(event, "backward")
             ) {
               return;
             }
 
             if (
               event.key === "Delete" &&
-              removeEditorSkillToken(event, "forward")
+              deleteEditorContent(event, "forward")
+            ) {
+              return;
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.defaultPrevented) {
+              return;
+            }
+
+            if (restoreDeletedSkillToken(event)) {
+              return;
+            }
+
+            if (
+              event.key === "Backspace" &&
+              deleteEditorContent(event, "backward")
+            ) {
+              return;
+            }
+
+            if (
+              event.key === "Delete" &&
+              deleteEditorContent(event, "forward")
             ) {
               return;
             }
