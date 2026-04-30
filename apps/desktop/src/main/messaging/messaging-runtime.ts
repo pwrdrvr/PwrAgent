@@ -63,18 +63,34 @@ export class DesktopMessagingRuntime {
     });
 
     for (const adapter of configuredAdapters) {
+      const authorizedActorIds =
+        adapter.channel === "telegram"
+          ? this.options.config.telegram?.authorizedActorIds ?? []
+          : this.options.config.discord?.authorizedActorIds ?? [];
+      const authorizedActorIdSet = new Set(authorizedActorIds);
       const controller = new MessagingController({
         adapter,
-        authorizedActorIds:
-          adapter.channel === "telegram"
-            ? this.options.config.telegram?.authorizedActorIds ?? []
-            : this.options.config.discord?.authorizedActorIds ?? [],
+        authorizedActorIds,
         backend: this.options.backendBridge,
         store,
       });
 
       try {
         await adapter.start?.(async (event) => {
+          if (!authorizedActorIdSet.has(event.actor.platformUserId)) {
+            messagingLog.warn("messaging event rejected by authorization", {
+              actorDisplayName: event.actor.displayName,
+              actorId: event.actor.platformUserId,
+              actorIsBot: event.actor.isBot,
+              actorUsername: event.actor.username,
+              authorizedActorCount: authorizedActorIds.length,
+              channel: adapter.channel,
+              conversationId: event.channel.conversation.id,
+              conversationKind: event.channel.conversation.kind,
+              eventId: event.id,
+              eventKind: event.kind,
+            });
+          }
           await controller.handleInboundEvent(event);
         });
       } catch (error) {

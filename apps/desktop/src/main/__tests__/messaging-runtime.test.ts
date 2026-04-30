@@ -20,6 +20,7 @@ import type {
 const messagingLog = {
   error: vi.fn(),
   info: vi.fn(),
+  warn: vi.fn(),
 };
 
 vi.mock("../log", () => ({
@@ -31,6 +32,7 @@ const tempDirs: string[] = [];
 beforeEach(() => {
   messagingLog.error.mockReset();
   messagingLog.info.mockReset();
+  messagingLog.warn.mockReset();
 });
 
 afterEach(async () => {
@@ -99,6 +101,39 @@ describe("DesktopMessagingRuntime", () => {
       });
     expect(adapter.delivered.at(-1)).toMatchObject({
       kind: "status",
+    });
+  });
+
+  it("logs rejected inbound actor ids before returning the authorization error", async () => {
+    const { runtime, adapter } = await createRuntimeHarness();
+
+    await runtime.start();
+    const event = buildCommandEvent("/threads");
+    event.actor = {
+      displayName: "Other User",
+      platformUserId: "user-2",
+      username: "other",
+    };
+    await adapter.listener?.(event);
+
+    expect(messagingLog.warn).toHaveBeenCalledWith(
+      "messaging event rejected by authorization",
+      expect.objectContaining({
+        actorDisplayName: "Other User",
+        actorId: "user-2",
+        actorUsername: "other",
+        authorizedActorCount: 1,
+        channel: "telegram",
+        conversationId: "chat-1",
+        conversationKind: "dm",
+        eventId: "event-command",
+        eventKind: "command",
+      }),
+    );
+    expect(adapter.delivered.at(-1)).toMatchObject({
+      body: "This channel user is not authorized to control PwrAgnt.",
+      kind: "error",
+      title: "Not authorized",
     });
   });
 
