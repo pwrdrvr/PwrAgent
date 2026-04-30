@@ -167,7 +167,7 @@ flowchart TB
     U6 --> U7["Unit 7: Command registration and docs"]
 ```
 
-- [ ] **Unit 1: Add managed surface, browse session, and binding preference state**
+- [x] **Unit 1: Add managed surface, browse session, and binding preference state**
 
 **Goal:** Extend the shared/store model so command surfaces can be edited, pinned, resumed after process restart, and scoped to the correct actor/channel/binding.
 

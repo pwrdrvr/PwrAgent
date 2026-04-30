@@ -1,10 +1,12 @@
 import type {
   MessagingBindingRecord,
+  MessagingBrowseSessionRecord,
+  MessagingCallbackHandleRecord,
   MessagingDeliveryResult,
   MessagingPendingIntentRecord,
 } from "@pwragnt/shared";
 
-export const CURRENT_MESSAGING_STORE_VERSION = 1;
+export const CURRENT_MESSAGING_STORE_VERSION = 2;
 
 export type MessagingDeliveryRecord = MessagingDeliveryResult & {
   id: string;
@@ -14,14 +16,18 @@ export type MessagingDeliveryRecord = MessagingDeliveryResult & {
 
 export type MessagingStoreData = {
   version: number;
+  browseSessions: Record<string, MessagingBrowseSessionRecord>;
   bindings: Record<string, MessagingBindingRecord>;
+  callbackHandles: Record<string, MessagingCallbackHandleRecord>;
   pendingIntents: Record<string, MessagingPendingIntentRecord>;
   deliveries: Record<string, MessagingDeliveryRecord>;
 };
 
 const EMPTY_MESSAGING_STORE_DATA: MessagingStoreData = {
   version: CURRENT_MESSAGING_STORE_VERSION,
+  browseSessions: {},
   bindings: {},
+  callbackHandles: {},
   pendingIntents: {},
   deliveries: {},
 };
@@ -34,7 +40,9 @@ export function migrateMessagingStoreData(raw: unknown): MessagingStoreData {
 
   return {
     version: CURRENT_MESSAGING_STORE_VERSION,
+    browseSessions: migrateRecord(record.browseSessions, isMessagingBrowseSessionRecord),
     bindings: migrateRecord(record.bindings, isMessagingBindingRecord),
+    callbackHandles: migrateRecord(record.callbackHandles, isMessagingCallbackHandleRecord),
     pendingIntents: migrateRecord(record.pendingIntents, isMessagingPendingIntentRecord),
     deliveries: migrateRecord(record.deliveries, isMessagingDeliveryRecord),
   };
@@ -85,6 +93,50 @@ function isMessagingPendingIntentRecord(
       typeof intent.kind === "string" &&
       Array.isArray(record.allowedActorIds) &&
       typeof record.createdAt === "number" &&
+      typeof record.expiresAt === "number",
+  );
+}
+
+function isMessagingBrowseSessionRecord(
+  value: unknown,
+): value is MessagingBrowseSessionRecord {
+  const record = asRecord(value);
+  const channel = asRecord(record?.channel);
+  const conversation = asRecord(channel?.conversation);
+  return Boolean(
+    record &&
+      typeof record.id === "string" &&
+      Array.isArray(record.allowedActorIds) &&
+      typeof channel?.channel === "string" &&
+      typeof conversation?.id === "string" &&
+      typeof conversation?.kind === "string" &&
+      typeof record.createdAt === "number" &&
+      typeof record.updatedAt === "number" &&
+      typeof record.expiresAt === "number" &&
+      typeof record.launchAction === "string" &&
+      typeof record.mode === "string" &&
+      typeof record.pageIndex === "number" &&
+      typeof record.pageSize === "number",
+  );
+}
+
+function isMessagingCallbackHandleRecord(
+  value: unknown,
+): value is MessagingCallbackHandleRecord {
+  const record = asRecord(value);
+  const channel = asRecord(record?.channel);
+  const conversation = asRecord(channel?.conversation);
+  return Boolean(
+    record &&
+      typeof record.id === "string" &&
+      typeof record.handle === "string" &&
+      typeof record.actionId === "string" &&
+      Array.isArray(record.allowedActorIds) &&
+      typeof channel?.channel === "string" &&
+      typeof conversation?.id === "string" &&
+      typeof conversation?.kind === "string" &&
+      typeof record.createdAt === "number" &&
+      typeof record.updatedAt === "number" &&
       typeof record.expiresAt === "number",
   );
 }

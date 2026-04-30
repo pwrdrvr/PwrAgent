@@ -4,6 +4,9 @@ import {
   MESSAGING_INBOUND_EVENT_KINDS,
   MESSAGING_SURFACE_INTENT_KINDS,
   type MessagingApprovalIntent,
+  type MessagingBindingRecord,
+  type MessagingBrowseSessionRecord,
+  type MessagingCallbackHandleRecord,
   type MessagingInboundMediaEvent,
   type MessagingMessageIntent,
   type MessagingThreadPickerIntent,
@@ -33,6 +36,8 @@ describe("messaging surface contract", () => {
       "lifecycle",
     ]);
     expect(MESSAGING_DELIVERY_OUTCOMES).toContain("presented_new");
+    expect(MESSAGING_DELIVERY_OUTCOMES).toContain("pinned");
+    expect(MESSAGING_DELIVERY_OUTCOMES).toContain("unpinned");
     expect(MESSAGING_DELIVERY_OUTCOMES).toContain("unsupported");
   });
 
@@ -180,5 +185,79 @@ describe("messaging surface contract", () => {
     } satisfies MessagingInboundMediaEvent;
 
     expect(event.disposition).toBe("unsupported");
+  });
+
+  it("describes restart-safe bindings, browse sessions, and callback handles", () => {
+    const binding = {
+      id: "binding-1",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "dm",
+        },
+      },
+      backend: "codex",
+      threadId: "thread-1",
+      authorizedActorIds: ["telegram-user-1"],
+      createdAt: 1000,
+      updatedAt: 1000,
+      preferences: {
+        executionMode: "full-access",
+        fastMode: true,
+        model: "gpt-5.4",
+        permissionsMode: "full-access",
+        reasoningEffort: "high",
+        updatedAt: 1000,
+      },
+      statusSurface: {
+        channel: "telegram",
+        id: "message-1",
+        state: {
+          opaque: {
+            chatId: 777,
+            messageId: 123,
+          },
+        },
+      },
+    } satisfies MessagingBindingRecord;
+    const browseSession = {
+      id: "browse-1",
+      allowedActorIds: ["telegram-user-1"],
+      bindingId: "binding-1",
+      channel: binding.channel,
+      createdAt: 1000,
+      updatedAt: 1000,
+      expiresAt: 2000,
+      launchAction: "resume_thread",
+      mode: "project_threads",
+      pageIndex: 1,
+      pageSize: 8,
+      selectedProject: {
+        directoryKey: "dir:pwragnt",
+        label: "PwrAgnt",
+      },
+      surface: binding.statusSurface,
+    } satisfies MessagingBrowseSessionRecord;
+    const callbackHandle = {
+      id: "callback-1",
+      actionId: "browse:select:2",
+      allowedActorIds: ["telegram-user-1"],
+      bindingId: "binding-1",
+      browseSessionId: "browse-1",
+      channel: binding.channel,
+      createdAt: 1000,
+      updatedAt: 1000,
+      expiresAt: 2000,
+      handle: "tg:short-handle",
+      surface: binding.statusSurface,
+      value: {
+        threadId: "thread-1",
+      },
+    } satisfies MessagingCallbackHandleRecord;
+
+    expect(callbackHandle.handle).not.toContain("thread-1");
+    expect(browseSession.selectedProject?.label).toBe("PwrAgnt");
+    expect(binding.preferences?.permissionsMode).toBe("full-access");
   });
 });

@@ -4,6 +4,7 @@ import type {
   AppServerThreadMessagePart,
   AppServerThreadSummary,
   ThreadIdentifier,
+  ThreadExecutionMode,
 } from "./normalized-app-server";
 import type {
   NavigationDirectorySummary,
@@ -38,6 +39,8 @@ export const MESSAGING_DELIVERY_OUTCOMES = [
   "presented",
   "updated",
   "presented_new",
+  "pinned",
+  "unpinned",
   "dismissed",
   "unsupported",
   "failed",
@@ -203,12 +206,22 @@ export type MessagingApprovalDecision =
   | "decline"
   | "cancel";
 
+export type MessagingSurfacePresentationMode = "present" | "update" | "dismiss";
+
+export type MessagingSurfaceDeliveryPolicy = {
+  mode?: MessagingSurfacePresentationMode;
+  pin?: boolean;
+  unpin?: boolean;
+  fallback?: "present_new" | "fail";
+};
+
 export type MessagingBaseSurfaceIntent = {
   id: string;
   kind: MessagingSurfaceIntentKind;
   audit?: MessagingAuditContext;
   bindingId?: string;
   createdAt: number;
+  delivery?: MessagingSurfaceDeliveryPolicy;
   fallbackText?: string;
   requestContext?: {
     backend: AppServerBackendKind;
@@ -367,6 +380,32 @@ export type MessagingInboundEvent =
   | MessagingInboundMediaEvent
   | MessagingInboundLifecycleEvent;
 
+export type MessagingPermissionsMode = "default" | "full-access";
+
+export type MessagingBindingPreferences = {
+  executionMode?: ThreadExecutionMode;
+  fastMode?: boolean;
+  model?: string;
+  permissionsMode?: MessagingPermissionsMode;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  updatedAt: number;
+};
+
+export type MessagingActiveTurnSummary = {
+  turnId: string;
+  status: "working" | "waiting" | "completed" | "failed" | "interrupted";
+  startedAt?: number;
+  updatedAt: number;
+};
+
+export type MessagingThreadDisplaySummary = {
+  directoryPath?: string;
+  projectLabel?: string;
+  threadTitle?: string;
+  worktreePath?: string;
+};
+
 export type MessagingBindingRecord = {
   id: string;
   channel: MessagingChannelRef;
@@ -374,10 +413,15 @@ export type MessagingBindingRecord = {
   threadId: ThreadIdentifier;
   authorizedActorIds: string[];
   routingState?: MessagingAdapterState;
+  activeTurn?: MessagingActiveTurnSummary;
   createdAt: number;
   updatedAt: number;
   revokedAt?: number;
   displayName?: string;
+  pinnedStatusSurface?: MessagingSurfaceRef;
+  preferences?: MessagingBindingPreferences;
+  statusSurface?: MessagingSurfaceRef;
+  threadDisplay?: MessagingThreadDisplaySummary;
 };
 
 export type MessagingPendingIntentRecord = {
@@ -389,4 +433,53 @@ export type MessagingPendingIntentRecord = {
   createdAt: number;
   expiresAt: number;
   surface?: MessagingSurfaceRef;
+};
+
+export type MessagingBrowseMode =
+  | "recents"
+  | "projects"
+  | "project_threads"
+  | "new_project"
+  | "new_thread_options";
+
+export type MessagingBrowseLaunchAction = "resume_thread" | "start_new_thread";
+
+export type MessagingBrowseSelectedProject = {
+  directoryKey?: string;
+  label: string;
+  path?: string;
+};
+
+export type MessagingBrowseSessionRecord = {
+  id: string;
+  allowedActorIds: string[];
+  bindingId?: string;
+  channel: MessagingChannelRef;
+  createdAt: number;
+  expiresAt: number;
+  launchAction: MessagingBrowseLaunchAction;
+  mode: MessagingBrowseMode;
+  pageIndex: number;
+  pageSize: number;
+  preferences?: MessagingBindingPreferences;
+  query?: string;
+  selectedProject?: MessagingBrowseSelectedProject;
+  surface?: MessagingSurfaceRef;
+  updatedAt: number;
+};
+
+export type MessagingCallbackHandleRecord = {
+  id: string;
+  actionId: string;
+  allowedActorIds: string[];
+  bindingId?: string;
+  browseSessionId?: string;
+  channel: MessagingChannelRef;
+  createdAt: number;
+  expiresAt: number;
+  handle: string;
+  pendingIntentId?: string;
+  surface?: MessagingSurfaceRef;
+  updatedAt: number;
+  value?: MessagingJsonValue;
 };

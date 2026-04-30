@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
   MessagingBindingRecord,
+  MessagingBrowseSessionRecord,
+  MessagingCallbackHandleRecord,
   MessagingPendingIntentRecord,
 } from "@pwragnt/shared";
 import { MessagingStore } from "../messaging/messaging-store";
@@ -66,6 +68,77 @@ function buildPendingIntent(
   };
 }
 
+function buildBrowseSession(
+  overrides: Partial<MessagingBrowseSessionRecord> = {},
+): MessagingBrowseSessionRecord {
+  return {
+    id: "browse-1",
+    allowedActorIds: ["user-1"],
+    bindingId: "binding-1",
+    channel: {
+      channel: "telegram",
+      conversation: {
+        id: "chat-1",
+        kind: "dm",
+      },
+    },
+    createdAt: 1000,
+    updatedAt: 1000,
+    expiresAt: 2000,
+    launchAction: "resume_thread",
+    mode: "recents",
+    pageIndex: 0,
+    pageSize: 5,
+    selectedProject: {
+      label: "PwrAgnt",
+      directoryKey: "directory:pwragnt",
+    },
+    surface: {
+      channel: "telegram",
+      id: "message-1",
+      state: {
+        opaque: {
+          chatId: 777,
+          messageId: 123,
+        },
+      },
+    },
+    ...overrides,
+  };
+}
+
+function buildCallbackHandle(
+  overrides: Partial<MessagingCallbackHandleRecord> = {},
+): MessagingCallbackHandleRecord {
+  return {
+    id: "callback-1",
+    actionId: "browse:select:1",
+    allowedActorIds: ["user-1"],
+    bindingId: "binding-1",
+    browseSessionId: "browse-1",
+    channel: {
+      channel: "telegram",
+      conversation: {
+        id: "chat-1",
+        kind: "dm",
+      },
+    },
+    createdAt: 1000,
+    updatedAt: 1000,
+    expiresAt: 2000,
+    handle: "tg:short",
+    surface: {
+      channel: "telegram",
+      id: "message-1",
+    },
+    value: {
+      backend: "codex",
+      threadId: "thread-1",
+    },
+    ...overrides,
+  };
+}
+
 afterEach(async () => {
   await Promise.all(
     tempDirs.splice(0).map(async (tempDir) => {
@@ -79,6 +152,8 @@ describe("MessagingStore", () => {
     const { filePath, store } = await createStore();
     await store.upsertBinding(buildBinding());
     await store.upsertPendingIntent(buildPendingIntent());
+    await store.upsertBrowseSession(buildBrowseSession());
+    await store.upsertCallbackHandle(buildCallbackHandle());
 
     const reloaded = new MessagingStore(filePath);
 
@@ -92,6 +167,27 @@ describe("MessagingStore", () => {
         id: "intent-1",
         bindingId: "binding-1",
       });
+    await expect(reloaded.getBrowseSession("browse-1", { now: 1500 })).resolves
+      .toMatchObject({
+        id: "browse-1",
+        mode: "recents",
+        selectedProject: {
+          label: "PwrAgnt",
+        },
+      });
+    await expect(
+      reloaded.resolveCallbackHandle({
+        actorId: "user-1",
+        channel: buildBinding().channel,
+        handle: "tg:short",
+        now: 1500,
+      }),
+    ).resolves.toMatchObject({
+      actionId: "browse:select:1",
+      value: {
+        threadId: "thread-1",
+      },
+    });
   });
 
   it("finds active bindings by stable channel conversation and ignores revoked records", async () => {
@@ -125,20 +221,42 @@ describe("MessagingStore", () => {
     const { store } = await createStore();
     await store.upsertBinding(buildBinding());
     await store.upsertPendingIntent(buildPendingIntent());
+    await store.upsertBrowseSession(buildBrowseSession());
+    await store.upsertCallbackHandle(buildCallbackHandle());
 
     await store.revokeBinding({ bindingId: "binding-1", revokedAt: 3000 });
 
     await expect(store.getPendingIntent("intent-1", { now: 1500 })).resolves
+      .toBeUndefined();
+    await expect(store.getBrowseSession("browse-1", { now: 1500 })).resolves
+      .toBeUndefined();
+    await expect(store.getCallbackHandle("callback-1", { now: 1500 })).resolves
       .toBeUndefined();
     await expect(store.getBinding("binding-1")).resolves.toMatchObject({
       revokedAt: 3000,
     });
   });
 
-  it("ignores and cleans up expired pending intents without deleting active intents", async () => {
+  it("ignores and cleans up expired pending intents and browse state without deleting active records", async () => {
     const { store } = await createStore();
     await store.upsertPendingIntent(buildPendingIntent({ id: "expired", expiresAt: 1500 }));
     await store.upsertPendingIntent(buildPendingIntent({ id: "active", expiresAt: 2500 }));
+    await store.upsertBrowseSession(buildBrowseSession({ id: "expired-browse", expiresAt: 1500 }));
+    await store.upsertBrowseSession(buildBrowseSession({ id: "active-browse", expiresAt: 2500 }));
+    await store.upsertCallbackHandle(
+      buildCallbackHandle({
+        id: "expired-callback",
+        browseSessionId: undefined,
+        expiresAt: 1500,
+      }),
+    );
+    await store.upsertCallbackHandle(
+      buildCallbackHandle({
+        id: "active-callback",
+        browseSessionId: undefined,
+        expiresAt: 2500,
+      }),
+    );
 
     await expect(store.getPendingIntent("expired", { now: 2000 })).resolves
       .toBeUndefined();
@@ -148,6 +266,60 @@ describe("MessagingStore", () => {
     await expect(store.getPendingIntent("active", { now: 2000 })).resolves.toMatchObject({
       id: "active",
     });
+    await expect(store.getBrowseSession("expired-browse", { now: 2000 })).resolves
+      .toBeUndefined();
+    await expect(store.cleanupExpiredBrowseSessions({ now: 2000 })).resolves.toEqual([
+      "expired-browse",
+    ]);
+    await expect(store.getBrowseSession("active-browse", { now: 2000 })).resolves
+      .toMatchObject({
+        id: "active-browse",
+      });
+    await expect(store.getCallbackHandle("expired-callback", { now: 2000 })).resolves
+      .toBeUndefined();
+    await expect(store.cleanupExpiredCallbackHandles({ now: 2000 })).resolves.toEqual([
+      "expired-callback",
+    ]);
+    await expect(store.getCallbackHandle("active-callback", { now: 2000 })).resolves
+      .toMatchObject({
+        id: "active-callback",
+      });
+  });
+
+  it("fails callback handle resolution closed for wrong actor, channel, or expiry", async () => {
+    const { store } = await createStore();
+    await store.upsertCallbackHandle(buildCallbackHandle());
+
+    await expect(
+      store.resolveCallbackHandle({
+        actorId: "other-user",
+        channel: buildBinding().channel,
+        handle: "tg:short",
+        now: 1500,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.resolveCallbackHandle({
+        actorId: "user-1",
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "other-chat",
+            kind: "dm",
+          },
+        },
+        handle: "tg:short",
+        now: 1500,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.resolveCallbackHandle({
+        actorId: "user-1",
+        channel: buildBinding().channel,
+        handle: "tg:short",
+        now: 2500,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("migrates malformed and older-version store data to safe defaults", async () => {
@@ -160,6 +332,18 @@ describe("MessagingStore", () => {
           valid: buildBinding({ id: "valid" }),
           invalid: {
             id: "invalid",
+          },
+        },
+        browseSessions: {
+          valid: buildBrowseSession({ id: "valid-browse" }),
+          invalid: {
+            id: "invalid-browse",
+          },
+        },
+        callbackHandles: {
+          valid: buildCallbackHandle({ id: "valid-callback" }),
+          invalid: {
+            id: "invalid-callback",
           },
         },
         pendingIntents: {
@@ -183,10 +367,20 @@ describe("MessagingStore", () => {
     const store = new MessagingStore(filePath);
 
     await expect(store.readSnapshot()).resolves.toMatchObject({
-      version: 1,
+      version: 2,
       bindings: {
         valid: {
           id: "valid",
+        },
+      },
+      browseSessions: {
+        valid: {
+          id: "valid-browse",
+        },
+      },
+      callbackHandles: {
+        valid: {
+          id: "valid-callback",
         },
       },
       pendingIntents: {
@@ -226,6 +420,15 @@ describe("MessagingStore", () => {
     const { filePath, store } = await createStore();
     await store.upsertBinding(
       buildBinding({
+        pinnedStatusSurface: {
+          channel: "telegram",
+          id: "pin-1",
+          state: {
+            opaque: {
+              token: "status-secret",
+            },
+          },
+        },
         routingState: {
           opaque: {
             botToken: "telegram-secret-token",
@@ -237,13 +440,24 @@ describe("MessagingStore", () => {
         },
       }),
     );
+    await store.upsertCallbackHandle(
+      buildCallbackHandle({
+        value: {
+          authorization: "callback-secret",
+          safe: "kept-callback",
+        },
+      }),
+    );
 
     const raw = await readFile(filePath, "utf8");
 
     expect(raw).not.toContain("telegram-secret-token");
     expect(raw).not.toContain("api-secret");
+    expect(raw).not.toContain("status-secret");
+    expect(raw).not.toContain("callback-secret");
     expect(raw).toContain("[REDACTED]");
     expect(raw).toContain("kept");
+    expect(raw).toContain("kept-callback");
   });
 
   it("does not trust mutable usernames as authorization identity", async () => {
