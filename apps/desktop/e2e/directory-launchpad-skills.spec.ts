@@ -249,6 +249,33 @@ test("directory launchpad loads skill autocomplete from user and local scope", a
   }
 });
 
+test("directory launchpad keyboard typing updates the rich input once", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const textbox = app.window.getByRole("textbox", { name: "New thread" });
+    await textbox.focus();
+    await app.window.keyboard.type("$ce");
+
+    await expect
+      .poll(async () =>
+        await textbox.evaluate((element) => (element as HTMLDivElement).textContent)
+      )
+      .toBe("$ce");
+    await expect(
+      app.window.getByRole("button", { name: /\$ce:brainstorm/i }),
+    ).toBeVisible();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("directory launchpad skill autocomplete selects focused options as undoable inline chips", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
