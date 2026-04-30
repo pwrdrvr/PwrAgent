@@ -28,7 +28,7 @@ test("review command asks for target and preserves transcript order", async () =
 
     const reply = app.window.getByLabel("Reply");
     await reply.fill("/review");
-    await expect(reply).toHaveValue("/review");
+    await expect(reply).toHaveAttribute("data-value", "/review");
     await app.window.getByRole("button", { name: "Send" }).click();
 
     const reviewTarget = app.window.getByRole("group", { name: "Review target" });

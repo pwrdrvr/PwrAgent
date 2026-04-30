@@ -3665,11 +3665,6 @@ textarea {
   opacity: 0.72;
 }
 
-.composer-rich-input:focus,
-.composer-rich-input:focus-visible {
-  outline: 0;
-}
-
 .composer-rich-input.is-empty::before {
   content: attr(data-placeholder);
   color: var(--text-muted);
