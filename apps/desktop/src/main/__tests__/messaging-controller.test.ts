@@ -209,6 +209,68 @@ describe("MessagingController", () => {
       kind: "status",
       status: "working",
     });
+    expect(harness.delivered.find((intent) => intent.kind === "activity")).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "active",
+    });
+  });
+
+  it("signals typing activity from backend turn lifecycle events", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "running",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "active",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: working"),
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: completed"),
+    });
   });
 
   it("updates the existing pinned status surface for /status commands", async () => {
@@ -442,7 +504,12 @@ describe("MessagingController", () => {
       },
     } as unknown as AgentEvent);
 
-    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered).toHaveLength(2);
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+    });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining("Turn: completed"),

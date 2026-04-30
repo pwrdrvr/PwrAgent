@@ -100,6 +100,68 @@ describe("DiscordAdapter", () => {
     expect(secondCustomId).not.toBe(customId);
   });
 
+  it("signals typing activity without rendering a visible Discord message", async () => {
+    const api = createApi();
+    const adapter = new DiscordAdapter({
+      api: api as unknown as DiscordApi,
+      config: {
+        channel: "discord",
+        botToken: "discord-token",
+        authorizedActorIds: ["42"],
+      },
+      gateway: createGateway(),
+      now: () => 1000,
+    });
+
+    const activeResult = await adapter.deliver({
+      id: "activity-1",
+      kind: "activity",
+      activity: "typing",
+      createdAt: 1000,
+      state: "active",
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "discord",
+          conversation: {
+            id: "channel-1",
+            kind: "channel",
+            parentId: "guild-1",
+          },
+        },
+        occurredAt: 1000,
+      },
+    });
+    const idleResult = await adapter.deliver({
+      id: "activity-2",
+      kind: "activity",
+      activity: "typing",
+      createdAt: 1000,
+      state: "idle",
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "discord",
+          conversation: {
+            id: "channel-1",
+            kind: "channel",
+            parentId: "guild-1",
+          },
+        },
+        occurredAt: 1000,
+      },
+    });
+
+    expect(activeResult.outcome).toBe("signaled");
+    expect(idleResult.outcome).toBe("signaled");
+    expect(api.sendTyping).toHaveBeenCalledWith("channel-1");
+    expect(api.createMessage).not.toHaveBeenCalled();
+  });
+
   it("resolves component custom IDs and acknowledges interactions", async () => {
     const harness = await createControllerHarness();
 
@@ -428,6 +490,7 @@ async function createControllerHarness(): Promise<{
 function createApi(): {
   createInteractionResponse: ReturnType<typeof vi.fn>;
   createMessage: ReturnType<typeof vi.fn>;
+  sendTyping: ReturnType<typeof vi.fn>;
 } {
   return {
     createInteractionResponse: vi.fn(
@@ -444,6 +507,7 @@ function createApi(): {
         id: `message-${Math.random()}`,
       }),
     ),
+    sendTyping: vi.fn(async (_channelId: string) => undefined),
   };
 }
 

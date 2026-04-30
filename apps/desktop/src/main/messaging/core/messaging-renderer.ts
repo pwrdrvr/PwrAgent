@@ -1,5 +1,6 @@
 import type {
   AppServerToolRequestUserInputNotification,
+  MessagingActivityIntent,
   MessagingConfirmationIntent,
   MessagingErrorIntent,
   MessagingQuestionnaireIntent,
@@ -9,6 +10,23 @@ import type {
   NavigationSnapshot,
 } from "@pwragnt/shared";
 export { buildApprovalIntent } from "./messaging-approval-renderer.js";
+
+export function buildActivityIntent(params: {
+  activity: MessagingActivityIntent["activity"];
+  bindingId?: string;
+  createdAt: number;
+  id: string;
+  state: MessagingActivityIntent["state"];
+}): MessagingActivityIntent {
+  return {
+    id: params.id,
+    kind: "activity",
+    activity: params.activity,
+    bindingId: params.bindingId,
+    createdAt: params.createdAt,
+    state: params.state,
+  };
+}
 
 export function buildThreadPickerIntent(params: {
   actions: MessagingSurfaceAction[];

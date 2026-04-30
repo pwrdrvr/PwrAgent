@@ -72,6 +72,8 @@ export function splitTelegramHtml(text: string): string[] {
 
 export function textForTelegramIntent(intent: MessagingSurfaceIntent): string {
   switch (intent.kind) {
+    case "activity":
+      return "";
     case "message":
       return intent.parts.map(renderContentPart).filter(Boolean).join("\n\n");
     case "status":

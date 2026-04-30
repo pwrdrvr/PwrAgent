@@ -15,6 +15,7 @@ import {
 describe("messaging surface contract", () => {
   it("enumerates the first-release semantic intent and inbound event kinds", () => {
     expect(MESSAGING_SURFACE_INTENT_KINDS).toEqual([
+      "activity",
       "message",
       "status",
       "progress",
@@ -36,6 +37,7 @@ describe("messaging surface contract", () => {
       "lifecycle",
     ]);
     expect(MESSAGING_DELIVERY_OUTCOMES).toContain("presented_new");
+    expect(MESSAGING_DELIVERY_OUTCOMES).toContain("signaled");
     expect(MESSAGING_DELIVERY_OUTCOMES).toContain("pinned");
     expect(MESSAGING_DELIVERY_OUTCOMES).toContain("unpinned");
     expect(MESSAGING_DELIVERY_OUTCOMES).toContain("unsupported");

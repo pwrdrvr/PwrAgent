@@ -66,6 +66,8 @@ export function splitDiscordContent(text: string): string[] {
 
 export function textForDiscordIntent(intent: MessagingSurfaceIntent): string {
   switch (intent.kind) {
+    case "activity":
+      return "";
     case "message":
       return intent.parts.map(renderContentPart).filter(Boolean).join("\n\n");
     case "status":

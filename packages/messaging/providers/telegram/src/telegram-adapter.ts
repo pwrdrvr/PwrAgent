@@ -19,6 +19,7 @@ import {
 } from "./telegram-formatting.ts";
 
 const TELEGRAM_ALLOWED_UPDATES = ["message", "callback_query"];
+const TELEGRAM_TYPING_SIGNAL_INTERVAL_MS = 4_000;
 
 type TelegramCallbackBinding = {
   actionId: string;
@@ -107,6 +108,12 @@ export type TelegramSendPhotoRequest = {
   reply_markup?: TelegramInlineKeyboardMarkup;
 };
 
+export type TelegramSendChatActionRequest = {
+  action: "typing";
+  chat_id: number | string;
+  message_thread_id?: number;
+};
+
 export type TelegramSentMessage = {
   chat: TelegramChat;
   message_id: number;
@@ -132,6 +139,7 @@ export type TelegramBotApi = {
   editMessageText(request: TelegramEditMessageTextRequest): Promise<TelegramSentMessage>;
   getWebhookInfo(): Promise<{ url: string }>;
   pinChatMessage(request: TelegramPinChatMessageRequest): Promise<boolean>;
+  sendChatAction(request: TelegramSendChatActionRequest): Promise<boolean>;
   sendMessage(request: TelegramSendMessageRequest): Promise<TelegramSentMessage>;
   sendPhoto(request: TelegramSendPhotoRequest): Promise<TelegramSentMessage>;
   setMyCommands(params: {
@@ -167,6 +175,11 @@ export type TelegramGrammyBotLike = {
       chatId: number | string,
       messageId: number,
       other?: Omit<TelegramPinChatMessageRequest, "chat_id" | "message_id">,
+    ): Promise<boolean>;
+    sendChatAction(
+      chatId: number | string,
+      action: TelegramSendChatActionRequest["action"],
+      other?: Omit<TelegramSendChatActionRequest, "chat_id" | "action">,
     ): Promise<boolean>;
     sendMessage(
       chatId: number | string,
@@ -215,6 +228,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     store?: MessagingCallbackHandleStore;
   };
   private startPromise?: Promise<void>;
+  private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
 
   constructor(options: TelegramAdapter["options"]) {
     this.options = options;
@@ -264,6 +278,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   async stop(): Promise<void> {
+    this.stopTypingSignals();
     await this.bot.stop?.();
     await this.startPromise?.catch(() => undefined);
     this.startPromise = undefined;
@@ -279,6 +294,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         errorMessage: "Telegram delivery target is missing.",
         outcome: "failed",
       };
+    }
+
+    if (intent.kind === "activity") {
+      return await this.deliverActivity(intent, target);
     }
 
     if (intent.kind === "dismiss") {
@@ -642,6 +661,78 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return intent.parts.find((part) => part.type === "image" && "url" in part)?.url;
   }
 
+  private async deliverActivity(
+    intent: Extract<MessagingSurfaceIntent, { kind: "activity" }>,
+    target: TelegramDeliveryTarget,
+  ): Promise<MessagingDeliveryResult> {
+    if (intent.activity !== "typing") {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "unsupported",
+      };
+    }
+
+    try {
+      if (intent.state === "active") {
+        await this.startTypingSignal(target);
+      } else {
+        this.stopTypingSignal(target);
+      }
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "signaled",
+      };
+    } catch (error) {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: error instanceof Error ? error.message : String(error),
+        outcome: "failed",
+      };
+    }
+  }
+
+  private async startTypingSignal(target: TelegramDeliveryTarget): Promise<void> {
+    this.stopTypingSignal(target);
+    await this.sendTypingSignal(target);
+    const interval = setInterval(() => {
+      void this.sendTypingSignal(target).catch(() => undefined);
+    }, TELEGRAM_TYPING_SIGNAL_INTERVAL_MS);
+    (interval as { unref?: () => void }).unref?.();
+    this.typingIntervals.set(this.typingSignalKey(target), interval);
+  }
+
+  private stopTypingSignal(target: TelegramDeliveryTarget): void {
+    const key = this.typingSignalKey(target);
+    const interval = this.typingIntervals.get(key);
+    if (!interval) {
+      return;
+    }
+    clearInterval(interval);
+    this.typingIntervals.delete(key);
+  }
+
+  private stopTypingSignals(): void {
+    for (const interval of this.typingIntervals.values()) {
+      clearInterval(interval);
+    }
+    this.typingIntervals.clear();
+  }
+
+  private async sendTypingSignal(target: TelegramDeliveryTarget): Promise<void> {
+    await this.bot.api.sendChatAction({
+      action: "typing",
+      chat_id: target.chatId,
+      message_thread_id: target.messageThreadId,
+    });
+  }
+
+  private typingSignalKey(target: TelegramDeliveryTarget): string {
+    return `${target.chatId}:${target.messageThreadId ?? ""}`;
+  }
+
   private channelFromMessage(message: TelegramMessage): MessagingInboundEvent["channel"] {
     if (message.message_thread_id) {
       return {
@@ -774,6 +865,10 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
       pinChatMessage: async (request) => {
         const { chat_id, message_id, ...other } = request;
         return await bot.api.pinChatMessage(chat_id, message_id, other);
+      },
+      sendChatAction: async (request) => {
+        const { chat_id, action, ...other } = request;
+        return await bot.api.sendChatAction(chat_id, action, other);
       },
       sendMessage: async (request) => {
         const { chat_id, text, ...other } = request;

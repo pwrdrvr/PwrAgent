@@ -22,6 +22,7 @@ import type {
 import { MessagingStore, buildMessagingConversationKey } from "./messaging-store.js";
 import type { MessagingAdapter, MessagingBackendBridge } from "./messaging-adapter.js";
 import {
+  buildActivityIntent,
   buildApprovalIntent,
   buildConfirmationIntent,
   buildErrorIntent,
@@ -146,6 +147,7 @@ export class MessagingController {
       }
 
       if (lifecycle) {
+        await this.signalTurnActivity(currentBinding, lifecycle);
         await this.renderBindingStatus(currentBinding);
       }
     }
@@ -196,6 +198,7 @@ export class MessagingController {
           },
           updatedAt: this.now(),
         });
+        await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!);
         await this.renderBindingStatus(updatedBinding);
       }
     }
@@ -341,6 +344,7 @@ export class MessagingController {
       },
       updatedAt: this.now(),
     });
+    await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!);
     await this.renderBindingStatus(updatedBinding);
   }
 
@@ -1088,6 +1092,7 @@ export class MessagingController {
       },
       updatedAt: this.now(),
     });
+    await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!);
     await this.renderBindingStatus(updatedBinding, event);
   }
 
@@ -1124,6 +1129,7 @@ export class MessagingController {
       },
       updatedAt: this.now(),
     });
+    await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!);
     await this.renderBindingStatus(updatedBinding, event);
   }
 
@@ -1182,6 +1188,13 @@ export class MessagingController {
     }
 
     const statusSurface = binding.pinnedStatusSurface ?? binding.statusSurface;
+    if (binding.activeTurn) {
+      await this.signalTurnActivity(binding, {
+        ...binding.activeTurn,
+        status: "interrupted",
+        updatedAt: this.now(),
+      });
+    }
     if (statusSurface) {
       await this.deliver(
         {
@@ -1247,6 +1260,22 @@ export class MessagingController {
       statusSurface: result.surface,
       updatedAt: this.now(),
     });
+  }
+
+  private async signalTurnActivity(
+    binding: MessagingBindingRecord,
+    activeTurn: MessagingActiveTurnSummary,
+  ): Promise<void> {
+    await this.deliver(
+      buildActivityIntent({
+        id: this.newIntentId("activity"),
+        activity: "typing",
+        bindingId: binding.id,
+        createdAt: this.now(),
+        state: activeTurn.status === "working" ? "active" : "idle",
+      }),
+      binding,
+    );
   }
 
   private async deliverInvalidBrowseSelection(

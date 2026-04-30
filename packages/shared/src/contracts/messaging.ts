@@ -13,6 +13,7 @@ import type {
 } from "./navigation";
 
 export const MESSAGING_SURFACE_INTENT_KINDS = [
+  "activity",
   "message",
   "status",
   "progress",
@@ -39,6 +40,7 @@ export const MESSAGING_DELIVERY_OUTCOMES = [
   "presented",
   "updated",
   "presented_new",
+  "signaled",
   "pinned",
   "unpinned",
   "dismissed",
@@ -239,6 +241,12 @@ export type MessagingMessageIntent = MessagingBaseSurfaceIntent & {
   role?: "assistant" | "user" | "system";
 };
 
+export type MessagingActivityIntent = MessagingBaseSurfaceIntent & {
+  kind: "activity";
+  activity: "typing";
+  state: "active" | "idle";
+};
+
 export type MessagingStatusIntent = MessagingBaseSurfaceIntent & {
   kind: "status";
   status: "idle" | "working" | "waiting" | "completed" | "failed";
@@ -314,6 +322,7 @@ export type MessagingDismissIntent = MessagingBaseSurfaceIntent & {
 };
 
 export type MessagingSurfaceIntent =
+  | MessagingActivityIntent
   | MessagingMessageIntent
   | MessagingStatusIntent
   | MessagingProgressIntent

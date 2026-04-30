@@ -4,6 +4,7 @@ import {
   type TelegramEditMessageTextRequest,
   type TelegramGrammyBotLike,
   type TelegramPinChatMessageRequest,
+  type TelegramSendChatActionRequest,
   type TelegramSendMessageRequest,
   type TelegramSendPhotoRequest,
   type TelegramUnpinChatMessageRequest,
@@ -48,6 +49,11 @@ describe("adaptGrammyBot", () => {
       disable_notification: true,
       message_id: 7,
     });
+    await bot.api.sendChatAction({
+      action: "typing",
+      chat_id: 42,
+      message_thread_id: 9,
+    });
     await bot.api.unpinChatMessage({
       chat_id: 42,
       message_id: 7,
@@ -88,6 +94,9 @@ describe("adaptGrammyBot", () => {
     expect(grammyBot.api.pinChatMessage).toHaveBeenCalledWith(42, 7, {
       disable_notification: true,
     });
+    expect(grammyBot.api.sendChatAction).toHaveBeenCalledWith(42, "typing", {
+      message_thread_id: 9,
+    });
     expect(grammyBot.api.unpinChatMessage).toHaveBeenCalledWith(42, 7, {});
   });
 });
@@ -99,6 +108,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
     editMessageText: ReturnType<typeof vi.fn>;
     getWebhookInfo: ReturnType<typeof vi.fn>;
     pinChatMessage: ReturnType<typeof vi.fn>;
+    sendChatAction: ReturnType<typeof vi.fn>;
     sendMessage: ReturnType<typeof vi.fn>;
     sendPhoto: ReturnType<typeof vi.fn>;
     setMyCommands: ReturnType<typeof vi.fn>;
@@ -132,6 +142,13 @@ function createGrammyBot(): TelegramGrammyBotLike & {
           _chatId: number | string,
           _messageId: number,
           _other?: Omit<TelegramPinChatMessageRequest, "chat_id" | "message_id">,
+        ) => true,
+      ),
+      sendChatAction: vi.fn(
+        async (
+          _chatId: number | string,
+          _action: TelegramSendChatActionRequest["action"],
+          _other?: Omit<TelegramSendChatActionRequest, "chat_id" | "action">,
         ) => true,
       ),
       sendMessage: vi.fn(

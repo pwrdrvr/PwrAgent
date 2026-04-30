@@ -17,6 +17,7 @@ import type {
   TelegramBotApi,
   TelegramEditMessageTextRequest,
   TelegramPinChatMessageRequest,
+  TelegramSendChatActionRequest,
   TelegramSendMessageRequest,
   TelegramSendPhotoRequest,
   TelegramUnpinChatMessageRequest,
@@ -103,6 +104,70 @@ describe("TelegramAdapter", () => {
     expect(callbackData).not.toContain("thread-1");
     expect(secondCallbackData).toMatch(/^tg:/);
     expect(secondCallbackData).not.toBe(callbackData);
+  });
+
+  it("signals typing activity without rendering a visible Telegram message", async () => {
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+      },
+      now: () => 1000,
+    });
+
+    const activeResult = await adapter.deliver({
+      id: "activity-1",
+      kind: "activity",
+      activity: "typing",
+      createdAt: 1000,
+      state: "active",
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+    });
+    const idleResult = await adapter.deliver({
+      id: "activity-2",
+      kind: "activity",
+      activity: "typing",
+      createdAt: 1000,
+      state: "idle",
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+    });
+
+    expect(activeResult.outcome).toBe("signaled");
+    expect(idleResult.outcome).toBe("signaled");
+    expect(api.sendChatAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "typing",
+        chat_id: 777,
+      }),
+    );
+    expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
   it("clears an existing webhook before starting local long polling", async () => {
@@ -856,6 +921,7 @@ function createApi(): {
   editMessageText: ReturnType<typeof vi.fn>;
   getWebhookInfo: ReturnType<typeof vi.fn>;
   pinChatMessage: ReturnType<typeof vi.fn>;
+  sendChatAction: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   sendPhoto: ReturnType<typeof vi.fn>;
   setMyCommands: ReturnType<typeof vi.fn>;
@@ -873,6 +939,7 @@ function createApi(): {
     })),
     getWebhookInfo: vi.fn(async () => ({ url: "" })),
     pinChatMessage: vi.fn(async (_request: TelegramPinChatMessageRequest) => true),
+    sendChatAction: vi.fn(async (_request: TelegramSendChatActionRequest) => true),
     sendMessage: vi.fn(async (request: TelegramSendMessageRequest) => ({
       chat: {
         id: Number(request.chat_id),

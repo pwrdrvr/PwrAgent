@@ -7,6 +7,7 @@ export type {
   TelegramEditMessageTextRequest,
   TelegramMessage,
   TelegramPinChatMessageRequest,
+  TelegramSendChatActionRequest,
   TelegramSendMessageRequest,
   TelegramSendPhotoRequest,
   TelegramSentMessage,

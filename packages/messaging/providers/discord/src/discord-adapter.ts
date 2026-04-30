@@ -28,6 +28,8 @@ import {
   textForDiscordIntent,
 } from "./discord-formatting.ts";
 
+const DISCORD_TYPING_SIGNAL_INTERVAL_MS = 4_000;
+
 type DiscordComponentBinding = {
   actionId: string;
   value?: MessagingJsonValue;
@@ -137,6 +139,7 @@ export type DiscordApi = {
     channelId: string,
     request: DiscordCreateMessageRequest,
   ): Promise<DiscordMessage>;
+  sendTyping(channelId: string): Promise<void>;
 };
 
 type DiscordAdapterOptions = {
@@ -161,6 +164,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private defaultGateway?: DiscordGatewayConnection;
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private readonly options: DiscordAdapterOptions;
+  private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
   private unsubscribeGateway?: () => void;
 
   constructor(options: DiscordAdapterOptions) {
@@ -182,6 +186,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   }
 
   async stop(): Promise<void> {
+    this.stopTypingSignals();
     this.unsubscribeGateway?.();
     this.unsubscribeGateway = undefined;
     this.listener = undefined;
@@ -205,6 +210,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         errorMessage: "Discord delivery target is missing.",
         outcome: "failed",
       };
+    }
+
+    if (intent.kind === "activity") {
+      return await this.deliverActivity(intent, target);
     }
 
     const components = buildDiscordComponents(
@@ -413,6 +422,69 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     return intent.parts.find((part) => part.type === "image")?.url;
   }
 
+  private async deliverActivity(
+    intent: Extract<MessagingSurfaceIntent, { kind: "activity" }>,
+    target: { channelId: string; guildId?: string },
+  ): Promise<MessagingDeliveryResult> {
+    if (intent.activity !== "typing") {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "unsupported",
+      };
+    }
+
+    try {
+      if (intent.state === "active") {
+        await this.startTypingSignal(target.channelId);
+      } else {
+        this.stopTypingSignal(target.channelId);
+      }
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "signaled",
+      };
+    } catch (error) {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: error instanceof Error ? error.message : String(error),
+        outcome: "failed",
+      };
+    }
+  }
+
+  private async startTypingSignal(channelId: string): Promise<void> {
+    this.stopTypingSignal(channelId);
+    await this.sendTypingSignal(channelId);
+    const interval = setInterval(() => {
+      void this.sendTypingSignal(channelId).catch(() => undefined);
+    }, DISCORD_TYPING_SIGNAL_INTERVAL_MS);
+    (interval as { unref?: () => void }).unref?.();
+    this.typingIntervals.set(channelId, interval);
+  }
+
+  private stopTypingSignal(channelId: string): void {
+    const interval = this.typingIntervals.get(channelId);
+    if (!interval) {
+      return;
+    }
+    clearInterval(interval);
+    this.typingIntervals.delete(channelId);
+  }
+
+  private stopTypingSignals(): void {
+    for (const interval of this.typingIntervals.values()) {
+      clearInterval(interval);
+    }
+    this.typingIntervals.clear();
+  }
+
+  private async sendTypingSignal(channelId: string): Promise<void> {
+    await this.api.sendTyping(channelId);
+  }
+
   private channelFromDiscord(
     channelId: string,
     guildId: string | undefined,
@@ -495,6 +567,12 @@ class DiscordRestApi implements DiscordApi {
   ): Promise<void> {
     await this.rest.post(Routes.interactionCallback(interactionId, interactionToken), {
       body: request,
+    });
+  }
+
+  async sendTyping(channelId: string): Promise<void> {
+    await this.rest.post(`/channels/${channelId}/typing`, {
+      body: {},
     });
   }
 }
