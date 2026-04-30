@@ -48,6 +48,8 @@ import {
 } from "./messaging-status-card.js";
 
 const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
+const TYPING_ACTIVITY_LEASE_MS = 15_000;
+const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 
 export type MessagingControllerOptions = {
   adapter: MessagingAdapter;
@@ -65,6 +67,7 @@ export class MessagingController {
   private readonly now: () => number;
   private readonly pendingIntentTtlMs: number;
   private readonly interactionMapper: MessagingInteractionMapper;
+  private readonly typingActivityLastSignaledAt = new Map<string, number>();
 
   constructor(private readonly options: MessagingControllerOptions) {
     this.authorizedActorIds = new Set(options.authorizedActorIds);
@@ -139,6 +142,16 @@ export class MessagingController {
           activeTurn: lifecycle,
           updatedAt: this.now(),
         });
+      } else if (isThreadStatusIdleEvent(event) && binding.activeTurn) {
+        currentBinding = await this.options.store.upsertBinding({
+          ...binding,
+          activeTurn: {
+            ...binding.activeTurn,
+            status: "completed",
+            updatedAt: this.now(),
+          },
+          updatedAt: this.now(),
+        });
       }
 
       const assistantText = assistantTextForBackendEvent(event);
@@ -146,9 +159,13 @@ export class MessagingController {
         await this.deliverAssistantMessage(assistantText, event, currentBinding);
       }
 
-      if (lifecycle) {
-        await this.signalTurnActivity(currentBinding, lifecycle);
+      if (lifecycle || (isThreadStatusIdleEvent(event) && binding.activeTurn)) {
+        await this.signalTurnActivity(currentBinding, currentBinding.activeTurn!, {
+          force: true,
+        });
         await this.renderBindingStatus(currentBinding);
+      } else if (currentBinding.activeTurn?.status === "working") {
+        await this.signalTurnActivity(currentBinding, currentBinding.activeTurn);
       }
     }
   }
@@ -198,7 +215,9 @@ export class MessagingController {
           },
           updatedAt: this.now(),
         });
-        await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!);
+        await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!, {
+          force: true,
+        });
         await this.renderBindingStatus(updatedBinding);
       }
     }
@@ -344,7 +363,9 @@ export class MessagingController {
       },
       updatedAt: this.now(),
     });
-    await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!);
+    await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!, {
+      force: true,
+    });
     await this.renderBindingStatus(updatedBinding);
   }
 
@@ -1092,7 +1113,9 @@ export class MessagingController {
       },
       updatedAt: this.now(),
     });
-    await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!);
+    await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!, {
+      force: true,
+    });
     await this.renderBindingStatus(updatedBinding, event);
   }
 
@@ -1129,7 +1152,9 @@ export class MessagingController {
       },
       updatedAt: this.now(),
     });
-    await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!);
+    await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!, {
+      force: true,
+    });
     await this.renderBindingStatus(updatedBinding, event);
   }
 
@@ -1189,11 +1214,15 @@ export class MessagingController {
 
     const statusSurface = binding.pinnedStatusSurface ?? binding.statusSurface;
     if (binding.activeTurn) {
-      await this.signalTurnActivity(binding, {
-        ...binding.activeTurn,
-        status: "interrupted",
-        updatedAt: this.now(),
-      });
+      await this.signalTurnActivity(
+        binding,
+        {
+          ...binding.activeTurn,
+          status: "interrupted",
+          updatedAt: this.now(),
+        },
+        { force: true },
+      );
     }
     if (statusSurface) {
       await this.deliver(
@@ -1265,14 +1294,33 @@ export class MessagingController {
   private async signalTurnActivity(
     binding: MessagingBindingRecord,
     activeTurn: MessagingActiveTurnSummary,
+    options?: { force?: boolean },
   ): Promise<void> {
+    const state = activeTurn.status === "working" ? "active" : "idle";
+    const now = this.now();
+    const lastSignaledAt = this.typingActivityLastSignaledAt.get(binding.id);
+    if (
+      state === "active" &&
+      !options?.force &&
+      lastSignaledAt !== undefined &&
+      now - lastSignaledAt < TYPING_ACTIVITY_REFRESH_MS
+    ) {
+      return;
+    }
+    if (state === "active") {
+      this.typingActivityLastSignaledAt.set(binding.id, now);
+    } else {
+      this.typingActivityLastSignaledAt.delete(binding.id);
+    }
+
     await this.deliver(
       buildActivityIntent({
         id: this.newIntentId("activity"),
         activity: "typing",
         bindingId: binding.id,
-        createdAt: this.now(),
-        state: activeTurn.status === "working" ? "active" : "idle",
+        createdAt: now,
+        leaseMs: state === "active" ? TYPING_ACTIVITY_LEASE_MS : undefined,
+        state,
       }),
       binding,
     );
@@ -1486,6 +1534,18 @@ function assistantMessageDeliveryKey(event: AgentEvent, text: string): string {
     turnId,
     createHash("sha256").update(text).digest("base64url"),
   ].join("\0");
+}
+
+function isThreadStatusIdleEvent(event: AgentEvent): boolean {
+  if (event.notification.method !== "thread/status/changed") {
+    return false;
+  }
+  const params = event.notification.params as {
+    status?: {
+      type?: unknown;
+    };
+  };
+  return params.status?.type === "idle";
 }
 
 function turnLifecycleForBackendEvent(

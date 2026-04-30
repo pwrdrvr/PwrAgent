@@ -170,6 +170,73 @@ describe("TelegramAdapter", () => {
     expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("expires Telegram typing activity when no idle signal arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createApi();
+      const adapter = new TelegramAdapter({
+        api: api as unknown as TelegramBotApi,
+        config: {
+          channel: "telegram",
+          botToken: "12345:test-token",
+          authorizedActorIds: ["42"],
+        },
+        now: () => 1000,
+      });
+
+      await adapter.deliver({
+        id: "activity-1",
+        kind: "activity",
+        activity: "typing",
+        createdAt: 1000,
+        leaseMs: 1000,
+        state: "active",
+        audit: {
+          actor: {
+            platformUserId: "42",
+          },
+          channel: {
+            channel: "telegram",
+            conversation: {
+              id: "777",
+              kind: "dm",
+            },
+          },
+          occurredAt: 1000,
+        },
+      });
+      await adapter.deliver({
+        id: "activity-2",
+        kind: "activity",
+        activity: "typing",
+        createdAt: 1000,
+        leaseMs: 1000,
+        state: "active",
+        audit: {
+          actor: {
+            platformUserId: "42",
+          },
+          channel: {
+            channel: "telegram",
+            conversation: {
+              id: "777",
+              kind: "dm",
+            },
+          },
+          occurredAt: 1000,
+        },
+      });
+
+      expect(api.sendChatAction).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(api.sendChatAction).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clears an existing webhook before starting local long polling", async () => {
     const api = createApi();
     api.getWebhookInfo.mockResolvedValueOnce({

@@ -242,6 +242,7 @@ export type MessagingMessageIntent = MessagingBaseSurfaceIntent & {
 export type MessagingActivityIntent = MessagingBaseSurfaceIntent & {
   kind: "activity";
   activity: "typing";
+  leaseMs?: number;
   state: "active" | "idle";
 };
 

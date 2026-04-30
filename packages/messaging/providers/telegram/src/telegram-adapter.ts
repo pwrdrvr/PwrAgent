@@ -19,6 +19,7 @@ import {
 } from "./telegram-formatting.ts";
 
 const TELEGRAM_ALLOWED_UPDATES = ["message", "callback_query"];
+const TELEGRAM_DEFAULT_TYPING_SIGNAL_LEASE_MS = 15_000;
 const TELEGRAM_TYPING_SIGNAL_INTERVAL_MS = 4_000;
 
 type TelegramCallbackBinding = {
@@ -30,6 +31,11 @@ type TelegramDeliveryTarget = {
   chatId: number | string;
   messageId?: number;
   messageThreadId?: number;
+};
+
+type TelegramTypingSignal = {
+  interval: ReturnType<typeof setInterval>;
+  timeout: ReturnType<typeof setTimeout>;
 };
 
 export type TelegramUser = {
@@ -228,7 +234,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     store?: MessagingCallbackHandleStore;
   };
   private startPromise?: Promise<void>;
-  private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
+  private typingSignals = new Map<string, TelegramTypingSignal>();
 
   constructor(options: TelegramAdapter["options"]) {
     this.options = options;
@@ -675,7 +681,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     try {
       if (intent.state === "active") {
-        await this.startTypingSignal(target);
+        await this.startTypingSignal(target, intent.leaseMs);
       } else {
         this.stopTypingSignal(target);
       }
@@ -694,31 +700,69 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
   }
 
-  private async startTypingSignal(target: TelegramDeliveryTarget): Promise<void> {
-    this.stopTypingSignal(target);
+  private async startTypingSignal(
+    target: TelegramDeliveryTarget,
+    leaseMs = TELEGRAM_DEFAULT_TYPING_SIGNAL_LEASE_MS,
+  ): Promise<void> {
+    const existing = this.typingSignals.get(this.typingSignalKey(target));
+    if (existing) {
+      this.refreshTypingSignalLease(target, leaseMs);
+      return;
+    }
+
     await this.sendTypingSignal(target);
     const interval = setInterval(() => {
       void this.sendTypingSignal(target).catch(() => undefined);
     }, TELEGRAM_TYPING_SIGNAL_INTERVAL_MS);
     (interval as { unref?: () => void }).unref?.();
-    this.typingIntervals.set(this.typingSignalKey(target), interval);
+    const timeout = this.createTypingSignalTimeout(target, leaseMs);
+    this.typingSignals.set(this.typingSignalKey(target), {
+      interval,
+      timeout,
+    });
   }
 
   private stopTypingSignal(target: TelegramDeliveryTarget): void {
     const key = this.typingSignalKey(target);
-    const interval = this.typingIntervals.get(key);
-    if (!interval) {
+    const signal = this.typingSignals.get(key);
+    if (!signal) {
       return;
     }
-    clearInterval(interval);
-    this.typingIntervals.delete(key);
+    clearInterval(signal.interval);
+    clearTimeout(signal.timeout);
+    this.typingSignals.delete(key);
   }
 
   private stopTypingSignals(): void {
-    for (const interval of this.typingIntervals.values()) {
-      clearInterval(interval);
+    for (const signal of this.typingSignals.values()) {
+      clearInterval(signal.interval);
+      clearTimeout(signal.timeout);
     }
-    this.typingIntervals.clear();
+    this.typingSignals.clear();
+  }
+
+  private refreshTypingSignalLease(
+    target: TelegramDeliveryTarget,
+    leaseMs: number,
+  ): void {
+    const key = this.typingSignalKey(target);
+    const signal = this.typingSignals.get(key);
+    if (!signal) {
+      return;
+    }
+    clearTimeout(signal.timeout);
+    signal.timeout = this.createTypingSignalTimeout(target, leaseMs);
+  }
+
+  private createTypingSignalTimeout(
+    target: TelegramDeliveryTarget,
+    leaseMs: number,
+  ): ReturnType<typeof setTimeout> {
+    const timeout = setTimeout(() => {
+      this.stopTypingSignal(target);
+    }, leaseMs);
+    (timeout as { unref?: () => void }).unref?.();
+    return timeout;
   }
 
   private async sendTypingSignal(target: TelegramDeliveryTarget): Promise<void> {

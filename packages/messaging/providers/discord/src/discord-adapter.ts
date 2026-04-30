@@ -28,11 +28,17 @@ import {
   textForDiscordIntent,
 } from "./discord-formatting.ts";
 
+const DISCORD_DEFAULT_TYPING_SIGNAL_LEASE_MS = 15_000;
 const DISCORD_TYPING_SIGNAL_INTERVAL_MS = 4_000;
 
 type DiscordComponentBinding = {
   actionId: string;
   value?: MessagingJsonValue;
+};
+
+type DiscordTypingSignal = {
+  interval: ReturnType<typeof setInterval>;
+  timeout: ReturnType<typeof setTimeout>;
 };
 
 export type DiscordAllowedMentions = {
@@ -164,7 +170,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private defaultGateway?: DiscordGatewayConnection;
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private readonly options: DiscordAdapterOptions;
-  private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
+  private typingSignals = new Map<string, DiscordTypingSignal>();
   private unsubscribeGateway?: () => void;
 
   constructor(options: DiscordAdapterOptions) {
@@ -436,7 +442,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
     try {
       if (intent.state === "active") {
-        await this.startTypingSignal(target.channelId);
+        await this.startTypingSignal(target.channelId, intent.leaseMs);
       } else {
         this.stopTypingSignal(target.channelId);
       }
@@ -455,30 +461,64 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
   }
 
-  private async startTypingSignal(channelId: string): Promise<void> {
-    this.stopTypingSignal(channelId);
+  private async startTypingSignal(
+    channelId: string,
+    leaseMs = DISCORD_DEFAULT_TYPING_SIGNAL_LEASE_MS,
+  ): Promise<void> {
+    const existing = this.typingSignals.get(channelId);
+    if (existing) {
+      this.refreshTypingSignalLease(channelId, leaseMs);
+      return;
+    }
+
     await this.sendTypingSignal(channelId);
     const interval = setInterval(() => {
       void this.sendTypingSignal(channelId).catch(() => undefined);
     }, DISCORD_TYPING_SIGNAL_INTERVAL_MS);
     (interval as { unref?: () => void }).unref?.();
-    this.typingIntervals.set(channelId, interval);
+    const timeout = this.createTypingSignalTimeout(channelId, leaseMs);
+    this.typingSignals.set(channelId, {
+      interval,
+      timeout,
+    });
   }
 
   private stopTypingSignal(channelId: string): void {
-    const interval = this.typingIntervals.get(channelId);
-    if (!interval) {
+    const signal = this.typingSignals.get(channelId);
+    if (!signal) {
       return;
     }
-    clearInterval(interval);
-    this.typingIntervals.delete(channelId);
+    clearInterval(signal.interval);
+    clearTimeout(signal.timeout);
+    this.typingSignals.delete(channelId);
   }
 
   private stopTypingSignals(): void {
-    for (const interval of this.typingIntervals.values()) {
-      clearInterval(interval);
+    for (const signal of this.typingSignals.values()) {
+      clearInterval(signal.interval);
+      clearTimeout(signal.timeout);
     }
-    this.typingIntervals.clear();
+    this.typingSignals.clear();
+  }
+
+  private refreshTypingSignalLease(channelId: string, leaseMs: number): void {
+    const signal = this.typingSignals.get(channelId);
+    if (!signal) {
+      return;
+    }
+    clearTimeout(signal.timeout);
+    signal.timeout = this.createTypingSignalTimeout(channelId, leaseMs);
+  }
+
+  private createTypingSignalTimeout(
+    channelId: string,
+    leaseMs: number,
+  ): ReturnType<typeof setTimeout> {
+    const timeout = setTimeout(() => {
+      this.stopTypingSignal(channelId);
+    }, leaseMs);
+    (timeout as { unref?: () => void }).unref?.();
+    return timeout;
   }
 
   private async sendTypingSignal(channelId: string): Promise<void> {

@@ -273,6 +273,36 @@ describe("MessagingController", () => {
     });
   });
 
+  it("stops typing when the backend reports idle without a turn completion event", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "thread-1",
+          status: {
+            type: "idle",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: completed"),
+    });
+  });
+
   it("updates the existing pinned status surface for /status commands", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(

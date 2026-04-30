@@ -162,6 +162,76 @@ describe("DiscordAdapter", () => {
     expect(api.createMessage).not.toHaveBeenCalled();
   });
 
+  it("expires Discord typing activity when no idle signal arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createApi();
+      const adapter = new DiscordAdapter({
+        api: api as unknown as DiscordApi,
+        config: {
+          channel: "discord",
+          botToken: "discord-token",
+          authorizedActorIds: ["42"],
+        },
+        gateway: createGateway(),
+        now: () => 1000,
+      });
+
+      await adapter.deliver({
+        id: "activity-1",
+        kind: "activity",
+        activity: "typing",
+        createdAt: 1000,
+        leaseMs: 1000,
+        state: "active",
+        audit: {
+          actor: {
+            platformUserId: "42",
+          },
+          channel: {
+            channel: "discord",
+            conversation: {
+              id: "channel-1",
+              kind: "channel",
+              parentId: "guild-1",
+            },
+          },
+          occurredAt: 1000,
+        },
+      });
+      await adapter.deliver({
+        id: "activity-2",
+        kind: "activity",
+        activity: "typing",
+        createdAt: 1000,
+        leaseMs: 1000,
+        state: "active",
+        audit: {
+          actor: {
+            platformUserId: "42",
+          },
+          channel: {
+            channel: "discord",
+            conversation: {
+              id: "channel-1",
+              kind: "channel",
+              parentId: "guild-1",
+            },
+          },
+          occurredAt: 1000,
+        },
+      });
+
+      expect(api.sendTyping).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(api.sendTyping).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resolves component custom IDs and acknowledges interactions", async () => {
     const harness = await createControllerHarness();
 
