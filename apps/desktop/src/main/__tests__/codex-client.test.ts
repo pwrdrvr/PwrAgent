@@ -1987,6 +1987,11 @@ describe("CodexAppServerClient", () => {
                 },
               },
               {
+                type: "userMessage",
+                id: "hidden-custom-review-prompt",
+                message: "Use the local review instructions from the prompt file.",
+              },
+              {
                 type: "response_item",
                 id: "review-action",
                 payload: {
