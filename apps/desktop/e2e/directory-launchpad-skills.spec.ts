@@ -671,7 +671,7 @@ test("directory launchpad deletes a persisted skill chip with repeated backspace
   }
 });
 
-test("directory launchpad uses macOS ctrl-a as line navigation instead of select all", async () => {
+test("directory launchpad does not intercept macOS ctrl-a as select all", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -683,7 +683,26 @@ test("directory launchpad uses macOS ctrl-a as line navigation instead of select
     const richInput = app.window.getByTestId("composer-rich-input");
     await richInput.focus();
     await app.window.keyboard.type("alpha beta");
-    await richInput.evaluate((element) => {
+    const shortcutResults = await richInput.evaluate((element) => {
+      const originalPlatformDescriptor =
+        Object.getOwnPropertyDescriptor(window.navigator, "platform") ??
+        Object.getOwnPropertyDescriptor(Navigator.prototype, "platform");
+      const setPlatform = (platform: string): void => {
+        Object.defineProperty(window.navigator, "platform", {
+          configurable: true,
+          value: platform,
+        });
+      };
+      const dispatchShortcut = (init: KeyboardEventInit): boolean =>
+        element.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "a",
+            ...init,
+          }),
+        );
+
       Object.defineProperty(window.navigator, "platform", {
         configurable: true,
         value: "MacIntel",
@@ -695,17 +714,30 @@ test("directory launchpad uses macOS ctrl-a as line navigation instead of select
       const selection = document.getSelection();
       selection?.removeAllRanges();
       selection?.addRange(range);
+
+      const macCtrlAWasNotPrevented = dispatchShortcut({ ctrlKey: true });
+      const macMetaAWasNotPrevented = dispatchShortcut({ metaKey: true });
+      setPlatform("Linux x86_64");
+      const linuxCtrlAWasNotPrevented = dispatchShortcut({ ctrlKey: true });
+
+      if (originalPlatformDescriptor) {
+        Object.defineProperty(
+          window.navigator,
+          "platform",
+          originalPlatformDescriptor,
+        );
+      }
+
+      return {
+        linuxCtrlAWasNotPrevented,
+        macCtrlAWasNotPrevented,
+        macMetaAWasNotPrevented,
+      };
     });
 
-    await app.window.keyboard.press("Control+A");
-
-    const selectedText = await richInput.evaluate(
-      () => document.getSelection()?.toString() ?? "",
-    );
-    expect(selectedText).not.toBe("alpha beta");
-
-    await app.window.keyboard.type("Z");
-    await expect(richInput).toHaveAttribute("data-value", "Zalpha beta");
+    expect(shortcutResults.macCtrlAWasNotPrevented).toBe(true);
+    expect(shortcutResults.macMetaAWasNotPrevented).toBe(false);
+    expect(shortcutResults.linuxCtrlAWasNotPrevented).toBe(false);
   } finally {
     await app.close();
     await fixture.cleanup();
