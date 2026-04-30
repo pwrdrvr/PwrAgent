@@ -1662,9 +1662,11 @@ describe("ThreadView", () => {
           notification: AppServerNotification;
         }) => void)
       | undefined;
+    const onLiveTranscriptEntry = vi.fn();
 
     render(
       <ThreadView
+        activeTurnId="review-turn"
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[
           {
@@ -1723,6 +1725,7 @@ describe("ThreadView", () => {
         ]}
         clearPendingRequest={() => undefined}
         onLoadOlder={async () => undefined}
+        onLiveTranscriptEntry={onLiveTranscriptEntry}
         removeOptimisticMessage={(_id) => undefined}
       />
     );
@@ -1734,7 +1737,7 @@ describe("ThreadView", () => {
           method: "item/started",
           params: {
             threadId: "thread-2",
-            turnId: "turn-1",
+            turnId: "review-mode-turn",
             item: {
               id: "cmd-1",
               type: "commandExecution",
@@ -1756,7 +1759,7 @@ describe("ThreadView", () => {
           method: "item/commandExecution/outputDelta",
           params: {
             threadId: "thread-2",
-            turnId: "turn-1",
+            turnId: "review-mode-turn",
             itemId: "cmd-1",
             delta: "## main\n",
           },
@@ -1774,7 +1777,7 @@ describe("ThreadView", () => {
           method: "item/completed",
           params: {
             threadId: "thread-2",
-            turnId: "turn-1",
+            turnId: "review-mode-turn",
             item: {
               id: "cmd-1",
               type: "commandExecution",
@@ -1802,6 +1805,35 @@ describe("ThreadView", () => {
         ) ?? false
       ).length
     ).toBeGreaterThan(0);
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-2",
+            turnId: "review-mode-turn",
+            turn: {
+              id: "review-mode-turn",
+              status: "completed",
+              durationMs: 5_000,
+            },
+          },
+        } as AppServerNotification,
+      });
+    });
+
+    expect(onLiveTranscriptEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "live-tools-review-turn",
+        type: "activity",
+        turn: expect.objectContaining({
+          id: "review-turn",
+          status: "completed",
+        }),
+      })
+    );
   });
 
   it("renders live Codex tool names when command execution items lack a command string", async () => {

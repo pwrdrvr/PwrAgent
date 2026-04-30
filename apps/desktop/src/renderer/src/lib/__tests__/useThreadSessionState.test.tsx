@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import type { AppServerThreadActivityEntry } from "@pwragnt/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -157,6 +158,181 @@ describe("useThreadSessionState", () => {
       "user:Please fix transcript ordering.",
       "assistant:Transcript ordering is fixed.",
     ]);
+  });
+
+  it("keeps live protocol activity before hydrated review output after completion", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi
+      .fn()
+      .mockImplementationOnce(
+        async ({
+          backend,
+          threadId,
+        }: {
+          backend?: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [
+              {
+                type: "message" as const,
+                id: `${threadId}-message-1`,
+                role: "user" as const,
+                text: "Review the branch.",
+              },
+            ],
+            messages: [
+              {
+                id: `${threadId}-message-1`,
+                role: "user" as const,
+                text: "Review the branch.",
+              },
+            ],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        })
+      )
+      .mockImplementationOnce(
+        async ({
+          backend,
+          threadId,
+        }: {
+          backend?: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [
+              {
+                type: "message" as const,
+                id: `${threadId}-message-1`,
+                role: "user" as const,
+                text: "Review the branch.",
+              },
+              {
+                type: "review" as const,
+                id: "review-result",
+                review: "Review finding.",
+                turn: {
+                  id: "review-turn",
+                  status: "completed" as const,
+                  durationMs: 211_000,
+                },
+              },
+            ],
+            messages: [
+              {
+                id: `${threadId}-message-1`,
+                role: "user" as const,
+                text: "Review the branch.",
+              },
+            ],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        })
+      );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
+
+    const liveActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-tools-review-turn",
+      createdAt: 1_100,
+      summary: "Used 2 tools",
+      status: "in_progress",
+      details: [
+        {
+          id: "cmd-1",
+          kind: "read",
+          label: "Read SKILL.md",
+          status: "completed",
+        },
+      ],
+      turn: {
+        id: "review-turn",
+        status: "in_progress",
+        startedAt: 1_050,
+      },
+    };
+
+    act(() => {
+      result.current.upsertLiveTranscriptEntry(liveActivity);
+    });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "review-turn",
+            turn: {
+              id: "review-turn",
+              status: "completed",
+              output: [],
+              durationMs: 211_000,
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(result.current.entries.map((entry) => entry.id)).toEqual([
+        "thread-1-message-1",
+        "live-tools-review-turn",
+        "review-result",
+      ]);
+    });
+    expect(result.current.entries[1]).toMatchObject({
+      type: "activity",
+      summary: "Used 2 tools",
+      turn: {
+        id: "review-turn",
+        status: "completed",
+        durationMs: 211_000,
+      },
+    });
   });
 
   it("materializes a new thread in user-then-assistant order on completion", async () => {

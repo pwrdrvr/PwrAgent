@@ -130,6 +130,52 @@ function mergeItems<T extends { id: string }>(olderItems: T[], newerItems: T[]):
   return [...deduped.values()];
 }
 
+function isTerminalTurnEntry(entry: AppServerThreadEntry): boolean {
+  if (entry.type === "review") {
+    return true;
+  }
+
+  return (
+    entry.type === "message" &&
+    entry.role === "assistant" &&
+    entry.phase === "final"
+  );
+}
+
+function mergeTranscriptEntries(
+  responseEntries: AppServerThreadEntry[],
+  optimisticEntries: AppServerThreadEntry[]
+): AppServerThreadEntry[] {
+  const merged = [...responseEntries];
+
+  for (const optimisticEntry of optimisticEntries) {
+    const existingIndex = merged.findIndex((entry) => entry.id === optimisticEntry.id);
+    if (existingIndex !== -1) {
+      merged[existingIndex] = optimisticEntry;
+      continue;
+    }
+
+    const optimisticTurnId = optimisticEntry.turn?.id;
+    const shouldInsertBeforeTerminal =
+      Boolean(optimisticTurnId) && optimisticEntry.type !== "message";
+    const terminalIndex = shouldInsertBeforeTerminal
+      ? merged.findIndex(
+          (entry) =>
+            entry.turn?.id === optimisticTurnId && isTerminalTurnEntry(entry)
+        )
+      : -1;
+
+    if (terminalIndex !== -1) {
+      merged.splice(terminalIndex, 0, optimisticEntry);
+      continue;
+    }
+
+    merged.push(optimisticEntry);
+  }
+
+  return merged;
+}
+
 function buildEmptyResponse(params: {
   backend: NavigationThreadSummary["source"];
   threadId: NavigationThreadSummary["id"];
@@ -850,6 +896,7 @@ export function useThreadSessionState(params: {
   removeOptimisticMessage: (id: string) => void;
   response?: AppServerReadThreadResponse;
   setActiveTurnId: (turnId?: string) => void;
+  upsertLiveTranscriptEntry: (entry: AppServerThreadEntry) => void;
   updatePendingUserInput: (
     requestId: string,
     updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
@@ -1406,6 +1453,13 @@ export function useThreadSessionState(params: {
               pendingUserInput: undefined,
               response: nextResponse,
             });
+          const remainingOptimisticEntries = current.optimisticEntries
+            .filter((entry) => entry.type !== "message")
+            .map((entry) =>
+              entry.turn?.id === completedTurn?.id && completedTurn
+                ? { ...entry, turn: completedTurn }
+                : entry
+            );
 
           return {
             ...current,
@@ -1424,7 +1478,7 @@ export function useThreadSessionState(params: {
             lastTouchedAt: nextLastTouchedAt,
             needsHydrationAfterCompletion:
               !completedText || shouldHydrateUnknownPhaseAssistant,
-            optimisticEntries: [],
+            optimisticEntries: remainingOptimisticEntries,
             pendingAssistantMessage: undefined,
             pendingMcpInteraction: undefined,
             pendingRequest: undefined,
@@ -1678,6 +1732,23 @@ export function useThreadSessionState(params: {
     [thread, threadKey, updateSession]
   );
 
+  const upsertLiveTranscriptEntry = useCallback(
+    (entry: AppServerThreadEntry): void => {
+      if (!threadKey) {
+        return;
+      }
+
+      updateSession(threadKey, (current) => ({
+        ...current,
+        expectOwnUpdate: true,
+        interacted: true,
+        lastTouchedAt: Date.now(),
+        optimisticEntries: mergeItems(current.optimisticEntries, [entry]),
+      }));
+    },
+    [threadKey, updateSession]
+  );
+
   const setPendingStatusText = useCallback(
     (status?: string): void => {
       if (!threadKey) {
@@ -1831,7 +1902,7 @@ export function useThreadSessionState(params: {
 
   const entries = useMemo(
     () => {
-      const mergedEntries = mergeItems(
+      const mergedEntries = mergeTranscriptEntries(
         selectedSession?.response?.replay.entries ?? [],
         visibleOptimisticEntries
       );
@@ -1903,6 +1974,7 @@ export function useThreadSessionState(params: {
     removeOptimisticMessage,
     response: selectedSession?.response,
     setActiveTurnId,
+    upsertLiveTranscriptEntry,
     updatePendingUserInput,
     updatePendingMcpInteraction,
     setPendingStatusText,

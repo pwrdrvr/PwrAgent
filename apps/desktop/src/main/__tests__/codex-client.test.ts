@@ -1987,6 +1987,11 @@ describe("CodexAppServerClient", () => {
                 },
               },
               {
+                type: "userMessage",
+                id: "visible-review-steer",
+                message: "Also check the desktop renderer path.",
+              },
+              {
                 type: "response_item",
                 id: "review-action",
                 payload: {
@@ -2043,6 +2048,14 @@ describe("CodexAppServerClient", () => {
         turn,
       },
       {
+        type: "message",
+        id: "visible-review-steer",
+        role: "user",
+        text: "Also check the desktop renderer path.",
+        createdAt: 1_763_509_850_000,
+        turn,
+      },
+      {
         type: "review",
         id: "exited-review",
         review: reviewOutput.overall_explanation,
@@ -2051,7 +2064,13 @@ describe("CodexAppServerClient", () => {
         turn,
       },
     ]);
-    expect(replay.messages).toEqual([]);
+    expect(replay.messages).toEqual([
+      expect.objectContaining({
+        id: "visible-review-steer",
+        role: "user",
+        text: "Also check the desktop renderer path.",
+      }),
+    ]);
 
     await client.close();
   });
