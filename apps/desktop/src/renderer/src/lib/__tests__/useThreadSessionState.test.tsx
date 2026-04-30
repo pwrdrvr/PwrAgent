@@ -633,7 +633,6 @@ describe("useThreadSessionState", () => {
             turnId: "turn-1",
             itemId: "message-1",
             delta: "First commentary.",
-            phase: "commentary",
           },
         },
       });
@@ -662,7 +661,6 @@ describe("useThreadSessionState", () => {
             turnId: "turn-1",
             itemId: "message-2",
             delta: "The first scan shows this is a deep brainstorm.",
-            phase: "commentary",
           },
         },
       });
@@ -714,6 +712,11 @@ describe("useThreadSessionState", () => {
       "activity:Explored 1 item",
       "message:Final answer.",
     ]);
+    expect(
+      result.current.entries
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.phase)
+    ).toEqual(["commentary", "commentary", "final"]);
   });
 
   it("preserves session-owned live activity across thread switches and hydration", async () => {

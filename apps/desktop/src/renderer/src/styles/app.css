@@ -1478,6 +1478,10 @@ textarea {
   color: var(--text-muted);
 }
 
+.transcript-work-phase-group__content[hidden] {
+  display: none !important;
+}
+
 .transcript-work-phase-group__content:not([hidden]) {
   display: contents;
 }

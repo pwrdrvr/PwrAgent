@@ -1701,7 +1701,11 @@ export function useThreadSessionState(params: {
               .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
               .map((entry) =>
                 entry.turn?.id === completedTurn?.id
-                  ? { ...entry, turn: completedTurn }
+                  ? withTurnMetadataAndPhase(
+                    entry,
+                    completedTurn,
+                    unphasedAssistantCompletionPhase
+                  )
                   : entry
               ),
             ...(current.pendingAssistantMessage

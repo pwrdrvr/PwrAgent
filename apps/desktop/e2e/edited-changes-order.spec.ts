@@ -28,6 +28,7 @@ test("expanded edited changes stay in transcript order", async () => {
 
     const activityToggle = app.window.getByRole("button", { name: /Edited 1 file/i });
     await activityToggle.click();
+    await app.window.getByRole("button", { name: /Update TranscriptList.tsx/i }).click();
     await expect(app.window.getByText("const b = 2;")).toBeVisible();
     await expect(app.window.getByText("const c = 3;")).toBeVisible();
     await expect(app.window.getByText("2 unmodified lines skipped")).toHaveCount(0);
