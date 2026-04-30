@@ -487,6 +487,8 @@ describe("MessagingController", () => {
   it("routes completed assistant item text to active thread bindings", async () => {
     const harness = await createHarness();
     await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("who are you"));
+    harness.delivered.length = 0;
 
     await harness.controller.handleBackendEvent({
       backend: "codex",
@@ -504,6 +506,11 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+    });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "message",
       role: "assistant",
