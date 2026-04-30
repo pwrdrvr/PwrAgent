@@ -4239,12 +4239,11 @@ textarea {
   flex-direction: column;
   gap: 4px;
   padding: 10px 12px;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
   color: var(--text-primary);
   cursor: pointer;
-  outline: 0;
   text-align: left;
 }
 
@@ -4253,22 +4252,20 @@ textarea {
 }
 
 .composer__autocomplete-option.is-active {
-  background:
-    linear-gradient(
-      90deg,
-      rgba(255, 138, 31, 0.28),
-      rgba(255, 138, 31, 0.16) 46%,
-      rgba(255, 138, 31, 0.08)
-    );
-  box-shadow:
-    inset 4px 0 0 var(--accent),
-    inset 0 0 0 1px var(--accent-border);
-  outline: 2px solid rgba(255, 179, 92, 0.65);
-  outline-offset: -2px;
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
 }
 
-.composer__autocomplete-option.is-active .composer__autocomplete-title {
-  color: var(--accent-bright);
+.composer__autocomplete-option.is-active::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 5px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  content: "";
+  pointer-events: none;
 }
 
 .composer__autocomplete-title {
