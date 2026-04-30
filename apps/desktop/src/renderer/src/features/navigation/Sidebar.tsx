@@ -19,6 +19,12 @@ import { DirectoriesList } from "./DirectoriesList";
 import { InboxList } from "./InboxList";
 import { RecentsList } from "./RecentsList";
 
+type ThreadContextMenuPosition = {
+  x: number;
+  y: number;
+  anchorTop?: number;
+};
+
 type SidebarProps = {
   backends: BackendSummary[];
   browseMode: BrowseMode;
@@ -53,10 +59,12 @@ type SidebarProps = {
 };
 
 export function Sidebar(props: SidebarProps) {
+  const contextMenuRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const [contextMenu, setContextMenu] = useState<
     | {
-        position: { x: number; y: number };
+        requestedPosition: ThreadContextMenuPosition;
+        position?: { x: number; y: number };
         thread: NavigationThreadSummary;
       }
     | undefined
@@ -133,6 +141,35 @@ export function Sidebar(props: SidebarProps) {
   }, [contextMenu]);
 
   useLayoutEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+
+    const menu = contextMenuRef.current;
+    if (!menu) {
+      return;
+    }
+
+    const menuRect = menu.getBoundingClientRect();
+    const nextPosition = placeThreadContextMenu(
+      contextMenu.requestedPosition,
+      menuRect
+    );
+
+    if (
+      contextMenu.position?.x === nextPosition.x &&
+      contextMenu.position.y === nextPosition.y
+    ) {
+      return;
+    }
+
+    setContextMenu({
+      ...contextMenu,
+      position: nextPosition,
+    });
+  }, [contextMenu]);
+
+  useLayoutEffect(() => {
     if (!renameThread) {
       return;
     }
@@ -144,10 +181,10 @@ export function Sidebar(props: SidebarProps) {
 
   const openThreadContextMenu = (
     thread: NavigationThreadSummary,
-    position: { x: number; y: number }
+    position: ThreadContextMenuPosition
   ): void => {
     setRenameThread(undefined);
-    setContextMenu({ position, thread });
+    setContextMenu({ requestedPosition: position, thread });
   };
 
   const requestRenameFromContextMenu = (thread: NavigationThreadSummary): void => {
@@ -332,11 +369,13 @@ export function Sidebar(props: SidebarProps) {
 
       {contextMenu ? (
         <div
+          ref={contextMenuRef}
           className="thread-context-menu"
           role="menu"
           style={{
-            left: contextMenu.position.x,
-            top: contextMenu.position.y,
+            left: contextMenu.position?.x ?? contextMenu.requestedPosition.x,
+            top: contextMenu.position?.y ?? contextMenu.requestedPosition.y,
+            visibility: contextMenu.position ? undefined : "hidden",
           }}
           onClick={(event) => event.stopPropagation()}
         >
@@ -471,6 +510,34 @@ export function Sidebar(props: SidebarProps) {
 
     </aside>
   );
+}
+
+function placeThreadContextMenu(
+  requestedPosition: ThreadContextMenuPosition,
+  menuRect: DOMRect
+): { x: number; y: number } {
+  const viewportMargin = 8;
+  const triggerGap = 4;
+  const menuWidth = menuRect.width || 168;
+  const menuHeight = menuRect.height;
+  const maxX = window.innerWidth - menuWidth - viewportMargin;
+  const maxY = window.innerHeight - menuHeight - viewportMargin;
+
+  const belowTop = requestedPosition.y;
+  const wouldOverflowBottom =
+    menuHeight > 0 && belowTop + menuHeight + viewportMargin > window.innerHeight;
+  const flippedTop =
+    requestedPosition.anchorTop !== undefined
+      ? requestedPosition.anchorTop - menuHeight - triggerGap
+      : requestedPosition.y - menuHeight - triggerGap;
+
+  return {
+    x: Math.max(viewportMargin, Math.min(requestedPosition.x, maxX)),
+    y: Math.max(
+      viewportMargin,
+      Math.min(wouldOverflowBottom ? flippedTop : belowTop, maxY)
+    ),
+  };
 }
 
 function RuntimeIdentityButton(props: {
