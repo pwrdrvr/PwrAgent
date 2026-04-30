@@ -16,6 +16,7 @@ import {
   type DesktopMessagingConfig,
 } from "./messaging-config";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
+import { createDiscordAdapter } from "./discord-adapter";
 import { createTelegramAdapter } from "./telegram-adapter";
 
 export type DesktopMessagingAdapter = {
@@ -143,5 +144,6 @@ function createConfiguredAdapters(params: {
 }): DesktopMessagingAdapter[] {
   return [
     ...(params.config.telegram ? [createTelegramAdapter(params.config.telegram)] : []),
+    ...(params.config.discord ? [createDiscordAdapter(params.config.discord)] : []),
   ];
 }

@@ -38,6 +38,7 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
   readonly channel = "telegram" as const;
 
   private callbackBindings = new Map<string, TelegramCallbackBinding>();
+  private defaultApi?: TelegramApi;
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private nextOffset: number | undefined;
   private stopped = true;
@@ -400,7 +401,8 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
   }
 
   private get api(): TelegramApi {
-    return this.options.api ?? new TelegramApi({ botToken: this.options.config.botToken });
+    this.defaultApi ??= new TelegramApi({ botToken: this.options.config.botToken });
+    return this.options.api ?? this.defaultApi;
   }
 
   private now(): number {

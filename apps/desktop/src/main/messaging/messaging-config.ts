@@ -8,6 +8,8 @@ export const DISCORD_APPLICATION_ID_ENV =
   "PWRAGNT_MESSAGING_DISCORD_APPLICATION_ID";
 export const DISCORD_AUTHORIZED_USER_IDS_ENV =
   "PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS";
+export const DISCORD_MESSAGE_CONTENT_INTENT_ENV =
+  "PWRAGNT_MESSAGING_DISCORD_MESSAGE_CONTENT_INTENT";
 
 type MessagingChannelConfigBase = {
   authorizedActorIds: string[];
@@ -23,6 +25,7 @@ export type DiscordMessagingConfig = MessagingChannelConfigBase & {
   applicationId?: string;
   botToken: string;
   channel: "discord";
+  messageContentIntent?: boolean;
 };
 
 export type DesktopMessagingConfig = {
@@ -55,6 +58,9 @@ export function loadDesktopMessagingConfig(
             botToken: discordBotToken,
             applicationId: readEnv(env, DISCORD_APPLICATION_ID_ENV),
             authorizedActorIds: discordAuthorizedActorIds,
+            messageContentIntent: parseBoolean(
+              env[DISCORD_MESSAGE_CONTENT_INTENT_ENV],
+            ),
           },
         }
       : {}),
@@ -78,6 +84,7 @@ export function redactDesktopMessagingConfig(
           applicationId: config.discord.applicationId,
           botToken: "[REDACTED]",
           authorizedActorCount: config.discord.authorizedActorIds.length,
+          messageContentIntent: config.discord.messageContentIntent,
         }
       : undefined,
   };
@@ -100,4 +107,12 @@ function parseList(value: string | undefined): string[] {
         .filter(Boolean),
     ),
   ];
+}
+
+function parseBoolean(value: string | undefined): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }

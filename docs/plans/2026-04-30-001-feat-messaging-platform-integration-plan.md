@@ -446,7 +446,7 @@ flowchart TB
 **Verification:**
 - Telegram can complete bind, thread picker navigation, free-form turn routing, approval/questionnaire actions, markdown/code rendering, and image response delivery against mocked Bot API tests plus manual smoke validation.
 
-- [ ] **Unit 7: Implement the Discord Gateway/REST adapter**
+- [x] **Unit 7: Implement the Discord Gateway/REST adapter**
 
 **Goal:** Add a direct Discord adapter that supports Gateway inbound events, REST message delivery, components/interactions, attachments, markdown-safe content, interaction acknowledgement, and binding commands.
 
