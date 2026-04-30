@@ -51,6 +51,22 @@ export class MessagingStore {
     );
   }
 
+  async findActiveBindingsForThread(params: {
+    backend: MessagingBindingRecord["backend"];
+    threadId: MessagingBindingRecord["threadId"];
+  }): Promise<MessagingBindingRecord[]> {
+    return await this.withReadData((data) =>
+      Object.values(data.bindings)
+        .filter(
+          (binding) =>
+            !binding.revokedAt &&
+            binding.backend === params.backend &&
+            binding.threadId === params.threadId,
+        )
+        .map((binding) => structuredClone(binding)),
+    );
+  }
+
   async revokeBinding(params: {
     bindingId: string;
     revokedAt?: number;
@@ -100,6 +116,28 @@ export class MessagingStore {
 
       return structuredClone(intent);
     });
+  }
+
+  async findActivePendingIntentForChannel(params: {
+    actorId: string;
+    channel: MessagingChannelRef;
+    now?: number;
+  }): Promise<MessagingPendingIntentRecord | undefined> {
+    const channelKey = buildMessagingConversationKey(params.channel);
+    const now = params.now ?? Date.now();
+    return await this.withReadData((data) =>
+      cloneOptional(
+        Object.values(data.pendingIntents)
+          .filter(
+            (intent) =>
+              intent.expiresAt > now &&
+              intent.allowedActorIds.includes(params.actorId) &&
+              intent.channel &&
+              buildMessagingConversationKey(intent.channel) === channelKey,
+          )
+          .sort((a, b) => b.createdAt - a.createdAt)[0],
+      ),
+    );
   }
 
   async deletePendingIntent(id: string): Promise<void> {

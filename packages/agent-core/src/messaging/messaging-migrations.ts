@@ -80,7 +80,6 @@ function isMessagingPendingIntentRecord(
   return Boolean(
     record &&
       typeof record.id === "string" &&
-      typeof record.bindingId === "string" &&
       intent &&
       typeof intent.id === "string" &&
       typeof intent.kind === "string" &&

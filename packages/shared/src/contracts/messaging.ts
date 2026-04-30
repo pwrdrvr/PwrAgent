@@ -210,6 +210,13 @@ export type MessagingBaseSurfaceIntent = {
   bindingId?: string;
   createdAt: number;
   fallbackText?: string;
+  requestContext?: {
+    backend: AppServerBackendKind;
+    method: string;
+    requestId: string;
+    threadId: ThreadIdentifier;
+    turnId?: string;
+  };
   targetSurface?: MessagingSurfaceRef;
 };
 
@@ -375,7 +382,8 @@ export type MessagingBindingRecord = {
 
 export type MessagingPendingIntentRecord = {
   id: string;
-  bindingId: string;
+  bindingId?: string;
+  channel?: MessagingChannelRef;
   intent: MessagingSurfaceIntent;
   allowedActorIds: string[];
   createdAt: number;

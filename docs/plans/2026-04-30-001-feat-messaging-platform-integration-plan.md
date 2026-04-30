@@ -266,7 +266,7 @@ flowchart TB
 **Verification:**
 - Binding and pending state survive process restart, stale state expires, and store writes remain atomic under concurrent update pressure.
 
-- [ ] **Unit 3: Build the channel-agnostic messaging controller with a fake adapter**
+- [x] **Unit 3: Build the channel-agnostic messaging controller with a fake adapter**
 
 **Goal:** Implement the core workflow engine that handles inbound channel events, authorization, project/thread navigation, binding, free-form text routing, pending interaction resolution, and outbound semantic intents without platform-specific branches.
 
@@ -315,7 +315,7 @@ flowchart TB
 **Verification:**
 - The fake adapter can complete project/thread selection, binding, text routing, and pending request workflows with no channel-specific code in the controller.
 
-- [ ] **Unit 4: Add deterministic-first text fallback and optional light mapper**
+- [x] **Unit 4: Add deterministic-first text fallback and optional light mapper**
 
 **Goal:** Normalize free-form replies during pending prompts into control actions when likely, or pass them through as new user instructions when not.
 

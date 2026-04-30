@@ -63,6 +63,28 @@ export {
   type MessagingStoreData,
 } from "./messaging/messaging-migrations.js";
 export {
+  MessagingController,
+  type MessagingControllerOptions,
+} from "./messaging/messaging-controller.js";
+export type {
+  MessagingAdapter,
+  MessagingBackendBridge,
+  MessagingBackendEventListener,
+  MessagingInboundListener,
+} from "./messaging/messaging-adapter.js";
+export {
+  DeterministicInteractionMapper,
+  actionsForIntent,
+} from "./messaging/deterministic-interaction-mapper.js";
+export {
+  ModelInteractionMapper,
+  type ModelInteractionMapperClient,
+} from "./messaging/model-interaction-mapper.js";
+export type {
+  MessagingInteractionMapper,
+  MessagingInteractionMapperResult,
+} from "./messaging/interaction-mapper.js";
+export {
   asObjectArguments,
   readOptionalBoolean,
   readOptionalPositiveInteger,
