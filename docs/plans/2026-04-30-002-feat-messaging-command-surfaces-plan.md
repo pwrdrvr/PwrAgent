@@ -350,7 +350,7 @@ flowchart TB
 **Verification:**
 - A bound Telegram chat has one durable status card, not a trail of duplicated status messages, while still falling back safely if edits or pins fail.
 
-- [ ] **Unit 5: Implement status action callbacks through the backend bridge**
+- [x] **Unit 5: Implement status action callbacks through the backend bridge**
 
 **Goal:** Make the status card controls actually change binding/thread behavior and repaint the same card or subview.
 

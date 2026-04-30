@@ -891,16 +891,7 @@ export class MessagingController {
       return;
     }
     if (actionId === "status:compact") {
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("status-compact-unavailable"),
-          createdAt: this.now(),
-          title: "Compact unavailable",
-          body: "Compaction is not exposed through this messaging bridge yet. Use /status to refresh this card.",
-        }),
-        binding,
-        event,
-      );
+      await this.compactThread(binding, event);
       return;
     }
 
@@ -1075,6 +1066,42 @@ export class MessagingController {
       activeTurn: {
         ...activeTurn,
         status: "interrupted",
+        updatedAt: this.now(),
+      },
+      updatedAt: this.now(),
+    });
+    await this.renderBindingStatus(updatedBinding, event);
+  }
+
+  private async compactThread(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    if (!this.options.backend.compactThread) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-compact-unavailable"),
+          createdAt: this.now(),
+          title: "Compact unavailable",
+          body: "This backend does not expose thread compaction through messaging.",
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return;
+    }
+
+    const compacted = await this.options.backend.compactThread({
+      backend: binding.backend,
+      threadId: binding.threadId,
+    });
+    const updatedBinding = await this.options.store.upsertBinding({
+      ...binding,
+      activeTurn: {
+        turnId: compacted.turnId,
+        status: "working",
+        startedAt: this.now(),
         updatedAt: this.now(),
       },
       updatedAt: this.now(),

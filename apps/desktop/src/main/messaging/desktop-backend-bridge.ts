@@ -1,5 +1,7 @@
 import type {
   AgentEvent,
+  CompactThreadRequest,
+  CompactThreadResponse,
   GetNavigationSnapshotRequest,
   InterruptTurnRequest,
   InterruptTurnResponse,
@@ -59,6 +61,10 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {
     return await this.registry.startThread(request);
+  }
+
+  async compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse> {
+    return await this.registry.compactThread(request);
   }
 
   async interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse> {

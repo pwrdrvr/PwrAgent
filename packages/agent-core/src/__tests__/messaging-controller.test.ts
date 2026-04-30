@@ -611,10 +611,29 @@ describe("MessagingController", () => {
       text: expect.stringContaining("Turn: interrupted"),
     });
   });
+
+  it("starts compaction through the backend bridge", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:compact" }),
+    );
+
+    expect(harness.compactThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: working"),
+    });
+  });
 });
 
 async function createHarness(): Promise<{
   controller: MessagingController;
+  compactThread: ReturnType<typeof vi.fn>;
   delivered: MessagingSurfaceIntent[];
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
   interruptTurn: ReturnType<typeof vi.fn>;
@@ -655,6 +674,11 @@ async function createHarness(): Promise<{
     threadId: request.threadId,
     turnId: "turn-1",
   }));
+  const compactThread = vi.fn(async (request) => ({
+    ...request,
+    turnId: "compact-turn-1",
+    itemId: "compact-item-1",
+  }));
   const interruptTurn = vi.fn(async (request) => request);
   const setThreadExecutionMode = vi.fn(async (request) => request);
   const setThreadModelSettings = vi.fn(async (request) => request);
@@ -669,6 +693,7 @@ async function createHarness(): Promise<{
     requestId: request.requestId,
   }));
   const backend: MessagingBackendBridge = {
+    compactThread,
     getNavigationSnapshot,
     interruptTurn,
     listBackends,
@@ -687,6 +712,7 @@ async function createHarness(): Promise<{
       now: () => 1000,
       store,
     }),
+    compactThread,
     delivered,
     getNavigationSnapshot,
     interruptTurn,

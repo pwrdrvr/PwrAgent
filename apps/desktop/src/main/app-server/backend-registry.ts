@@ -174,6 +174,9 @@ type BackendClient = {
     threadId: string;
     turnId: string;
   }): Promise<{ threadId: string; turnId: string }>;
+  compactThread?(params: {
+    threadId: string;
+  }): Promise<{ threadId: string; turnId: string; itemId?: string }>;
   steerTurn?(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
@@ -1432,6 +1435,39 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: result.threadId,
       turnId: result.turnId,
+    };
+  }
+
+  async compactThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<{
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+    itemId?: string;
+  }> {
+    const compactWithClient = async (
+      client: BackendClient,
+    ): Promise<{ threadId: string; turnId: string; itemId?: string }> => {
+      if (!client.compactThread) {
+        throw new Error("Selected backend does not support thread compaction");
+      }
+      return await client.compactThread({
+        threadId: params.threadId,
+      });
+    };
+
+    const result =
+      params.backend === "codex"
+        ? await this.withCodexThreadClient(params.threadId, compactWithClient)
+        : await compactWithClient(this.grokClient);
+
+    return {
+      backend: params.backend,
+      threadId: result.threadId,
+      turnId: result.turnId,
+      itemId: result.itemId,
     };
   }
 

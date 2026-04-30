@@ -1,5 +1,7 @@
 import type {
   AgentEvent,
+  CompactThreadRequest,
+  CompactThreadResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
   GetNavigationSnapshotRequest,
@@ -31,6 +33,7 @@ export type MessagingBackendBridge = {
   ): Promise<NavigationSnapshot>;
   startThread?(request: StartThreadRequest): Promise<StartThreadResponse>;
   startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
+  compactThread?(request: CompactThreadRequest): Promise<CompactThreadResponse>;
   interruptTurn?(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
   listBackends?(request?: ListBackendsRequest): Promise<ListBackendsResponse>;
   setThreadExecutionMode?(

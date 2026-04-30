@@ -293,6 +293,9 @@ class MockBackendClient {
     target: AppServerReviewTarget;
     delivery?: "inline" | "detached";
   };
+  lastCompactThreadParams?: {
+    threadId: string;
+  };
   lastArchiveThreadParams?: {
     threadId: string;
   };
@@ -522,6 +525,17 @@ class MockBackendClient {
     }
 
     return { threadId: params.threadId, turnId: params.expectedTurnId };
+  }
+
+  async compactThread(params: {
+    threadId: string;
+  }): Promise<{ threadId: string; turnId: string; itemId: string }> {
+    this.lastCompactThreadParams = params;
+    return {
+      threadId: params.threadId,
+      turnId: "compact-turn-1",
+      itemId: "compact-item-1",
+    };
   }
 
   async emit(notification: AppServerNotification): Promise<void> {
@@ -1769,6 +1783,41 @@ describe("DesktopBackendRegistry", () => {
       sandbox: "danger-full-access",
     });
     expect(codexFullAccessClient.lastSetThreadPermissionsParams).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("starts compaction through the current Codex thread owner", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read", "thread/resume", "thread/compact/start"] },
+    });
+    const codexFullAccessClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read", "thread/resume", "thread/compact/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+
+    const response = await registry.compactThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "compact-turn-1",
+      itemId: "compact-item-1",
+    });
+    expect(codexClient.lastCompactThreadParams).toEqual({
+      threadId: "thread-1",
+    });
+    expect(codexFullAccessClient.lastCompactThreadParams).toBeUndefined();
 
     await registry.close();
   });

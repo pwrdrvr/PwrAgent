@@ -76,6 +76,18 @@ export type InterruptTurnResponse = {
   turnId: string;
 };
 
+export type CompactThreadRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type CompactThreadResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId: string;
+  itemId?: string;
+};
+
 export type SteerTurnRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

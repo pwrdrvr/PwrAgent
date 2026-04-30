@@ -4126,6 +4126,40 @@ export class CodexAppServerClient {
     }
   }
 
+  async compactThread(params: {
+    threadId: string;
+  }): Promise<{ threadId: string; turnId: string; itemId?: string }> {
+    await this.ensureInitialized();
+
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads({
+        threadId: params.threadId,
+      }),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    }).catch(() => undefined);
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/compact/start"],
+      payloads: [
+        {
+          threadId: params.threadId,
+        },
+      ],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    const threadId = extractThreadIdFromValue(result) ?? params.threadId;
+    const turnId = extractTurnIdFromValue(result) ?? `compact:${threadId}`;
+    return {
+      threadId,
+      turnId,
+      itemId: extractStringProperty(result, "itemId", "item_id"),
+    };
+  }
+
   async steerTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
