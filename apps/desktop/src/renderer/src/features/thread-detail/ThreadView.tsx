@@ -1436,6 +1436,9 @@ export function ThreadView(props: ThreadViewProps) {
           ? event.notification.params.threadId
           : undefined;
 
+      // Threadless MCP status is ambient session state. Until the protocol gives
+      // it a thread owner, show it where the user is looking without treating it
+      // as persisted thread history.
       const isGlobalMcpStatus =
         notificationThreadId == null &&
         (event.notification.method === "mcpServer/startupStatus/updated" ||
