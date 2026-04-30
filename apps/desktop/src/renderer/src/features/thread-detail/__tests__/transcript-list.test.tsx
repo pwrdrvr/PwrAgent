@@ -1284,7 +1284,7 @@ describe("TranscriptList", () => {
     expect(list.scrollTop).toBe(72);
   });
 
-  it("restores a generically scrolled glued thread back to the bottom", () => {
+  it("restores a scrolled-away thread to its saved viewport", () => {
     const { rerender } = render(
       <TranscriptList
         entries={[
@@ -1352,7 +1352,7 @@ describe("TranscriptList", () => {
       />
     );
 
-    expect(list.scrollTop).toBe(480);
+    expect(list.scrollTop).toBe(60);
   });
 
   it("does not re-arm auto-scroll while a cached transcript is refreshing", () => {
@@ -1675,7 +1675,7 @@ describe("TranscriptList", () => {
     expect(list.scrollTop).toBe(1340);
   });
 
-  it("does not unglue from generic scroll events while following the bottom", () => {
+  it("stops following the bottom as soon as the reader scrolls away", () => {
     const entries = Array.from({ length: 24 }, (_, index) => ({
       type: "message" as const,
       id: `generic-scroll-message-${index + 1}`,
@@ -1720,7 +1720,65 @@ describe("TranscriptList", () => {
       />
     );
 
-    expect(list.scrollTop).toBe(880);
+    expect(list.scrollTop).toBe(120);
+  });
+
+  it("does not pull the reader back down when a streamed assistant message grows after scroll-away", () => {
+    const entries = Array.from({ length: 24 }, (_, index) => ({
+      type: "message" as const,
+      id: `stream-scroll-message-${index + 1}`,
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      text: `Stream scroll transcript message ${index + 1}`
+    }));
+    scrollHeight = 720;
+    const { rerender } = render(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "assistant-stream-scroll-away",
+          role: "assistant",
+          phase: "final",
+          text: "Streaming starts."
+        }}
+        pendingStatusText="Thinking"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 480;
+    fireEvent.scroll(list);
+
+    list.scrollTop = 120;
+    fireEvent.scroll(list);
+
+    scrollHeight = 920;
+    rerender(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "assistant-stream-scroll-away",
+          role: "assistant",
+          phase: "final",
+          text: [
+            "Streaming starts.",
+            "More text arrived while the reader was inspecting older transcript content."
+          ].join(" ")
+        }}
+        pendingStatusText="Thinking"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(120);
   });
 
   it("reglues and scrolls to bottom when a send request arrives", () => {
@@ -1778,6 +1836,54 @@ describe("TranscriptList", () => {
     );
 
     expect(list.scrollTop).toBe(840);
+  });
+
+  it("does not reuse a consumed reglue request after the reader scrolls away", () => {
+    const entries = Array.from({ length: 20 }, (_, index) => ({
+      type: "message" as const,
+      id: `consumed-reglue-message-${index + 1}`,
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      text: `Consumed reglue transcript message ${index + 1}`
+    }));
+    scrollHeight = 720;
+    const { rerender } = render(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        reglueRequestKey={1}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    expect(list.scrollTop).toBe(720);
+
+    list.scrollTop = 120;
+    fireEvent.scroll(list);
+
+    scrollHeight = 920;
+    rerender(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "consumed-reglue-stream",
+          role: "assistant",
+          phase: "final",
+          text: "Streaming should not reuse the old send-time reglue request."
+        }}
+        pendingStatusText="Thinking"
+        reglueRequestKey={1}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(list.scrollTop).toBe(120);
   });
 
   it("keeps the bottom pinned when rendered content grows after layout", () => {
