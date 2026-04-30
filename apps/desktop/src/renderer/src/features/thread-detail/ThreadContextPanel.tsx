@@ -7,7 +7,9 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
+  type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import type {
   BackendSummary,
   NavigationThreadSummary,
@@ -234,10 +236,17 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                           onCopy={handleCopyPath}
                           onShowTooltip={showRailTooltip}
                         />
-                        <span aria-hidden="true" className="context-list__icon">
-                          {directory.kind === "worktree" ? "🔀" : "📁"}
-                        </span>
-                        {directory.label}
+                        <TooltipValue
+                          label={`Path for ${directory.label}`}
+                          value={directory.path}
+                          onBlur={hideRailTooltip}
+                          onShowTooltip={showRailTooltip}
+                        >
+                          <span aria-hidden="true" className="context-list__icon">
+                            {directory.kind === "worktree" ? "🔀" : "📁"}
+                          </span>
+                          {directory.label}
+                        </TooltipValue>
                       </div>
                       <div className="context-list__actions">
                         {canRestore && snapshot ? (
@@ -263,7 +272,16 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                             onCopy={handleCopyPath}
                             onShowTooltip={showRailTooltip}
                           />
-                          {snapshot?.state === "archived" ? "archived" : directory.kind}
+                          <TooltipValue
+                            label={`Path for ${
+                              snapshot?.state === "archived" ? "archived" : directory.kind
+                            } ${directory.label}`}
+                            value={worktreePath}
+                            onBlur={hideRailTooltip}
+                            onShowTooltip={showRailTooltip}
+                          >
+                            {snapshot?.state === "archived" ? "archived" : directory.kind}
+                          </TooltipValue>
                         </span>
                       </div>
                     </li>
@@ -282,10 +300,17 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                         onCopy={handleCopyPath}
                         onShowTooltip={showRailTooltip}
                       />
-                      <span aria-hidden="true" className="context-list__icon">
-                        📁
-                      </span>
-                      {pathBaseName(props.thread.projectKey)}
+                      <TooltipValue
+                        label="Recorded working directory path"
+                        value={props.thread.projectKey!}
+                        onBlur={hideRailTooltip}
+                        onShowTooltip={showRailTooltip}
+                      >
+                        <span aria-hidden="true" className="context-list__icon">
+                          📁
+                        </span>
+                        {pathBaseName(props.thread.projectKey)}
+                      </TooltipValue>
                     </div>
                     <span className="context-list__meta">
                       <CopyValueButton
@@ -295,7 +320,14 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                         onCopy={handleCopyPath}
                         onShowTooltip={showRailTooltip}
                       />
-                      missing
+                      <TooltipValue
+                        label="Missing working directory path"
+                        value={props.thread.projectKey!}
+                        onBlur={hideRailTooltip}
+                        onShowTooltip={showRailTooltip}
+                      >
+                        missing
+                      </TooltipValue>
                     </span>
                   </li>
                 </ul>
@@ -481,31 +513,37 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         </div>
       ) : null}
 
-      {tooltip ? (
-        <div
-          ref={tooltipRef}
-          className="context-rail__tooltip"
-          role="tooltip"
-          style={{
-            left: tooltip.left,
-            top: tooltip.top,
-            visibility: tooltip.left === undefined ? "hidden" : undefined,
-          }}
-        >
-          {tooltip.text}
-        </div>
-      ) : null}
+      {tooltip && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={tooltipRef}
+              className="context-rail__tooltip"
+              role="tooltip"
+              style={{
+                left: tooltip.left,
+                top: tooltip.top,
+                visibility: tooltip.left === undefined ? "hidden" : undefined,
+              }}
+            >
+              {tooltip.text}
+            </div>,
+            document.body
+          )
+        : null}
     </aside>
   );
 
   function showRailTooltip(
     event: FocusEvent<HTMLElement> | MouseEvent<HTMLElement>,
     path: string,
-    maxLength?: number
+    maxLength?: number,
+    copyHint = true
   ): void {
     const rect = event.currentTarget.getBoundingClientRect();
     setTooltip({
-      text: formatCopyTooltip(path, maxLength),
+      text: copyHint
+        ? formatCopyTooltip(path, maxLength)
+        : formatTooltipValue(path, maxLength),
       targetBottom: rect.bottom,
       targetCenter: rect.left + rect.width / 2,
       targetTop: rect.top,
@@ -529,7 +567,8 @@ function CopyValueButton(props: {
   onShowTooltip: (
     event: FocusEvent<HTMLElement> | MouseEvent<HTMLElement>,
     value: string,
-    maxLength?: number
+    maxLength?: number,
+    copyHint?: boolean
   ) => void;
   value: string;
 }) {
@@ -555,6 +594,33 @@ function CopyValueButton(props: {
   );
 }
 
+function TooltipValue(props: {
+  children: ReactNode;
+  label: string;
+  onBlur: () => void;
+  onShowTooltip: (
+    event: FocusEvent<HTMLElement> | MouseEvent<HTMLElement>,
+    value: string,
+    maxLength?: number,
+    copyHint?: boolean
+  ) => void;
+  value: string;
+}) {
+  return (
+    <span
+      aria-label={props.label}
+      className="context-tooltip-value"
+      tabIndex={0}
+      onBlur={props.onBlur}
+      onFocus={(event) => props.onShowTooltip(event, props.value, undefined, false)}
+      onMouseEnter={(event) => props.onShowTooltip(event, props.value, undefined, false)}
+      onMouseLeave={props.onBlur}
+    >
+      {props.children}
+    </span>
+  );
+}
+
 async function handleCopyPath(
   event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
   path: string
@@ -562,6 +628,21 @@ async function handleCopyPath(
   event.preventDefault();
   event.stopPropagation();
   await copyText(path);
+}
+
+function formatTooltipValue(value: string, maxLength = 72): string {
+  return elideMiddle(value, maxLength);
+}
+
+function elideMiddle(text: string, maxLength: number): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  const visible = Math.max(8, maxLength - 1);
+  const left = Math.ceil(visible / 2);
+  const right = Math.floor(visible / 2);
+  return `${text.slice(0, left)}…${text.slice(-right)}`;
 }
 
 function formatTimestamp(timestamp: number): string {
