@@ -97,6 +97,34 @@ describe("TelegramAdapter", () => {
     });
   });
 
+  it("registers PwrAgnt bot commands on startup", async () => {
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      pollOnStart: false,
+    });
+
+    await adapter.start(async () => {});
+
+    expect(api.setMyCommands).toHaveBeenCalledWith({
+      commands: [
+        {
+          command: "threads",
+          description: "Choose a PwrAgnt thread",
+        },
+        {
+          command: "bind",
+          description: "Bind this chat to a PwrAgnt thread",
+        },
+      ],
+    });
+  });
+
   it("resolves callback handles and acknowledges callback queries", async () => {
     const harness = await createControllerHarness();
 
@@ -386,6 +414,7 @@ function createApi(): {
   getWebhookInfo: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   sendPhoto: ReturnType<typeof vi.fn>;
+  setMyCommands: ReturnType<typeof vi.fn>;
 } {
   return {
     answerCallbackQuery: vi.fn(async () => true),
@@ -406,6 +435,7 @@ function createApi(): {
       },
       message_id: 201,
     })),
+    setMyCommands: vi.fn(async () => true),
   };
 }
 

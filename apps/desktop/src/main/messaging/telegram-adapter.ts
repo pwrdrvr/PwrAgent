@@ -64,6 +64,18 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
         drop_pending_updates: false,
       });
     }
+    await this.api.setMyCommands({
+      commands: [
+        {
+          command: "threads",
+          description: "Choose a PwrAgnt thread",
+        },
+        {
+          command: "bind",
+          description: "Bind this chat to a PwrAgnt thread",
+        },
+      ],
+    });
 
     if (this.options.pollOnStart !== false) {
       this.pollLoop = this.runPollLoop();

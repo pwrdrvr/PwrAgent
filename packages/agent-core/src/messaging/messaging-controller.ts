@@ -316,6 +316,18 @@ export class MessagingController {
   }
 
   private async handleCallback(event: MessagingInboundCallbackEvent): Promise<void> {
+    const command = readCommandAction(event);
+    if (command) {
+      await this.handleCommand({
+        ...event,
+        kind: "command",
+        args: [],
+        command,
+        rawText: `/${command}`,
+      });
+      return;
+    }
+
     const bindingTarget = readBindingTarget(event);
     if (bindingTarget) {
       const binding = await this.bindChannelToThread(event, bindingTarget);
@@ -345,16 +357,16 @@ export class MessagingController {
         await this.submitApprovalAction(pendingIntent.intent, action.id);
         await this.options.store.deletePendingIntent(pendingIntent.id);
         await this.deliver(
-        buildStatusIntent({
-          id: this.newIntentId("approval-submitted"),
-          createdAt: this.now(),
-          status: "completed",
-          text: "Approval response sent.",
-        }),
-        undefined,
-        event,
-      );
-      return;
+          buildStatusIntent({
+            id: this.newIntentId("approval-submitted"),
+            createdAt: this.now(),
+            status: "completed",
+            text: "Approval response sent.",
+          }),
+          undefined,
+          event,
+        );
+        return;
       }
     }
 
@@ -540,6 +552,12 @@ export class MessagingController {
   private newIntentId(prefix: string): string {
     return `${prefix}:${randomUUID()}`;
   }
+}
+
+function readCommandAction(event: MessagingInboundCallbackEvent): string | undefined {
+  const actionId = event.actionId ?? event.interaction.id;
+  const match = /^command:([a-z0-9_-]+)$/i.exec(actionId);
+  return match?.[1]?.toLowerCase();
 }
 
 function parseTextCommand(text: string): string | undefined {

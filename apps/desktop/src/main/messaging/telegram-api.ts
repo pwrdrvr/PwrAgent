@@ -57,6 +57,11 @@ export type TelegramWebhookInfo = {
   url: string;
 };
 
+export type TelegramBotCommand = {
+  command: string;
+  description: string;
+};
+
 export type TelegramSendMessageRequest = {
   chat_id: number | string;
   disable_web_page_preview?: boolean;
@@ -122,6 +127,10 @@ export class TelegramApi {
 
   async deleteWebhook(params: { drop_pending_updates?: boolean } = {}): Promise<boolean> {
     return await this.request<boolean>("deleteWebhook", params);
+  }
+
+  async setMyCommands(params: { commands: TelegramBotCommand[] }): Promise<boolean> {
+    return await this.request<boolean>("setMyCommands", params);
   }
 
   async getUpdates(params: {

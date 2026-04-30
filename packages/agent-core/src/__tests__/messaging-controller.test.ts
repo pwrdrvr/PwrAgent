@@ -136,6 +136,21 @@ describe("MessagingController", () => {
     });
   });
 
+  it("routes command callbacks from help buttons to command handlers", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "command:threads",
+      }),
+    );
+
+    expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "thread_picker",
+    });
+  });
+
   it("rejects unauthorized actors without revealing thread data", async () => {
     const harness = await createHarness();
 
