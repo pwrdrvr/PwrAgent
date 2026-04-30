@@ -141,6 +141,13 @@ async function createDirectoryLaunchpadSkillsFixture(): Promise<{
                     scope: "user",
                   },
                   {
+                    name: "ce:plan",
+                    description: "Transform requirements into implementation plans.",
+                    path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+                    enabled: true,
+                    scope: "user",
+                  },
+                  {
                     name: "desktop-e2e-fixture-seeding",
                     description: "Replay-backed desktop E2E fixtures.",
                     path: path.join(
@@ -226,6 +233,18 @@ async function openDirectoryLaunchpad(app: Awaited<ReturnType<typeof launchElect
   ).toBeVisible();
 }
 
+async function typeSkillChip(
+  app: Awaited<ReturnType<typeof launchElectronApp>>,
+  triggerText: string,
+  optionName: RegExp,
+) {
+  await app.window.keyboard.type(triggerText);
+  const option = app.window.getByRole("button", { name: optionName });
+  await option.focus();
+  await expect(option).toBeFocused();
+  await app.window.keyboard.press("Enter");
+}
+
 test("directory launchpad loads skill autocomplete from user and local scope", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
@@ -270,6 +289,75 @@ test("directory launchpad keyboard typing updates the rich input once", async ()
     await expect(
       app.window.getByRole("button", { name: /\$ce:brainstorm/i }),
     ).toBeVisible();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad preserves multiple skill chips across boundary edits", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const richInput = app.window.getByTestId("composer-rich-input");
+    await richInput.focus();
+    await typeSkillChip(app, "$ce:plan", /\$ce:plan/i);
+    await app.window.keyboard.type(" i like cats n dogs - ");
+    await typeSkillChip(app, "$ce:brainstorm", /\$ce:brainstorm/i);
+
+    const planChip = richInput.locator(".skill-chip", { hasText: "$ce:plan" });
+    const brainstormChip = richInput.locator(".skill-chip", {
+      hasText: "$ce:brainstorm",
+    });
+    await expect(planChip).toBeVisible();
+    await expect(brainstormChip).toBeVisible();
+
+    await app.window.keyboard.type(" and more");
+    await expect(planChip).toBeVisible();
+    await expect(brainstormChip).toBeVisible();
+    await expect(richInput).toHaveAttribute(
+      "data-value",
+      " i like cats n dogs -  and more",
+    );
+
+    await richInput.evaluate((element) => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      const textNode = Array.from(
+        {
+          [Symbol.iterator]: function* () {
+            let node = walker.nextNode();
+            while (node) {
+              yield node;
+              node = walker.nextNode();
+            }
+          },
+        } as Iterable<Node>,
+      ).find((node) => node.nodeValue?.includes("i like cats n dogs"));
+      if (!textNode) {
+        throw new Error("Expected text between skill chips");
+      }
+
+      element.focus();
+      const range = document.createRange();
+      range.setStart(textNode, textNode.nodeValue?.length ?? 0);
+      range.collapse(true);
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    });
+    await app.window.keyboard.press("Backspace");
+
+    await expect(planChip).toBeVisible();
+    await expect(brainstormChip).toBeVisible();
+    await expect(richInput).toHaveAttribute(
+      "data-value",
+      " i like cats n dogs - and more",
+    );
   } finally {
     await app.close();
     await fixture.cleanup();

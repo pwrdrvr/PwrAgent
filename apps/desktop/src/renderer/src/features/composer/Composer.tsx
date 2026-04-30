@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import type {
   AppServerCollaborationModeRequest,
   AppServerReviewTarget,
@@ -1713,20 +1714,22 @@ export function Composer(props: ComposerProps) {
     const nextAfter = after.length > 0 && !/^\s/.test(after) ? ` ${after}` : after;
     const nextDraft = `${before}${nextAfter}`;
     const tokenIndex = before.length;
-    setSkillTokens((current) => [
+    const nextSkillTokens = [
       ...adjustSkillTokenIndexesForTextChange({
         currentDraft: draft,
         nextDraft,
-        skillTokens: current,
+        skillTokens,
       }),
       createComposerSkillToken(skill, tokenIndex),
-    ]);
-    setDraft(nextDraft);
-    setActiveSkillIndex(0);
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(tokenIndex, tokenIndex);
+    ];
+
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+      setDraft(nextDraft);
+      setActiveSkillIndex(0);
     });
+    inputRef.current?.focus();
+    inputRef.current?.setSelectionRange(tokenIndex, tokenIndex);
   };
 
   const applySlashCommand = (command: SlashCommandSuggestion): void => {
@@ -2157,22 +2160,6 @@ export function Composer(props: ComposerProps) {
     return tokenElement?.dataset.composerSkillTokenId;
   };
 
-  const shouldGuardBoundarySkillDeletion = (editor: HTMLElement): boolean => {
-    const selection = editor.ownerDocument.getSelection();
-    if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
-      return false;
-    }
-
-    const range = selection.getRangeAt(0);
-    if (!editor.contains(range.startContainer)) {
-      return false;
-    }
-
-    return (
-      range.startContainer.nodeType !== Node.TEXT_NODE || range.startOffset === 0
-    );
-  };
-
   const shouldGuardNativeTextDeletion = (
     editor: HTMLElement,
     direction: "backward" | "forward",
@@ -2197,19 +2184,75 @@ export function Composer(props: ComposerProps) {
       : range.startOffset >= textLength;
   };
 
-  const findBoundarySkillToken = (
-    caret: number,
-    direction: "backward" | "forward",
-  ): ComposerSkillToken | undefined => {
-    if (direction === "forward") {
-      return [...skillTokens]
-        .sort((left, right) => left.index - right.index)
-        .find((candidate) => candidate.index >= caret);
+  const findTokenIdInNode = (node: Node | undefined): string | undefined => {
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) {
+      return undefined;
     }
 
-    return [...skillTokens]
-      .sort((left, right) => right.index - left.index)
-      .find((candidate) => candidate.index <= caret);
+    const element = node as Element;
+    const tokenElement = element.matches(COMPOSER_SKILL_TOKEN_SELECTOR)
+      ? element
+      : element.querySelector(COMPOSER_SKILL_TOKEN_SELECTOR);
+    return tokenElement instanceof HTMLElement
+      ? tokenElement.dataset.composerSkillTokenId
+      : undefined;
+  };
+
+  const findEditorChildForNode = (
+    editor: HTMLElement,
+    node: Node,
+  ): Node | undefined => {
+    let current: Node | null = node;
+    while (current && current.parentNode !== editor) {
+      current = current.parentNode;
+    }
+    return current ?? undefined;
+  };
+
+  const findAdjacentSkillTokenId = (
+    editor: HTMLElement,
+    direction: "backward" | "forward",
+  ): string | undefined => {
+    const selection = editor.ownerDocument.getSelection();
+    if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
+      return undefined;
+    }
+
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.startContainer)) {
+      return undefined;
+    }
+
+    if (range.startContainer === editor) {
+      const sibling =
+        direction === "backward"
+          ? editor.childNodes[range.startOffset - 1]
+          : editor.childNodes[range.startOffset];
+      return findTokenIdInNode(sibling);
+    }
+
+    if (range.startContainer.nodeType === Node.TEXT_NODE) {
+      const textLength = range.startContainer.nodeValue?.length ?? 0;
+      if (direction === "backward" && range.startOffset > 0) {
+        return undefined;
+      }
+      if (direction === "forward" && range.startOffset < textLength) {
+        return undefined;
+      }
+    }
+
+    const editorChild = findEditorChildForNode(editor, range.startContainer);
+    if (!editorChild) {
+      return undefined;
+    }
+
+    const siblings = Array.from(editor.childNodes);
+    const childIndex = siblings.indexOf(editorChild as ChildNode);
+    const sibling =
+      direction === "backward"
+        ? siblings[childIndex - 1]
+        : siblings[childIndex + 1];
+    return findTokenIdInNode(sibling);
   };
 
   const removeSkillToken = (
@@ -2238,18 +2281,16 @@ export function Composer(props: ComposerProps) {
       return false;
     }
 
-    const caret = Math.min(inputRef.current.selectionStart, draft.length);
     const tokenId =
       findEventTargetSkillTokenId(event) ??
-      findSelectedSkillTokenId(event.currentTarget);
+      findSelectedSkillTokenId(event.currentTarget) ??
+      findAdjacentSkillTokenId(event.currentTarget, direction);
     const token =
-      (tokenId
+      tokenId
         ? skillTokens.find((candidate) => candidate.id === tokenId)
-        : undefined) ??
-      skillTokens.find((candidate) => candidate.index === caret) ??
-      (shouldGuardBoundarySkillDeletion(event.currentTarget)
-        ? findBoundarySkillToken(caret, direction)
-        : undefined);
+        : draft.length === 0 && skillTokens.length === 1
+          ? skillTokens[0]
+          : undefined;
     if (!token) {
       if (tokenId) {
         event.preventDefault();

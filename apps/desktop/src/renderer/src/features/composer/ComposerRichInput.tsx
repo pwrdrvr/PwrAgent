@@ -424,6 +424,12 @@ function adjustTokensForReplacement(params: {
   });
 }
 
+function getSkillTokenSignature(skillTokens: ComposerSkillToken[]): string {
+  return skillTokens
+    .map((token) => `${token.id}:${token.index}:${token.name}:${token.path ?? ""}`)
+    .join("|");
+}
+
 export const ComposerRichInput = forwardRef<
   ComposerRichInputHandle,
   ComposerRichInputProps
@@ -434,6 +440,9 @@ export const ComposerRichInput = forwardRef<
   const pendingAssignedValueRef = useRef<string | undefined>(undefined);
   const pendingSelectionIndexRef = useRef<number | undefined>(undefined);
   const handledKeyInputRef = useRef<string | undefined>(undefined);
+  const localEditValueRef = useRef<string | undefined>(undefined);
+  const valueRef = useRef(props.value);
+  const skillTokensRef = useRef(props.skillTokens);
   const parts = useMemo(
     () => buildInlineParts(props.value, props.skillTokens),
     [props.skillTokens, props.value]
@@ -443,11 +452,34 @@ export const ComposerRichInput = forwardRef<
     onChangeRef.current = props.onChange;
   }, [props.onChange]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     for (const token of props.skillTokens) {
       knownTokensRef.current.set(token.id, token);
     }
   }, [props.skillTokens]);
+
+  useLayoutEffect(() => {
+    const localEditValue = localEditValueRef.current;
+    const propsTokenSignature = getSkillTokenSignature(props.skillTokens);
+    const currentTokenSignature = getSkillTokenSignature(skillTokensRef.current);
+    if (
+      localEditValue !== undefined &&
+      props.value !== localEditValue &&
+      propsTokenSignature === currentTokenSignature
+    ) {
+      return;
+    }
+
+    if (
+      props.value === localEditValue ||
+      propsTokenSignature !== currentTokenSignature
+    ) {
+      localEditValueRef.current = undefined;
+    }
+
+    valueRef.current = props.value;
+    skillTokensRef.current = props.skillTokens;
+  }, [props.skillTokens, props.value]);
 
   useLayoutEffect(() => {
     const editor = editorRef.current;
@@ -471,6 +503,7 @@ export const ComposerRichInput = forwardRef<
       setSelectionRange: {
         configurable: true,
         value: (start: number) => {
+          pendingSelectionIndexRef.current = start;
           setSelectionIndex(editor, knownTokensRef.current, start);
         },
       },
@@ -495,6 +528,8 @@ export const ComposerRichInput = forwardRef<
       if (assignedValue !== undefined) {
         pendingAssignedValueRef.current = undefined;
         pendingSelectionIndexRef.current = assignedValue.length;
+        valueRef.current = assignedValue;
+        skillTokensRef.current = [];
         onChangeRef.current(assignedValue, []);
         return;
       }
@@ -502,6 +537,8 @@ export const ComposerRichInput = forwardRef<
       const nextSelection = getSelectionIndex(editor, knownTokensRef.current);
       const next = readEditorContent(editor, knownTokensRef.current);
       pendingSelectionIndexRef.current = nextSelection;
+      valueRef.current = next.value;
+      skillTokensRef.current = next.skillTokens;
       onChangeRef.current(next.value, next.skillTokens);
     };
 
@@ -539,9 +576,7 @@ export const ComposerRichInput = forwardRef<
     },
     setSelectionRange: (start: number) => {
       pendingSelectionIndexRef.current = start;
-      requestAnimationFrame(() => {
-        setSelectionIndex(editorRef.current, knownTokensRef.current, start);
-      });
+      setSelectionIndex(editorRef.current, knownTokensRef.current, start);
     },
   }));
 
@@ -552,27 +587,41 @@ export const ComposerRichInput = forwardRef<
     );
     const next = readEditorContent(event.currentTarget, knownTokensRef.current);
     pendingSelectionIndexRef.current = nextSelection;
+    valueRef.current = next.value;
+    skillTokensRef.current = next.skillTokens;
+    localEditValueRef.current = next.value;
     onChangeRef.current(next.value, next.skillTokens);
   };
 
   const replaceSelection = (
     editor: HTMLElement,
     replacement: string,
-    selection = getSelectionIndexes(editor, knownTokensRef.current),
+    selection?: { end: number; start: number },
   ): void => {
-    const nextValue = `${props.value.slice(0, selection.start)}${replacement}${props.value.slice(selection.end)}`;
-    const nextSelection = selection.start + replacement.length;
-    pendingSelectionIndexRef.current = nextSelection;
-    onChangeRef.current(
+    const currentSelection =
+      selection ??
+      (pendingSelectionIndexRef.current !== undefined
+        ? {
+            start: pendingSelectionIndexRef.current,
+            end: pendingSelectionIndexRef.current,
+          }
+        : getSelectionIndexes(editor, knownTokensRef.current));
+    const currentValue = valueRef.current;
+    const currentSkillTokens = skillTokensRef.current;
+    const nextValue = `${currentValue.slice(0, currentSelection.start)}${replacement}${currentValue.slice(currentSelection.end)}`;
+    const nextSelection = currentSelection.start + replacement.length;
+    const nextSkillTokens = adjustTokensForReplacement({
+      end: currentSelection.end,
       nextValue,
-      adjustTokensForReplacement({
-        end: selection.end,
-        nextValue,
-        replacementLength: replacement.length,
-        skillTokens: props.skillTokens,
-        start: selection.start,
-      }),
-    );
+      replacementLength: replacement.length,
+      skillTokens: currentSkillTokens,
+      start: currentSelection.start,
+    });
+    pendingSelectionIndexRef.current = nextSelection;
+    valueRef.current = nextValue;
+    skillTokensRef.current = nextSkillTokens;
+    localEditValueRef.current = nextValue;
+    onChangeRef.current(nextValue, nextSkillTokens);
   };
 
   const deleteSelection = (
@@ -590,7 +639,7 @@ export const ComposerRichInput = forwardRef<
     const end =
       direction === "backward"
         ? selection.end
-        : Math.min(props.value.length, selection.end + 1);
+        : Math.min(valueRef.current.length, selection.end + 1);
     replaceSelection(editor, "", { start, end });
   };
 
