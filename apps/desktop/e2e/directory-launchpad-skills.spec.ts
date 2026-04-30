@@ -562,6 +562,73 @@ test("directory launchpad skill autocomplete selects focused options as undoable
   }
 });
 
+test("directory launchpad skill chips stay text-sized and baseline aligned", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const richInput = app.window.getByTestId("composer-rich-input");
+    await richInput.focus();
+    await app.window.keyboard.type("before ");
+    await typeSkillChip(app, "$ce:plan", /\$ce:plan/i);
+    await app.window.keyboard.type(" after");
+
+    const metrics = await richInput.evaluate((element) => {
+      const chip = element.querySelector<HTMLElement>(".skill-chip");
+      const label = element.querySelector<HTMLElement>(".skill-chip__label");
+      if (!chip || !label) {
+        throw new Error("Expected skill chip and label to render");
+      }
+
+      const textRects: DOMRect[] = [];
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      while (node) {
+        const text = node.nodeValue ?? "";
+        if (text.includes("before") || text.includes("after")) {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          textRects.push(...Array.from(range.getClientRects()));
+        }
+        node = walker.nextNode();
+      }
+      if (textRects.length === 0) {
+        throw new Error("Expected surrounding text to be measurable");
+      }
+
+      const labelRect = label.getBoundingClientRect();
+      const chipRect = chip.getBoundingClientRect();
+      const textStyle = getComputedStyle(element);
+      const labelStyle = getComputedStyle(label);
+      const surroundingBottom = textRects.reduce(
+        (bottom, rect) => Math.max(bottom, rect.bottom),
+        0,
+      );
+
+      return {
+        chipHeight: chipRect.height,
+        fontSize: textStyle.fontSize,
+        labelBottom: labelRect.bottom,
+        labelFontSize: labelStyle.fontSize,
+        surroundingBottom,
+      };
+    });
+
+    expect(metrics.labelFontSize).toBe(metrics.fontSize);
+    expect(Math.abs(metrics.labelBottom - metrics.surroundingBottom)).toBeLessThanOrEqual(
+      3,
+    );
+    expect(metrics.chipHeight).toBeLessThanOrEqual(22);
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("directory launchpad deletes a persisted skill chip with repeated backspace", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-saved-launchpad-"));
@@ -601,6 +668,47 @@ test("directory launchpad deletes a persisted skill chip with repeated backspace
     await app.close();
     await fixture.cleanup();
     await rm(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("directory launchpad uses macOS ctrl-a as line navigation instead of select all", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const richInput = app.window.getByTestId("composer-rich-input");
+    await richInput.focus();
+    await app.window.keyboard.type("alpha beta");
+    await richInput.evaluate((element) => {
+      Object.defineProperty(window.navigator, "platform", {
+        configurable: true,
+        value: "MacIntel",
+      });
+      element.focus();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      range.collapse(false);
+      const selection = document.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    });
+
+    await app.window.keyboard.press("Control+A");
+
+    const selectedText = await richInput.evaluate(
+      () => document.getSelection()?.toString() ?? "",
+    );
+    expect(selectedText).not.toBe("alpha beta");
+
+    await app.window.keyboard.type("Z");
+    await expect(richInput).toHaveAttribute("data-value", "Zalpha beta");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
   }
 });
 

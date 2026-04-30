@@ -3686,9 +3686,9 @@ textarea {
 
 .composer-rich-input__token {
   display: inline-flex;
-  margin: 0 2px;
-  line-height: 1;
-  vertical-align: -0.18em;
+  margin: 0 3px;
+  line-height: inherit;
+  vertical-align: -0.1em;
 }
 
 .composer-rich-input__token:first-child {
@@ -3696,15 +3696,21 @@ textarea {
 }
 
 .composer-rich-input .skill-chip {
-  height: 22px;
-  gap: 5px;
-  padding: 0 7px;
-  font-size: 12px;
+  height: 1.35em;
+  gap: 0.35em;
+  padding: 0 0.5em;
+  font-size: inherit;
   line-height: 1;
 }
 
 .composer-rich-input .thread-row__chip-icon {
-  font-size: 11px;
+  flex: 0 0 auto;
+  font-size: 0.72em;
+  line-height: 1;
+}
+
+.composer-rich-input .skill-chip__label {
+  line-height: 1;
 }
 
 .composer__mentioned-skills {

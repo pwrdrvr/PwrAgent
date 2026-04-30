@@ -468,6 +468,20 @@ function getSkillTokenSignature(skillTokens: ComposerSkillToken[]): string {
     .join("|");
 }
 
+function isMacPlatform(): boolean {
+  return /\bMac/.test(window.navigator.platform);
+}
+
+function isSelectAllShortcut(event: KeyboardEvent<HTMLDivElement>): boolean {
+  if (event.altKey || event.shiftKey || event.key.toLowerCase() !== "a") {
+    return false;
+  }
+
+  return isMacPlatform()
+    ? event.metaKey && !event.ctrlKey
+    : event.ctrlKey && !event.metaKey;
+}
+
 export const ComposerRichInput = forwardRef<
   ComposerRichInputHandle,
   ComposerRichInputProps
@@ -744,9 +758,7 @@ export const ComposerRichInput = forwardRef<
     if (
       !event.defaultPrevented &&
       !props.disabled &&
-      event.key.toLowerCase() === "a" &&
-      (event.metaKey || event.ctrlKey) &&
-      !event.altKey
+      isSelectAllShortcut(event)
     ) {
       event.preventDefault();
       selectAllPendingRef.current = true;
