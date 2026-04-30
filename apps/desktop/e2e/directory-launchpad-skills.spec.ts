@@ -197,7 +197,7 @@ test("directory launchpad loads skill autocomplete from user and local scope", a
   }
 });
 
-test("directory launchpad skill autocomplete selects focused options as removable inline chips", async () => {
+test("directory launchpad skill autocomplete selects focused options as undoable inline chips", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -236,9 +236,14 @@ test("directory launchpad skill autocomplete selects focused options as removabl
       inputBox.y + inputBox.height,
     );
 
-    await chip.getByRole("button", { name: "Remove $frontend-design" }).click();
+    await richInput.focus();
+    await app.window.keyboard.press("Backspace");
     await expect(chip).toBeHidden();
-    await expect(textbox).toHaveValue("");
+
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+Z" : "Control+Z",
+    );
+    await expect(chip).toBeVisible();
   } finally {
     await app.close();
     await fixture.cleanup();

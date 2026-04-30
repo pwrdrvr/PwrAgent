@@ -3646,40 +3646,44 @@ textarea {
 }
 
 .composer-rich-input {
-  display: flex;
+  display: block;
   min-height: 144px;
-  flex-direction: column;
-  gap: 8px;
-  padding: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .composer-rich-input.is-disabled {
   opacity: 0.72;
 }
 
-.composer-rich-input__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-height: 24px;
-}
-
-.composer-rich-input__textarea {
-  min-height: 0;
-  flex: 1 1 auto;
-  resize: vertical;
-  padding: 4px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-}
-
-.composer-rich-input__textarea:focus,
-.composer-rich-input__textarea:focus-visible {
+.composer-rich-input:focus,
+.composer-rich-input:focus-visible {
   outline: 0;
+}
+
+.composer-rich-input.is-empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.composer-rich-input__token {
+  display: inline-flex;
+  margin: 0 3px;
+  vertical-align: -0.22em;
+}
+
+.composer-rich-input__token:first-child {
+  margin-left: 0;
 }
 
 .composer__mentioned-skills {

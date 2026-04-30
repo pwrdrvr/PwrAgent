@@ -2263,7 +2263,7 @@ describe("Composer", () => {
     expect(options.slice(2).join(" ")).toContain("$adversarial-document-reviewer");
   });
 
-  it("removes selected skill chips without leaving raw mention text", async () => {
+  it("renders selected skill chips without leaving raw mention text", async () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
@@ -2302,18 +2302,18 @@ describe("Composer", () => {
     expect(within(screen.getByTestId("composer-rich-input")).getByText("$ce:plan")).toBeInTheDocument();
     expect(textarea).toHaveValue("Use ");
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove $ce:plan" }));
-
-    expect(screen.queryByText("$ce:plan")).not.toBeInTheDocument();
-    expect(textarea).toHaveValue("Use ");
-
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-1",
-        input: [{ type: "text", text: "Use" }],
+        input: [
+          {
+            type: "text",
+            text: "Use [$ce:plan](/Users/huntharo/.codex/skills/ce-plan/SKILL.md)",
+          },
+        ],
       });
     });
   });

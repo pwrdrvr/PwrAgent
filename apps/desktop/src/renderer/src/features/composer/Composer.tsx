@@ -41,6 +41,7 @@ import {
 import { parseReviewCommand } from "../../../../shared/review-command";
 import {
   ComposerRichInput,
+  type ComposerRichInputHandle,
   type ComposerSkillToken,
 } from "./ComposerRichInput";
 
@@ -131,6 +132,12 @@ type QueuedTurnDraft = {
 
 type PendingSteerDraft = QueuedTurnDraft & {
   status: "pending" | "steering";
+};
+
+type DeletedSkillTokenHistoryEntry = {
+  draft: string;
+  selectionStart: number;
+  skillTokens: ComposerSkillToken[];
 };
 
 type ComposerImageFile = {
@@ -767,7 +774,7 @@ function ComposerApplicationButton(props: {
 }
 
 export function Composer(props: ComposerProps) {
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<ComposerRichInputHandle>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -780,6 +787,7 @@ export function Composer(props: ComposerProps) {
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
   const scopedThreadDraftsRef = useRef(new Map<string, ComposerDraftState>());
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
+  const deletedSkillTokenHistoryRef = useRef<DeletedSkillTokenHistoryEntry[]>([]);
   const [draft, setDraft] = useState("");
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const workspaceMenuRef = useDismissableMenu<HTMLDivElement>(
@@ -822,7 +830,10 @@ export function Composer(props: ComposerProps) {
     [props.backends, props.launchpad?.backend, props.thread?.source]
   );
 
-  const selectionStart = inputRef.current?.selectionStart ?? draft.length;
+  const selectionStart = Math.min(
+    inputRef.current?.selectionStart ?? draft.length,
+    draft.length,
+  );
   const isThreadComposerScope = (scopeKey: string): boolean =>
     scopeKey.startsWith("thread:");
   const canonicalDraft = useMemo(
@@ -831,22 +842,32 @@ export function Composer(props: ComposerProps) {
   );
   const hasComposerContent = draft.trim().length > 0 || skillTokens.length > 0;
   const setComposerDraftFromCanonical = (nextDraft: string): void => {
+    deletedSkillTokenHistoryRef.current = [];
     const hydrated = hydrateComposerDraft(nextDraft, props.skills);
     setDraft(hydrated.draft);
     setSkillTokens(hydrated.skillTokens);
   };
   const clearComposerDraft = (): void => {
+    deletedSkillTokenHistoryRef.current = [];
     setDraft("");
     setSkillTokens([]);
   };
-  const updateVisibleDraft = (nextDraft: string): void => {
-    setSkillTokens((current) =>
-      adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens: current,
-      })
-    );
+  const updateVisibleDraft = (
+    nextDraft: string,
+    nextSkillTokens?: ComposerSkillToken[],
+  ): void => {
+    deletedSkillTokenHistoryRef.current = [];
+    if (nextSkillTokens) {
+      setSkillTokens(nextSkillTokens);
+    } else {
+      setSkillTokens((current) =>
+        adjustSkillTokenIndexesForTextChange({
+          currentDraft: draft,
+          nextDraft,
+          skillTokens: current,
+        })
+      );
+    }
     setDraft(nextDraft);
   };
   const saveThreadComposerDraft = (
@@ -1664,8 +1685,14 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const selectionStart = inputRef.current.selectionStart ?? draft.length;
-    const selectionEnd = inputRef.current.selectionEnd ?? selectionStart;
+    const selectionStart = Math.min(
+      inputRef.current.selectionStart ?? draft.length,
+      draft.length,
+    );
+    const selectionEnd = Math.min(
+      inputRef.current.selectionEnd ?? selectionStart,
+      draft.length,
+    );
     const trigger = findSkillTrigger(draft, selectionStart);
     if (!trigger) {
       return;
@@ -1697,8 +1724,14 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const selectionStart = inputRef.current.selectionStart ?? draft.length;
-    const selectionEnd = inputRef.current.selectionEnd ?? selectionStart;
+    const selectionStart = Math.min(
+      inputRef.current.selectionStart ?? draft.length,
+      draft.length,
+    );
+    const selectionEnd = Math.min(
+      inputRef.current.selectionEnd ?? selectionStart,
+      draft.length,
+    );
     const trigger = findSlashCommandTrigger(draft, selectionStart);
     if (!trigger) {
       return;
@@ -1744,7 +1777,7 @@ export function Composer(props: ComposerProps) {
     });
   };
 
-  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
+  const handlePaste = (event: ClipboardEvent<HTMLDivElement>): void => {
     const pastedFiles = getImageFilesFromDataTransfer(event.clipboardData);
     if (pastedFiles.length === 0) {
       return;
@@ -1755,7 +1788,7 @@ export function Composer(props: ComposerProps) {
     void attachImages(pastedFiles);
   };
 
-  const handleDragOver = (event: DragEvent<HTMLTextAreaElement>): void => {
+  const handleDragOver = (event: DragEvent<HTMLDivElement>): void => {
     if (!hasImageFiles(event.dataTransfer)) {
       return;
     }
@@ -1764,7 +1797,7 @@ export function Composer(props: ComposerProps) {
     event.dataTransfer.dropEffect = "copy";
   };
 
-  const handleDrop = (event: DragEvent<HTMLTextAreaElement>): void => {
+  const handleDrop = (event: DragEvent<HTMLDivElement>): void => {
     const droppedFiles = getImageFilesFromDataTransfer(event.dataTransfer);
     if (droppedFiles.length === 0) {
       return;
@@ -2059,35 +2092,6 @@ export function Composer(props: ComposerProps) {
     !sourceBranch ||
     (handoffDialog === "local-to-worktree" && !leaveLocalBranch);
 
-  const removeSkillToken = (id: string): void => {
-    setSkillTokens((current) => current.filter((skill) => skill.id !== id));
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-    });
-  };
-
-  const removeAdjacentSkillToken = (key: "Backspace" | "Delete"): boolean => {
-    const input = inputRef.current;
-    if (!input || input.selectionStart !== input.selectionEnd) {
-      return false;
-    }
-
-    const caret = input.selectionStart ?? draft.length;
-    const token = skillTokens.find((candidate) => candidate.index === caret);
-    if (!token) {
-      return false;
-    }
-
-    setSkillTokens((current) =>
-      current.filter((candidate) => candidate.id !== token.id)
-    );
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(caret, caret);
-    });
-    return key === "Backspace" || key === "Delete";
-  };
-
   const commitActiveAutocomplete = (): void => {
     if (autocompleteKind === "skills") {
       applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
@@ -2099,10 +2103,69 @@ export function Composer(props: ComposerProps) {
     );
   };
 
+  const removeAdjacentSkillToken = (
+    event: ReactKeyboardEvent<HTMLElement>,
+  ): boolean => {
+    if (
+      event.key !== "Backspace" ||
+      !inputRef.current ||
+      inputRef.current.selectionStart !== inputRef.current.selectionEnd
+    ) {
+      return false;
+    }
+
+    const caret = Math.min(inputRef.current.selectionStart, draft.length);
+    const token = skillTokens.find((candidate) => candidate.index === caret);
+    if (!token) {
+      return false;
+    }
+
+    event.preventDefault();
+    deletedSkillTokenHistoryRef.current.push({
+      draft,
+      selectionStart: caret,
+      skillTokens,
+    });
+    setSkillTokens((current) =>
+      current.filter((candidate) => candidate.id !== token.id)
+    );
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(caret, caret);
+    });
+    return true;
+  };
+
+  const restoreDeletedSkillToken = (
+    event: ReactKeyboardEvent<HTMLElement>,
+  ): boolean => {
+    if (
+      event.key.toLowerCase() !== "z" ||
+      (!event.metaKey && !event.ctrlKey) ||
+      event.shiftKey ||
+      deletedSkillTokenHistoryRef.current.length === 0
+    ) {
+      return false;
+    }
+
+    const previous = deletedSkillTokenHistoryRef.current.pop()!;
+    event.preventDefault();
+    setDraft(previous.draft);
+    setSkillTokens(previous.skillTokens);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(
+        previous.selectionStart,
+        previous.selectionStart,
+      );
+    });
+    return true;
+  };
+
   const handleAutocompleteKeyDown = (
     event: ReactKeyboardEvent<HTMLElement>,
   ): void => {
-    if (!hasAutocomplete) {
+    if (!hasAutocomplete && event.key !== "Escape") {
       return;
     }
 
@@ -2141,7 +2204,7 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const optionHasFocus = event.currentTarget !== inputRef.current;
+    const optionHasFocus = event.currentTarget instanceof HTMLButtonElement;
     if (
       (event.key === "Enter" && !event.shiftKey) ||
       (event.key === " " && optionHasFocus)
@@ -2261,7 +2324,6 @@ export function Composer(props: ComposerProps) {
           id="thread-composer"
           disabled={launchpadSubmitting || (props.disabled && !hasComposerContent)}
           label={isLaunchpad ? "New thread" : "Reply"}
-          onRemoveSkillToken={removeSkillToken}
           placeholder={
             isLaunchpad
               ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`
@@ -2269,8 +2331,8 @@ export function Composer(props: ComposerProps) {
           }
           skillTokens={skillTokens}
           value={draft}
-          onChange={(nextDraft) => {
-            updateVisibleDraft(nextDraft);
+          onChange={(nextDraft, nextSkillTokens) => {
+            updateVisibleDraft(nextDraft, nextSkillTokens);
             if (nextDraft.trim() !== "/review") {
               setReviewConfig(undefined);
             }
@@ -2284,18 +2346,19 @@ export function Composer(props: ComposerProps) {
             setActiveSlashIndex(0);
           }}
           onKeyDown={(event) => {
+            if (restoreDeletedSkillToken(event)) {
+              return;
+            }
+
             if (!hasAutocomplete) {
-              if (
-                (event.key === "Backspace" || event.key === "Delete") &&
-                removeAdjacentSkillToken(event.key)
-              ) {
-                event.preventDefault();
+              if (removeAdjacentSkillToken(event)) {
                 return;
               }
+
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 void submitTurn(event.metaKey ? "steer" : "default");
-            }
+              }
               return;
             }
 
