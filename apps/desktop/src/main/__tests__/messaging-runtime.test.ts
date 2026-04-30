@@ -184,6 +184,94 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
+  it("isolates backend event delivery failures between adapters", async () => {
+    const failingAdapter = createAdapter("telegram", {
+      deliver: vi.fn(async (
+        intent: MessagingSurfaceIntent,
+      ): Promise<MessagingDeliveryResult> => {
+        if (intent.kind === "message") {
+          throw new Error("telegram delivery failed");
+        }
+        failingAdapter.delivered.push(intent);
+        return {
+          channel: "telegram",
+          deliveredAt: 1000,
+          outcome: "presented",
+        };
+      }),
+    });
+    const workingAdapter = createAdapter("discord");
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const bridge = createBackendBridge();
+    const runtime = new Runtime({
+      adapterFactory: () => [failingAdapter, workingAdapter],
+      backendBridge: bridge,
+      config: {
+        discord: {
+          channel: "discord",
+          botToken: "discord-token",
+          authorizedActorIds: ["user-1"],
+        },
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: ["user-1"],
+        },
+      },
+    });
+
+    await runtime.start();
+    await failingAdapter.listener?.(
+      buildCallbackEvent("bind:codex:thread-1", {
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    );
+    await workingAdapter.listener?.(
+      buildCallbackEvent("bind:codex:thread-1", {
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    );
+    failingAdapter.delivered.length = 0;
+    workingAdapter.delivered.length = 0;
+
+    await bridge.emitBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [
+              {
+                type: "text",
+                text: "Still delivered elsewhere",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(messagingLog.error).toHaveBeenCalledWith(
+      "messaging controller failed to handle backend event",
+      expect.objectContaining({
+        backend: "codex",
+        method: "turn/completed",
+      }),
+    );
+    expect(workingAdapter.delivered.find((intent) => intent.kind === "message"))
+      .toMatchObject({
+        kind: "message",
+      });
+  });
+
   it("stops the started adapter instances without rebuilding the factory", async () => {
     const adapter = createAdapter("telegram");
     const factory = vi.fn<DesktopMessagingAdapterFactory>(() => [adapter]);

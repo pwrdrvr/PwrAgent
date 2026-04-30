@@ -1466,53 +1466,53 @@ function turnLifecycleForBackendEvent(
   switch (event.notification.method) {
     case "turn/started": {
       const params = event.notification.params as TurnLifecycleParams;
-      const turnId = params.turnId ?? params.turn.id;
+      const turnId = params.turnId ?? params.turn?.id;
       if (!turnId) {
         return undefined;
       }
       return {
         turnId,
         status: "working",
-        startedAt: params.turn.startedAt ?? undefined,
+        startedAt: params.turn?.startedAt ?? undefined,
         updatedAt: now,
       };
     }
     case "turn/completed": {
       const params = event.notification.params as TurnLifecycleParams;
-      const turnId = params.turnId ?? params.turn.id;
+      const turnId = params.turnId ?? params.turn?.id;
       if (!turnId) {
         return undefined;
       }
       return {
         turnId,
         status: "completed",
-        startedAt: params.turn.startedAt ?? undefined,
+        startedAt: params.turn?.startedAt ?? undefined,
         updatedAt: now,
       };
     }
     case "turn/failed": {
       const params = event.notification.params as TurnLifecycleParams;
-      const turnId = params.turnId ?? params.turn.id;
+      const turnId = params.turnId ?? params.turn?.id;
       if (!turnId) {
         return undefined;
       }
       return {
         turnId,
         status: "failed",
-        startedAt: params.turn.startedAt ?? undefined,
+        startedAt: params.turn?.startedAt ?? undefined,
         updatedAt: now,
       };
     }
     case "turn/cancelled": {
       const params = event.notification.params as TurnLifecycleParams;
-      const turnId = params.turnId ?? params.turn.id;
+      const turnId = params.turnId ?? params.turn?.id;
       if (!turnId) {
         return undefined;
       }
       return {
         turnId,
         status: "interrupted",
-        startedAt: params.turn.startedAt ?? undefined,
+        startedAt: params.turn?.startedAt ?? undefined,
         updatedAt: now,
       };
     }
@@ -1523,7 +1523,7 @@ function turnLifecycleForBackendEvent(
 
 type TurnLifecycleParams = {
   turnId?: string | null;
-  turn: {
+  turn?: {
     id?: string | null;
     startedAt?: number | null;
   };

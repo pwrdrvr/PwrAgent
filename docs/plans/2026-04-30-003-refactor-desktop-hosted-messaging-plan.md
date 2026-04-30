@@ -293,7 +293,7 @@ flowchart TB
 **Verification:**
 - Adding a future provider requires adding a package and a loader registry entry, not changing desktop workflow logic.
 
-- [ ] **Unit 4: Make desktop registry mirroring explicit**
+- [x] **Unit 4: Make desktop registry mirroring explicit**
 
 **Goal:** Ensure messaging input/output is a mirror of desktop thread state, using the same registry and event source as the renderer.
 

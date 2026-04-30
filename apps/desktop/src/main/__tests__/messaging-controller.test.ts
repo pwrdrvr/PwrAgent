@@ -449,6 +449,26 @@ describe("MessagingController", () => {
     });
   });
 
+  it("ignores malformed turn completion events without throwing", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await expect(
+      harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+          },
+        },
+      } as unknown as AgentEvent),
+    ).resolves.toBeUndefined();
+
+    expect(harness.delivered).toEqual([]);
+  });
+
   it("presents Plan questionnaires as semantic questionnaire intents", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(

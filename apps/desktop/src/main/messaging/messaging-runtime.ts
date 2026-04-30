@@ -104,7 +104,17 @@ export class DesktopMessagingRuntime {
 
     this.unsubscribeBackendEvents = this.options.backendBridge.onEvent?.(async (event) => {
       await Promise.all(
-        this.controllers.map((controller) => controller.handleBackendEvent(event)),
+        this.controllers.map(async (controller) => {
+          try {
+            await controller.handleBackendEvent(event);
+          } catch (error) {
+            messagingLog.error("messaging controller failed to handle backend event", {
+              backend: event.backend,
+              error,
+              method: event.notification.method,
+            });
+          }
+        }),
       );
     });
 
