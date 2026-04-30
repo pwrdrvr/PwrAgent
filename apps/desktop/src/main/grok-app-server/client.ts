@@ -19,6 +19,7 @@ import type {
   AppServerThreadReviewEntry,
   AppServerSkillSummary,
   AppServerThreadReplay,
+  AppServerThreadStatus,
   AppServerThreadTitleSource,
   AppServerThreadSummary,
   AppServerTurnInputItem,
@@ -133,6 +134,67 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function readString(
+  record: Record<string, unknown> | undefined,
+  key: string
+): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeThreadStatus(value: string | undefined): AppServerThreadStatus | undefined {
+  const normalized = value?.trim().replace(/[-_\s]/g, "").toLowerCase();
+  if (normalized === "active") {
+    return "active";
+  }
+  if (normalized === "idle") {
+    return "idle";
+  }
+  if (normalized === "notloaded") {
+    return "notLoaded";
+  }
+  if (normalized === "unknown") {
+    return "unknown";
+  }
+  return undefined;
+}
+
+function readThreadStatus(value: unknown): AppServerThreadStatus | undefined {
+  if (typeof value === "string") {
+    return normalizeThreadStatus(value);
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const status = asRecord(record.status);
+  const thread = asRecord(record.thread) ?? asRecord(record.session);
+  const threadStatus = asRecord(thread?.status);
+
+  return normalizeThreadStatus(
+    readString(status, "type") ??
+      readString(status, "status") ??
+      readString(status, "state") ??
+      readString(threadStatus, "type") ??
+      readString(threadStatus, "status") ??
+      readString(threadStatus, "state") ??
+      readString(record, "status") ??
+      readString(record, "state") ??
+      readString(thread, "status") ??
+      readString(thread, "state")
+  );
+}
+
+function withThreadStatus(
+  replay: AppServerThreadReplay,
+  source: unknown
+): AppServerThreadReplay {
+  const threadStatus = readThreadStatus(source);
+  return threadStatus ? { ...replay, threadStatus } : replay;
+}
+
 async function resolveLinkedDirectories(
   projectKey?: string
 ): Promise<LinkedDirectorySummary[]> {
@@ -240,23 +302,26 @@ function extractThreadReplay(value: unknown): AppServerThreadReplay {
   const replayFromItems = extractReplayFromItems(rawItems, pagination);
   if (replayFromItems) {
     if (replayFromItems.messages.length > 0 || messages.length === 0) {
-      return replayFromItems;
+      return withThreadStatus(replayFromItems, value);
     }
-    return buildReplayFromMessages(messages, pagination, activityEntries(replayFromItems));
+    return withThreadStatus(
+      buildReplayFromMessages(messages, pagination, activityEntries(replayFromItems)),
+      value
+    );
   }
 
   if (messages.length > 0) {
-    return buildReplayFromMessages(messages, pagination);
+    return withThreadStatus(buildReplayFromMessages(messages, pagination), value);
   }
 
   if (rawMessages.length === 0) {
     const fallbackMessages = fallbackLastMessages(record);
     if (fallbackMessages.length > 0) {
-      return buildReplayFromMessages(fallbackMessages, pagination);
+      return withThreadStatus(buildReplayFromMessages(fallbackMessages, pagination), value);
     }
   }
 
-  return buildReplayFromMessages([], pagination);
+  return withThreadStatus(buildReplayFromMessages([], pagination), value);
 }
 
 function fallbackLastMessages(record: {

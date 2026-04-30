@@ -107,6 +107,7 @@ export type WorktreeSnapshotSummary = {
 };
 
 export type AppServerThreadTitleSource = "explicit" | "derived" | "fallback";
+export type AppServerThreadStatus = "active" | "idle" | "notLoaded" | "unknown";
 
 export type AppServerThreadSummary = {
   id: ThreadIdentifier;
@@ -283,6 +284,7 @@ export type AppServerThreadReplay = {
   lastUserMessage?: string;
   lastAssistantMessage?: string;
   pagination: AppServerThreadReplayPagination;
+  threadStatus?: AppServerThreadStatus;
 };
 
 export type AppServerListThreadsRequest = {
@@ -420,6 +422,7 @@ export type AppServerReadThreadResponse = {
   fetchedAt: number;
   threadId: ThreadIdentifier;
   replay: AppServerThreadReplay;
+  threadStatus?: AppServerThreadStatus;
 };
 
 export type AppServerListSkillsRequest = {

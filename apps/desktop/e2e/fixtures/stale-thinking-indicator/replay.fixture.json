@@ -1,0 +1,184 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "stale-thinking-indicator",
+    "sourceCaptureId": "2026-04-30T17-19-20-090Z-codex-full-access",
+    "threadId": "019dde61-c9d6-70d2-9023-28669e27a63b"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "019dde61-c9d6-70d2-9023-28669e27a63b",
+          "title": "Stale thinking replay",
+          "titleSource": "explicit",
+          "summary": "Replay seeded stale thinking state",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1777572421000
+        }
+      ]
+    },
+    {
+      "id": "status-active-1",
+      "kind": "notification",
+      "notification": {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "019dde61-c9d6-70d2-9023-28669e27a63b",
+          "status": {
+            "type": "active",
+            "activeFlags": []
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "019dde61-c9d6-70d2-9023-28669e27a63b",
+          "turnId": "019ddf89-d1ec-76f1-930f-7730c5b014ac",
+          "turn": {
+            "id": "019ddf89-d1ec-76f1-930f-7730c5b014ac",
+            "status": "inProgress",
+            "startedAt": 1777571844
+          }
+        }
+      }
+    },
+    {
+      "id": "item-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/started",
+        "params": {
+          "threadId": "019dde61-c9d6-70d2-9023-28669e27a63b",
+          "turnId": "019ddf89-d1ec-76f1-930f-7730c5b014ac",
+          "item": {
+            "id": "command-1",
+            "type": "commandExecution",
+            "status": "in_progress",
+            "command": "pnpm test -- useThreadSessionState"
+          }
+        }
+      }
+    },
+    {
+      "id": "status-idle-before-completion",
+      "kind": "notification",
+      "notification": {
+        "method": "thread/status/changed",
+        "params": {
+          "threadId": "019dde61-c9d6-70d2-9023-28669e27a63b",
+          "status": {
+            "type": "idle"
+          }
+        }
+      }
+    },
+    {
+      "id": "item-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "019dde61-c9d6-70d2-9023-28669e27a63b",
+          "turnId": "019ddf89-d1ec-76f1-930f-7730c5b014ac",
+          "item": {
+            "id": "command-1",
+            "type": "commandExecution",
+            "status": "completed",
+            "command": "pnpm test -- useThreadSessionState",
+            "aggregatedOutput": "Tests passed."
+          }
+        }
+      }
+    },
+    {
+      "id": "turn-completed-captured",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "019dde61-c9d6-70d2-9023-28669e27a63b",
+          "turnId": "019ddf89-d1ec-76f1-930f-7730c5b014ac",
+          "turn": {
+            "id": "019ddf89-d1ec-76f1-930f-7730c5b014ac",
+            "items": [],
+            "status": "completed",
+            "error": null,
+            "startedAt": 1777571844,
+            "completedAt": 1777572421,
+            "durationMs": 577092,
+            "output": []
+          }
+        }
+      }
+    },
+    {
+      "id": "thread-read-idle-captured",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Reproduce stale thinking state."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "The captured turn is complete and idle."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Reproduce stale thinking state."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "The captured turn is complete and idle."
+          }
+        ],
+        "lastUserMessage": "Reproduce stale thinking state.",
+        "lastAssistantMessage": "The captured turn is complete and idle.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        },
+        "threadStatus": "idle"
+      }
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { RendererErrorReport } from "../../../shared/renderer-error";
+import type { RendererDiagnosticLogRequest } from "../../../shared/renderer-diagnostic";
 import type {
   ImageUploadFallbackRequest,
   ImageUploadFallbackResponse,
@@ -149,6 +150,7 @@ export type DesktopApi = {
   recordImageUploadNormalization?: (
     request: ImageUploadNormalizationLogRequest
   ) => Promise<void>;
+  logRendererDiagnostic?: (request: RendererDiagnosticLogRequest) => Promise<void>;
   reportRendererError?: (report: RendererErrorReport) => Promise<void>;
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
   onWindowFocus?: (callback: () => void) => () => void;

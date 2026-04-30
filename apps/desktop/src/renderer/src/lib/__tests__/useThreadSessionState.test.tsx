@@ -3198,4 +3198,212 @@ describe("useThreadSessionState", () => {
       usedPercent: (20_708 / 258_400) * 100,
     });
   });
+
+  it("does not keep list thinking after completed live activity is retained", async () => {
+    const agentEventListeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => {
+          agentEventListeners.delete(listener);
+        };
+      },
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "inProgress",
+              },
+            },
+          },
+        });
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: {
+                id: "command-1",
+                type: "commandExecution",
+                status: "in_progress",
+                command: "pnpm test",
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+
+    act(() => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "item/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: {
+                id: "command-1",
+                type: "commandExecution",
+                status: "completed",
+                command: "pnpm test",
+                aggregatedOutput: "Tests passed.",
+              },
+            },
+          },
+        });
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        status: "completed",
+        turn: expect.objectContaining({
+          id: "turn-1",
+          status: "completed",
+        }),
+      }),
+    ]);
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+  });
+
+  it("logs and clears stale thinking when a selected thread read proves the thread is idle", async () => {
+    const logRendererDiagnostic = vi.fn(async () => undefined);
+    const readThread = vi
+      .fn()
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }))
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        threadStatus: "idle",
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }));
+    const desktopApi: DesktopApi = {
+      logRendererDiagnostic,
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ currentThread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: currentThread,
+        }),
+      {
+        initialProps: {
+          currentThread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      result.current.setPendingStatusText("Thinking");
+    });
+
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+
+    rerender({
+      currentThread: buildThread({ id: "thread-1", updatedAt: 2_000 }),
+    });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    });
+
+    expect(logRendererDiagnostic).toHaveBeenCalledTimes(1);
+    expect(logRendererDiagnostic).toHaveBeenCalledWith({
+      details: expect.objectContaining({
+        threadKey: "codex:thread-1",
+        threadStatus: "idle",
+        reasons: expect.arrayContaining([
+          expect.objectContaining({ kind: "pendingStatus" }),
+        ]),
+      }),
+      level: "warn",
+      message: "stale thinking state cleared after idle thread read",
+    });
+  });
 });

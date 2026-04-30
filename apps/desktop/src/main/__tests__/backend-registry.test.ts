@@ -1513,6 +1513,45 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("forwards normalized read-thread status metadata", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/read"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.readThread({
+        backend: "codex",
+        threadId: "thread-1",
+      })
+    ).resolves.toMatchObject({
+      threadStatus: "idle",
+      replay: {
+        threadStatus: "idle",
+      },
+    });
+
+    await registry.close();
+  });
+
   it("updates execution mode through the current Codex thread owner", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read", "thread/resume"] },

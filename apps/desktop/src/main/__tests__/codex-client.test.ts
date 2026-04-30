@@ -1652,6 +1652,32 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("extracts thread status from thread/read", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-idle-status", {
+      thread: {
+        id: "thread-idle-status",
+        status: {
+          type: "idle",
+        },
+        turns: [],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(
+      client.readThread({ threadId: "thread-idle-status" })
+    ).resolves.toMatchObject({
+      threadStatus: "idle",
+    });
+
+    await client.close();
+  });
+
   it("preserves protocol thread/read activity groups at their captured item positions", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-captured-order", {
