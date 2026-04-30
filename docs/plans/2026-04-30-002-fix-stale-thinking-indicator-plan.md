@@ -1,7 +1,7 @@
 ---
 title: fix: Diagnose and clear stale thread thinking indicators
 type: fix
-status: active
+status: completed
 date: 2026-04-30
 origin: docs/brainstorms/2026-04-18-desktop-thread-refresh-model-requirements.md
 ---
@@ -262,7 +262,7 @@ premature idle notification alone remains insufficient.
 
 ## Implementation Units
 
-- [ ] **Unit 1: Derive the stale-thinking replay fixture**
+- [x] **Unit 1: Derive the stale-thinking replay fixture**
 
 **Goal:** Convert the live protocol capture for
 `019dde61-c9d6-70d2-9023-28669e27a63b` into a replay fixture that can reproduce
@@ -298,7 +298,7 @@ the stale row state.
 - The derived fixture can be loaded by `launchElectronApp` and advanced step by
   step without hand-editing the raw capture.
 
-- [ ] **Unit 2: Add thinking-state reasons and bounded diagnostics**
+- [x] **Unit 2: Add thinking-state reasons and bounded diagnostics**
 
 **Goal:** Make the renderer able to explain why it thinks a thread is active and
 log that explanation when selected-thread evidence proves otherwise.
@@ -344,7 +344,7 @@ log that explanation when selected-thread evidence proves otherwise.
 - Developers can inspect one structured log entry and see why the stale spinner
   existed.
 
-- [ ] **Unit 3: Normalize read-thread status for reconciliation**
+- [x] **Unit 3: Normalize read-thread status for reconciliation**
 
 **Goal:** Preserve the raw `thread/read` status through the normalized desktop API
 so renderer reconciliation can rely on explicit idle evidence.
@@ -382,7 +382,7 @@ so renderer reconciliation can rely on explicit idle evidence.
 - Renderer tests can simulate a fresh idle read without relying on private raw
   protocol shape.
 
-- [ ] **Unit 4: Fix thinking-state derivation and idle-read reconciliation**
+- [x] **Unit 4: Fix thinking-state derivation and idle-read reconciliation**
 
 **Goal:** Clear stale list thinking without hiding real active work.
 
@@ -420,7 +420,7 @@ so renderer reconciliation can rely on explicit idle evidence.
 - `thinkingThreadKeys` reflects active work only, not retained transcript
   richness.
 
-- [ ] **Unit 5: Add replay-backed E2E coverage for the row indicator**
+- [x] **Unit 5: Add replay-backed E2E coverage for the row indicator**
 
 **Goal:** Prove the full desktop flow: list row thinking appears while active,
 survives premature idle, and clears after terminal completion plus idle read.
