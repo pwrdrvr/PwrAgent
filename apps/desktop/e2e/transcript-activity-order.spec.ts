@@ -32,7 +32,7 @@ test("tool activity stays in protocol order when transcript work is collapsed", 
     const userIndex = transcriptText.indexOf("Replay the captured order.");
     const firstActivityIndex = transcriptText.indexOf("Worked for 1m 10s");
     const interimIndex = transcriptText.indexOf("Interim answer after the first tool.");
-    const secondActivityIndex = transcriptText.indexOf("Worked for 1m 10s", firstActivityIndex + 1);
+    const secondActivityIndex = transcriptText.indexOf("More work", interimIndex + 1);
     const finalIndex = transcriptText.indexOf("Done.");
 
     expect(userIndex).toBeGreaterThanOrEqual(0);
@@ -46,7 +46,7 @@ test("tool activity stays in protocol order when transcript work is collapsed", 
     await expect(app.window.getByText("Read a.ts (1.2s)")).toBeVisible();
     await expect(app.window.getByText("Read b.ts (2.5s)")).toBeHidden();
 
-    await app.window.getByRole("button", { name: /Worked for 1m 10s/ }).last().click();
+    await app.window.getByRole("button", { name: /More work/ }).click();
     await app.window.getByRole("button", { name: /Explored 1 file/ }).last().click();
     await expect(app.window.getByText("Read b.ts (2.5s)")).toBeVisible();
   } finally {
