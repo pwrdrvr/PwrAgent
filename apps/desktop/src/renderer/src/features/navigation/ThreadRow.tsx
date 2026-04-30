@@ -12,7 +12,7 @@ type ThreadRowProps = {
   thread: NavigationThreadSummary;
   onOpenContextMenu: (
     thread: NavigationThreadSummary,
-    position: { x: number; y: number }
+    position: { x: number; y: number; anchorTop?: number }
   ) => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
 };
@@ -72,6 +72,7 @@ export function ThreadRow(props: ThreadRowProps) {
           props.onOpenContextMenu(props.thread, {
             x: rect.left,
             y: rect.bottom + 4,
+            anchorTop: rect.top,
           });
         }}
       >

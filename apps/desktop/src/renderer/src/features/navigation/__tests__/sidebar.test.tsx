@@ -128,6 +128,7 @@ const directories: NavigationDirectorySummary[] = [
 ];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   cleanup();
 });
 
@@ -429,6 +430,85 @@ describe("Sidebar", () => {
       "Copy Local Path",
       "Copy Branch Name",
     ]);
+  });
+
+  it("flips the thread actions menu above the overflow button near the viewport bottom", () => {
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: 600,
+    });
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 640,
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function getBoundingClientRect(this: HTMLElement) {
+        if (this.classList.contains("thread-context-menu")) {
+          return {
+            bottom: 680,
+            height: 150,
+            left: 420,
+            right: 588,
+            top: 530,
+            width: 168,
+            x: 420,
+            y: 530,
+            toJSON: () => ({}),
+          };
+        }
+        if (this.getAttribute("aria-label") === "Open thread actions") {
+          return {
+            bottom: 530,
+            height: 26,
+            left: 420,
+            right: 450,
+            top: 500,
+            width: 30,
+            x: 420,
+            y: 500,
+            toJSON: () => ({}),
+          };
+        }
+        return {
+          bottom: 0,
+          height: 0,
+          left: 0,
+          right: 0,
+          top: 0,
+          width: 0,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        };
+      }
+    );
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+
+    expect(screen.getByRole("menu")).toHaveStyle({
+      left: "420px",
+      top: "346px",
+    });
   });
 
   it("copies thread context menu values", () => {
