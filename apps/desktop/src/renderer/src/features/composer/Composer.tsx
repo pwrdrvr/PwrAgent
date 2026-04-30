@@ -2411,21 +2411,21 @@ export function Composer(props: ComposerProps) {
               return;
             }
 
+            if (
+              event.key === "Backspace" &&
+              removeEditorSkillToken(event, "backward")
+            ) {
+              return;
+            }
+
+            if (
+              event.key === "Delete" &&
+              removeEditorSkillToken(event, "forward")
+            ) {
+              return;
+            }
+
             if (!hasAutocomplete) {
-              if (
-                event.key === "Backspace" &&
-                removeEditorSkillToken(event, "backward")
-              ) {
-                return;
-              }
-
-              if (
-                event.key === "Delete" &&
-                removeEditorSkillToken(event, "forward")
-              ) {
-                return;
-              }
-
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 void submitTurn(event.metaKey ? "steer" : "default");
