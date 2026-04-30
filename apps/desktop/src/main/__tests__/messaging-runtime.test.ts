@@ -239,8 +239,13 @@ function createAdapter(
       adapter.listener = listener;
     }),
     stop: vi.fn(async () => {}),
-    ...overrides,
+  } as DesktopMessagingAdapter & {
+    delivered: MessagingSurfaceIntent[];
+    listener?: (event: MessagingInboundEvent) => Promise<void>;
+    start: ReturnType<typeof vi.fn>;
+    stop: ReturnType<typeof vi.fn>;
   };
+  Object.assign(adapter, overrides);
 
   return adapter;
 }

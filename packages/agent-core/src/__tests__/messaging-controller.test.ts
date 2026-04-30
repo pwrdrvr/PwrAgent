@@ -7,6 +7,7 @@ import type {
   AppServerPendingRequestNotification,
   MessagingInboundCallbackEvent,
   MessagingInboundEvent,
+  MessagingInboundTextEvent,
   MessagingSurfaceIntent,
   NavigationSnapshot,
   StartTurnRequest,
@@ -332,11 +333,11 @@ async function createHarness(): Promise<{
     deliver: vi.fn(async (intent) => {
       delivered.push(intent);
       return {
-        channel: "telegram",
+        channel: "telegram" as const,
         deliveredAt: 1000,
-        outcome: "presented",
+        outcome: "presented" as const,
         surface: {
-          channel: "telegram",
+          channel: "telegram" as const,
           id: `surface:${intent.id}`,
         },
       };

@@ -93,7 +93,7 @@ export function textForTelegramIntent(intent: MessagingSurfaceIntent): string {
       return renderTelegramHtml(
         [
           intent.fallbackText ?? "Choose a project.",
-          ...intent.page.items.map((item, index) => `${index + 1}. ${item.name}`),
+          ...intent.page.items.map((item, index) => `${index + 1}. ${item.label}`),
         ].join("\n"),
         "plain",
       );

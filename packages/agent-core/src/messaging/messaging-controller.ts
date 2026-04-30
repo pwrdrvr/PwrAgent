@@ -111,10 +111,21 @@ export class MessagingController {
 
     const bindings = await this.options.store.findActiveBindingsForThread({
       backend: event.backend,
-      threadId: event.notification.params.threadId,
+      threadId: (
+        event.notification.params as {
+          threadId: ThreadIdentifier;
+        }
+      ).threadId,
     });
-    const text = event.notification.params.turn.output
-      .map((item) => item.text)
+    const turn = (
+      event.notification.params as {
+        turn: {
+          output: Array<{ text?: string }>;
+        };
+      }
+    ).turn;
+    const text = turn.output
+      .map((item) => item.text ?? "")
       .join("\n\n")
       .trim();
     if (!text) {
@@ -512,6 +523,7 @@ export class MessagingController {
         actor: event?.actor ?? {
           platformUserId: binding?.authorizedActorIds[0] ?? "unknown",
         },
+        action: "intent.deliver",
         backend: binding?.backend,
         bindingId: binding?.id ?? intent.bindingId,
         channel,

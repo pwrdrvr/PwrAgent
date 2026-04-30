@@ -80,7 +80,7 @@ export function textForDiscordIntent(intent: MessagingSurfaceIntent): string {
     case "project_picker":
       return [
         intent.fallbackText ?? "Choose a project.",
-        ...intent.page.items.map((item, index) => `${index + 1}. ${item.name}`),
+        ...intent.page.items.map((item, index) => `${index + 1}. ${item.label}`),
       ].join("\n");
     case "single_select":
       return intent.prompt;

@@ -252,7 +252,7 @@ describe("TelegramAdapter", () => {
         name: "secret.txt",
       },
     });
-    expect(api.getFile).toBeUndefined();
+    expect("getFile" in api).toBe(false);
   });
 
   it("sends image message intents through sendPhoto", async () => {
