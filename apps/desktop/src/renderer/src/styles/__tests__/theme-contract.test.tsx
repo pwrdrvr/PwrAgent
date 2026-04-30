@@ -19,6 +19,16 @@ function extractRootTokens(source: string): Record<string, string> {
   );
 }
 
+function extractRuleBody(source: string, selector: string): string {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const ruleMatch = source.match(new RegExp(`${escapedSelector}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`));
+  if (!ruleMatch?.groups?.body) {
+    throw new Error(`Expected app.css to define ${selector}`);
+  }
+
+  return ruleMatch.groups.body;
+}
+
 function expandHex(hex: string): string {
   const normalized = hex.replace("#", "");
   if (normalized.length === 3) {
@@ -124,6 +134,23 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toMatch(
       /\.transcript-list__items\s*\{[\s\S]*?padding-bottom:\s*(?:[4-9]\d|\d{3,})px;[\s\S]*?\}/
     );
+  });
+
+  it("keeps thread header titles tall enough for descenders", () => {
+    const compactTitleRule = extractRuleBody(css, ".thread-header__compact-title");
+    const threadRowTitleRule = extractRuleBody(css, ".thread-row__title");
+
+    expect(css).toMatch(
+      /\.thread-header__title,\s*\.thread-empty-state h2\s*\{[\s\S]*?line-height:\s*1\.16;[\s\S]*?\}/
+    );
+    expect(compactTitleRule).toContain("padding-bottom: 2px;");
+    expect(compactTitleRule).toContain("line-height: 1.25;");
+    expect(threadRowTitleRule).toContain("padding-bottom: 2px;");
+    expect(threadRowTitleRule).toContain("line-height: 1.25;");
+    expect(css).not.toMatch(
+      /\.thread-header--launchpad \.thread-header__title\s*\{[\s\S]*?line-height:\s*1\.05;[\s\S]*?\}/
+    );
+    expect(compactTitleRule).not.toContain("line-height: 1;");
   });
 
   it("keeps thinking scanner variants on one shared visible sweep", () => {
