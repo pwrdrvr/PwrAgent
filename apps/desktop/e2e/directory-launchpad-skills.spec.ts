@@ -319,6 +319,8 @@ test("directory launchpad skill autocomplete supports active keyboard selection"
       "aria-activedescendant",
       firstActiveOptionId ?? "",
     );
+    await expect(firstActiveOption).toHaveCSS("outline-style", "solid");
+    await expect(firstActiveOption).not.toHaveCSS("box-shadow", "none");
 
     await app.window.keyboard.press("ArrowDown");
     const secondActiveOption = listbox.locator('[aria-selected="true"]');

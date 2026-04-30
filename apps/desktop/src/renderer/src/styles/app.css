@@ -4232,6 +4232,7 @@ textarea {
 
 .composer__autocomplete-option {
   display: flex;
+  position: relative;
   width: 100%;
   min-width: 0;
   flex: 0 0 auto;
@@ -4243,12 +4244,31 @@ textarea {
   background: transparent;
   color: var(--text-primary);
   cursor: pointer;
+  outline: 0;
   text-align: left;
 }
 
-.composer__autocomplete-option:hover,
+.composer__autocomplete-option:hover {
+  background: var(--bg-panel-hover);
+}
+
 .composer__autocomplete-option.is-active {
-  background: var(--bg-row-active);
+  background:
+    linear-gradient(
+      90deg,
+      rgba(255, 138, 31, 0.28),
+      rgba(255, 138, 31, 0.16) 46%,
+      rgba(255, 138, 31, 0.08)
+    );
+  box-shadow:
+    inset 4px 0 0 var(--accent),
+    inset 0 0 0 1px var(--accent-border);
+  outline: 2px solid rgba(255, 179, 92, 0.65);
+  outline-offset: -2px;
+}
+
+.composer__autocomplete-option.is-active .composer__autocomplete-title {
+  color: var(--accent-bright);
 }
 
 .composer__autocomplete-title {
