@@ -1,7 +1,9 @@
 export { TelegramAdapter, createTelegramAdapter } from "./telegram-adapter.ts";
 export type {
-  TelegramApi,
+  TelegramBotApi,
+  TelegramBotLike,
   TelegramCallbackQuery,
+  TelegramChat,
   TelegramEditMessageTextRequest,
   TelegramMessage,
   TelegramPinChatMessageRequest,
@@ -10,7 +12,7 @@ export type {
   TelegramSentMessage,
   TelegramUnpinChatMessageRequest,
   TelegramUpdate,
-} from "./telegram-api.ts";
+} from "./telegram-adapter.ts";
 export {
   TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
   actionsForTelegramIntent,

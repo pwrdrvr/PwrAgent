@@ -1,10 +1,13 @@
-export { DiscordAdapter, createDiscordAdapter } from "./discord-adapter.ts";
 export type {
   DiscordApi,
   DiscordCreateMessageRequest,
+  DiscordGatewayConnection,
+  DiscordGatewayEvent,
+  DiscordGatewayListener,
   DiscordInteractionResponseRequest,
   DiscordMessage,
-} from "./discord-api.ts";
+} from "./discord-adapter.ts";
+export { DiscordAdapter, createDiscordAdapter } from "./discord-adapter.ts";
 export {
   DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES,
   actionsForDiscordIntent,
@@ -13,10 +16,4 @@ export {
   splitDiscordContent,
   textForDiscordIntent,
 } from "./discord-formatting.ts";
-export {
-  DiscordGateway,
-  type DiscordGatewayConnection,
-  type DiscordGatewayEvent,
-  type DiscordGatewayListener,
-} from "./discord-gateway.ts";
 export type { DiscordMessagingConfig } from "./discord-config.ts";

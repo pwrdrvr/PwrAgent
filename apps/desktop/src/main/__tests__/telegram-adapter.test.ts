@@ -14,7 +14,7 @@ import type {
 } from "@pwragnt/shared";
 import { TelegramAdapter } from "@pwragnt/messaging-provider-telegram";
 import type {
-  TelegramApi,
+  TelegramBotApi,
   TelegramEditMessageTextRequest,
   TelegramPinChatMessageRequest,
   TelegramSendMessageRequest,
@@ -111,7 +111,7 @@ describe("TelegramAdapter", () => {
       url: "https://example.com/telegram-webhook",
     });
     const adapter = new TelegramAdapter({
-      api: api as unknown as TelegramApi,
+      api: api as unknown as TelegramBotApi,
       config: {
         channel: "telegram",
         botToken: "telegram-token",
@@ -130,7 +130,7 @@ describe("TelegramAdapter", () => {
   it("registers PwrAgnt bot commands on startup", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({
-      api: api as unknown as TelegramApi,
+      api: api as unknown as TelegramBotApi,
       config: {
         channel: "telegram",
         botToken: "telegram-token",
@@ -170,7 +170,7 @@ describe("TelegramAdapter", () => {
   it("edits target Telegram messages for managed surface updates", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({
-      api: api as unknown as TelegramApi,
+      api: api as unknown as TelegramBotApi,
       config: {
         channel: "telegram",
         botToken: "telegram-token",
@@ -238,7 +238,7 @@ describe("TelegramAdapter", () => {
       new Error("message is not editable anymore"),
     );
     const adapter = new TelegramAdapter({
-      api: api as unknown as TelegramApi,
+      api: api as unknown as TelegramBotApi,
       config: {
         channel: "telegram",
         botToken: "telegram-token",
@@ -301,7 +301,7 @@ describe("TelegramAdapter", () => {
   it("pins and unpins Telegram status surfaces when requested", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({
-      api: api as unknown as TelegramApi,
+      api: api as unknown as TelegramBotApi,
       config: {
         channel: "telegram",
         botToken: "telegram-token",
@@ -451,7 +451,7 @@ describe("TelegramAdapter", () => {
       harness.api.sendMessage.mock.calls.at(-1)?.[0].reply_markup?.inline_keyboard[0]?.[0]
         ?.callback_data ?? "";
     const restartedAdapter = new TelegramAdapter({
-      api: harness.api as unknown as TelegramApi,
+      api: harness.api as unknown as TelegramBotApi,
       config: {
         channel: "telegram",
         botToken: "telegram-token",
@@ -575,7 +575,7 @@ describe("TelegramAdapter", () => {
     const events: MessagingInboundEvent[] = [];
     const api = createApi();
     const adapter = new TelegramAdapter({
-      api: api as unknown as TelegramApi,
+      api: api as unknown as TelegramBotApi,
       config: {
         channel: "telegram",
         botToken: "telegram-token",
@@ -621,7 +621,7 @@ describe("TelegramAdapter", () => {
     const events: MessagingInboundEvent[] = [];
     const api = createApi();
     const adapter = new TelegramAdapter({
-      api: api as unknown as TelegramApi,
+      api: api as unknown as TelegramBotApi,
       config: {
         channel: "telegram",
         botToken: "telegram-token",
@@ -669,7 +669,7 @@ describe("TelegramAdapter", () => {
     const events: MessagingInboundEvent[] = [];
     const api = createApi();
     const adapter = new TelegramAdapter({
-      api: api as unknown as TelegramApi,
+      api: api as unknown as TelegramBotApi,
       config: {
         channel: "telegram",
         botToken: "8378950683:telegram-token",
@@ -706,7 +706,7 @@ describe("TelegramAdapter", () => {
     const events: MessagingInboundEvent[] = [];
     const api = createApi();
     const adapter = new TelegramAdapter({
-      api: api as unknown as TelegramApi,
+      api: api as unknown as TelegramBotApi,
       config: {
         channel: "telegram",
         botToken: "8378950683:telegram-token",
@@ -750,7 +750,7 @@ describe("TelegramAdapter", () => {
   it("sends image message intents through sendPhoto", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({
-      api: api as unknown as TelegramApi,
+      api: api as unknown as TelegramBotApi,
       config: {
         channel: "telegram",
         botToken: "telegram-token",
@@ -819,7 +819,7 @@ async function createControllerHarness(): Promise<{
     turnId: "turn-1",
   }));
   const adapter = new TelegramAdapter({
-    api: api as unknown as TelegramApi,
+    api: api as unknown as TelegramBotApi,
     config: {
       channel: "telegram",
       botToken: "telegram-token",
@@ -854,7 +854,6 @@ function createApi(): {
   answerCallbackQuery: ReturnType<typeof vi.fn>;
   deleteWebhook: ReturnType<typeof vi.fn>;
   editMessageText: ReturnType<typeof vi.fn>;
-  getUpdates: ReturnType<typeof vi.fn>;
   getWebhookInfo: ReturnType<typeof vi.fn>;
   pinChatMessage: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -872,7 +871,6 @@ function createApi(): {
       },
       message_id: request.message_id,
     })),
-    getUpdates: vi.fn(async () => []),
     getWebhookInfo: vi.fn(async () => ({ url: "" })),
     pinChatMessage: vi.fn(async (_request: TelegramPinChatMessageRequest) => true),
     sendMessage: vi.fn(async (request: TelegramSendMessageRequest) => ({

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Bot } from "grammy";
 import type {
   MessagingAdapterState,
   MessagingCallbackHandleStore,
@@ -10,14 +11,6 @@ import type {
 } from "@pwragnt/messaging-interface";
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
-  TelegramApi,
-  TelegramApiError,
-  type TelegramCallbackQuery,
-  type TelegramMessage,
-  type TelegramSentMessage,
-  type TelegramUpdate,
-} from "./telegram-api.ts";
-import {
   actionsForTelegramIntent,
   splitTelegramHtml,
   TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
@@ -26,8 +19,6 @@ import {
 } from "./telegram-formatting.ts";
 
 const TELEGRAM_ALLOWED_UPDATES = ["message", "callback_query"];
-const TELEGRAM_LONG_POLL_TIMEOUT_SECONDS = 25;
-const TRANSIENT_ERROR_BACKOFF_MS = 2_000;
 
 type TelegramCallbackBinding = {
   actionId: string;
@@ -38,6 +29,124 @@ type TelegramDeliveryTarget = {
   chatId: number | string;
   messageId?: number;
   messageThreadId?: number;
+};
+
+export type TelegramUser = {
+  first_name?: string;
+  id: number;
+  is_bot?: boolean;
+  last_name?: string;
+  username?: string;
+};
+
+export type TelegramChat = {
+  id: number;
+  title?: string;
+  type: "private" | "group" | "supergroup" | "channel";
+};
+
+export type TelegramMessage = {
+  chat: TelegramChat;
+  date?: number;
+  document?: {
+    file_id: string;
+    file_name?: string;
+    mime_type?: string;
+  };
+  from?: TelegramUser;
+  message_id: number;
+  message_thread_id?: number;
+  photo?: Array<{
+    file_id: string;
+    file_size?: number;
+  }>;
+  pinned_message?: TelegramMessage;
+  text?: string;
+  video?: {
+    file_id: string;
+    mime_type?: string;
+  };
+  voice?: {
+    file_id: string;
+    mime_type?: string;
+  };
+};
+
+export type TelegramCallbackQuery = {
+  data?: string;
+  from: TelegramUser;
+  id: string;
+  message?: TelegramMessage;
+};
+
+export type TelegramUpdate = {
+  callback_query?: TelegramCallbackQuery;
+  message?: TelegramMessage;
+  update_id: number;
+};
+
+export type TelegramSendMessageRequest = {
+  chat_id: number | string;
+  disable_web_page_preview?: boolean;
+  message_thread_id?: number;
+  parse_mode?: "HTML";
+  reply_markup?: TelegramInlineKeyboardMarkup;
+  text: string;
+};
+
+export type TelegramEditMessageTextRequest = TelegramSendMessageRequest & {
+  message_id: number;
+};
+
+export type TelegramSendPhotoRequest = {
+  caption?: string;
+  chat_id: number | string;
+  message_thread_id?: number;
+  parse_mode?: "HTML";
+  photo: string;
+  reply_markup?: TelegramInlineKeyboardMarkup;
+};
+
+export type TelegramSentMessage = {
+  chat: TelegramChat;
+  message_id: number;
+};
+
+export type TelegramPinChatMessageRequest = {
+  chat_id: number | string;
+  disable_notification?: boolean;
+  message_id: number;
+};
+
+export type TelegramUnpinChatMessageRequest = {
+  chat_id: number | string;
+  message_id?: number;
+};
+
+export type TelegramBotApi = {
+  answerCallbackQuery(params: {
+    callback_query_id: string;
+    text?: string;
+  }): Promise<boolean>;
+  deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
+  editMessageText(request: TelegramEditMessageTextRequest): Promise<TelegramSentMessage>;
+  getWebhookInfo(): Promise<{ url: string }>;
+  pinChatMessage(request: TelegramPinChatMessageRequest): Promise<boolean>;
+  sendMessage(request: TelegramSendMessageRequest): Promise<TelegramSentMessage>;
+  sendPhoto(request: TelegramSendPhotoRequest): Promise<TelegramSentMessage>;
+  setMyCommands(params: {
+    commands: Array<{ command: string; description: string }>;
+  }): Promise<boolean>;
+  unpinChatMessage(request: TelegramUnpinChatMessageRequest): Promise<boolean>;
+};
+
+export type TelegramBotLike = {
+  api: TelegramBotApi;
+  catch?(handler: (error: unknown) => void): void;
+  handleUpdate?(update: TelegramUpdate): Promise<void>;
+  on?(filter: string, handler: (context: unknown) => void | Promise<void>): void;
+  start?(options?: { allowed_updates?: string[] }): Promise<void>;
+  stop?(): void | Promise<void>;
 };
 
 export type TelegramProviderAdapter = {
@@ -51,19 +160,17 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   readonly channel = "telegram" as const;
 
   private callbackBindings = new Map<string, TelegramCallbackBinding>();
-  private defaultApi?: TelegramApi;
+  private defaultBot?: TelegramBotLike;
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
-  private nextOffset: number | undefined;
   private readonly options: {
-    api?: TelegramApi;
+    api?: TelegramBotApi;
+    bot?: TelegramBotLike;
     config: TelegramMessagingConfig;
     now?: () => number;
     pollOnStart?: boolean;
-    sleep?: (ms: number) => Promise<void>;
     store?: MessagingCallbackHandleStore;
   };
-  private stopped = true;
-  private pollLoop?: Promise<void>;
+  private startPromise?: Promise<void>;
 
   constructor(options: TelegramAdapter["options"]) {
     this.options = options;
@@ -71,15 +178,16 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
     this.listener = listener;
-    this.stopped = false;
 
-    const webhookInfo = await this.api.getWebhookInfo();
+    this.registerBotHandlers();
+
+    const webhookInfo = await this.bot.api.getWebhookInfo();
     if (webhookInfo.url) {
-      await this.api.deleteWebhook({
+      await this.bot.api.deleteWebhook({
         drop_pending_updates: false,
       });
     }
-    await this.api.setMyCommands({
+    await this.bot.api.setMyCommands({
       commands: [
         {
           command: "resume",
@@ -105,14 +213,16 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     });
 
     if (this.options.pollOnStart !== false) {
-      this.pollLoop = this.runPollLoop();
+      this.startPromise = this.bot.start?.({
+        allowed_updates: [...TELEGRAM_ALLOWED_UPDATES],
+      });
     }
   }
 
   async stop(): Promise<void> {
-    this.stopped = true;
-    await this.pollLoop;
-    this.pollLoop = undefined;
+    await this.bot.stop?.();
+    await this.startPromise?.catch(() => undefined);
+    this.startPromise = undefined;
     this.listener = undefined;
   }
 
@@ -129,7 +239,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     if (intent.kind === "dismiss") {
       if (intent.delivery?.unpin && target.messageId) {
-        await this.api.unpinChatMessage({
+        await this.bot.api.unpinChatMessage({
           chat_id: target.chatId,
           message_id: target.messageId,
         });
@@ -163,7 +273,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     ) {
       try {
         sentMessages.push(
-          await this.api.editMessageText({
+          await this.bot.api.editMessageText({
             chat_id: target.chatId,
             disable_web_page_preview: true,
             message_id: target.messageId,
@@ -179,7 +289,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           throw error;
         }
         sentMessages.push(
-          await this.api.sendMessage({
+          await this.bot.api.sendMessage({
             chat_id: target.chatId,
             disable_web_page_preview: true,
             message_thread_id: target.messageThreadId,
@@ -192,7 +302,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       }
     } else if (image) {
       sentMessages.push(
-        await this.api.sendPhoto({
+        await this.bot.api.sendPhoto({
           caption: text.slice(0, 1024) || undefined,
           chat_id: target.chatId,
           message_thread_id: target.messageThreadId,
@@ -206,7 +316,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       const lastChunkIndex = chunks.length - 1;
       for (const [index, chunk] of chunks.entries()) {
         sentMessages.push(
-          await this.api.sendMessage({
+          await this.bot.api.sendMessage({
             chat_id: target.chatId,
             disable_web_page_preview: true,
             message_thread_id: target.messageThreadId,
@@ -221,7 +331,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const lastMessage = sentMessages.at(-1);
     if (intent.delivery?.pin && lastMessage) {
       try {
-        await this.api.pinChatMessage({
+        await this.bot.api.pinChatMessage({
           chat_id: target.chatId,
           disable_notification: true,
           message_id: lastMessage.message_id,
@@ -260,32 +370,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     if (update.callback_query) {
       await this.handleCallbackQuery(update.update_id, update.callback_query);
-    }
-  }
-
-  private async runPollLoop(): Promise<void> {
-    while (!this.stopped) {
-      try {
-        const updates = await this.api.getUpdates({
-          allowed_updates: TELEGRAM_ALLOWED_UPDATES,
-          offset: this.nextOffset,
-          timeout: TELEGRAM_LONG_POLL_TIMEOUT_SECONDS,
-        });
-
-        for (const update of updates) {
-          this.nextOffset = update.update_id + 1;
-          await this.handleUpdate(update);
-        }
-      } catch (error) {
-        if (this.stopped) {
-          return;
-        }
-        const retryAfterMs =
-          error instanceof TelegramApiError && error.details.retryAfterSeconds
-            ? error.details.retryAfterSeconds * 1000
-            : TRANSIENT_ERROR_BACKOFF_MS;
-        await this.sleep(retryAfterMs);
-      }
     }
   }
 
@@ -351,7 +435,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     updateId: number,
     callbackQuery: TelegramCallbackQuery,
   ): Promise<void> {
-    await this.api.answerCallbackQuery({
+    await this.bot.api.answerCallbackQuery({
       callback_query_id: callbackQuery.id,
     });
 
@@ -569,18 +653,50 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return message.date ? message.date * 1000 : this.now();
   }
 
-  private get api(): TelegramApi {
-    this.defaultApi ??= new TelegramApi({ botToken: this.options.config.botToken });
-    return this.options.api ?? this.defaultApi;
+  private registerBotHandlers(): void {
+    if (!this.bot.on) {
+      return;
+    }
+    this.bot.on("message", async (context) => {
+      const update = context as {
+        message?: TelegramMessage;
+        update?: { update_id?: number };
+      };
+      if (update.message) {
+        await this.handleMessage(update.update?.update_id ?? this.now(), update.message);
+      }
+    });
+    this.bot.on("callback_query:data", async (context) => {
+      const update = context as {
+        callbackQuery?: TelegramCallbackQuery;
+        update?: { update_id?: number };
+      };
+      if (update.callbackQuery) {
+        await this.handleCallbackQuery(
+          update.update?.update_id ?? this.now(),
+          update.callbackQuery,
+        );
+      }
+    });
+  }
+
+  private get bot(): TelegramBotLike {
+    if (this.options.bot) {
+      return this.options.bot;
+    }
+    if (this.options.api) {
+      return {
+        api: this.options.api,
+      };
+    }
+    this.defaultBot ??= new Bot(this.options.config.botToken) as unknown as TelegramBotLike;
+    return this.defaultBot;
   }
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
   }
 
-  private async sleep(ms: number): Promise<void> {
-    await (this.options.sleep?.(ms) ?? new Promise((resolve) => setTimeout(resolve, ms)));
-  }
 }
 
 export function createTelegramAdapter(

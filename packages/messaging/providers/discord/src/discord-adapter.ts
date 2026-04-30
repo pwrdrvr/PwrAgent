@@ -1,4 +1,15 @@
 import { createHash } from "node:crypto";
+import {
+  Client,
+  Events,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  type ButtonInteraction,
+  type Interaction,
+  type Message,
+  type User,
+} from "discord.js";
 import type {
   MessagingAdapterState,
   MessagingDeliveryResult,
@@ -9,30 +20,130 @@ import type {
 } from "@pwragnt/messaging-interface";
 import type { DiscordMessagingConfig } from "./discord-config.ts";
 import {
-  defensiveAllowedMentions,
-  DiscordApi,
-  type DiscordCreateMessageRequest,
-  type DiscordMessage,
-} from "./discord-api.ts";
-import {
   actionsForDiscordIntent,
   buildDiscordComponents,
   DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES,
+  type DiscordActionRowComponent,
   splitDiscordContent,
   textForDiscordIntent,
 } from "./discord-formatting.ts";
-import {
-  DiscordGateway,
-  type DiscordGatewayConnection,
-  type DiscordGatewayEvent,
-  type DiscordInteractionCreateDispatch,
-  type DiscordMessageCreateDispatch,
-  type DiscordUser,
-} from "./discord-gateway.ts";
 
 type DiscordComponentBinding = {
   actionId: string;
   value?: MessagingJsonValue;
+};
+
+export type DiscordAllowedMentions = {
+  parse: string[];
+  replied_user?: boolean;
+  roles?: string[];
+  users?: string[];
+};
+
+export type DiscordCreateMessageRequest = {
+  allowed_mentions: DiscordAllowedMentions;
+  components?: DiscordActionRowComponent[];
+  content: string;
+  embeds?: Array<{
+    image?: {
+      url: string;
+    };
+  }>;
+};
+
+export type DiscordInteractionResponseRequest = {
+  data?: DiscordCreateMessageRequest;
+  type: 4 | 6 | 7;
+};
+
+export type DiscordMessage = {
+  channel_id: string;
+  content?: string;
+  guild_id?: string;
+  id: string;
+};
+
+export type DiscordUser = {
+  bot?: boolean;
+  discriminator?: string;
+  global_name?: string | null;
+  id: string;
+  username: string;
+};
+
+export type DiscordMessageCreateDispatch = {
+  attachments?: Array<{
+    content_type?: string;
+    filename: string;
+    id: string;
+    size?: number;
+    url: string;
+  }>;
+  author: DiscordUser;
+  channel_id: string;
+  content?: string;
+  guild_id?: string;
+  id: string;
+};
+
+export type DiscordInteractionCreateDispatch = {
+  channel_id: string;
+  data?: {
+    custom_id?: string;
+  };
+  guild_id?: string;
+  id: string;
+  member?: {
+    nick?: string | null;
+    user?: DiscordUser;
+  };
+  message?: {
+    id: string;
+  };
+  token: string;
+  type: number;
+  user?: DiscordUser;
+};
+
+export type DiscordGatewayEvent =
+  | {
+      d: DiscordMessageCreateDispatch;
+      op: 0;
+      s?: number;
+      t: "MESSAGE_CREATE";
+    }
+  | {
+      d: DiscordInteractionCreateDispatch;
+      op: 0;
+      s?: number;
+      t: "INTERACTION_CREATE";
+    };
+
+export type DiscordGatewayListener = (event: DiscordGatewayEvent) => void | Promise<void>;
+
+export type DiscordGatewayConnection = {
+  close(): Promise<void>;
+  onEvent(listener: DiscordGatewayListener): () => void;
+  start(): Promise<void>;
+};
+
+export type DiscordApi = {
+  createInteractionResponse(
+    interactionId: string,
+    interactionToken: string,
+    request: DiscordInteractionResponseRequest,
+  ): Promise<void>;
+  createMessage(
+    channelId: string,
+    request: DiscordCreateMessageRequest,
+  ): Promise<DiscordMessage>;
+};
+
+type DiscordAdapterOptions = {
+  api?: DiscordApi;
+  config: DiscordMessagingConfig;
+  gateway?: DiscordGatewayConnection;
+  now?: () => number;
 };
 
 export type DiscordProviderAdapter = {
@@ -49,15 +160,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private defaultApi?: DiscordApi;
   private defaultGateway?: DiscordGatewayConnection;
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
-  private readonly options: {
-    api?: DiscordApi;
-    config: DiscordMessagingConfig;
-    gateway?: DiscordGatewayConnection;
-    now?: () => number;
-  };
+  private readonly options: DiscordAdapterOptions;
   private unsubscribeGateway?: () => void;
 
-  constructor(options: DiscordAdapter["options"]) {
+  constructor(options: DiscordAdapterOptions) {
     this.options = options;
   }
 
@@ -346,14 +452,12 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   }
 
   private get api(): DiscordApi {
-    this.defaultApi ??= new DiscordApi({ botToken: this.options.config.botToken });
+    this.defaultApi ??= new DiscordRestApi(this.options.config.botToken);
     return this.options.api ?? this.defaultApi;
   }
 
   private get gateway(): DiscordGatewayConnection {
-    this.defaultGateway ??= new DiscordGateway({
-      botToken: this.options.config.botToken,
-    });
+    this.defaultGateway ??= new DiscordJsGatewayConnection(this.options.config);
     return this.options.gateway ?? this.defaultGateway;
   }
 
@@ -366,4 +470,160 @@ export function createDiscordAdapter(config: DiscordMessagingConfig): DiscordAda
   return new DiscordAdapter({
     config,
   });
+}
+
+class DiscordRestApi implements DiscordApi {
+  private readonly rest: REST;
+
+  constructor(botToken: string) {
+    this.rest = new REST({ version: "10" }).setToken(botToken);
+  }
+
+  async createMessage(
+    channelId: string,
+    request: DiscordCreateMessageRequest,
+  ): Promise<DiscordMessage> {
+    return (await this.rest.post(Routes.channelMessages(channelId), {
+      body: request,
+    })) as DiscordMessage;
+  }
+
+  async createInteractionResponse(
+    interactionId: string,
+    interactionToken: string,
+    request: DiscordInteractionResponseRequest,
+  ): Promise<void> {
+    await this.rest.post(Routes.interactionCallback(interactionId, interactionToken), {
+      body: request,
+    });
+  }
+}
+
+class DiscordJsGatewayConnection implements DiscordGatewayConnection {
+  private readonly client: Client;
+  private readonly config: DiscordMessagingConfig;
+  private readonly listeners = new Set<DiscordGatewayListener>();
+
+  constructor(config: DiscordMessagingConfig) {
+    this.config = config;
+    this.client = new Client({
+      intents: [
+        GatewayIntentBits.DirectMessages,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.MessageContent,
+      ],
+    });
+    this.registerHandlers();
+  }
+
+  async start(): Promise<void> {
+    await this.client.login(this.config.botToken);
+  }
+
+  async close(): Promise<void> {
+    this.client.removeAllListeners();
+    this.client.destroy();
+  }
+
+  onEvent(listener: DiscordGatewayListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private registerHandlers(): void {
+    this.client.on(Events.MessageCreate, (message) => {
+      void this.emit({
+        d: messageToDispatch(message),
+        op: 0,
+        t: "MESSAGE_CREATE",
+      });
+    });
+    this.client.on(Events.InteractionCreate, (interaction) => {
+      const dispatch = interactionToDispatch(interaction);
+      if (!dispatch) {
+        return;
+      }
+      void this.emit({
+        d: dispatch,
+        op: 0,
+        t: "INTERACTION_CREATE",
+      });
+    });
+  }
+
+  private async emit(event: DiscordGatewayEvent): Promise<void> {
+    await Promise.all([...this.listeners].map(async (listener) => listener(event)));
+  }
+}
+
+function defensiveAllowedMentions(): DiscordAllowedMentions {
+  return {
+    parse: [],
+    replied_user: false,
+    roles: [],
+    users: [],
+  };
+}
+
+function messageToDispatch(message: Message): DiscordMessageCreateDispatch {
+  return {
+    attachments: [...message.attachments.values()].map((attachment) => ({
+      content_type: attachment.contentType ?? undefined,
+      filename: attachment.name,
+      id: attachment.id,
+      size: attachment.size,
+      url: attachment.url,
+    })),
+    author: userToDiscordUser(message.author),
+    channel_id: message.channelId,
+    content: message.content,
+    guild_id: message.guildId ?? undefined,
+    id: message.id,
+  };
+}
+
+function interactionToDispatch(
+  interaction: Interaction,
+): DiscordInteractionCreateDispatch | undefined {
+  if (!interaction.isButton()) {
+    return undefined;
+  }
+
+  const buttonInteraction = interaction as ButtonInteraction;
+  return {
+    channel_id: buttonInteraction.channelId,
+    data: {
+      custom_id: buttonInteraction.customId,
+    },
+    guild_id: buttonInteraction.guildId ?? undefined,
+    id: buttonInteraction.id,
+    member: buttonInteraction.inGuild()
+      ? {
+          nick:
+            "nickname" in buttonInteraction.member
+              ? buttonInteraction.member.nickname
+              : null,
+          user: userToDiscordUser(buttonInteraction.user),
+        }
+      : undefined,
+    message: {
+      id: buttonInteraction.message.id,
+    },
+    token: buttonInteraction.token,
+    type: buttonInteraction.type,
+    user: userToDiscordUser(buttonInteraction.user),
+  };
+}
+
+function userToDiscordUser(user: User): DiscordUser {
+  return {
+    bot: user.bot,
+    discriminator: user.discriminator,
+    global_name: user.globalName,
+    id: user.id,
+    username: user.username,
+  };
 }

@@ -418,7 +418,7 @@ flowchart TB
 **Verification:**
 - Discord adapter behavior is driven by discord.js, with PwrAgnt-specific formatting and workflow still isolated.
 
-- [ ] **Unit 7: Remove hand-rolled platform transports and tighten boundaries**
+- [x] **Unit 7: Remove hand-rolled platform transports and tighten boundaries**
 
 **Goal:** Delete now-obsolete raw Telegram/Discord API and Gateway code, leaving only library-backed adapters and desktop-local channel policy helpers.
 
@@ -427,12 +427,14 @@ flowchart TB
 **Dependencies:** Unit 5, Unit 6
 
 **Files:**
-- Delete/Modify: `apps/desktop/src/main/messaging/telegram-api.ts`
-- Delete/Modify: `apps/desktop/src/main/messaging/discord-api.ts`
-- Delete: `apps/desktop/src/main/messaging/discord-gateway.ts`
-- Delete/Move: `apps/desktop/src/main/__tests__/telegram-adapter.test.ts`
-- Delete/Move: `apps/desktop/src/main/__tests__/discord-adapter.test.ts`
-- Modify: `apps/desktop/src/main/__tests__/discord-gateway.test.ts` if present
+- Delete: `packages/messaging/providers/telegram/src/telegram-api.ts`
+- Delete: `packages/messaging/providers/discord/src/discord-api.ts`
+- Delete: `packages/messaging/providers/discord/src/discord-gateway.ts`
+- Modify: `packages/messaging/providers/telegram/src/telegram-adapter.ts`
+- Modify: `packages/messaging/providers/discord/src/discord-adapter.ts`
+- Modify: `apps/desktop/src/main/__tests__/telegram-adapter.test.ts`
+- Modify: `apps/desktop/src/main/__tests__/discord-adapter.test.ts`
+- Delete: `packages/messaging/providers/discord/src/__tests__/discord-gateway.test.ts`
 - Test: `apps/desktop/src/main/__tests__/messaging-provider-loader.test.ts`
 
 **Approach:**
