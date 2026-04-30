@@ -60,9 +60,9 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
 
     const webhookInfo = await this.api.getWebhookInfo();
     if (webhookInfo.url) {
-      throw new Error(
-        "Telegram webhook is configured; disable the webhook before using local long polling.",
-      );
+      await this.api.deleteWebhook({
+        drop_pending_updates: false,
+      });
     }
 
     if (this.options.pollOnStart !== false) {

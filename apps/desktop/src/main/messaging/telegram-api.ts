@@ -120,6 +120,10 @@ export class TelegramApi {
     return await this.request<TelegramWebhookInfo>("getWebhookInfo", {});
   }
 
+  async deleteWebhook(params: { drop_pending_updates?: boolean } = {}): Promise<boolean> {
+    return await this.request<boolean>("deleteWebhook", params);
+  }
+
   async getUpdates(params: {
     allowed_updates?: string[];
     limit?: number;

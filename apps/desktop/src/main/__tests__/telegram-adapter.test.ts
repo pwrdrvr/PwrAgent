@@ -75,6 +75,28 @@ describe("TelegramAdapter", () => {
     expect(callbackData).not.toContain("thread-1");
   });
 
+  it("clears an existing webhook before starting local long polling", async () => {
+    const api = createApi();
+    api.getWebhookInfo.mockResolvedValueOnce({
+      url: "https://example.com/telegram-webhook",
+    });
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      pollOnStart: false,
+    });
+
+    await adapter.start(async () => {});
+
+    expect(api.deleteWebhook).toHaveBeenCalledWith({
+      drop_pending_updates: false,
+    });
+  });
+
   it("resolves callback handles and acknowledges callback queries", async () => {
     const harness = await createControllerHarness();
 
@@ -359,6 +381,7 @@ async function createControllerHarness(): Promise<{
 
 function createApi(): {
   answerCallbackQuery: ReturnType<typeof vi.fn>;
+  deleteWebhook: ReturnType<typeof vi.fn>;
   getUpdates: ReturnType<typeof vi.fn>;
   getWebhookInfo: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -366,6 +389,7 @@ function createApi(): {
 } {
   return {
     answerCallbackQuery: vi.fn(async () => true),
+    deleteWebhook: vi.fn(async () => true),
     getUpdates: vi.fn(async () => []),
     getWebhookInfo: vi.fn(async () => ({ url: "" })),
     sendMessage: vi.fn(async (request: TelegramSendMessageRequest) => ({

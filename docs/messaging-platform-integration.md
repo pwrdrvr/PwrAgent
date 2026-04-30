@@ -68,7 +68,7 @@ Run the desktop app with the desired environment variables configured.
 
 Telegram:
 
-1. Confirm no Telegram webhook is configured for the bot.
+1. Start PwrAgnt with `pnpm dev:op`; if the bot has a webhook configured, PwrAgnt clears it before long polling.
 2. Send `/threads` from an allowlisted Telegram user.
 3. Verify a numbered thread picker appears with inline buttons.
 4. Choose a thread by button, then repeat by replying `1`.
