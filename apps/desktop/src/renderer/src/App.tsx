@@ -1,5 +1,7 @@
 import { useState, type CSSProperties, type PointerEvent } from "react";
 import { Sidebar } from "./features/navigation/Sidebar";
+import { SettingsScreen } from "./features/settings/SettingsScreen";
+import { useDesktopSettings } from "./features/settings/useDesktopSettings";
 import { ThreadView } from "./features/thread-detail/ThreadView";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi } from "./lib/desktop-api";
@@ -10,7 +12,9 @@ import { useThreadSkills } from "./lib/useThreadSkills";
 
 export function App() {
   const [sidebarWidth, setSidebarWidth] = useState(408);
+  const [mainView, setMainView] = useState<"thread" | "settings">("thread");
   const desktopApi = useDesktopApi();
+  const settings = useDesktopSettings(desktopApi);
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
   const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);
@@ -69,10 +73,18 @@ export function App() {
         selectedItemKey={navigation.selectedItemKey}
         thinkingThreadKeys={session.thinkingThreadKeys}
         threads={navigation.threads}
+        settingsActive={mainView === "settings"}
         onBrowseModeChange={navigation.setBrowseMode}
         onCreateThread={navigation.createThread}
-        onOpenLaunchpad={navigation.openDirectoryLaunchpad}
-        onSelectThread={navigation.selectThread}
+        onOpenLaunchpad={async (directory, preferredBackend) => {
+          setMainView("thread");
+          await navigation.openDirectoryLaunchpad(directory, preferredBackend);
+        }}
+        onOpenSettings={() => setMainView("settings")}
+        onSelectThread={(thread) => {
+          setMainView("thread");
+          navigation.selectThread(thread);
+        }}
         onArchiveThread={navigation.archiveThread}
         onRenameThread={navigation.renameThread}
         onResizeStart={startSidebarResize}
@@ -80,6 +92,12 @@ export function App() {
       />
 
       <main className="app-main">
+        {mainView === "settings" ? (
+          <SettingsScreen
+            settings={settings}
+            onClose={() => setMainView("thread")}
+          />
+        ) : (
         <ThreadView
           activeTurnId={session.activeTurnId}
           activeTurnStartedAt={session.activeTurnStartedAt}
@@ -96,6 +114,7 @@ export function App() {
                 backend.available
             )
           }
+          composerImplementation={settings.composerImplementation}
           desktopApi={desktopApi}
           launchpadError={navigation.launchpadError}
           loading={session.loading}
@@ -164,6 +183,7 @@ export function App() {
           removeOptimisticMessage={session.removeOptimisticMessage}
           transcriptViewport={session.viewport}
         />
+        )}
       </main>
     </div>
   );

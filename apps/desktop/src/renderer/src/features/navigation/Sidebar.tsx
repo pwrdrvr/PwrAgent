@@ -41,6 +41,7 @@ type SidebarProps = {
   archiveThreadError?: string;
   renameThreadError?: string;
   runtimeIdentity?: RuntimeIdentity;
+  settingsActive?: boolean;
   approvalRequestThreadKeys?: Record<string, boolean>;
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
@@ -51,6 +52,7 @@ type SidebarProps = {
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
+  onOpenSettings?: () => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRenameThread?: (thread: NavigationThreadSummary, name: string) => Promise<void>;
@@ -287,6 +289,15 @@ export function Sidebar(props: SidebarProps) {
         </div>
 
         <div className="sidebar__masthead-actions">
+          <button
+            aria-label="Open settings"
+            aria-pressed={props.settingsActive}
+            className={`sidebar__icon-button${props.settingsActive ? " is-active" : ""}`}
+            type="button"
+            onClick={props.onOpenSettings}
+          >
+            <span aria-hidden="true">⚙</span>
+          </button>
           <div className="sidebar__new-thread">
             <button
               className="button button--primary"
