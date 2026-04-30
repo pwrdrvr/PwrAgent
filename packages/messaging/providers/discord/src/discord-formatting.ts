@@ -2,7 +2,7 @@ import type {
   MessagingContentPart,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
-} from "@pwragnt/shared";
+} from "@pwragnt/messaging-interface";
 
 export const DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES = 100;
 export const DISCORD_MESSAGE_CONTENT_LIMIT = 2000;

@@ -90,7 +90,7 @@ async function loadMessagingProviderModule(
 const defaultMessagingProviderRegistry: DesktopMessagingProviderRegistry = {
   discord: {
     async load() {
-      const module = await import("./discord-adapter");
+      const module = await import("@pwragnt/messaging-provider-discord");
       return {
         createAdapter({ config }) {
           return config.discord ? module.createDiscordAdapter(config.discord) : undefined;

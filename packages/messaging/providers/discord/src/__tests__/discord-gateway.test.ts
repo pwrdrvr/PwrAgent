@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DiscordGateway } from "../messaging/discord-gateway";
+import { DiscordGateway } from "../discord-gateway";
 
 describe("DiscordGateway", () => {
   it("opens a Discord Gateway socket and identifies after hello", async () => {

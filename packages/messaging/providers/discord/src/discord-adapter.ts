@@ -6,9 +6,8 @@ import type {
   MessagingJsonValue,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
-} from "@pwragnt/shared";
-import type { DesktopMessagingAdapter } from "./messaging-runtime";
-import type { DiscordMessagingConfig } from "./messaging-config";
+} from "@pwragnt/messaging-interface";
+import type { DiscordMessagingConfig } from "./discord-config";
 import {
   defensiveAllowedMentions,
   DiscordApi,
@@ -36,7 +35,14 @@ type DiscordComponentBinding = {
   value?: MessagingJsonValue;
 };
 
-export class DiscordAdapter implements DesktopMessagingAdapter {
+export type DiscordProviderAdapter = {
+  channel: "discord";
+  deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
+  stop?(): Promise<void>;
+};
+
+export class DiscordAdapter implements DiscordProviderAdapter {
   readonly channel = "discord" as const;
 
   private componentBindings = new Map<string, DiscordComponentBinding>();

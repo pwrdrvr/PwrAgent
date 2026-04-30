@@ -372,7 +372,7 @@ flowchart TB
 **Verification:**
 - Telegram adapter code uses grammY for platform transport and Bot API calls; PwrAgnt logic remains in desktop workflow/formatting helpers.
 
-- [ ] **Unit 6: Implement the Discord provider package with discord.js**
+- [x] **Unit 6: Implement the Discord provider package with discord.js**
 
 **Goal:** Use `discord.js` for Discord Gateway, REST, messages, interactions, components, reconnects, and intent handling.
 

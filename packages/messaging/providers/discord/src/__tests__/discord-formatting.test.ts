@@ -6,7 +6,7 @@ import {
   sanitizeDiscordContent,
   splitDiscordContent,
   textForDiscordIntent,
-} from "../messaging/discord-formatting";
+} from "../discord-formatting";
 
 describe("discord formatting", () => {
   it("preserves markdown while neutralizing broad mentions", () => {

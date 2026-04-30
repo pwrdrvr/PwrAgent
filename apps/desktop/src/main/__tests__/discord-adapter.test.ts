@@ -6,21 +6,23 @@ import { MessagingController } from "../messaging/core/messaging-controller";
 import { MessagingStore } from "../messaging/core/messaging-store";
 import type {
   MessagingInboundEvent,
+} from "@pwragnt/messaging-interface";
+import type {
   NavigationSnapshot,
   StartTurnRequest,
 } from "@pwragnt/shared";
-import { DiscordAdapter } from "../messaging/discord-adapter";
+import { DiscordAdapter } from "@pwragnt/messaging-provider-discord";
 import type {
   DiscordApi,
   DiscordCreateMessageRequest,
   DiscordInteractionResponseRequest,
-} from "../messaging/discord-api";
-import { DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES } from "../messaging/discord-formatting";
+} from "@pwragnt/messaging-provider-discord";
+import { DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES } from "@pwragnt/messaging-provider-discord";
 import type {
   DiscordGatewayConnection,
   DiscordGatewayEvent,
   DiscordGatewayListener,
-} from "../messaging/discord-gateway";
+} from "@pwragnt/messaging-provider-discord";
 
 const tempDirs: string[] = [];
 

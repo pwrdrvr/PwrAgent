@@ -21,6 +21,7 @@
   "dependencies": {
     "@pwragnt/agent-core": "workspace:*",
     "@pwragnt/messaging-interface": "workspace:*",
+    "@pwragnt/messaging-provider-discord": "workspace:*",
     "@pwragnt/messaging-provider-telegram": "workspace:*",
     "@pwragnt/shared": "workspace:*",
     "@tiptap/extension-mention": "^3.22.5",

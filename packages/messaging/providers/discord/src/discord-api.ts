@@ -1,3 +1,4 @@
+import { REST, Routes } from "discord.js";
 import type { DiscordActionRowComponent } from "./discord-formatting";
 
 export type DiscordAllowedMentions = {
@@ -48,6 +49,7 @@ export type DiscordApiFetch = typeof fetch;
 
 export class DiscordApi {
   private readonly baseUrl: string;
+  private readonly rest?: REST;
 
   constructor(
     private readonly options: {
@@ -57,12 +59,22 @@ export class DiscordApi {
     },
   ) {
     this.baseUrl = options.baseUrl?.replace(/\/$/, "") ?? "https://discord.com/api/v10";
+    this.rest =
+      options.fetch || options.baseUrl
+        ? undefined
+        : new REST({ version: "10" }).setToken(options.botToken);
   }
 
   async createMessage(
     channelId: string,
     request: DiscordCreateMessageRequest,
   ): Promise<DiscordMessage> {
+    if (this.rest) {
+      return (await this.rest.post(Routes.channelMessages(channelId), {
+        body: request,
+      })) as DiscordMessage;
+    }
+
     return await this.request<DiscordMessage>(
       "POST",
       `/channels/${encodeURIComponent(channelId)}/messages`,
@@ -75,6 +87,13 @@ export class DiscordApi {
     interactionToken: string,
     request: DiscordInteractionResponseRequest,
   ): Promise<void> {
+    if (this.rest) {
+      await this.rest.post(Routes.interactionCallback(interactionId, interactionToken), {
+        body: request,
+      });
+      return;
+    }
+
     await this.request<void>(
       "POST",
       `/interactions/${encodeURIComponent(interactionId)}/${encodeURIComponent(
