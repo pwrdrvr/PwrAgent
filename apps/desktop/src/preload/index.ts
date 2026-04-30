@@ -53,10 +53,17 @@ import type {
   StartTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  ClearDesktopSettingsSecretRequest,
+  DesktopSettingsWriteResponse,
+  ReadDesktopSettingsRequest,
+  ReadDesktopSettingsResponse,
+  RefreshDesktopCodexDiscoveryRequest,
+  ReplaceDesktopSettingsSecretRequest,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
   UpdateThreadExpectedBranchRequest,
   UpdateThreadExpectedBranchResponse,
+  WriteDesktopSettingsConfigRequest,
 } from "@pwragnt/shared";
 import type { RendererErrorReport } from "../shared/renderer-error";
 import type { RendererDiagnosticLogRequest } from "../shared/renderer-diagnostic";
@@ -100,6 +107,11 @@ import {
   PRELOAD_LOG_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
   RUNTIME_IDENTITY_CHANNEL,
+  SETTINGS_CLEAR_SECRET_CHANNEL,
+  SETTINGS_READ_CHANNEL,
+  SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
+  SETTINGS_REPLACE_SECRET_CHANNEL,
+  SETTINGS_WRITE_CONFIG_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
 } from "../shared/ipc";
 import type { RuntimeIdentity } from "../shared/runtime-identity";
@@ -147,6 +159,26 @@ const desktopApi = Object.freeze({
     request?: ListBackendsRequest
   ): Promise<ListBackendsResponse> =>
     await ipcRenderer.invoke(BACKEND_LIST_CHANNEL, request),
+  readSettings: async (
+    request?: ReadDesktopSettingsRequest,
+  ): Promise<ReadDesktopSettingsResponse> =>
+    await ipcRenderer.invoke(SETTINGS_READ_CHANNEL, request),
+  writeSettingsConfig: async (
+    request: WriteDesktopSettingsConfigRequest,
+  ): Promise<DesktopSettingsWriteResponse> =>
+    await ipcRenderer.invoke(SETTINGS_WRITE_CONFIG_CHANNEL, request),
+  replaceSettingsSecret: async (
+    request: ReplaceDesktopSettingsSecretRequest,
+  ): Promise<DesktopSettingsWriteResponse> =>
+    await ipcRenderer.invoke(SETTINGS_REPLACE_SECRET_CHANNEL, request),
+  clearSettingsSecret: async (
+    request: ClearDesktopSettingsSecretRequest,
+  ): Promise<DesktopSettingsWriteResponse> =>
+    await ipcRenderer.invoke(SETTINGS_CLEAR_SECRET_CHANNEL, request),
+  refreshCodexDiscovery: async (
+    request?: RefreshDesktopCodexDiscoveryRequest,
+  ): Promise<ReadDesktopSettingsResponse> =>
+    await ipcRenderer.invoke(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL, request),
   readThread: async (
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> =>

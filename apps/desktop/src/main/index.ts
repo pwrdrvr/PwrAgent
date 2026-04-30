@@ -14,6 +14,10 @@ import {
   disposeRuntimeIdentityIpcHandlers,
   registerRuntimeIdentityIpcHandlers,
 } from "./ipc/runtime-identity";
+import {
+  disposeSettingsIpcHandlers,
+  registerSettingsIpcHandlers,
+} from "./ipc/settings";
 import { initializeMainLogger } from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
 import { createMainWindow } from "./window";
@@ -58,6 +62,7 @@ export function bootstrapApp(): void {
     registerImageNormalizationIpcHandlers();
     registerPreloadLogIpcHandlers();
     registerRendererErrorIpcHandlers();
+    registerSettingsIpcHandlers();
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
     }
@@ -84,6 +89,7 @@ export function bootstrapApp(): void {
     disposeAgentIpcHandlers();
     disposeImageNormalizationIpcHandlers();
     disposePreloadLogIpcHandlers();
+    disposeSettingsIpcHandlers();
     if (isDevelopment) {
       disposeRuntimeIdentityIpcHandlers();
     }
