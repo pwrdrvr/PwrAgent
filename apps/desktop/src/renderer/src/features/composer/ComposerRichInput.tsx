@@ -20,6 +20,7 @@ export type ComposerSkillToken = AppServerSkillSummary & {
 };
 
 export type ComposerRichInputHandle = {
+  deleteSelection: (direction: "backward" | "forward") => void;
   focus: () => void;
   readonly selectionEnd: number;
   readonly selectionStart: number;
@@ -297,27 +298,53 @@ function getSelectionIndexes(
   }
 
   const range = selection.getRangeAt(0);
-  if (!editor.contains(range.startContainer)) {
+  const containsStart = editor.contains(range.startContainer);
+  const containsEnd = editor.contains(range.endContainer);
+  if (!containsStart && !containsEnd) {
+    if (range.intersectsNode(editor)) {
+      return { start: 0, end: fallback };
+    }
     return { start: fallback, end: fallback };
   }
 
-  const start = getBoundaryIndex(
-    editor,
-    range.startContainer,
-    range.startOffset,
-    knownTokens,
-  );
-  const end = getBoundaryIndex(
-    editor,
-    range.endContainer,
-    range.endOffset,
-    knownTokens,
-  );
+  const start = containsStart
+    ? getBoundaryIndex(
+        editor,
+        range.startContainer,
+        range.startOffset,
+        knownTokens,
+      )
+    : 0;
+  const end = containsEnd
+    ? getBoundaryIndex(
+        editor,
+        range.endContainer,
+        range.endOffset,
+        knownTokens,
+      )
+    : fallback;
 
   return {
     start: Math.min(start, end),
     end: Math.max(start, end),
   };
+}
+
+function getSelectedTokenIds(editor: HTMLElement): Set<string> {
+  const selection = editor.ownerDocument.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    return new Set();
+  }
+
+  const range = selection.getRangeAt(0);
+  return new Set(
+    Array.from(
+      editor.querySelectorAll<HTMLElement>("[data-composer-skill-token-id]"),
+    )
+      .filter((candidate) => range.intersectsNode(candidate))
+      .map((candidate) => candidate.dataset.composerSkillTokenId)
+      .filter((tokenId): tokenId is string => Boolean(tokenId)),
+  );
 }
 
 function setSelectionIndex(
@@ -390,6 +417,14 @@ function setSelectionIndex(
   void knownTokens;
 }
 
+function selectEditorContents(editor: HTMLElement): void {
+  const range = editor.ownerDocument.createRange();
+  range.selectNodeContents(editor);
+  const selection = editor.ownerDocument.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
 function clampTokenIndex(index: number, value: string): number {
   return Math.max(0, Math.min(index, value.length));
 }
@@ -441,6 +476,7 @@ export const ComposerRichInput = forwardRef<
   const pendingSelectionIndexRef = useRef<number | undefined>(undefined);
   const handledKeyInputRef = useRef<string | undefined>(undefined);
   const localEditValueRef = useRef<string | undefined>(undefined);
+  const selectAllPendingRef = useRef(false);
   const valueRef = useRef(props.value);
   const skillTokensRef = useRef(props.skillTokens);
   const parts = useMemo(
@@ -558,7 +594,86 @@ export const ComposerRichInput = forwardRef<
     setSelectionIndex(editorRef.current, knownTokensRef.current, nextSelection);
   }, [parts]);
 
+  const handleInput = (event: FormEvent<HTMLDivElement>): void => {
+    const nextSelection = getSelectionIndex(
+      event.currentTarget,
+      knownTokensRef.current,
+    );
+    const next = readEditorContent(event.currentTarget, knownTokensRef.current);
+    selectAllPendingRef.current = false;
+    pendingSelectionIndexRef.current = nextSelection;
+    valueRef.current = next.value;
+    skillTokensRef.current = next.skillTokens;
+    localEditValueRef.current = next.value;
+    onChangeRef.current(next.value, next.skillTokens);
+  };
+
+  const replaceSelection = (
+    editor: HTMLElement,
+    replacement: string,
+    selection?: { end: number; start: number },
+    selectedTokenIds = new Set<string>(),
+  ): void => {
+    const currentSelection =
+      selection ??
+      (pendingSelectionIndexRef.current !== undefined
+        ? {
+            start: pendingSelectionIndexRef.current,
+            end: pendingSelectionIndexRef.current,
+          }
+        : getSelectionIndexes(editor, knownTokensRef.current));
+    const currentValue = valueRef.current;
+    const currentSkillTokens = skillTokensRef.current;
+    const nextValue = `${currentValue.slice(0, currentSelection.start)}${replacement}${currentValue.slice(currentSelection.end)}`;
+    const nextSelection = currentSelection.start + replacement.length;
+    const nextSkillTokens = adjustTokensForReplacement({
+      end: currentSelection.end,
+      nextValue,
+      replacementLength: replacement.length,
+      skillTokens: currentSkillTokens.filter(
+        (token) => !selectedTokenIds.has(token.id),
+      ),
+      start: currentSelection.start,
+    });
+    pendingSelectionIndexRef.current = nextSelection;
+    valueRef.current = nextValue;
+    skillTokensRef.current = nextSkillTokens;
+    localEditValueRef.current = nextValue;
+    onChangeRef.current(nextValue, nextSkillTokens);
+  };
+
+  const deleteSelection = (
+    editor: HTMLElement,
+    direction: "backward" | "forward",
+  ): void => {
+    const selection = selectAllPendingRef.current
+      ? { start: 0, end: valueRef.current.length }
+      : getSelectionIndexes(editor, knownTokensRef.current);
+    const selectedTokenIds = selectAllPendingRef.current
+      ? new Set(skillTokensRef.current.map((token) => token.id))
+      : getSelectedTokenIds(editor);
+    selectAllPendingRef.current = false;
+    if (selection.start !== selection.end || selectedTokenIds.size > 0) {
+      replaceSelection(editor, "", selection, selectedTokenIds);
+      return;
+    }
+
+    const start =
+      direction === "backward" ? Math.max(0, selection.start - 1) : selection.start;
+    const end =
+      direction === "backward"
+        ? selection.end
+        : Math.min(valueRef.current.length, selection.end + 1);
+    replaceSelection(editor, "", { start, end });
+  };
+
   useImperativeHandle(ref, () => ({
+    deleteSelection: (direction) => {
+      const editor = editorRef.current;
+      if (editor) {
+        deleteSelection(editor, direction);
+      }
+    },
     focus: () => {
       editorRef.current?.focus();
     },
@@ -579,69 +694,6 @@ export const ComposerRichInput = forwardRef<
       setSelectionIndex(editorRef.current, knownTokensRef.current, start);
     },
   }));
-
-  const handleInput = (event: FormEvent<HTMLDivElement>): void => {
-    const nextSelection = getSelectionIndex(
-      event.currentTarget,
-      knownTokensRef.current,
-    );
-    const next = readEditorContent(event.currentTarget, knownTokensRef.current);
-    pendingSelectionIndexRef.current = nextSelection;
-    valueRef.current = next.value;
-    skillTokensRef.current = next.skillTokens;
-    localEditValueRef.current = next.value;
-    onChangeRef.current(next.value, next.skillTokens);
-  };
-
-  const replaceSelection = (
-    editor: HTMLElement,
-    replacement: string,
-    selection?: { end: number; start: number },
-  ): void => {
-    const currentSelection =
-      selection ??
-      (pendingSelectionIndexRef.current !== undefined
-        ? {
-            start: pendingSelectionIndexRef.current,
-            end: pendingSelectionIndexRef.current,
-          }
-        : getSelectionIndexes(editor, knownTokensRef.current));
-    const currentValue = valueRef.current;
-    const currentSkillTokens = skillTokensRef.current;
-    const nextValue = `${currentValue.slice(0, currentSelection.start)}${replacement}${currentValue.slice(currentSelection.end)}`;
-    const nextSelection = currentSelection.start + replacement.length;
-    const nextSkillTokens = adjustTokensForReplacement({
-      end: currentSelection.end,
-      nextValue,
-      replacementLength: replacement.length,
-      skillTokens: currentSkillTokens,
-      start: currentSelection.start,
-    });
-    pendingSelectionIndexRef.current = nextSelection;
-    valueRef.current = nextValue;
-    skillTokensRef.current = nextSkillTokens;
-    localEditValueRef.current = nextValue;
-    onChangeRef.current(nextValue, nextSkillTokens);
-  };
-
-  const deleteSelection = (
-    editor: HTMLElement,
-    direction: "backward" | "forward",
-  ): void => {
-    const selection = getSelectionIndexes(editor, knownTokensRef.current);
-    if (selection.start !== selection.end) {
-      replaceSelection(editor, "", selection);
-      return;
-    }
-
-    const start =
-      direction === "backward" ? Math.max(0, selection.start - 1) : selection.start;
-    const end =
-      direction === "backward"
-        ? selection.end
-        : Math.min(valueRef.current.length, selection.end + 1);
-    replaceSelection(editor, "", { start, end });
-  };
 
   const handleBeforeInputCapture = (event: FormEvent<HTMLDivElement>): void => {
     props.onBeforeInputCapture?.(event);
@@ -686,6 +738,20 @@ export const ComposerRichInput = forwardRef<
 
   const handleKeyDownCapture = (event: KeyboardEvent<HTMLDivElement>): void => {
     props.onKeyDownCapture?.(event);
+    if (
+      !event.defaultPrevented &&
+      !props.disabled &&
+      event.key.toLowerCase() === "a" &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      selectAllPendingRef.current = true;
+      pendingSelectionIndexRef.current = undefined;
+      selectEditorContents(event.currentTarget);
+      return;
+    }
+
     if (
       event.defaultPrevented ||
       props.disabled ||

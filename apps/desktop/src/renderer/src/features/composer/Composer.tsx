@@ -2160,6 +2160,20 @@ export function Composer(props: ComposerProps) {
     return tokenElement?.dataset.composerSkillTokenId;
   };
 
+  const hasRangedEditorSelection = (editor: HTMLElement): boolean => {
+    const selection = editor.ownerDocument.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return false;
+    }
+
+    const range = selection.getRangeAt(0);
+    return (
+      editor.contains(range.startContainer) ||
+      editor.contains(range.endContainer) ||
+      range.intersectsNode(editor)
+    );
+  };
+
   const shouldGuardNativeTextDeletion = (
     editor: HTMLElement,
     direction: "backward" | "forward",
@@ -2281,6 +2295,10 @@ export function Composer(props: ComposerProps) {
       return false;
     }
 
+    if (hasRangedEditorSelection(event.currentTarget)) {
+      return false;
+    }
+
     const tokenId =
       findEventTargetSkillTokenId(event) ??
       findSelectedSkillTokenId(event.currentTarget) ??
@@ -2338,11 +2356,21 @@ export function Composer(props: ComposerProps) {
   const deleteEditorContent = (
     event: SkillTokenDeletionEvent,
     direction: "backward" | "forward",
-  ): boolean =>
-    removeEditorSkillToken(event, direction) ||
-    (shouldGuardNativeTextDeletion(event.currentTarget, direction)
-      ? deleteEditorText(event, direction)
-      : false);
+  ): boolean => {
+    if (inputRef.current && hasRangedEditorSelection(event.currentTarget)) {
+      event.preventDefault();
+      event.stopPropagation();
+      inputRef.current.deleteSelection(direction);
+      return true;
+    }
+
+    return (
+      removeEditorSkillToken(event, direction) ||
+      (shouldGuardNativeTextDeletion(event.currentTarget, direction)
+        ? deleteEditorText(event, direction)
+        : false)
+    );
+  };
 
   useEffect(() => {
     const ownerDocument = inputWrapRef.current?.ownerDocument ?? document;

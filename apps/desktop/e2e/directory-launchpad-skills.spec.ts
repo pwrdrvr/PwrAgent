@@ -364,6 +364,48 @@ test("directory launchpad preserves multiple skill chips across boundary edits",
   }
 });
 
+test("directory launchpad select all delete clears chips without renderer crash", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const richInput = app.window.getByTestId("composer-rich-input");
+    await richInput.focus();
+    await typeSkillChip(app, "$ce:plan", /\$ce:plan/i);
+    await app.window.keyboard.type(" i like cats n dogs - ");
+    await typeSkillChip(app, "$ce:brainstorm", /\$ce:brainstorm/i);
+    await app.window.keyboard.type(" and more");
+
+    await expect(
+      richInput.locator(".skill-chip", { hasText: "$ce:plan" }),
+    ).toBeVisible();
+    await expect(
+      richInput.locator(".skill-chip", { hasText: "$ce:brainstorm" }),
+    ).toBeVisible();
+    await expect(richInput).toHaveAttribute(
+      "data-value",
+      " i like cats n dogs -  and more",
+    );
+
+    await richInput.focus();
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await app.window.keyboard.press("Delete");
+
+    await expect(richInput.locator(".skill-chip")).toHaveCount(0);
+    await expect(richInput).toHaveAttribute("data-value", "");
+    await expect(app.window.locator("body")).not.toContainText("Renderer error");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("directory launchpad skill autocomplete selects focused options as undoable inline chips", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
