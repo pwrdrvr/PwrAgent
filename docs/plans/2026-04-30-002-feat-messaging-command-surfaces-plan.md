@@ -304,7 +304,7 @@ flowchart TB
 **Verification:**
 - Telegram can support browser-like message rewriting and pinned status cards with graceful fallback when a client/server rejects an operation.
 
-- [ ] **Unit 4: Add pinned `/status` card and binding preference rendering**
+- [x] **Unit 4: Add pinned `/status` card and binding preference rendering**
 
 **Goal:** Render the current binding as a durable control card that can be pinned, refreshed, updated in place, and unpinned on detach.
 

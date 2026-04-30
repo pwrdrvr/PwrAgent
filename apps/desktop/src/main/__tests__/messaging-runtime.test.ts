@@ -92,9 +92,13 @@ describe("DesktopMessagingRuntime", () => {
     });
     await Promise.resolve();
 
+    expect([...adapter.delivered].reverse().find((intent) => intent.kind === "message"))
+      .toMatchObject({
+        kind: "message",
+        role: "assistant",
+      });
     expect(adapter.delivered.at(-1)).toMatchObject({
-      kind: "message",
-      role: "assistant",
+      kind: "status",
     });
   });
 

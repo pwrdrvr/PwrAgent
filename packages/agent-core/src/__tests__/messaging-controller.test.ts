@@ -150,9 +150,16 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       authorizedActorIds: ["user-1"],
     });
-    expect(harness.delivered.at(-1)).toMatchObject({
+    expect(harness.delivered.find((intent) => intent.kind === "confirmation")).toMatchObject({
       kind: "confirmation",
       title: "Thread bound",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      delivery: {
+        pin: true,
+      },
+      text: expect.stringContaining("Binding: Thread one"),
     });
   });
 
@@ -185,20 +192,76 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildTextEvent("please run the tests"));
 
-    expect(harness.startTurn).toHaveBeenCalledWith({
-      backend: "codex",
-      threadId: "thread-1",
-      input: [
-        {
-          type: "text",
-          text: "please run the tests",
-        },
-      ],
-    });
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: "please run the tests",
+          },
+        ],
+      }),
+    );
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       status: "working",
     });
+  });
+
+  it("updates the existing pinned status surface for /status commands", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/status").channel,
+    );
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    expect(binding?.statusSurface).toBeDefined();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      delivery: {
+        mode: "update",
+        pin: true,
+      },
+      targetSurface: binding?.statusSurface,
+      text: expect.stringContaining("Project: PwrAgnt"),
+    });
+  });
+
+  it("detaches a bound conversation and unpins the status surface", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
+
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "dismiss",
+      delivery: {
+        unpin: true,
+      },
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/detach").channel),
+    ).resolves.toBeUndefined();
   });
 
   it("asks unbound conversations to choose a thread before routing text", async () => {
@@ -312,14 +375,19 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
+    expect([...harness.delivered].reverse().find((intent) => intent.kind === "message"))
+      .toMatchObject({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            markdown: "markdown",
+          }),
+        ],
+      });
     expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "message",
-      role: "assistant",
-      parts: [
-        expect.objectContaining({
-          markdown: "markdown",
-        }),
-      ],
+      kind: "status",
+      text: expect.stringContaining("Turn: completed"),
     });
   });
 
@@ -428,7 +496,9 @@ async function createHarness(): Promise<{
       return {
         channel: "telegram" as const,
         deliveredAt: 1000,
-        outcome: "presented" as const,
+        outcome: intent.kind === "status" && intent.delivery?.pin
+          ? "pinned" as const
+          : "presented" as const,
         surface: {
           channel: "telegram" as const,
           id: `surface:${intent.id}`,

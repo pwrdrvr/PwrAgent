@@ -138,6 +138,8 @@ export function actionsForTelegramIntent(
       return intent.decisions;
     case "confirmation":
       return intent.actions;
+    case "status":
+      return intent.actions ?? [];
     default:
       return [];
   }

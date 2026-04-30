@@ -243,6 +243,7 @@ export type MessagingStatusIntent = MessagingBaseSurfaceIntent & {
   kind: "status";
   status: "idle" | "working" | "waiting" | "completed" | "failed";
   text: string;
+  actions?: MessagingSurfaceAction[];
 };
 
 export type MessagingProgressIntent = MessagingBaseSurfaceIntent & {

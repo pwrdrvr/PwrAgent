@@ -6,6 +6,7 @@ import type {
   AppServerToolRequestUserInputNotification,
   MessagingBindingRecord,
   MessagingBrowseSessionRecord,
+  MessagingActiveTurnSummary,
   MessagingDeliveryResult,
   MessagingInboundCallbackEvent,
   MessagingInboundCommandEvent,
@@ -15,6 +16,7 @@ import type {
   MessagingMessageIntent,
   MessagingPendingIntentRecord,
   MessagingSurfaceIntent,
+  NavigationSnapshot,
   ThreadIdentifier,
 } from "@pwragnt/shared";
 import { MessagingStore, buildMessagingConversationKey } from "./messaging-store.js";
@@ -38,6 +40,7 @@ import {
   selectProjectFromValue,
   selectThreadFromValue,
 } from "./messaging-resume-browser.js";
+import { buildBindingStatusIntent } from "./messaging-status-card.js";
 
 const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 
@@ -112,51 +115,62 @@ export class MessagingController {
   }
 
   async handleBackendEvent(event: AgentEvent): Promise<void> {
-    if (event.notification.method !== "turn/completed") {
+    const threadId = threadIdForBackendEvent(event);
+    if (!threadId) {
       return;
     }
 
     const bindings = await this.options.store.findActiveBindingsForThread({
       backend: event.backend,
-      threadId: (
-        event.notification.params as {
-          threadId: ThreadIdentifier;
-        }
-      ).threadId,
+      threadId,
     });
-    const turn = (
-      event.notification.params as {
-        turn: {
-          output: Array<{ text?: string }>;
-        };
-      }
-    ).turn;
-    const text = turn.output
-      .map((item) => item.text ?? "")
-      .join("\n\n")
-      .trim();
-    if (!text) {
-      return;
-    }
-
+    const lifecycle = turnLifecycleForBackendEvent(event, this.now());
     for (const binding of bindings) {
-      await this.deliver(
-        {
-          id: this.newIntentId("assistant-message"),
-          kind: "message",
-          bindingId: binding.id,
-          createdAt: this.now(),
-          role: "assistant",
-          parts: [
+      let currentBinding = binding;
+      if (lifecycle) {
+        currentBinding = await this.options.store.upsertBinding({
+          ...binding,
+          activeTurn: lifecycle,
+          updatedAt: this.now(),
+        });
+      }
+
+      if (event.notification.method === "turn/completed") {
+        const turn = (
+          event.notification.params as {
+            turn: {
+              output: Array<{ text?: string }>;
+            };
+          }
+        ).turn;
+        const text = turn.output
+          .map((item) => item.text ?? "")
+          .join("\n\n")
+          .trim();
+        if (text) {
+          await this.deliver(
             {
-              type: "text",
-              text,
-              markdown: "markdown",
+              id: this.newIntentId("assistant-message"),
+              kind: "message",
+              bindingId: currentBinding.id,
+              createdAt: this.now(),
+              role: "assistant",
+              parts: [
+                {
+                  type: "text",
+                  text,
+                  markdown: "markdown",
+                },
+              ],
             },
-          ],
-        },
-        binding,
-      );
+            currentBinding,
+          );
+        }
+      }
+
+      if (lifecycle) {
+        await this.renderBindingStatus(currentBinding);
+      }
     }
   }
 
@@ -195,11 +209,31 @@ export class MessagingController {
       });
       await this.storePendingIntent(intent, binding);
       await this.deliver(intent, binding);
+      if (request.params.turnId) {
+        const updatedBinding = await this.options.store.upsertBinding({
+          ...binding,
+          activeTurn: {
+            turnId: request.params.turnId,
+            status: "waiting",
+            updatedAt: this.now(),
+          },
+          updatedAt: this.now(),
+        });
+        await this.renderBindingStatus(updatedBinding);
+      }
     }
   }
 
   private async handleCommand(event: MessagingInboundCommandEvent): Promise<void> {
     const command = event.command.replace(/^\//, "").toLowerCase();
+    if (command === "status") {
+      await this.presentStatus(event);
+      return;
+    }
+    if (command === "detach") {
+      await this.detachBinding(event);
+      return;
+    }
     if (
       command === "resume" ||
       command === "threads" ||
@@ -306,7 +340,7 @@ export class MessagingController {
       return;
     }
 
-    await this.options.backend.startTurn({
+    const started = await this.options.backend.startTurn({
       backend: binding.backend,
       threadId: binding.threadId,
       input: [
@@ -315,16 +349,22 @@ export class MessagingController {
           text: event.text,
         },
       ],
+      fastMode: binding.preferences?.fastMode,
+      model: binding.preferences?.model,
+      reasoningEffort: binding.preferences?.reasoningEffort,
+      serviceTier: binding.preferences?.serviceTier,
     });
-    await this.deliver(
-      buildStatusIntent({
-        id: this.newIntentId("turn-started"),
-        createdAt: this.now(),
+    const updatedBinding = await this.options.store.upsertBinding({
+      ...binding,
+      activeTurn: {
+        turnId: started.turnId,
         status: "working",
-        text: "Sent to thread.",
-      }),
-      binding,
-    );
+        startedAt: this.now(),
+        updatedAt: this.now(),
+      },
+      updatedAt: this.now(),
+    });
+    await this.renderBindingStatus(updatedBinding);
   }
 
   private async handleCallback(event: MessagingInboundCallbackEvent): Promise<void> {
@@ -346,6 +386,12 @@ export class MessagingController {
       return;
     }
 
+    const statusAction = readStatusAction(event);
+    if (statusAction) {
+      await this.handleStatusCallback(event, statusAction);
+      return;
+    }
+
     const bindingTarget = readBindingTarget(event);
     if (bindingTarget) {
       const binding = await this.bindChannelToThread(event, bindingTarget);
@@ -359,6 +405,7 @@ export class MessagingController {
         }),
         binding,
       );
+      await this.renderBindingStatus(binding);
       return;
     }
 
@@ -611,7 +658,12 @@ export class MessagingController {
         return;
       }
       const binding = await this.bindChannelToThread(event, target);
-      await this.applyBrowseBindingMetadata(binding, session, navigation, target);
+      const updatedBinding = await this.applyBrowseBindingMetadata(
+        binding,
+        session,
+        navigation,
+        target,
+      );
       await this.options.store.deleteBrowseSession(session.id);
       await this.deliver(
         buildConfirmationIntent({
@@ -621,8 +673,9 @@ export class MessagingController {
           body: "Messages in this conversation will route to the selected thread.",
           fallbackText: "Send a message to continue the thread.",
         }),
-        binding,
+        updatedBinding,
       );
+      await this.renderBindingStatus(updatedBinding, event, navigation);
       return;
     }
 
@@ -720,6 +773,7 @@ export class MessagingController {
       }),
       updatedBinding,
     );
+    await this.renderBindingStatus(updatedBinding, event, navigation);
   }
 
   private async applyBrowseBindingMetadata(
@@ -727,14 +781,14 @@ export class MessagingController {
     session: MessagingBrowseSessionRecord,
     navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
     target: { backend: AppServerBackendKind; threadId: ThreadIdentifier },
-  ): Promise<void> {
+  ): Promise<MessagingBindingRecord> {
     const thread = navigation.threads.find(
       (candidate) => candidate.source === target.backend && candidate.id === target.threadId,
     );
     const directory = session.selectedProject
       ? directoryForProjectSelection(navigation, session.selectedProject)
       : undefined;
-    await this.options.store.upsertBinding({
+    return await this.options.store.upsertBinding({
       ...binding,
       preferences: session.preferences,
       threadDisplay: {
@@ -744,6 +798,158 @@ export class MessagingController {
         worktreePath: thread?.linkedDirectories.find((item) => item.kind === "worktree")
           ?.worktreePath,
       },
+      updatedAt: this.now(),
+    });
+  }
+
+  private async presentStatus(event: MessagingInboundEvent): Promise<void> {
+    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    if (!binding) {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("status-unbound"),
+          createdAt: this.now(),
+          title: "No thread bound",
+          body: "Use /resume to choose a PwrAgnt thread for this conversation.",
+          actions: [
+            {
+              id: "command:resume",
+              label: "Resume",
+              style: "primary",
+              fallbackText: "/resume",
+            },
+          ],
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    await this.renderBindingStatus(binding, event);
+  }
+
+  private async handleStatusCallback(
+    event: MessagingInboundCallbackEvent,
+    actionId: string,
+  ): Promise<void> {
+    if (actionId === "status:detach") {
+      await this.detachBinding(event);
+      return;
+    }
+
+    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    if (!binding) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-expired"),
+          createdAt: this.now(),
+          title: "Action expired",
+          body: "That status action is no longer available. Use /status to refresh.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    if (actionId === "status:refresh") {
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
+
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("status-action-pending"),
+        createdAt: this.now(),
+        title: "Status action unavailable",
+        body: "Use /status to refresh. This control will be wired to backend actions in the next implementation slice.",
+      }),
+      binding,
+    );
+  }
+
+  private async detachBinding(event: MessagingInboundEvent): Promise<void> {
+    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    if (!binding) {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("detach-unbound"),
+          createdAt: this.now(),
+          title: "No thread bound",
+          body: "This conversation is not bound to a PwrAgnt thread.",
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    const statusSurface = binding.pinnedStatusSurface ?? binding.statusSurface;
+    if (statusSurface) {
+      await this.deliver(
+        {
+          id: this.newIntentId("status-dismiss"),
+          kind: "dismiss",
+          bindingId: binding.id,
+          createdAt: this.now(),
+          delivery: {
+            mode: "dismiss",
+            unpin: Boolean(binding.pinnedStatusSurface),
+          },
+          reason: "detached",
+          targetSurface: statusSurface,
+        },
+        binding,
+        event,
+      );
+    }
+
+    await this.options.store.revokeBinding({
+      bindingId: binding.id,
+      revokedAt: this.now(),
+    });
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("detached"),
+        createdAt: this.now(),
+        title: "Thread detached",
+        body: "Messages in this conversation will no longer route to PwrAgnt.",
+      }),
+      undefined,
+      event,
+    );
+  }
+
+  private async renderBindingStatus(
+    binding: MessagingBindingRecord,
+    event?: MessagingInboundEvent,
+    navigation?: NavigationSnapshot,
+  ): Promise<MessagingBindingRecord> {
+    const snapshot =
+      navigation ??
+      (await this.options.backend.getNavigationSnapshot({
+        backend: "all",
+      }));
+    const intent = buildBindingStatusIntent({
+      id: this.newIntentId("status"),
+      binding,
+      createdAt: this.now(),
+      navigation: snapshot,
+    });
+    const result = await this.deliver(intent, binding, event);
+    if (!result.surface) {
+      return binding;
+    }
+
+    return await this.options.store.upsertBinding({
+      ...binding,
+      pinnedStatusSurface:
+        result.outcome === "pinned"
+          ? result.surface
+          : binding.pinnedStatusSurface,
+      statusSurface: result.surface,
       updatedAt: this.now(),
     });
   }
@@ -888,6 +1094,86 @@ function readBrowseAction(event: MessagingInboundCallbackEvent): string | undefi
   const actionId = event.actionId ?? event.interaction.id;
   return actionId.startsWith("browse:") ? actionId : undefined;
 }
+
+function readStatusAction(event: MessagingInboundCallbackEvent): string | undefined {
+  const actionId = event.actionId ?? event.interaction.id;
+  return actionId.startsWith("status:") ? actionId : undefined;
+}
+
+function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefined {
+  const params = event.notification.params as { threadId?: unknown };
+  return typeof params.threadId === "string" ? params.threadId : undefined;
+}
+
+function turnLifecycleForBackendEvent(
+  event: AgentEvent,
+  now: number,
+): MessagingActiveTurnSummary | undefined {
+  switch (event.notification.method) {
+    case "turn/started": {
+      const params = event.notification.params as TurnLifecycleParams;
+      const turnId = params.turnId ?? params.turn.id;
+      if (!turnId) {
+        return undefined;
+      }
+      return {
+        turnId,
+        status: "working",
+        startedAt: params.turn.startedAt ?? undefined,
+        updatedAt: now,
+      };
+    }
+    case "turn/completed": {
+      const params = event.notification.params as TurnLifecycleParams;
+      const turnId = params.turnId ?? params.turn.id;
+      if (!turnId) {
+        return undefined;
+      }
+      return {
+        turnId,
+        status: "completed",
+        startedAt: params.turn.startedAt ?? undefined,
+        updatedAt: now,
+      };
+    }
+    case "turn/failed": {
+      const params = event.notification.params as TurnLifecycleParams;
+      const turnId = params.turnId ?? params.turn.id;
+      if (!turnId) {
+        return undefined;
+      }
+      return {
+        turnId,
+        status: "failed",
+        startedAt: params.turn.startedAt ?? undefined,
+        updatedAt: now,
+      };
+    }
+    case "turn/cancelled": {
+      const params = event.notification.params as TurnLifecycleParams;
+      const turnId = params.turnId ?? params.turn.id;
+      if (!turnId) {
+        return undefined;
+      }
+      return {
+        turnId,
+        status: "interrupted",
+        startedAt: params.turn.startedAt ?? undefined,
+        updatedAt: now,
+      };
+    }
+    default:
+      return undefined;
+  }
+}
+
+type TurnLifecycleParams = {
+  turnId?: string | null;
+  turn: {
+    id?: string | null;
+    startedAt?: number | null;
+  };
+};
 
 function parseTextCommand(text: string): string | undefined {
   const trimmed = text.trim();
