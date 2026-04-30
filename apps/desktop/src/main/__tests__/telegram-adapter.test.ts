@@ -1,0 +1,412 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MessagingController, MessagingStore } from "@pwragnt/agent-core";
+import type {
+  MessagingInboundEvent,
+  MessagingSurfaceIntent,
+  NavigationSnapshot,
+  StartTurnRequest,
+} from "@pwragnt/shared";
+import { TelegramAdapter } from "../messaging/telegram-adapter";
+import type {
+  TelegramApi,
+  TelegramSendMessageRequest,
+  TelegramSendPhotoRequest,
+} from "../messaging/telegram-api";
+import { TELEGRAM_CALLBACK_DATA_LIMIT_BYTES } from "../messaging/telegram-formatting";
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirs.splice(0).map(async (tempDir) => {
+      await rm(tempDir, { recursive: true, force: true });
+    }),
+  );
+});
+
+describe("TelegramAdapter", () => {
+  it("normalizes /threads and renders a thread picker with inline keyboard handles", async () => {
+    const harness = await createControllerHarness();
+
+    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.handleUpdate({
+      update_id: 1,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        date: 1,
+        from: {
+          first_name: "Ada",
+          id: 42,
+          is_bot: false,
+          username: "mutable_username",
+        },
+        message_id: 100,
+        text: "/threads",
+      },
+    });
+
+    expect(harness.api.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: 777,
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [
+              expect.objectContaining({
+                text: "1. Thread one",
+              }),
+            ],
+          ],
+        },
+      }),
+    );
+    const request = harness.api.sendMessage.mock.calls.at(-1)?.[0];
+    const callbackData = request?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data;
+    expect(callbackData).toMatch(/^tg:/);
+    expect(Buffer.byteLength(callbackData ?? "", "utf8")).toBeLessThanOrEqual(
+      TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
+    );
+    expect(callbackData).not.toContain("thread-1");
+  });
+
+  it("resolves callback handles and acknowledges callback queries", async () => {
+    const harness = await createControllerHarness();
+
+    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.handleUpdate({
+      update_id: 1,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        from: {
+          id: 42,
+          is_bot: false,
+        },
+        message_id: 100,
+        text: "/threads",
+      },
+    });
+    const callbackData =
+      harness.api.sendMessage.mock.calls.at(-1)?.[0].reply_markup?.inline_keyboard[0]?.[0]
+        ?.callback_data ?? "";
+
+    await harness.adapter.handleUpdate({
+      callback_query: {
+        data: callbackData,
+        from: {
+          id: 42,
+          is_bot: false,
+        },
+        id: "callback-1",
+        message: {
+          chat: {
+            id: 777,
+            type: "private",
+          },
+          message_id: 101,
+        },
+      },
+      update_id: 2,
+    });
+
+    expect(harness.api.answerCallbackQuery).toHaveBeenCalledWith({
+      callback_query_id: "callback-1",
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel({
+        channel: "telegram",
+        conversation: {
+          id: "777",
+          kind: "dm",
+        },
+      }),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+  });
+
+  it("routes free-form text from a persisted binding by stable Telegram user id", async () => {
+    const harness = await createControllerHarness();
+
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm:777:codex:thread-1",
+      authorizedActorIds: ["42"],
+      backend: "codex",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "777",
+          kind: "dm",
+        },
+      },
+      createdAt: 1000,
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.handleUpdate({
+      update_id: 3,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        from: {
+          id: 42,
+          is_bot: false,
+          username: "new_username",
+        },
+        message_id: 102,
+        text: "run the focused tests",
+      },
+    });
+
+    expect(harness.startTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      input: [
+        {
+          text: "run the focused tests",
+          type: "text",
+        },
+      ],
+      threadId: "thread-1",
+    });
+  });
+
+  it("rejects matching usernames with different Telegram numeric ids through the controller", async () => {
+    const harness = await createControllerHarness();
+
+    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.handleUpdate({
+      update_id: 4,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        from: {
+          id: 99,
+          is_bot: false,
+          username: "mutable_username",
+        },
+        message_id: 103,
+        text: "/threads",
+      },
+    });
+
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.api.sendMessage.mock.calls.at(-1)?.[0].text).toContain(
+      "Not authorized",
+    );
+  });
+
+  it("normalizes inbound media as unsupported without downloading it", async () => {
+    const events: MessagingInboundEvent[] = [];
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      pollOnStart: false,
+    });
+
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    await adapter.handleUpdate({
+      update_id: 5,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        document: {
+          file_id: "file-1",
+          file_name: "secret.txt",
+          mime_type: "text/plain",
+        },
+        from: {
+          id: 42,
+          is_bot: false,
+        },
+        message_id: 104,
+      },
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      disposition: "unsupported",
+      kind: "media",
+      media: {
+        name: "secret.txt",
+      },
+    });
+    expect(api.getFile).toBeUndefined();
+  });
+
+  it("sends image message intents through sendPhoto", async () => {
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      now: () => 1000,
+      pollOnStart: false,
+    });
+
+    await adapter.deliver({
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      createdAt: 1000,
+      id: "intent-image",
+      kind: "message",
+      parts: [
+        {
+          type: "image",
+          url: "https://example.com/image.png",
+        },
+        {
+          markdown: "plain",
+          text: "Rendered image",
+          type: "text",
+        },
+      ],
+    });
+
+    expect(api.sendPhoto).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caption: "Rendered image",
+        chat_id: 777,
+        photo: "https://example.com/image.png",
+      }),
+    );
+  });
+});
+
+async function createControllerHarness(): Promise<{
+  adapter: TelegramAdapter;
+  api: ReturnType<typeof createApi>;
+  controller: MessagingController;
+  getNavigationSnapshot: ReturnType<typeof vi.fn>;
+  startTurn: ReturnType<typeof vi.fn>;
+  store: MessagingStore;
+}> {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-telegram-"));
+  tempDirs.push(tempDir);
+  const store = new MessagingStore(path.join(tempDir, "messaging-state.json"));
+  const api = createApi();
+  const getNavigationSnapshot = vi.fn(async () => buildNavigationSnapshot());
+  const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+    backend: request.backend,
+    threadId: request.threadId,
+    turnId: "turn-1",
+  }));
+  const adapter = new TelegramAdapter({
+    api: api as unknown as TelegramApi,
+    config: {
+      channel: "telegram",
+      botToken: "telegram-token",
+      authorizedActorIds: ["42"],
+    },
+    now: () => 1000,
+    pollOnStart: false,
+  });
+  const controller = new MessagingController({
+    adapter,
+    authorizedActorIds: ["42"],
+    backend: {
+      getNavigationSnapshot,
+      startTurn,
+    },
+    now: () => 1000,
+    store,
+  });
+
+  return {
+    adapter,
+    api,
+    controller,
+    getNavigationSnapshot,
+    startTurn,
+    store,
+  };
+}
+
+function createApi(): {
+  answerCallbackQuery: ReturnType<typeof vi.fn>;
+  getUpdates: ReturnType<typeof vi.fn>;
+  getWebhookInfo: ReturnType<typeof vi.fn>;
+  sendMessage: ReturnType<typeof vi.fn>;
+  sendPhoto: ReturnType<typeof vi.fn>;
+} {
+  return {
+    answerCallbackQuery: vi.fn(async () => true),
+    getUpdates: vi.fn(async () => []),
+    getWebhookInfo: vi.fn(async () => ({ url: "" })),
+    sendMessage: vi.fn(async (request: TelegramSendMessageRequest) => ({
+      chat: {
+        id: Number(request.chat_id),
+        type: "private",
+      },
+      message_id: 200,
+    })),
+    sendPhoto: vi.fn(async (request: TelegramSendPhotoRequest) => ({
+      chat: {
+        id: Number(request.chat_id),
+        type: "private",
+      },
+      message_id: 201,
+    })),
+  };
+}
+
+function buildNavigationSnapshot(): NavigationSnapshot {
+  return {
+    backend: "all",
+    directories: [],
+    fetchedAt: 1000,
+    inboxThreadKeys: [],
+    launchpadDefaults: {
+      backend: "codex",
+      executionMode: "default",
+    },
+    threads: [
+      {
+        id: "thread-1",
+        inbox: {
+          inInbox: false,
+        },
+        linkedDirectories: [],
+        source: "codex",
+        title: "Thread one",
+        titleSource: "explicit",
+      },
+    ],
+    unchanged: false,
+  };
+}

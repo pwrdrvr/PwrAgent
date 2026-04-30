@@ -16,6 +16,7 @@ import {
   type DesktopMessagingConfig,
 } from "./messaging-config";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
+import { createTelegramAdapter } from "./telegram-adapter";
 
 export type DesktopMessagingAdapter = {
   channel: "telegram" | "discord";
@@ -140,6 +141,7 @@ export function resetDesktopMessagingRuntimeForTests(): void {
 function createConfiguredAdapters(params: {
   config: DesktopMessagingConfig;
 }): DesktopMessagingAdapter[] {
-  void params;
-  return [];
+  return [
+    ...(params.config.telegram ? [createTelegramAdapter(params.config.telegram)] : []),
+  ];
 }

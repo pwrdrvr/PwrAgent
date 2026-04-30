@@ -68,6 +68,8 @@ export class MessagingController {
           body: "This channel user is not authorized to control PwrAgnt.",
           recoverable: false,
         }),
+        undefined,
+        event,
       );
       return;
     }
@@ -91,6 +93,8 @@ export class MessagingController {
           body: "This messaging integration accepts text and buttons for now.",
           recoverable: true,
         }),
+        undefined,
+        event,
       );
       return;
     }
@@ -198,6 +202,8 @@ export class MessagingController {
           },
         ],
       }),
+      undefined,
+      event,
     );
   }
 
@@ -246,6 +252,8 @@ export class MessagingController {
             body: pendingIntent.intent.fallbackText ?? "Reply with one of the shown options.",
             fallbackText: pendingIntent.intent.fallbackText,
           }),
+          undefined,
+          event,
         );
         return;
       }
@@ -269,6 +277,8 @@ export class MessagingController {
             },
           ],
         }),
+        undefined,
+        event,
       );
       return;
     }
@@ -324,14 +334,16 @@ export class MessagingController {
         await this.submitApprovalAction(pendingIntent.intent, action.id);
         await this.options.store.deletePendingIntent(pendingIntent.id);
         await this.deliver(
-          buildStatusIntent({
-            id: this.newIntentId("approval-submitted"),
-            createdAt: this.now(),
-            status: "completed",
-            text: "Approval response sent.",
-          }),
-        );
-        return;
+        buildStatusIntent({
+          id: this.newIntentId("approval-submitted"),
+          createdAt: this.now(),
+          status: "completed",
+          text: "Approval response sent.",
+        }),
+        undefined,
+        event,
+      );
+      return;
       }
     }
 
@@ -343,6 +355,8 @@ export class MessagingController {
         body: "That action is no longer available. Use /threads to refresh.",
         recoverable: true,
       }),
+      undefined,
+      event,
     );
   }
 
@@ -401,7 +415,7 @@ export class MessagingController {
       actions,
     });
     await this.storePendingIntent(intent, undefined, event);
-    await this.deliver(intent);
+    await this.deliver(intent, undefined, event);
   }
 
   private async bindChannelToThread(
@@ -466,14 +480,45 @@ export class MessagingController {
   private async deliver(
     intent: MessagingSurfaceIntent,
     binding?: MessagingBindingRecord,
+    event?: MessagingInboundEvent,
   ): Promise<void> {
-    const result = await this.options.adapter.deliver(intent);
+    const routedIntent = this.withRoutingAudit(intent, binding, event);
+    const result = await this.options.adapter.deliver(routedIntent);
     await this.options.store.recordDelivery({
       ...result,
-      id: `delivery:${intent.id}:${randomUUID()}`,
+      id: `delivery:${routedIntent.id}:${randomUUID()}`,
       bindingId: binding?.id ?? intent.bindingId,
-      intentId: intent.id,
+      intentId: routedIntent.id,
     });
+  }
+
+  private withRoutingAudit(
+    intent: MessagingSurfaceIntent,
+    binding?: MessagingBindingRecord,
+    event?: MessagingInboundEvent,
+  ): MessagingSurfaceIntent {
+    if (intent.audit || (!binding && !event)) {
+      return intent;
+    }
+
+    const channel = binding?.channel ?? event?.channel;
+    if (!channel) {
+      return intent;
+    }
+
+    return {
+      ...intent,
+      audit: buildMessagingAuditContext({
+        actor: event?.actor ?? {
+          platformUserId: binding?.authorizedActorIds[0] ?? "unknown",
+        },
+        backend: binding?.backend,
+        bindingId: binding?.id ?? intent.bindingId,
+        channel,
+        now: this.now(),
+        threadId: binding?.threadId,
+      }),
+    };
   }
 
   private isAuthorized(platformUserId: string): boolean {

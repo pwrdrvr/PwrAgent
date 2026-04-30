@@ -399,7 +399,7 @@ flowchart TB
 **Verification:**
 - The desktop app can run with messaging disabled by default and can start configured adapters without involving renderer UI state.
 
-- [ ] **Unit 6: Implement the Telegram long-polling adapter**
+- [x] **Unit 6: Implement the Telegram long-polling adapter**
 
 **Goal:** Add a direct Telegram Bot API adapter that supports local long polling, inbound text/commands/callbacks, outbound rich intents, inline keyboards, MarkdownV2/HTML-safe formatting, images, and best-effort update/dismissal.
 
