@@ -19,7 +19,7 @@ export class ReplayController {
 
   constructor(private readonly fixture: ReplayFixture) {
     validateReplayFixture(fixture);
-    this.steps = fixture.steps;
+    this.steps = [...fixture.steps];
   }
 
   consumeResponse(method: ReplayResponseMethod): ReplayResponseStep {

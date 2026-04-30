@@ -56,6 +56,10 @@ export class ReplayClient {
     threadId: string;
     name: string;
   };
+  private readonly interruptTurnCalls: Array<{
+    threadId: string;
+    turnId: string;
+  }> = [];
 
   constructor(private readonly controller: ReplayController) {}
 
@@ -165,15 +169,26 @@ export class ReplayClient {
     };
   }
 
-  async interruptTurn(_params?: {
+  async interruptTurn(params: {
     threadId: string;
     turnId: string;
   }): Promise<{ threadId: string; turnId: string }> {
     await this.ensureInitialized();
+    this.interruptTurnCalls.push({
+      threadId: params.threadId,
+      turnId: params.turnId,
+    });
     return this.controller.consumeResponse("turn/interrupt").result as {
       threadId: string;
       turnId: string;
     };
+  }
+
+  async setThreadPermissions(params: {
+    threadId: string;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+    return { threadId: params.threadId };
   }
 
   async renameThread(params: {
@@ -240,6 +255,13 @@ export class ReplayClient {
       }
     | undefined {
     return this.lastRenameThreadParams;
+  }
+
+  getInterruptTurnCalls(): Array<{
+    threadId: string;
+    turnId: string;
+  }> {
+    return [...this.interruptTurnCalls];
   }
 
   async respondToPendingRequest(requestId: string): Promise<void> {

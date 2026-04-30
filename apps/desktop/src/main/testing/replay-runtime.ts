@@ -58,6 +58,13 @@ type ReplayDriver = {
         name: string;
       }
     | undefined;
+  getInterruptTurnCalls(params?: {
+    backend?: AppServerBackendKind;
+    executionMode?: ThreadExecutionMode;
+  }): Array<{
+    threadId: string;
+    turnId: string;
+  }>;
   getPendingRequest(params?: {
     backend?: AppServerBackendKind;
     executionMode?: ThreadExecutionMode;
@@ -100,6 +107,10 @@ type ReplayRuntimeClient = {
         name: string;
       }
     | undefined;
+  getInterruptTurnCalls?(): Array<{
+    threadId: string;
+    turnId: string;
+  }>;
   getInitializeResult(): Promise<{
     serverInfo?: {
       name?: string;
@@ -222,6 +233,13 @@ export function createReplayClientsFromEnv():
       });
       return client.getLastRenameThreadParams?.();
     },
+    getInterruptTurnCalls: (params) => {
+      const client = getReplayClient(clients, {
+        backend: params?.backend,
+        executionMode: params?.executionMode,
+      });
+      return client.getInterruptTurnCalls?.() ?? [];
+    },
     respondToPendingRequest: async (params) => {
       const client = getReplayClient(clients, {
         backend: params.backend,
@@ -303,6 +321,7 @@ function createUnavailableReplayClient(
     getLastStartTurnParams: () => undefined,
     getLastStartReviewParams: () => undefined,
     getLastRenameThreadParams: () => undefined,
+    getInterruptTurnCalls: () => [],
     getInitializeResult: async () => {
       throw new Error(message);
     },

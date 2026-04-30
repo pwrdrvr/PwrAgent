@@ -19,7 +19,8 @@
           "thread/list",
           "thread/read",
           "skills/list",
-          "turn/start"
+          "turn/start",
+          "turn/interrupt"
         ]
       }
     },
@@ -133,6 +134,15 @@
           "reason": "Do you want to allow network access so I can query npm metadata for the `dive` package?",
           "command": "/bin/zsh -lc 'npm view dive'"
         }
+      }
+    },
+    {
+      "id": "turn-interrupt-1",
+      "kind": "response",
+      "method": "turn/interrupt",
+      "result": {
+        "threadId": "thread-approval-pending",
+        "turnId": "turn-approval-2"
       }
     }
   ]
