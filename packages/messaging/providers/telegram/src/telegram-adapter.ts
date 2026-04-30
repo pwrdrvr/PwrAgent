@@ -149,6 +149,50 @@ export type TelegramBotLike = {
   stop?(): void | Promise<void>;
 };
 
+export type TelegramGrammyBotLike = {
+  api: {
+    answerCallbackQuery(
+      callbackQueryId: string,
+      other?: { text?: string },
+    ): Promise<boolean>;
+    deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
+    editMessageText(
+      chatId: number | string,
+      messageId: number,
+      text: string,
+      other?: Omit<TelegramEditMessageTextRequest, "chat_id" | "message_id" | "text">,
+    ): Promise<TelegramSentMessage | boolean>;
+    getWebhookInfo(): Promise<{ url: string }>;
+    pinChatMessage(
+      chatId: number | string,
+      messageId: number,
+      other?: Omit<TelegramPinChatMessageRequest, "chat_id" | "message_id">,
+    ): Promise<boolean>;
+    sendMessage(
+      chatId: number | string,
+      text: string,
+      other?: Omit<TelegramSendMessageRequest, "chat_id" | "text">,
+    ): Promise<TelegramSentMessage>;
+    sendPhoto(
+      chatId: number | string,
+      photo: string,
+      other?: Omit<TelegramSendPhotoRequest, "chat_id" | "photo">,
+    ): Promise<TelegramSentMessage>;
+    setMyCommands(
+      commands: Array<{ command: string; description: string }>,
+    ): Promise<boolean>;
+    unpinChatMessage(
+      chatId: number | string,
+      messageId?: number,
+      other?: Omit<TelegramUnpinChatMessageRequest, "chat_id" | "message_id">,
+    ): Promise<boolean>;
+  };
+  handleUpdate?(update: TelegramUpdate): Promise<void>;
+  on?(filter: string, handler: (context: unknown) => void | Promise<void>): void;
+  start?(options?: { allowed_updates?: string[] }): Promise<void>;
+  stop?(): void | Promise<void>;
+};
+
 export type TelegramProviderAdapter = {
   channel: "telegram";
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
@@ -689,7 +733,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         api: this.options.api,
       };
     }
-    this.defaultBot ??= new Bot(this.options.config.botToken) as unknown as TelegramBotLike;
+    this.defaultBot ??= adaptGrammyBot(
+      new Bot(this.options.config.botToken) as unknown as TelegramGrammyBotLike,
+    );
     return this.defaultBot;
   }
 
@@ -707,6 +753,64 @@ export function createTelegramAdapter(
     config,
     store,
   });
+}
+
+export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
+  return {
+    api: {
+      answerCallbackQuery: async (params) =>
+        await bot.api.answerCallbackQuery(params.callback_query_id, {
+          text: params.text,
+        }),
+      deleteWebhook: async (params) => await bot.api.deleteWebhook(params),
+      editMessageText: async (request) => {
+        const { chat_id, message_id, text, ...other } = request;
+        return coerceTelegramSentMessage(
+          await bot.api.editMessageText(chat_id, message_id, text, other),
+          request,
+        );
+      },
+      getWebhookInfo: async () => await bot.api.getWebhookInfo(),
+      pinChatMessage: async (request) => {
+        const { chat_id, message_id, ...other } = request;
+        return await bot.api.pinChatMessage(chat_id, message_id, other);
+      },
+      sendMessage: async (request) => {
+        const { chat_id, text, ...other } = request;
+        return await bot.api.sendMessage(chat_id, text, other);
+      },
+      sendPhoto: async (request) => {
+        const { chat_id, photo, ...other } = request;
+        return await bot.api.sendPhoto(chat_id, photo, other);
+      },
+      setMyCommands: async (params) =>
+        await bot.api.setMyCommands(params.commands),
+      unpinChatMessage: async (request) => {
+        const { chat_id, message_id, ...other } = request;
+        return await bot.api.unpinChatMessage(chat_id, message_id, other);
+      },
+    },
+    handleUpdate: bot.handleUpdate?.bind(bot),
+    on: bot.on?.bind(bot),
+    start: bot.start?.bind(bot),
+    stop: bot.stop?.bind(bot),
+  };
+}
+
+function coerceTelegramSentMessage(
+  result: TelegramSentMessage | boolean,
+  request: TelegramEditMessageTextRequest,
+): TelegramSentMessage {
+  if (result && typeof result === "object") {
+    return result;
+  }
+  return {
+    chat: {
+      id: Number(request.chat_id),
+      type: "private",
+    },
+    message_id: request.message_id,
+  };
 }
 
 function parseTelegramIdentifier(value: string): number | string {
