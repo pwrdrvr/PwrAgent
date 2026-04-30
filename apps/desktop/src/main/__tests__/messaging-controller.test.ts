@@ -15,9 +15,9 @@ import type {
   StartTurnRequest,
   SubmitServerRequestRequest,
 } from "@pwragnt/shared";
-import { MessagingController } from "../messaging/messaging-controller";
-import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/messaging-adapter";
-import { MessagingStore } from "../messaging/messaging-store";
+import { MessagingController } from "../messaging/core/messaging-controller";
+import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
+import { MessagingStore } from "../messaging/core/messaging-store";
 
 const tempDirs: string[] = [];
 

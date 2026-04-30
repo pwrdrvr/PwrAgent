@@ -19,7 +19,7 @@ import type {
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
 } from "@pwragnt/shared";
-import type { MessagingBackendBridge } from "@pwragnt/agent-core";
+import type { MessagingBackendBridge } from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";

@@ -212,7 +212,7 @@ flowchart TB
 **Verification:**
 - The interface package is the only compile-time contract between desktop orchestration and provider packages.
 
-- [ ] **Unit 2: Move messaging workflow ownership to desktop**
+- [x] **Unit 2: Move messaging workflow ownership to desktop**
 
 **Goal:** Relocate messaging controller/store/renderers/browser/status/fallback logic out of `packages/agent-core` and into desktop main-process messaging modules.
 

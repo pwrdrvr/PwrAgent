@@ -2,7 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MessagingController, MessagingStore } from "@pwragnt/agent-core";
+import { MessagingController } from "../messaging/core/messaging-controller";
+import { MessagingStore } from "../messaging/core/messaging-store";
 import type {
   MessagingInboundEvent,
   MessagingSurfaceIntent,

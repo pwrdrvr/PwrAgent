@@ -26,6 +26,9 @@ importers:
       '@pwragnt/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
+      '@pwragnt/messaging-interface':
+        specifier: workspace:*
+        version: link:../../packages/messaging/interface
       '@pwragnt/shared':
         specifier: workspace:*
         version: link:../../packages/shared

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MessagingBindingRecord, NavigationSnapshot } from "@pwragnt/shared";
-import { buildBindingStatusIntent } from "../messaging/messaging-status-card";
+import { buildBindingStatusIntent } from "../messaging/core/messaging-status-card";
 
 describe("buildBindingStatusIntent", () => {
   it("renders binding, preference, project, and unavailable status fields", () => {

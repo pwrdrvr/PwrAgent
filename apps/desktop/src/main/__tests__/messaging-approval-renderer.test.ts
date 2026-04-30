@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildApprovalIntent } from "../messaging/messaging-approval-renderer";
+import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 
 describe("buildApprovalIntent", () => {
   it("renders command approvals with prompt, command code block, and conservative choices", () => {

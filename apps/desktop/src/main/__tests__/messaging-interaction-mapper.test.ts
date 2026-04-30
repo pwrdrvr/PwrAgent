@@ -4,7 +4,7 @@ import type {
   MessagingQuestionnaireIntent,
   MessagingSingleSelectIntent,
 } from "@pwragnt/shared";
-import { DeterministicInteractionMapper } from "../messaging/deterministic-interaction-mapper";
+import { DeterministicInteractionMapper } from "../messaging/core/deterministic-interaction-mapper";
 
 describe("DeterministicInteractionMapper", () => {
   const mapper = new DeterministicInteractionMapper();

@@ -10,7 +10,7 @@ import {
   type MessagingInboundMediaEvent,
   type MessagingMessageIntent,
   type MessagingThreadPickerIntent,
-} from "@pwragnt/shared";
+} from "../index";
 
 describe("messaging surface contract", () => {
   it("enumerates the first-release semantic intent and inbound event kinds", () => {

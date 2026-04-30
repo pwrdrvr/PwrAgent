@@ -1,4 +1,4 @@
-import { MessagingStore } from "@pwragnt/agent-core";
+import { MessagingStore } from "./core/messaging-store";
 import { resolveDesktopMessagingStorePath } from "../app-server/desktop-state-root";
 
 let messagingStore: MessagingStore | null = null;

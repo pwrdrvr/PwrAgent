@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@pwragnt/agent-core", () => ({
+vi.mock("../messaging/core/messaging-store", () => ({
   MessagingStore: class MockMessagingStore {
     constructor(readonly filePath: string) {}
   },

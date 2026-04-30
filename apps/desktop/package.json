@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@pwragnt/agent-core": "workspace:*",
+    "@pwragnt/messaging-interface": "workspace:*",
     "@pwragnt/shared": "workspace:*",
     "@tiptap/extension-mention": "^3.22.5",
     "@tiptap/react": "^3.22.5",

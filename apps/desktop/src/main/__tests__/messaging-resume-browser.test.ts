@@ -4,7 +4,7 @@ import {
   buildResumeIntent,
   parseResumeCommandArgs,
   RESUME_BROWSER_PAGE_SIZE,
-} from "../messaging/messaging-resume-browser";
+} from "../messaging/core/messaging-resume-browser";
 
 describe("messaging resume browser", () => {
   it("parses resume flags including unicode dashes and preferences", () => {

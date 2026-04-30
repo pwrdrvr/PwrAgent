@@ -4,13 +4,15 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
-  MessagingDeliveryResult,
-  MessagingInboundEvent,
-  MessagingSurfaceIntent,
   NavigationSnapshot,
   StartTurnRequest,
 } from "@pwragnt/shared";
-import type { MessagingBackendBridge } from "@pwragnt/agent-core";
+import type {
+  MessagingDeliveryResult,
+  MessagingInboundEvent,
+  MessagingSurfaceIntent,
+} from "@pwragnt/messaging-interface";
+import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import type {
   DesktopMessagingAdapter,
   DesktopMessagingAdapterFactory,

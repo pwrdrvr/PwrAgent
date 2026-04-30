@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { MessagingStore } from "@pwragnt/agent-core";
+import type { MessagingStore } from "./core/messaging-store";
 import type {
   MessagingAdapterState,
   MessagingDeliveryResult,

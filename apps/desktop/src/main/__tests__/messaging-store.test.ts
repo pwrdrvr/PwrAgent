@@ -8,7 +8,7 @@ import type {
   MessagingCallbackHandleRecord,
   MessagingPendingIntentRecord,
 } from "@pwragnt/shared";
-import { MessagingStore } from "../messaging/messaging-store";
+import { MessagingStore } from "../messaging/core/messaging-store";
 
 const tempDirs: string[] = [];
 

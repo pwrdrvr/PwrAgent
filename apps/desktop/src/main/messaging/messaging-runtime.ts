@@ -1,14 +1,12 @@
-import {
-  MessagingController,
-  type MessagingStore,
-  type MessagingBackendBridge,
-} from "@pwragnt/agent-core";
+import { MessagingController } from "./core/messaging-controller";
+import type { MessagingStore } from "./core/messaging-store";
+import type { MessagingBackendBridge } from "./core/messaging-adapter";
+import type { AgentEvent } from "@pwragnt/shared";
 import type {
-  AgentEvent,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   MessagingSurfaceIntent,
-} from "@pwragnt/shared";
+} from "@pwragnt/messaging-interface";
 import { getMainLogger } from "../log";
 import { getDesktopMessagingStore } from "./desktop-messaging-store";
 import {
