@@ -7,7 +7,7 @@ import {
   TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
   TELEGRAM_MESSAGE_TEXT_LIMIT,
   textForTelegramIntent,
-} from "../telegram-formatting";
+} from "../telegram-formatting.ts";
 
 describe("telegram formatting", () => {
   it("escapes HTML and preserves inline and fenced code as Telegram HTML", () => {

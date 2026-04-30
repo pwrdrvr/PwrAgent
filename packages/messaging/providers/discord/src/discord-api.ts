@@ -1,5 +1,5 @@
 import { REST, Routes } from "discord.js";
-import type { DiscordActionRowComponent } from "./discord-formatting";
+import type { DiscordActionRowComponent } from "./discord-formatting.ts";
 
 export type DiscordAllowedMentions = {
   parse: string[];
@@ -32,9 +32,15 @@ export type DiscordInteractionResponseRequest = {
 };
 
 export class DiscordApiError extends Error {
+  readonly details: {
+    errorCode?: number;
+    method: string;
+    retryAfterSeconds?: number;
+  };
+
   constructor(
     message: string,
-    readonly details: {
+    details: {
       errorCode?: number;
       method: string;
       retryAfterSeconds?: number;
@@ -42,6 +48,7 @@ export class DiscordApiError extends Error {
   ) {
     super(message);
     this.name = "DiscordApiError";
+    this.details = details;
   }
 }
 
@@ -49,15 +56,15 @@ export type DiscordApiFetch = typeof fetch;
 
 export class DiscordApi {
   private readonly baseUrl: string;
+  private readonly options: {
+    botToken: string;
+    fetch?: DiscordApiFetch;
+    baseUrl?: string;
+  };
   private readonly rest?: REST;
 
-  constructor(
-    private readonly options: {
-      botToken: string;
-      fetch?: DiscordApiFetch;
-      baseUrl?: string;
-    },
-  ) {
+  constructor(options: DiscordApi["options"]) {
+    this.options = options;
     this.baseUrl = options.baseUrl?.replace(/\/$/, "") ?? "https://discord.com/api/v10";
     this.rest =
       options.fetch || options.baseUrl

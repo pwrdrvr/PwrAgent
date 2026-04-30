@@ -8,7 +8,7 @@ import type {
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragnt/messaging-interface";
-import type { TelegramMessagingConfig } from "./telegram-config";
+import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
   TelegramApi,
   TelegramApiError,
@@ -16,14 +16,14 @@ import {
   type TelegramMessage,
   type TelegramSentMessage,
   type TelegramUpdate,
-} from "./telegram-api";
+} from "./telegram-api.ts";
 import {
   actionsForTelegramIntent,
   splitTelegramHtml,
   TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
   type TelegramInlineKeyboardMarkup,
   textForTelegramIntent,
-} from "./telegram-formatting";
+} from "./telegram-formatting.ts";
 
 const TELEGRAM_ALLOWED_UPDATES = ["message", "callback_query"];
 const TELEGRAM_LONG_POLL_TIMEOUT_SECONDS = 25;
@@ -54,19 +54,20 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private defaultApi?: TelegramApi;
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private nextOffset: number | undefined;
+  private readonly options: {
+    api?: TelegramApi;
+    config: TelegramMessagingConfig;
+    now?: () => number;
+    pollOnStart?: boolean;
+    sleep?: (ms: number) => Promise<void>;
+    store?: MessagingCallbackHandleStore;
+  };
   private stopped = true;
   private pollLoop?: Promise<void>;
 
-  constructor(
-    private readonly options: {
-      api?: TelegramApi;
-      config: TelegramMessagingConfig;
-      now?: () => number;
-      pollOnStart?: boolean;
-      sleep?: (ms: number) => Promise<void>;
-      store?: MessagingCallbackHandleStore;
-    },
-  ) {}
+  constructor(options: TelegramAdapter["options"]) {
+    this.options = options;
+  }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
     this.listener = listener;

@@ -1,4 +1,4 @@
-export { TelegramAdapter, createTelegramAdapter } from "./telegram-adapter";
+export { TelegramAdapter, createTelegramAdapter } from "./telegram-adapter.ts";
 export type {
   TelegramApi,
   TelegramCallbackQuery,
@@ -10,7 +10,7 @@ export type {
   TelegramSentMessage,
   TelegramUnpinChatMessageRequest,
   TelegramUpdate,
-} from "./telegram-api";
+} from "./telegram-api.ts";
 export {
   TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
   actionsForTelegramIntent,
@@ -19,5 +19,5 @@ export {
   renderTelegramHtml,
   splitTelegramHtml,
   textForTelegramIntent,
-} from "./telegram-formatting";
-export type { TelegramMessagingConfig } from "./telegram-config";
+} from "./telegram-formatting.ts";
+export type { TelegramMessagingConfig } from "./telegram-config.ts";

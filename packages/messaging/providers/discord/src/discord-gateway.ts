@@ -79,19 +79,20 @@ export class DiscordGateway implements DiscordGatewayConnection {
   private listeners = new Set<DiscordGatewayListener>();
   private heartbeatTimer: NodeJS.Timeout | undefined;
   private lastSequence: number | undefined;
+  private readonly options: {
+    botToken?: string;
+    gatewayUrl?: string;
+    heartbeatIntervalMs?: number;
+    onHeartbeatMiss?: () => void | Promise<void>;
+    sendHeartbeat?: (sequence: number | undefined) => void | Promise<void>;
+    websocketFactory?: DiscordGatewayWebSocketFactory;
+  };
   private running = false;
   private socket?: DiscordGatewayWebSocket;
 
-  constructor(
-    private readonly options: {
-      botToken?: string;
-      gatewayUrl?: string;
-      heartbeatIntervalMs?: number;
-      onHeartbeatMiss?: () => void | Promise<void>;
-      sendHeartbeat?: (sequence: number | undefined) => void | Promise<void>;
-      websocketFactory?: DiscordGatewayWebSocketFactory;
-    } = {},
-  ) {}
+  constructor(options: DiscordGateway["options"] = {}) {
+    this.options = options;
+  }
 
   async start(): Promise<void> {
     this.running = true;

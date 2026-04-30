@@ -1,5 +1,5 @@
 import { Api } from "grammy";
-import type { TelegramInlineKeyboardMarkup } from "./telegram-formatting";
+import type { TelegramInlineKeyboardMarkup } from "./telegram-formatting.ts";
 
 export type TelegramUser = {
   first_name?: string;
@@ -103,9 +103,16 @@ export type TelegramUnpinChatMessageRequest = {
 };
 
 export class TelegramApiError extends Error {
+  readonly details: {
+    description?: string;
+    errorCode?: number;
+    method: string;
+    retryAfterSeconds?: number;
+  };
+
   constructor(
     message: string,
-    readonly details: {
+    details: {
       description?: string;
       errorCode?: number;
       method: string;
@@ -114,6 +121,7 @@ export class TelegramApiError extends Error {
   ) {
     super(message);
     this.name = "TelegramApiError";
+    this.details = details;
   }
 }
 
@@ -122,14 +130,14 @@ export type TelegramApiFetch = typeof fetch;
 export class TelegramApi {
   private readonly baseUrl: string;
   private readonly grammyApi?: Api;
+  private readonly options: {
+    botToken: string;
+    fetch?: TelegramApiFetch;
+    baseUrl?: string;
+  };
 
-  constructor(
-    private readonly options: {
-      botToken: string;
-      fetch?: TelegramApiFetch;
-      baseUrl?: string;
-    },
-  ) {
+  constructor(options: TelegramApi["options"]) {
+    this.options = options;
     this.baseUrl =
       options.baseUrl?.replace(/\/$/, "") ??
       `https://api.telegram.org/bot${options.botToken}`;

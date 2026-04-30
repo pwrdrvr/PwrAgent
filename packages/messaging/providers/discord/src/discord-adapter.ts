@@ -7,20 +7,20 @@ import type {
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragnt/messaging-interface";
-import type { DiscordMessagingConfig } from "./discord-config";
+import type { DiscordMessagingConfig } from "./discord-config.ts";
 import {
   defensiveAllowedMentions,
   DiscordApi,
   type DiscordCreateMessageRequest,
   type DiscordMessage,
-} from "./discord-api";
+} from "./discord-api.ts";
 import {
   actionsForDiscordIntent,
   buildDiscordComponents,
   DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES,
   splitDiscordContent,
   textForDiscordIntent,
-} from "./discord-formatting";
+} from "./discord-formatting.ts";
 import {
   DiscordGateway,
   type DiscordGatewayConnection,
@@ -28,7 +28,7 @@ import {
   type DiscordInteractionCreateDispatch,
   type DiscordMessageCreateDispatch,
   type DiscordUser,
-} from "./discord-gateway";
+} from "./discord-gateway.ts";
 
 type DiscordComponentBinding = {
   actionId: string;
@@ -49,16 +49,17 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private defaultApi?: DiscordApi;
   private defaultGateway?: DiscordGatewayConnection;
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
+  private readonly options: {
+    api?: DiscordApi;
+    config: DiscordMessagingConfig;
+    gateway?: DiscordGatewayConnection;
+    now?: () => number;
+  };
   private unsubscribeGateway?: () => void;
 
-  constructor(
-    private readonly options: {
-      api?: DiscordApi;
-      config: DiscordMessagingConfig;
-      gateway?: DiscordGatewayConnection;
-      now?: () => number;
-    },
-  ) {}
+  constructor(options: DiscordAdapter["options"]) {
+    this.options = options;
+  }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
     if (this.options.config.messageContentIntent === false) {
