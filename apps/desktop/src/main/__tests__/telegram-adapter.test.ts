@@ -7,10 +7,12 @@ import { MessagingStore } from "../messaging/core/messaging-store";
 import type {
   MessagingInboundEvent,
   MessagingSurfaceIntent,
+} from "@pwragnt/messaging-interface";
+import type {
   NavigationSnapshot,
   StartTurnRequest,
 } from "@pwragnt/shared";
-import { TelegramAdapter } from "../messaging/telegram-adapter";
+import { TelegramAdapter } from "@pwragnt/messaging-provider-telegram";
 import type {
   TelegramApi,
   TelegramEditMessageTextRequest,
@@ -18,8 +20,8 @@ import type {
   TelegramSendMessageRequest,
   TelegramSendPhotoRequest,
   TelegramUnpinChatMessageRequest,
-} from "../messaging/telegram-api";
-import { TELEGRAM_CALLBACK_DATA_LIMIT_BYTES } from "../messaging/telegram-formatting";
+} from "@pwragnt/messaging-provider-telegram";
+import { TELEGRAM_CALLBACK_DATA_LIMIT_BYTES } from "@pwragnt/messaging-provider-telegram";
 
 const tempDirs: string[] = [];
 

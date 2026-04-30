@@ -1,15 +1,14 @@
 import { createHash } from "node:crypto";
-import type { MessagingStore } from "./core/messaging-store";
 import type {
   MessagingAdapterState,
+  MessagingCallbackHandleStore,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   MessagingJsonValue,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
-} from "@pwragnt/shared";
-import type { DesktopMessagingAdapter } from "./messaging-runtime";
-import type { TelegramMessagingConfig } from "./messaging-config";
+} from "@pwragnt/messaging-interface";
+import type { TelegramMessagingConfig } from "./telegram-config";
 import {
   TelegramApi,
   TelegramApiError,
@@ -41,7 +40,14 @@ type TelegramDeliveryTarget = {
   messageThreadId?: number;
 };
 
-export class TelegramAdapter implements DesktopMessagingAdapter {
+export type TelegramProviderAdapter = {
+  channel: "telegram";
+  deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
+  stop?(): Promise<void>;
+};
+
+export class TelegramAdapter implements TelegramProviderAdapter {
   readonly channel = "telegram" as const;
 
   private callbackBindings = new Map<string, TelegramCallbackBinding>();
@@ -58,7 +64,7 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
       now?: () => number;
       pollOnStart?: boolean;
       sleep?: (ms: number) => Promise<void>;
-      store?: MessagingStore;
+      store?: MessagingCallbackHandleStore;
     },
   ) {}
 
@@ -578,7 +584,7 @@ export class TelegramAdapter implements DesktopMessagingAdapter {
 
 export function createTelegramAdapter(
   config: TelegramMessagingConfig,
-  store?: MessagingStore,
+  store?: MessagingCallbackHandleStore,
 ): TelegramAdapter {
   return new TelegramAdapter({
     config,

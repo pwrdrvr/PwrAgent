@@ -482,3 +482,15 @@ export type MessagingCallbackHandleRecord = {
   updatedAt: number;
   value?: MessagingJsonValue;
 };
+
+export type MessagingCallbackHandleStore = {
+  resolveCallbackHandle(params: {
+    actorId: string;
+    channel: MessagingChannelRef;
+    handle: string;
+    now?: number;
+  }): Promise<MessagingCallbackHandleRecord | undefined>;
+  upsertCallbackHandle(
+    callbackHandle: MessagingCallbackHandleRecord,
+  ): Promise<MessagingCallbackHandleRecord>;
+};

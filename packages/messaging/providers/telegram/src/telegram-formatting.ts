@@ -3,7 +3,7 @@ import type {
   MessagingMarkdownPolicy,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
-} from "@pwragnt/shared";
+} from "@pwragnt/messaging-interface";
 
 export const TELEGRAM_CALLBACK_DATA_LIMIT_BYTES = 64;
 export const TELEGRAM_MESSAGE_TEXT_LIMIT = 4096;

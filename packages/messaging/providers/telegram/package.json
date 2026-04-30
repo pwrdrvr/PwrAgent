@@ -1,0 +1,19 @@
+{
+  "name": "@pwragnt/messaging-provider-telegram",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pwragnt/messaging-interface": "workspace:*",
+    "grammy": "^1.42.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.4"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

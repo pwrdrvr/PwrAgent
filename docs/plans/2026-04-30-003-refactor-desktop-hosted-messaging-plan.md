@@ -327,7 +327,7 @@ flowchart TB
 **Verification:**
 - Telegram/Discord behavior is traceable to existing desktop registry operations and backend events.
 
-- [ ] **Unit 5: Implement the Telegram provider package with grammY**
+- [x] **Unit 5: Implement the Telegram provider package with grammY**
 
 **Goal:** Use `grammy` for Telegram bot lifecycle, updates, command registration, callbacks, and Bot API calls while preserving the desktop adapter boundary.
 

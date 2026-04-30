@@ -100,7 +100,7 @@ const defaultMessagingProviderRegistry: DesktopMessagingProviderRegistry = {
   },
   telegram: {
     async load() {
-      const module = await import("./telegram-adapter");
+      const module = await import("@pwragnt/messaging-provider-telegram");
       return {
         createAdapter({ config, store }) {
           return config.telegram

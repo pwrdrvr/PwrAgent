@@ -1,4 +1,5 @@
 import type { MessagingChannelKind } from "@pwragnt/messaging-interface";
+import type { TelegramMessagingConfig } from "@pwragnt/messaging-provider-telegram";
 
 export const TELEGRAM_BOT_TOKEN_ENV = "PWRAGNT_MESSAGING_TELEGRAM_BOT_TOKEN";
 export const TELEGRAM_AUTHORIZED_USER_IDS_ENV =
@@ -15,11 +16,6 @@ type MessagingChannelConfigBase = {
   authorizedActorIds: string[];
   channel: MessagingChannelKind;
   enabled?: boolean;
-};
-
-export type TelegramMessagingConfig = MessagingChannelConfigBase & {
-  botToken: string;
-  channel: "telegram";
 };
 
 export type DiscordMessagingConfig = MessagingChannelConfigBase & {

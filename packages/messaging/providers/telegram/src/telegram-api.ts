@@ -1,3 +1,4 @@
+import { Api } from "grammy";
 import type { TelegramInlineKeyboardMarkup } from "./telegram-formatting";
 
 export type TelegramUser = {
@@ -120,6 +121,7 @@ export type TelegramApiFetch = typeof fetch;
 
 export class TelegramApi {
   private readonly baseUrl: string;
+  private readonly grammyApi?: Api;
 
   constructor(
     private readonly options: {
@@ -131,6 +133,8 @@ export class TelegramApi {
     this.baseUrl =
       options.baseUrl?.replace(/\/$/, "") ??
       `https://api.telegram.org/bot${options.botToken}`;
+    this.grammyApi =
+      options.fetch || options.baseUrl ? undefined : new Api(options.botToken);
   }
 
   async getWebhookInfo(): Promise<TelegramWebhookInfo> {
@@ -195,6 +199,12 @@ export class TelegramApi {
   }
 
   private async request<T>(method: string, body: unknown): Promise<T> {
+    if (this.grammyApi) {
+      return await (
+        this.grammyApi.raw as unknown as Record<string, (payload: unknown) => Promise<T>>
+      )[method](body);
+    }
+
     const response = await (this.options.fetch ?? fetch)(`${this.baseUrl}/${method}`, {
       body: JSON.stringify(body),
       headers: {
