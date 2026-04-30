@@ -1,7 +1,15 @@
 import type {
   AgentEvent,
   GetNavigationSnapshotRequest,
+  InterruptTurnRequest,
+  InterruptTurnResponse,
+  ListBackendsRequest,
+  ListBackendsResponse,
   NavigationSnapshot,
+  SetThreadExecutionModeRequest,
+  SetThreadExecutionModeResponse,
+  SetThreadModelSettingsRequest,
+  SetThreadModelSettingsResponse,
   StartTurnRequest,
   StartTurnResponse,
   StartThreadRequest,
@@ -51,6 +59,26 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {
     return await this.registry.startThread(request);
+  }
+
+  async interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse> {
+    return await this.registry.interruptTurn(request);
+  }
+
+  async listBackends(request: ListBackendsRequest = {}): Promise<ListBackendsResponse> {
+    return await this.registry.listBackends(request);
+  }
+
+  async setThreadExecutionMode(
+    request: SetThreadExecutionModeRequest,
+  ): Promise<SetThreadExecutionModeResponse> {
+    return await this.registry.setThreadExecutionMode(request);
+  }
+
+  async setThreadModelSettings(
+    request: SetThreadModelSettingsRequest,
+  ): Promise<SetThreadModelSettingsResponse> {
+    return await this.registry.setThreadModelSettings(request);
   }
 
   async submitServerRequest(

@@ -40,7 +40,11 @@ import {
   selectProjectFromValue,
   selectThreadFromValue,
 } from "./messaging-resume-browser.js";
-import { buildBindingStatusIntent } from "./messaging-status-card.js";
+import {
+  buildBindingStatusIntent,
+  buildStatusModelPickerIntent,
+  buildStatusReasoningPickerIntent,
+} from "./messaging-status-card.js";
 
 const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 
@@ -858,6 +862,47 @@ export class MessagingController {
       await this.renderBindingStatus(binding, event);
       return;
     }
+    if (actionId === "status:model") {
+      await this.presentModelPicker(binding, event);
+      return;
+    }
+    if (actionId === "status:reasoning") {
+      await this.presentReasoningPicker(binding, event);
+      return;
+    }
+    if (actionId === "status:set-model") {
+      await this.setBindingModel(binding, event);
+      return;
+    }
+    if (actionId === "status:set-reasoning") {
+      await this.setBindingReasoning(binding, event);
+      return;
+    }
+    if (actionId === "status:fast") {
+      await this.toggleFastMode(binding, event);
+      return;
+    }
+    if (actionId === "status:permissions") {
+      await this.togglePermissionsMode(binding, event);
+      return;
+    }
+    if (actionId === "status:stop") {
+      await this.stopActiveTurn(binding, event);
+      return;
+    }
+    if (actionId === "status:compact") {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("status-compact-unavailable"),
+          createdAt: this.now(),
+          title: "Compact unavailable",
+          body: "Compaction is not exposed through this messaging bridge yet. Use /status to refresh this card.",
+        }),
+        binding,
+        event,
+      );
+      return;
+    }
 
     await this.deliver(
       buildConfirmationIntent({
@@ -867,6 +912,211 @@ export class MessagingController {
         body: "Use /status to refresh. This control will be wired to backend actions in the next implementation slice.",
       }),
       binding,
+    );
+  }
+
+  private async presentModelPicker(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const summary = await this.getBackendSummary(binding.backend);
+    const models = summary?.launchpadOptions?.models ?? [];
+    if (models.length === 0) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-models-unavailable"),
+          createdAt: this.now(),
+          title: "Models unavailable",
+          body: "This backend did not report model choices. Use /status to refresh.",
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return;
+    }
+
+    await this.deliver(
+      buildStatusModelPickerIntent({
+        id: this.newIntentId("status-model-picker"),
+        binding,
+        createdAt: this.now(),
+        models,
+      }),
+      binding,
+      event,
+    );
+  }
+
+  private async presentReasoningPicker(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const summary = await this.getBackendSummary(binding.backend);
+    const efforts = summary?.launchpadOptions?.reasoningEfforts ?? [
+      "low",
+      "medium",
+      "high",
+    ];
+    await this.deliver(
+      buildStatusReasoningPickerIntent({
+        id: this.newIntentId("status-reasoning-picker"),
+        binding,
+        createdAt: this.now(),
+        efforts,
+      }),
+      binding,
+      event,
+    );
+  }
+
+  private async setBindingModel(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    const model = readStringValue(event.value, "model");
+    if (!model) {
+      await this.deliverInvalidStatusSelection(event);
+      return;
+    }
+
+    const updatedBinding = await this.updateBindingPreferences(binding, {
+      model,
+    });
+    await this.options.backend.setThreadModelSettings?.({
+      backend: binding.backend,
+      threadId: binding.threadId,
+      model,
+      fastMode: updatedBinding.preferences?.fastMode,
+      reasoningEffort: updatedBinding.preferences?.reasoningEffort,
+      serviceTier: updatedBinding.preferences?.serviceTier,
+    });
+    await this.renderBindingStatus(updatedBinding, event);
+  }
+
+  private async setBindingReasoning(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    const reasoningEffort = readStringValue(event.value, "reasoningEffort");
+    if (!reasoningEffort) {
+      await this.deliverInvalidStatusSelection(event);
+      return;
+    }
+
+    const updatedBinding = await this.updateBindingPreferences(binding, {
+      reasoningEffort,
+    });
+    await this.options.backend.setThreadModelSettings?.({
+      backend: binding.backend,
+      threadId: binding.threadId,
+      fastMode: updatedBinding.preferences?.fastMode,
+      model: updatedBinding.preferences?.model,
+      reasoningEffort,
+      serviceTier: updatedBinding.preferences?.serviceTier,
+    });
+    await this.renderBindingStatus(updatedBinding, event);
+  }
+
+  private async toggleFastMode(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const fastMode = !binding.preferences?.fastMode;
+    const updatedBinding = await this.updateBindingPreferences(binding, {
+      fastMode,
+    });
+    await this.options.backend.setThreadModelSettings?.({
+      backend: binding.backend,
+      threadId: binding.threadId,
+      fastMode,
+      model: updatedBinding.preferences?.model,
+      reasoningEffort: updatedBinding.preferences?.reasoningEffort,
+      serviceTier: updatedBinding.preferences?.serviceTier,
+    });
+    await this.renderBindingStatus(updatedBinding, event);
+  }
+
+  private async togglePermissionsMode(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const nextMode =
+      binding.preferences?.permissionsMode === "full-access" ? "default" : "full-access";
+    const executionMode = nextMode;
+    await this.options.backend.setThreadExecutionMode?.({
+      backend: binding.backend,
+      threadId: binding.threadId,
+      executionMode,
+    });
+    const updatedBinding = await this.updateBindingPreferences(binding, {
+      executionMode,
+      permissionsMode: nextMode,
+    });
+    await this.renderBindingStatus(updatedBinding, event);
+  }
+
+  private async stopActiveTurn(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const activeTurn = binding.activeTurn;
+    if (!activeTurn || !["working", "waiting"].includes(activeTurn.status)) {
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
+    await this.options.backend.interruptTurn?.({
+      backend: binding.backend,
+      threadId: binding.threadId,
+      turnId: activeTurn.turnId,
+    });
+    const updatedBinding = await this.options.store.upsertBinding({
+      ...binding,
+      activeTurn: {
+        ...activeTurn,
+        status: "interrupted",
+        updatedAt: this.now(),
+      },
+      updatedAt: this.now(),
+    });
+    await this.renderBindingStatus(updatedBinding, event);
+  }
+
+  private async updateBindingPreferences(
+    binding: MessagingBindingRecord,
+    patch: Partial<NonNullable<MessagingBindingRecord["preferences"]>>,
+  ): Promise<MessagingBindingRecord> {
+    return await this.options.store.upsertBinding({
+      ...binding,
+      preferences: {
+        ...binding.preferences,
+        ...patch,
+        updatedAt: this.now(),
+      },
+      updatedAt: this.now(),
+    });
+  }
+
+  private async getBackendSummary(backend: AppServerBackendKind) {
+    const response = await this.options.backend.listBackends?.({
+      includeUnavailable: true,
+    });
+    return response?.backends.find((candidate) => candidate.kind === backend);
+  }
+
+  private async deliverInvalidStatusSelection(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("invalid-status-selection"),
+        createdAt: this.now(),
+        title: "Invalid status selection",
+        body: "That status selection is no longer available. Use /status to refresh.",
+        recoverable: true,
+      }),
+      undefined,
+      event,
     );
   }
 
@@ -1230,4 +1480,16 @@ function readBindingTargetFromValue(
   }
 
   return undefined;
+}
+
+function readStringValue(
+  value: MessagingJsonValue | undefined,
+  key: string,
+): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const result = value[key];
+  return typeof result === "string" ? result : undefined;
 }

@@ -1,9 +1,17 @@
 import type {
   AgentEvent,
+  InterruptTurnRequest,
+  InterruptTurnResponse,
   GetNavigationSnapshotRequest,
+  ListBackendsRequest,
+  ListBackendsResponse,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   NavigationSnapshot,
+  SetThreadExecutionModeRequest,
+  SetThreadExecutionModeResponse,
+  SetThreadModelSettingsRequest,
+  SetThreadModelSettingsResponse,
   MessagingSurfaceIntent,
   StartThreadRequest,
   StartThreadResponse,
@@ -23,6 +31,14 @@ export type MessagingBackendBridge = {
   ): Promise<NavigationSnapshot>;
   startThread?(request: StartThreadRequest): Promise<StartThreadResponse>;
   startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
+  interruptTurn?(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
+  listBackends?(request?: ListBackendsRequest): Promise<ListBackendsResponse>;
+  setThreadExecutionMode?(
+    request: SetThreadExecutionModeRequest,
+  ): Promise<SetThreadExecutionModeResponse>;
+  setThreadModelSettings?(
+    request: SetThreadModelSettingsRequest,
+  ): Promise<SetThreadModelSettingsResponse>;
   submitServerRequest?(
     request: SubmitServerRequestRequest,
   ): Promise<SubmitServerRequestResponse>;

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
   AppServerPendingRequestNotification,
+  ListBackendsResponse,
   MessagingInboundCallbackEvent,
   MessagingInboundEvent,
   MessagingInboundTextEvent,
@@ -477,12 +478,149 @@ describe("MessagingController", () => {
       text: "Approval response sent.",
     });
   });
+
+  it("opens a model picker and stores the selected model", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:model" }));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Select Model",
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:set-model",
+          value: {
+            model: "gpt-5.3-codex",
+          },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-model",
+        value: {
+          model: "gpt-5.3-codex",
+        },
+      }),
+    );
+
+    expect(harness.setThreadModelSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        model: "gpt-5.3-codex",
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.toMatchObject({
+      preferences: {
+        model: "gpt-5.3-codex",
+      },
+    });
+  });
+
+  it("opens a reasoning picker and stores the selected effort", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:reasoning" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Select Reasoning",
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-reasoning",
+        value: {
+          reasoningEffort: "high",
+        },
+      }),
+    );
+
+    expect(harness.setThreadModelSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        reasoningEffort: "high",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Reasoning: high"),
+    });
+  });
+
+  it("toggles fast mode and applies it to later free-form turns", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:fast" }));
+    await harness.controller.handleInboundEvent(buildTextEvent("please run tests"));
+
+    expect(harness.setThreadModelSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fastMode: true,
+      }),
+    );
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        fastMode: true,
+      }),
+    );
+  });
+
+  it("toggles permissions mode through the backend bridge", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+
+    expect(harness.setThreadExecutionMode).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "full-access",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Permissions: Full Access"),
+    });
+  });
+
+  it("stops an active turn through the backend bridge", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:stop" }));
+
+    expect(harness.interruptTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: interrupted"),
+    });
+  });
 });
 
 async function createHarness(): Promise<{
   controller: MessagingController;
   delivered: MessagingSurfaceIntent[];
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
+  interruptTurn: ReturnType<typeof vi.fn>;
+  listBackends: ReturnType<typeof vi.fn>;
+  setThreadExecutionMode: ReturnType<typeof vi.fn>;
+  setThreadModelSettings: ReturnType<typeof vi.fn>;
   startThread: ReturnType<typeof vi.fn>;
   startTurn: ReturnType<typeof vi.fn>;
   submitServerRequest: ReturnType<typeof vi.fn>;
@@ -517,6 +655,13 @@ async function createHarness(): Promise<{
     threadId: request.threadId,
     turnId: "turn-1",
   }));
+  const interruptTurn = vi.fn(async (request) => request);
+  const setThreadExecutionMode = vi.fn(async (request) => request);
+  const setThreadModelSettings = vi.fn(async (request) => request);
+  const listBackends = vi.fn(async (): Promise<ListBackendsResponse> => ({
+    fetchedAt: 1000,
+    backends: [buildBackendSummary()],
+  }));
   const submitServerRequest = vi.fn(async (request: SubmitServerRequestRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -525,6 +670,10 @@ async function createHarness(): Promise<{
   }));
   const backend: MessagingBackendBridge = {
     getNavigationSnapshot,
+    interruptTurn,
+    listBackends,
+    setThreadExecutionMode,
+    setThreadModelSettings,
     startThread,
     startTurn,
     submitServerRequest,
@@ -540,10 +689,74 @@ async function createHarness(): Promise<{
     }),
     delivered,
     getNavigationSnapshot,
+    interruptTurn,
+    listBackends,
+    setThreadExecutionMode,
+    setThreadModelSettings,
     startThread,
     startTurn,
     submitServerRequest,
     store,
+  };
+}
+
+async function bindThread(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+): Promise<void> {
+  await harness.controller.handleInboundEvent(
+    buildCallbackEvent({
+      actionId: "bind:codex:thread-1",
+      value: {
+        backend: "codex",
+        threadId: "thread-1",
+      },
+    }),
+  );
+}
+
+function buildBackendSummary(): ListBackendsResponse["backends"][number] {
+  return {
+    kind: "codex",
+    label: "Codex",
+    available: true,
+    methods: [],
+    capabilities: {
+      listThreads: true,
+      createThread: true,
+      resumeThread: true,
+      renameThread: true,
+      readThread: true,
+      startTurn: true,
+      interruptTurn: true,
+      steerTurn: false,
+      transcriptPagination: false,
+      toolUse: true,
+      approvalRequests: true,
+      multiDirectoryThreads: true,
+    },
+    executionModes: [
+      {
+        mode: "default",
+        label: "Default",
+        available: true,
+        isDefault: true,
+      },
+      {
+        mode: "full-access",
+        label: "Full Access",
+        available: true,
+      },
+    ],
+    launchpadOptions: {
+      models: [
+        {
+          id: "gpt-5.3-codex",
+          label: "GPT-5.3 Codex",
+        },
+      ],
+      reasoningEfforts: ["low", "medium", "high"],
+      supportsFastMode: true,
+    },
   };
 }
 

@@ -1,5 +1,6 @@
 import type {
   MessagingBindingRecord,
+  MessagingSingleSelectIntent,
   MessagingStatusIntent,
   NavigationSnapshot,
   NavigationThreadSummary,
@@ -113,6 +114,82 @@ export function buildBindingStatusIntent(params: {
         label: "Detach",
         style: "danger",
         fallbackText: "detach",
+      },
+    ],
+  };
+}
+
+export function buildStatusModelPickerIntent(params: {
+  binding: MessagingBindingRecord;
+  createdAt: number;
+  id: string;
+  models: Array<{ id: string; label?: string; current?: boolean }>;
+}): MessagingSingleSelectIntent {
+  return {
+    id: params.id,
+    kind: "single_select",
+    bindingId: params.binding.id,
+    createdAt: params.createdAt,
+    delivery: {
+      mode: params.binding.statusSurface ? "update" : "present",
+      fallback: "present_new",
+    },
+    targetSurface: params.binding.statusSurface,
+    fallbackText: "Reply with a model number, Refresh, or Detach.",
+    prompt: "Select Model",
+    choices: [
+      ...params.models.map((model, index) => ({
+        id: "status:set-model",
+        label: `${model.label ?? model.id}${model.current ? " (current)" : ""}`,
+        fallbackText: String(index + 1),
+        style: "secondary" as const,
+        value: {
+          model: model.id,
+        },
+      })),
+      {
+        id: "status:refresh",
+        label: "Back",
+        fallbackText: "back",
+        style: "secondary" as const,
+      },
+    ],
+  };
+}
+
+export function buildStatusReasoningPickerIntent(params: {
+  binding: MessagingBindingRecord;
+  createdAt: number;
+  id: string;
+  efforts: string[];
+}): MessagingSingleSelectIntent {
+  return {
+    id: params.id,
+    kind: "single_select",
+    bindingId: params.binding.id,
+    createdAt: params.createdAt,
+    delivery: {
+      mode: params.binding.statusSurface ? "update" : "present",
+      fallback: "present_new",
+    },
+    targetSurface: params.binding.statusSurface,
+    fallbackText: "Reply with a reasoning option number, Refresh, or Detach.",
+    prompt: "Select Reasoning",
+    choices: [
+      ...params.efforts.map((effort, index) => ({
+        id: "status:set-reasoning",
+        label: effort,
+        fallbackText: String(index + 1),
+        style: "secondary" as const,
+        value: {
+          reasoningEffort: effort,
+        },
+      })),
+      {
+        id: "status:refresh",
+        label: "Back",
+        fallbackText: "back",
+        style: "secondary" as const,
       },
     ],
   };
