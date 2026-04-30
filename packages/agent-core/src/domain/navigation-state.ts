@@ -40,6 +40,10 @@ function dedupeLinkedDirectories(
   );
 }
 
+function hasHandoffWorkspace(directories: LinkedDirectorySummary[]): boolean {
+  return directories.some((directory) => directory.id.startsWith("pwragnt-handoff:"));
+}
+
 export function materializeNavigationThreads(params: {
   firstSnapshot: boolean;
   now?: number;
@@ -56,10 +60,15 @@ export function materializeNavigationThreads(params: {
       ...thread.linkedDirectories,
       ...(overlay?.extraLinkedDirectories ?? []),
     ]);
+    const overlayGitBranch =
+      overlay?.gitBranch ??
+      (overlay?.observedGitBranch && hasHandoffWorkspace(overlay.extraLinkedDirectories)
+        ? overlay.observedGitBranch
+        : undefined);
 
     return {
       ...thread,
-      gitBranch: overlay?.gitBranch ?? thread.gitBranch,
+      gitBranch: overlayGitBranch ?? thread.gitBranch,
       observedGitBranch: overlay?.observedGitBranch ?? thread.observedGitBranch,
       retainedBranchDriftPairs: overlay?.retainedBranchDriftPairs,
       executionMode: overlay?.executionMode ?? thread.executionMode ?? "default",

@@ -59,6 +59,7 @@ import {
   type SubmitServerRequestRequest,
   type SubmitServerRequestResponse,
   type ThreadExecutionMode,
+  type ThreadOverlayState,
   type UpdateDirectoryLaunchpadRequest,
   type UpdateDirectoryLaunchpadResponse,
   type UpdateThreadExpectedBranchRequest,
@@ -206,6 +207,32 @@ function resolveThreadGitSourcePath(
     linkedDirectories[0];
 
   return directory?.worktreePath ?? directory?.path ?? thread.projectKey;
+}
+
+function hasHandoffWorkspace(
+  directories: AppServerThreadSummary["linkedDirectories"] = [],
+): boolean {
+  return directories.some((directory) => directory.id.startsWith("pwragnt-handoff:"));
+}
+
+function resolveExpectedThreadBranch(params: {
+  overlay?: ThreadOverlayState;
+  thread?: Pick<AppServerThreadSummary, "gitBranch">;
+}): string | undefined {
+  const overlayBranch = params.overlay?.gitBranch?.trim();
+  if (overlayBranch) {
+    return overlayBranch;
+  }
+
+  const overlayObservedBranch = params.overlay?.observedGitBranch?.trim();
+  if (
+    overlayObservedBranch &&
+    hasHandoffWorkspace(params.overlay?.extraLinkedDirectories)
+  ) {
+    return overlayObservedBranch;
+  }
+
+  return params.thread?.gitBranch?.trim() || undefined;
 }
 
 async function readCurrentGitBranch(sourcePath: string): Promise<string | undefined> {
@@ -1387,8 +1414,10 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
     });
-    const expectedBranch =
-      overlay?.gitBranch?.trim() || thread?.gitBranch?.trim() || undefined;
+    const expectedBranch = resolveExpectedThreadBranch({
+      overlay,
+      thread,
+    });
     const sourcePath = resolveThreadGitSourcePath(
       thread,
       overlay?.extraLinkedDirectories ?? [],
@@ -1402,6 +1431,19 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
       branch: normalizedObservedBranch,
+    });
+
+    backendRegistryLog.debug("checked thread branch drift", {
+      backend: params.backend,
+      drifted:
+        Boolean(expectedBranch && normalizedObservedBranch) &&
+        expectedBranch !== "HEAD" &&
+        normalizedObservedBranch !== "HEAD" &&
+        expectedBranch !== normalizedObservedBranch,
+      expectedBranch,
+      observedBranch: normalizedObservedBranch,
+      sourcePath,
+      threadId: params.threadId,
     });
 
     return {
@@ -1435,6 +1477,12 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
       branch,
+    });
+
+    backendRegistryLog.info("updated thread expected branch", {
+      backend: params.backend,
+      branch,
+      threadId: params.threadId,
     });
 
     return {

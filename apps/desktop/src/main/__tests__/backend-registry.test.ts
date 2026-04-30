@@ -96,6 +96,85 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    setThreadExpectedBranch: async ({
+      backend,
+      threadId,
+      branch,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      branch: string;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        gitBranch: branch,
+        observedGitBranch: branch,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    setThreadObservedBranch: async ({
+      backend,
+      threadId,
+      branch,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      branch?: string;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        observedGitBranch: branch,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    retainThreadBranchDrift: async ({
+      backend,
+      threadId,
+      expectedBranch,
+      observedBranch,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      expectedBranch: string;
+      observedBranch: string;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        retainedBranchDriftPairs: [
+          ...(current.retainedBranchDriftPairs ?? []),
+          {
+            expectedBranch,
+            observedBranch,
+            retainedAt: Date.now(),
+          },
+        ],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     getLaunchpadDefaults: async () => launchpadDefaults,
     setLaunchpadDefaults: async (patch: Partial<NavigationLaunchpadDefaults>) => {
       launchpadDefaults = {
@@ -1670,6 +1749,72 @@ describe("DesktopBackendRegistry", () => {
           kind: "worktree",
         }),
       ],
+    });
+
+    await registry.close();
+  });
+
+  it("uses an observed handoff branch as expected when legacy overlay state has no gitBranch", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Moved thread",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "local",
+        },
+      ],
+      source: "codex",
+      gitBranch: "fix/context-rail-slide-reflow",
+      observedGitBranch: "feat/thread-workspace-handoff-plan",
+      updatedAt: 2,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "full-access",
+          observedGitBranch: "feat/thread-workspace-handoff-plan",
+          extraLinkedDirectories: [
+            {
+              id: "pwragnt-handoff:codex:thread-1",
+              kind: "worktree",
+              label: "app",
+              path: "/repo/app",
+              worktreePath: "/repo/app/.worktrees/app-feature",
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [thread],
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    const response = await registry.checkThreadBranchDrift({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(response).toMatchObject({
+      expectedBranch: "feat/thread-workspace-handoff-plan",
+      observedBranch: "feat/thread-workspace-handoff-plan",
+      drifted: false,
     });
 
     await registry.close();
