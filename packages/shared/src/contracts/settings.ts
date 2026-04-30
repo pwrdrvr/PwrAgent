@@ -66,6 +66,7 @@ export type DesktopCodexDiscoverySnapshot = {
 export type DesktopSettingsSnapshot = {
   fetchedAt: number;
   configPath: string;
+  configError?: string;
   secretStorage: DesktopSettingsSecretStorageState;
   experimental: {
     chatReplyComposer: DesktopSettingsValue<DesktopChatReplyComposer>;
