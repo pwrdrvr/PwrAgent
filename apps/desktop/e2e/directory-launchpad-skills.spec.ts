@@ -244,6 +244,16 @@ test("directory launchpad skill autocomplete selects focused options as undoable
       process.platform === "darwin" ? "Meta+Z" : "Control+Z",
     );
     await expect(chip).toBeVisible();
+
+    await chip.click();
+    await expect(chip).toBeFocused();
+    await app.window.keyboard.press("Backspace");
+    await expect(chip).toBeHidden();
+
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+Z" : "Control+Z",
+    );
+    await expect(chip).toBeVisible();
   } finally {
     await app.close();
     await fixture.cleanup();
