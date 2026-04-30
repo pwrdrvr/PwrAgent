@@ -13,6 +13,8 @@ const disposePreloadLogIpcHandlersMock = vi.fn();
 const registerRendererErrorIpcHandlersMock = vi.fn();
 const registerRuntimeIdentityIpcHandlersMock = vi.fn();
 const disposeRuntimeIdentityIpcHandlersMock = vi.fn();
+const registerSettingsIpcHandlersMock = vi.fn();
+const disposeSettingsIpcHandlersMock = vi.fn();
 const initializeMainLoggerMock = vi.fn();
 const setApplicationMenuMock = vi.fn();
 const buildFromTemplateMock = vi.fn(() => ({ kind: "menu" }));
@@ -81,6 +83,11 @@ vi.mock("../ipc/runtime-identity", () => ({
   disposeRuntimeIdentityIpcHandlers: disposeRuntimeIdentityIpcHandlersMock,
 }));
 
+vi.mock("../ipc/settings", () => ({
+  registerSettingsIpcHandlers: registerSettingsIpcHandlersMock,
+  disposeSettingsIpcHandlers: disposeSettingsIpcHandlersMock,
+}));
+
 vi.mock("../log", () => ({
   initializeMainLogger: initializeMainLoggerMock,
 }));
@@ -110,6 +117,8 @@ describe("bootstrapApp", () => {
     registerRendererErrorIpcHandlersMock.mockReset();
     registerRuntimeIdentityIpcHandlersMock.mockReset();
     disposeRuntimeIdentityIpcHandlersMock.mockReset();
+    registerSettingsIpcHandlersMock.mockReset();
+    disposeSettingsIpcHandlersMock.mockReset();
     initializeMainLoggerMock.mockReset();
     setApplicationMenuMock.mockReset();
     buildFromTemplateMock.mockClear();
@@ -156,6 +165,7 @@ describe("bootstrapApp", () => {
     expect(registerImageNormalizationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerPreloadLogIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerRendererErrorIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(registerSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerRuntimeIdentityIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(1);
   });
@@ -192,6 +202,7 @@ describe("bootstrapApp", () => {
     expect(registerRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
 
     appEventHandlers.get("before-quit")?.();
+    expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
   });
 });
