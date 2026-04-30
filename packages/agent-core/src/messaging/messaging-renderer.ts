@@ -1,7 +1,5 @@
 import type {
-  AppServerPendingRequestNotification,
   AppServerToolRequestUserInputNotification,
-  MessagingApprovalIntent,
   MessagingConfirmationIntent,
   MessagingErrorIntent,
   MessagingQuestionnaireIntent,
@@ -10,6 +8,7 @@ import type {
   MessagingThreadPickerIntent,
   NavigationSnapshot,
 } from "@pwragnt/shared";
+export { buildApprovalIntent } from "./messaging-approval-renderer.js";
 
 export function buildThreadPickerIntent(params: {
   actions: MessagingSurfaceAction[];
@@ -115,54 +114,5 @@ export function buildQuestionnaireIntent(params: {
         recommended: /\(recommended\)/i.test(option.label),
       })),
     })),
-  };
-}
-
-export function buildApprovalIntent(params: {
-  createdAt: number;
-  id: string;
-  request: AppServerPendingRequestNotification;
-}): MessagingApprovalIntent {
-  const prompt = typeof params.request.params.prompt === "string"
-    ? params.request.params.prompt
-    : "Approve this action?";
-
-  return {
-    id: params.id,
-    kind: "approval",
-    createdAt: params.createdAt,
-    title: "Approval needed",
-    body: prompt,
-    fallbackText: "Reply yes, yes for this session, no, or cancel.",
-    decisions: [
-      {
-        id: "approval:accept",
-        label: "Allow",
-        decision: "accept",
-        style: "primary",
-        fallbackText: "yes",
-      },
-      {
-        id: "approval:accept_for_session",
-        label: "Allow for session",
-        decision: "accept_for_session",
-        style: "secondary",
-        fallbackText: "yes for this session",
-      },
-      {
-        id: "approval:decline",
-        label: "Decline",
-        decision: "decline",
-        style: "danger",
-        fallbackText: "no",
-      },
-      {
-        id: "approval:cancel",
-        label: "Cancel",
-        decision: "cancel",
-        style: "secondary",
-        fallbackText: "cancel",
-      },
-    ],
   };
 }

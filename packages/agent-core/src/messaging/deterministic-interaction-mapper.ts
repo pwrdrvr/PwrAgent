@@ -9,7 +9,18 @@ import type {
   MessagingInteractionMapperResult,
 } from "./interaction-mapper.js";
 
-const YES_SYNONYMS = new Set(["yes", "y", "allow", "approve", "ok", "okay"]);
+const YES_SYNONYMS = new Set([
+  "yes",
+  "y",
+  "yeah",
+  "yep",
+  "allow",
+  "approve",
+  "approve once",
+  "allow once",
+  "ok",
+  "okay",
+]);
 const NO_SYNONYMS = new Set(["no", "n", "deny", "decline", "reject"]);
 const CANCEL_SYNONYMS = new Set(["cancel", "stop", "nevermind", "never mind"]);
 const NEXT_SYNONYMS = new Set(["next", "forward", "continue"]);
@@ -140,7 +151,12 @@ function matchApprovalSynonym(
   intent: MessagingApprovalIntent,
   normalized: string,
 ): MessagingSurfaceAction | undefined {
-  if (normalized === "yes for this session" || normalized === "allow for session") {
+  if (
+    normalized === "yes for this session" ||
+    normalized === "approve for session" ||
+    normalized === "allow for session" ||
+    normalized === "approve this session"
+  ) {
     return intent.decisions.find((action) => action.decision === "accept_for_session");
   }
   if (YES_SYNONYMS.has(normalized)) {

@@ -6,6 +6,7 @@ import {
   splitTelegramHtml,
   TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
   TELEGRAM_MESSAGE_TEXT_LIMIT,
+  textForTelegramIntent,
 } from "../messaging/telegram-formatting";
 
 describe("telegram formatting", () => {
@@ -66,5 +67,19 @@ describe("telegram formatting", () => {
     expect(escapeTelegramHtml("a < b && b > c")).toBe(
       "a &lt; b &amp;&amp; b &gt; c",
     );
+  });
+
+  it("renders approval code blocks as Telegram HTML", () => {
+    const rendered = textForTelegramIntent({
+      id: "approval-1",
+      kind: "approval",
+      createdAt: 1000,
+      title: "Command Approval",
+      body: "Command:\n```shell\npnpm test\n```",
+      decisions: [],
+    });
+
+    expect(rendered).toContain("Command Approval");
+    expect(rendered).toContain("<pre><code>pnpm test</code></pre>");
   });
 });

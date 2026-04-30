@@ -439,6 +439,21 @@ export class MessagingController {
       }
     }
 
+    if ((event.actionId ?? event.interaction.id).startsWith("approval:")) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("expired-approval"),
+          createdAt: this.now(),
+          title: "Approval expired",
+          body: "That approval request is no longer available. Retry the command or request that needed approval.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
     await this.deliver(
       buildErrorIntent({
         id: this.newIntentId("expired-callback"),

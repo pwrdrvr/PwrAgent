@@ -398,7 +398,7 @@ flowchart TB
 **Verification:**
 - Status controls mutate real PwrAgnt binding/thread behavior and the visible card remains coherent after each callback.
 
-- [ ] **Unit 6: Improve rich approval prompt rendering and action handling**
+- [x] **Unit 6: Improve rich approval prompt rendering and action handling**
 
 **Goal:** Make approval prompts usable from Telegram/Discord with clear markdown/code display, decision buttons, and text fallback.
 

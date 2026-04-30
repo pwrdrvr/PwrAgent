@@ -459,7 +459,13 @@ describe("MessagingController", () => {
         turnId: "turn-1",
         requestId: "approval-1",
         prompt: "Run tests?",
+        command: "/bin/zsh -lc 'pnpm test -- messaging-controller'",
       },
+    });
+
+    expect(harness.delivered.find((intent) => intent.kind === "approval")).toMatchObject({
+      kind: "approval",
+      body: expect.stringContaining("```shell\npnpm test -- messaging-controller\n```"),
     });
 
     await harness.controller.handleInboundEvent(buildTextEvent("yes for this session"));
@@ -476,6 +482,21 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: "Approval response sent.",
+    });
+  });
+
+  it("reports expired approval callbacks with retry guidance", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "approval:accept" }),
+    );
+
+    expect(harness.submitServerRequest).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Approval expired",
+      body: expect.stringContaining("Retry the command"),
     });
   });
 

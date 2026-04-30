@@ -5,6 +5,7 @@ import {
   DISCORD_MESSAGE_CONTENT_LIMIT,
   sanitizeDiscordContent,
   splitDiscordContent,
+  textForDiscordIntent,
 } from "../messaging/discord-formatting";
 
 describe("discord formatting", () => {
@@ -54,5 +55,18 @@ describe("discord formatting", () => {
     expect(Buffer.byteLength(components![0]!.components[0]!.custom_id, "utf8")).toBeLessThanOrEqual(
       DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES,
     );
+  });
+
+  it("preserves approval markdown code blocks", () => {
+    const rendered = textForDiscordIntent({
+      id: "approval-1",
+      kind: "approval",
+      createdAt: 1000,
+      title: "Command Approval",
+      body: "Command:\n```shell\npnpm test\n```",
+      decisions: [],
+    });
+
+    expect(rendered).toContain("```shell\npnpm test\n```");
   });
 });

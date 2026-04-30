@@ -78,6 +78,10 @@ describe("DeterministicInteractionMapper", () => {
       kind: "matched",
       action: { id: "approval:accept_for_session" },
     });
+    expect(mapper.mapText({ intent, text: "approve this session" })).toMatchObject({
+      kind: "matched",
+      action: { id: "approval:accept_for_session" },
+    });
     expect(mapper.mapText({ intent, text: "no" })).toMatchObject({
       kind: "matched",
       action: { id: "approval:decline" },
