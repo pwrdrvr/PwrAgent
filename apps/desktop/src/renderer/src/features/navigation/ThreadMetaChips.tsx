@@ -129,9 +129,6 @@ export function ThreadMetaChips({
           className="thread-row__chip thread-row__chip--approval"
           title="Waiting for approval"
         >
-          <span aria-hidden="true" className="thread-row__chip-icon">
-            !
-          </span>
           Waiting for approval
         </span>
       ) : null}
