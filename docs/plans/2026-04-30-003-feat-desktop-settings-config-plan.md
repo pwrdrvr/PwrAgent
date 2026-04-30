@@ -1,7 +1,7 @@
 ---
 title: "feat: Add Desktop Settings And Config"
 type: feat
-status: active
+status: completed
 date: 2026-04-30
 origin: docs/brainstorms/2026-04-30-desktop-settings-config-requirements.md
 deepened: 2026-04-30
@@ -153,7 +153,7 @@ The main process owns all config parsing, secret reads/writes, override preceden
 
 ## Implementation Units
 
-- [ ] **Unit 1: Shared Settings Contracts**
+- [x] **Unit 1: Shared Settings Contracts**
 
 **Goal:** Define the typed desktop settings API surface used by main, preload, and renderer.
 
@@ -186,7 +186,7 @@ The main process owns all config parsing, secret reads/writes, override preceden
 - Shared contracts compile and are exported through `@pwragnt/shared`.
 - Contract tests prove raw secret values are absent from read response shapes.
 
-- [ ] **Unit 2: Desktop Config And Secret Services**
+- [x] **Unit 2: Desktop Config And Secret Services**
 
 **Goal:** Add main-process services for reading/writing desktop TOML config, resolving env overrides, and storing secrets through an isolated secret-store adapter.
 
@@ -229,7 +229,7 @@ The main process owns all config parsing, secret reads/writes, override preceden
 **Verification:**
 - Main-process tests cover config path resolution, precedence, list parsing, secret redaction, unavailable secret storage, and write behavior.
 
-- [ ] **Unit 3: Settings IPC And Preload Bridge**
+- [x] **Unit 3: Settings IPC And Preload Bridge**
 
 **Goal:** Expose settings read/write operations to the renderer through the established desktop IPC pattern.
 
@@ -268,7 +268,7 @@ The main process owns all config parsing, secret reads/writes, override preceden
 **Verification:**
 - IPC tests prove handlers register/dispose cleanly and secret values are not present in read responses.
 
-- [ ] **Unit 4: Runtime Integration For Models**
+- [x] **Unit 4: Runtime Integration For Models**
 
 **Goal:** Make effective settings influence Codex command selection and Grok/xAI credential consumers while preserving env-first behavior.
 
@@ -315,7 +315,7 @@ The main process owns all config parsing, secret reads/writes, override preceden
 - Existing backend behavior remains unchanged when no desktop settings file exists.
 - Tests prove model runtime consumers honor the new precedence rules.
 
-- [ ] **Unit 5: Codex Discovery Surface**
+- [x] **Unit 5: Codex Discovery Surface**
 
 **Goal:** Expose discovered Codex paths, versions, selected path, and source metadata to Settings.
 
@@ -349,7 +349,7 @@ The main process owns all config parsing, secret reads/writes, override preceden
 **Verification:**
 - Settings can render both successful and failed discovery results from a single snapshot.
 
-- [ ] **Unit 6: Settings Screen Shell**
+- [x] **Unit 6: Settings Screen Shell**
 
 **Goal:** Add the gear entrypoint, app-level settings view, and section navigation.
 
@@ -395,7 +395,7 @@ The main process owns all config parsing, secret reads/writes, override preceden
 **Verification:**
 - App shell tests cover opening, closing/returning to thread view, section navigation, loading, and error states.
 
-- [ ] **Unit 7: Settings Forms And Composer Preference Consumption**
+- [x] **Unit 7: Settings Forms And Composer Preference Consumption**
 
 **Goal:** Implement the initial Experimental, Messaging, and Models settings groups and consume the composer implementation preference safely.
 

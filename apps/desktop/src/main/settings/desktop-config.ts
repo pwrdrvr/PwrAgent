@@ -365,7 +365,7 @@ function parseStringArray(
       continue;
     }
     if (character === "," && !inQuotedString) {
-      values.push(parseTomlValue(current.trim(), filePath, lineNumber) as string);
+      values.push(parseStringArrayItem(current.trim(), filePath, lineNumber));
       current = "";
       continue;
     }
@@ -376,8 +376,20 @@ function parseStringArray(
     throw new Error(`Unterminated TOML string on line ${lineNumber} in ${filePath}`);
   }
 
-  values.push(parseTomlValue(current.trim(), filePath, lineNumber) as string);
+  values.push(parseStringArrayItem(current.trim(), filePath, lineNumber));
   return values;
+}
+
+function parseStringArrayItem(
+  value: string,
+  filePath: string,
+  lineNumber: number,
+): string {
+  const parsed = parseTomlValue(value, filePath, lineNumber);
+  if (typeof parsed !== "string") {
+    throw new Error(`Expected TOML string array on line ${lineNumber} in ${filePath}`);
+  }
+  return parsed;
 }
 
 function stripInlineComment(line: string): string {
