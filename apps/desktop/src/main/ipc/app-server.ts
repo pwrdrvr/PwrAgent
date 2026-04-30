@@ -162,6 +162,7 @@ class DesktopAppServerService {
       hasLastUserMessage: Boolean(response.replay.lastUserMessage),
       hasLastAssistantMessage: Boolean(response.replay.lastAssistantMessage),
       hasPreviousPage: response.replay.pagination.hasPreviousPage,
+      threadStatus: response.threadStatus ?? response.replay.threadStatus,
     });
 
     return response;

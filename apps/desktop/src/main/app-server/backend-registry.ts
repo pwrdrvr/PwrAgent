@@ -1167,6 +1167,7 @@ export class DesktopBackendRegistry {
       backend,
       fetchedAt: Date.now(),
       threadId: request.threadId,
+      ...(replay.threadStatus ? { threadStatus: replay.threadStatus } : {}),
       replay,
     };
   }

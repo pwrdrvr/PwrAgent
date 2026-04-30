@@ -59,6 +59,7 @@ import type {
   UpdateThreadExpectedBranchResponse,
 } from "@pwragnt/shared";
 import type { RendererErrorReport } from "../shared/renderer-error";
+import type { RendererDiagnosticLogRequest } from "../shared/renderer-diagnostic";
 import type {
   ImageUploadFallbackRequest,
   ImageUploadFallbackResponse,
@@ -257,6 +258,11 @@ const desktopApi = Object.freeze({
     request: ImageUploadNormalizationLogRequest,
   ): Promise<void> => {
     await ipcRenderer.invoke(IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL, request);
+  },
+  logRendererDiagnostic: async (
+    request: RendererDiagnosticLogRequest,
+  ): Promise<void> => {
+    recordPreloadLog(request.level, request.message, request.details);
   },
   onWindowFocus: (callback: () => void): (() => void) => {
     const listener = () => callback();

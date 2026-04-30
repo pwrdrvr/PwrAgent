@@ -24,6 +24,7 @@ import type {
   AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadReplayPagination,
+  AppServerThreadStatus,
   AppServerThreadTitleSource,
   AppServerThreadSummary,
   AppServerTurnInputItem,
@@ -1203,6 +1204,45 @@ function normalizeTurnStatus(value: string | undefined): AppServerThreadTurnStat
   return undefined;
 }
 
+function normalizeThreadStatus(value: string | undefined): AppServerThreadStatus | undefined {
+  const normalized = value?.trim().replace(/[-_\s]/g, "").toLowerCase();
+  if (normalized === "active") {
+    return "active";
+  }
+  if (normalized === "idle") {
+    return "idle";
+  }
+  if (normalized === "notloaded") {
+    return "notLoaded";
+  }
+  if (normalized === "unknown") {
+    return "unknown";
+  }
+  return undefined;
+}
+
+function readThreadStatus(value: unknown): AppServerThreadStatus | undefined {
+  if (typeof value === "string") {
+    return normalizeThreadStatus(value);
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const statusRecord = asRecord(record.status);
+  const threadRecord = asRecord(record.thread) ?? asRecord(record.session);
+  const threadStatusRecord = asRecord(threadRecord?.status);
+
+  return normalizeThreadStatus(
+    pickString(statusRecord ?? {}, ["type", "status", "state"]) ??
+      pickString(threadStatusRecord ?? {}, ["type", "status", "state"]) ??
+      pickString(record, ["status", "state"]) ??
+      pickString(threadRecord ?? {}, ["status", "state"])
+  );
+}
+
 function extractTurnMetadata(
   turn: Record<string, unknown>
 ): AppServerThreadTurnMetadata | undefined {
@@ -2272,12 +2312,14 @@ function extractThreadReplayFromReadResult(value: unknown): AppServerThreadRepla
     }
   }
 
+  const threadStatus = readThreadStatus(value);
   return {
     entries,
     messages,
     lastUserMessage,
     lastAssistantMessage,
-    pagination: extractReplayPagination(value)
+    pagination: extractReplayPagination(value),
+    ...(threadStatus ? { threadStatus } : {})
   };
 }
 

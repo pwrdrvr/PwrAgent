@@ -116,7 +116,24 @@ type ThreadSessionEntry = {
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
   response?: AppServerReadThreadResponse;
+  thinkingSinceAt?: number;
   viewport?: ThreadViewportState;
+};
+
+type ThinkingStateReason = {
+  entryId?: string;
+  entryStatus?: string;
+  entryType?: AppServerThreadEntry["type"];
+  kind:
+    | "activeTurn"
+    | "liveOptimisticEntry"
+    | "pendingAssistantMessage"
+    | "pendingMcpInteraction"
+    | "pendingRequest"
+    | "pendingStatus"
+    | "pendingUserInput";
+  turnId?: string;
+  turnStatus?: string;
 };
 
 type ThreadSessionState = Record<string, ThreadSessionEntry>;
@@ -374,16 +391,122 @@ function hasHydratedTranscriptContent(session: ThreadSessionEntry): boolean {
   );
 }
 
+function isLiveOptimisticEntry(entry: AppServerThreadEntry): boolean {
+  if (entry.type === "message") {
+    return true;
+  }
+
+  if (entry.turn?.status) {
+    return entry.turn.status === "in_progress";
+  }
+
+  if (entry.type === "activity") {
+    return entry.status === "in_progress";
+  }
+
+  if (entry.type === "review") {
+    return true;
+  }
+
+  return false;
+}
+
+function summarizeOptimisticEntryReason(
+  entry: AppServerThreadEntry
+): ThinkingStateReason {
+  return {
+    entryId: entry.id,
+    entryStatus: "status" in entry ? entry.status : undefined,
+    entryType: entry.type,
+    kind: "liveOptimisticEntry",
+    turnId: entry.turn?.id,
+    turnStatus: entry.turn?.status,
+  };
+}
+
+function describeThinkingState(session: ThreadSessionEntry): ThinkingStateReason[] {
+  const reasons: ThinkingStateReason[] = [];
+
+  if (session.activeTurnId) {
+    reasons.push({
+      kind: "activeTurn",
+      turnId: session.activeTurnId,
+    });
+  }
+
+  if (session.pendingStatusText) {
+    reasons.push({ kind: "pendingStatus" });
+  }
+
+  if (session.pendingAssistantMessage) {
+    reasons.push({
+      entryId: session.pendingAssistantMessage.id,
+      kind: "pendingAssistantMessage",
+      turnId: session.pendingAssistantMessage.turn?.id,
+      turnStatus: session.pendingAssistantMessage.turn?.status,
+    });
+  }
+
+  if (session.pendingMcpInteraction) {
+    reasons.push({ kind: "pendingMcpInteraction" });
+  }
+
+  if (session.pendingRequest) {
+    reasons.push({
+      kind: "pendingRequest",
+      turnId: session.pendingRequest.params.turnId ?? undefined,
+    });
+  }
+
+  if (session.pendingUserInput) {
+    reasons.push({ kind: "pendingUserInput" });
+  }
+
+  if (session.expectOwnUpdate) {
+    reasons.push(
+      ...session.optimisticEntries
+        .filter(isLiveOptimisticEntry)
+        .map(summarizeOptimisticEntryReason)
+    );
+  }
+
+  return reasons;
+}
+
 function hasThinkingState(session: ThreadSessionEntry): boolean {
+  return describeThinkingState(session).length > 0;
+}
+
+function hasPendingInteraction(session: ThreadSessionEntry): boolean {
   return Boolean(
-    session.activeTurnId ||
-      session.pendingStatusText ||
-      session.pendingAssistantMessage ||
-      session.pendingMcpInteraction ||
+    session.pendingMcpInteraction ||
       session.pendingRequest ||
-      session.pendingUserInput ||
-      (session.expectOwnUpdate && session.optimisticEntries.length > 0)
+      session.pendingUserInput
   );
+}
+
+function summarizeOptimisticEntries(
+  entries: AppServerThreadEntry[]
+): Array<{
+  entryStatus?: string;
+  id: string;
+  turnId?: string;
+  turnStatus?: string;
+  type: AppServerThreadEntry["type"];
+}> {
+  return entries.map((entry) => ({
+    id: entry.id,
+    type: entry.type,
+    entryStatus: "status" in entry ? entry.status : undefined,
+    turnId: entry.turn?.id,
+    turnStatus: entry.turn?.status,
+  }));
+}
+
+function readResponseThreadStatus(
+  response: AppServerReadThreadResponse
+): AppServerReadThreadResponse["threadStatus"] {
+  return response.threadStatus ?? response.replay.threadStatus;
 }
 
 function normalizeNotificationTimestamp(value: unknown): number | undefined {
@@ -1141,6 +1264,7 @@ export function useThreadSessionState(params: {
     : undefined;
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
   const requestVersionsRef = useRef<Record<string, number>>({});
+  const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
   const [sessions, setSessions] = useState<ThreadSessionState>({});
 
   selectedThreadKeyRef.current = threadKey;
@@ -1152,7 +1276,17 @@ export function useThreadSessionState(params: {
     ): void => {
       setSessions((current) => {
         const previous = current[targetThreadKey] ?? createEmptyThreadSessionEntry();
-        const next = updater(previous);
+        const previousThinking = hasThinkingState(previous);
+        let next = updater(previous);
+        const nextThinking = hasThinkingState(next);
+        if (next !== previous && previousThinking !== nextThinking) {
+          next = {
+            ...next,
+            thinkingSinceAt: nextThinking
+              ? previous.thinkingSinceAt ?? Date.now()
+              : undefined,
+          };
+        }
         if (next === previous) {
           return current;
         }
@@ -1167,6 +1301,63 @@ export function useThreadSessionState(params: {
       });
     },
     []
+  );
+
+  const logStaleThinkingState = useCallback(
+    (params: {
+      current: ThreadSessionEntry;
+      reasons: ThinkingStateReason[];
+      response: AppServerReadThreadResponse;
+      targetThreadKey: string;
+    }): void => {
+      const logRendererDiagnostic = desktopApi?.logRendererDiagnostic;
+      if (!logRendererDiagnostic) {
+        return;
+      }
+
+      const reasonSignature = params.reasons
+        .map((reason) =>
+          [
+            reason.kind,
+            reason.entryType,
+            reason.entryId,
+            reason.entryStatus,
+            reason.turnId,
+            reason.turnStatus,
+          ].filter(Boolean).join(":")
+        )
+        .join("|");
+      const logKey = `${params.targetThreadKey}:${params.response.fetchedAt}:${reasonSignature}`;
+      if (staleThinkingLogKeysRef.current.has(logKey)) {
+        return;
+      }
+      staleThinkingLogKeysRef.current.add(logKey);
+
+      void logRendererDiagnostic({
+        details: {
+          activeTurnId: params.current.activeTurnId,
+          expectOwnUpdate: params.current.expectOwnUpdate,
+          lastTouchedAt: params.current.lastTouchedAt,
+          optimisticEntries: summarizeOptimisticEntries(
+            params.current.optimisticEntries
+          ),
+          pendingAssistantMessageId: params.current.pendingAssistantMessage?.id,
+          pendingMcpInteraction: Boolean(params.current.pendingMcpInteraction),
+          pendingRequestId: params.current.pendingRequest?.params.requestId,
+          pendingStatusText: params.current.pendingStatusText,
+          pendingUserInput: Boolean(params.current.pendingUserInput),
+          reasons: params.reasons,
+          staleAgeMs: params.current.thinkingSinceAt
+            ? Date.now() - params.current.thinkingSinceAt
+            : undefined,
+          threadKey: params.targetThreadKey,
+          threadStatus: readResponseThreadStatus(params.response),
+        },
+        level: "warn",
+        message: "stale thinking state cleared after idle thread read",
+      }).catch(() => undefined);
+    },
+    [desktopApi?.logRendererDiagnostic]
   );
 
   const loadLatest = useCallback(
@@ -1215,9 +1406,29 @@ export function useThreadSessionState(params: {
           const completionHydrationRetries = needsHydrationAfterCompletion
             ? current.completionHydrationRetries + 1
             : 0;
+          const thinkingReasons = describeThinkingState(current);
+          const shouldClearStaleThinking =
+            readResponseThreadStatus(response) === "idle" &&
+            thinkingReasons.length > 0 &&
+            !hasPendingInteraction(current);
+
+          if (shouldClearStaleThinking) {
+            logStaleThinkingState({
+              current,
+              reasons: thinkingReasons,
+              response,
+              targetThreadKey,
+            });
+          }
 
           return {
             ...current,
+            activeTurnId: shouldClearStaleThinking
+              ? undefined
+              : current.activeTurnId,
+            activeTurnStartedAt: shouldClearStaleThinking
+              ? undefined
+              : current.activeTurnStartedAt,
             error: undefined,
             expectOwnUpdate: false,
             failedHydrationVersion: undefined,
@@ -1230,6 +1441,12 @@ export function useThreadSessionState(params: {
             completionHydrationRetries,
             needsHydrationAfterCompletion,
             optimisticEntries: pruneOptimisticEntries(current.optimisticEntries, response),
+            pendingAssistantMessage: shouldClearStaleThinking
+              ? undefined
+              : current.pendingAssistantMessage,
+            pendingStatusText: shouldClearStaleThinking
+              ? undefined
+              : current.pendingStatusText,
             response,
           };
         });
@@ -1247,7 +1464,7 @@ export function useThreadSessionState(params: {
         }));
       }
     },
-    [desktopApi?.readThread, updateSession]
+    [desktopApi?.readThread, logStaleThinkingState, updateSession]
   );
 
   useEffect(() => {
