@@ -979,7 +979,11 @@ describe("App", () => {
         value: "Start a Grok-backed thread from the sidebar.",
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    const startThreadButton = screen.getByRole("button", { name: "Start thread" });
+    await waitFor(() => {
+      expect(startThreadButton).toBeEnabled();
+    });
+    fireEvent.click(startThreadButton);
 
     expect(
       await screen.findByRole("region", { name: "Preparing transcript" })
