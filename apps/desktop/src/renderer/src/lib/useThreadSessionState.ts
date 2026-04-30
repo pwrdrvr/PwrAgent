@@ -325,6 +325,14 @@ function normalizeNotificationDuration(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function readNotificationTurnId(notification: {
+  params: Record<string, unknown>;
+}): string | undefined {
+  return typeof notification.params.turnId === "string"
+    ? notification.params.turnId
+    : undefined;
+}
+
 function readFiniteNumber(record: Record<string, unknown>, keys: string[]): number | undefined {
   for (const key of keys) {
     const value = record[key];
@@ -1168,8 +1176,10 @@ export function useThreadSessionState(params: {
         const nextLastTouchedAt = Date.now();
 
         if (isApprovalRequestNotification(event.notification)) {
+          const notificationTurnId = readNotificationTurnId(event.notification);
           return {
             ...current,
+            activeTurnId: notificationTurnId ?? current.activeTurnId,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
             pendingRequest: event.notification,
@@ -1182,9 +1192,11 @@ export function useThreadSessionState(params: {
           if (!pendingUserInput) {
             return current;
           }
+          const notificationTurnId = readNotificationTurnId(event.notification);
 
           return {
             ...current,
+            activeTurnId: notificationTurnId ?? current.activeTurnId,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
             pendingStatusText: "Waiting for input",
@@ -1197,9 +1209,11 @@ export function useThreadSessionState(params: {
           if (!pendingMcpInteraction) {
             return current;
           }
+          const notificationTurnId = readNotificationTurnId(event.notification);
 
           return {
             ...current,
+            activeTurnId: notificationTurnId ?? current.activeTurnId,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
             pendingMcpInteraction,
@@ -1304,22 +1318,31 @@ export function useThreadSessionState(params: {
           event.notification.method === "serverRequest/resolved" &&
           "requestId" in event.notification.params
         ) {
+          const pendingRequestResolved =
+            current.pendingRequest?.params.requestId === event.notification.params.requestId;
+          const pendingMcpResolved =
+            current.pendingMcpInteraction?.requestId === event.notification.params.requestId;
+          const pendingUserInputResolved =
+            current.pendingUserInput?.requestId === event.notification.params.requestId;
+          const hasActiveTurnAfterResolve = Boolean(current.activeTurnId);
+          const resolvedKnownRequest =
+            pendingRequestResolved || pendingMcpResolved || pendingUserInputResolved;
+
           return {
             ...current,
             lastTouchedAt: nextLastTouchedAt,
             pendingRequest:
-              current.pendingRequest?.params.requestId === event.notification.params.requestId
-                ? undefined
-                : current.pendingRequest,
+              pendingRequestResolved ? undefined : current.pendingRequest,
             pendingMcpInteraction:
-              current.pendingMcpInteraction?.requestId === event.notification.params.requestId
-                ? undefined
-                : current.pendingMcpInteraction,
+              pendingMcpResolved ? undefined : current.pendingMcpInteraction,
             pendingUserInput:
-              current.pendingUserInput?.requestId === event.notification.params.requestId
-                ? undefined
-                : current.pendingUserInput,
-            pendingStatusText: "Thinking",
+              pendingUserInputResolved ? undefined : current.pendingUserInput,
+            pendingStatusText:
+              hasActiveTurnAfterResolve && resolvedKnownRequest
+                ? "Thinking"
+                : resolvedKnownRequest
+                  ? undefined
+                  : current.pendingStatusText,
           };
         }
 
