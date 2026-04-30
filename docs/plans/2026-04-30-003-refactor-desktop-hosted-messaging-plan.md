@@ -252,7 +252,7 @@ flowchart TB
 **Verification:**
 - Messaging code is owned by `apps/desktop`; `packages/agent-core` remains focused on app-server/model runtime behavior.
 
-- [ ] **Unit 3: Add configured provider loading**
+- [x] **Unit 3: Add configured provider loading**
 
 **Goal:** Let desktop load only enabled messaging provider packages once during startup, rather than statically importing every future provider.
 

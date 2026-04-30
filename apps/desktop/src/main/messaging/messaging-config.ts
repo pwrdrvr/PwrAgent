@@ -1,4 +1,4 @@
-import type { MessagingChannelKind } from "@pwragnt/shared";
+import type { MessagingChannelKind } from "@pwragnt/messaging-interface";
 
 export const TELEGRAM_BOT_TOKEN_ENV = "PWRAGNT_MESSAGING_TELEGRAM_BOT_TOKEN";
 export const TELEGRAM_AUTHORIZED_USER_IDS_ENV =
@@ -14,6 +14,7 @@ export const DISCORD_MESSAGE_CONTENT_INTENT_ENV =
 type MessagingChannelConfigBase = {
   authorizedActorIds: string[];
   channel: MessagingChannelKind;
+  enabled?: boolean;
 };
 
 export type TelegramMessagingConfig = MessagingChannelConfigBase & {
@@ -46,6 +47,7 @@ export function loadDesktopMessagingConfig(
       ? {
           telegram: {
             channel: "telegram" as const,
+            enabled: true,
             botToken: telegramBotToken,
             authorizedActorIds: telegramAuthorizedActorIds,
           },
@@ -55,6 +57,7 @@ export function loadDesktopMessagingConfig(
       ? {
           discord: {
             channel: "discord" as const,
+            enabled: true,
             botToken: discordBotToken,
             applicationId: readEnv(env, DISCORD_APPLICATION_ID_ENV),
             authorizedActorIds: discordAuthorizedActorIds,
@@ -74,6 +77,7 @@ export function redactDesktopMessagingConfig(
     telegram: config.telegram
       ? {
           channel: config.telegram.channel,
+          enabled: config.telegram.enabled !== false,
           botToken: "[REDACTED]",
           authorizedActorCount: config.telegram.authorizedActorIds.length,
         }
@@ -81,6 +85,7 @@ export function redactDesktopMessagingConfig(
     discord: config.discord
       ? {
           channel: config.discord.channel,
+          enabled: config.discord.enabled !== false,
           applicationId: config.discord.applicationId,
           botToken: "[REDACTED]",
           authorizedActorCount: config.discord.authorizedActorIds.length,

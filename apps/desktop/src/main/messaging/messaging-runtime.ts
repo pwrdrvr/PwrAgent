@@ -15,8 +15,7 @@ import {
   type DesktopMessagingConfig,
 } from "./messaging-config";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
-import { createDiscordAdapter } from "./discord-adapter";
-import { createTelegramAdapter } from "./telegram-adapter";
+import { loadConfiguredMessagingAdapters } from "./provider-loader";
 
 export type DesktopMessagingAdapter = {
   channel: "telegram" | "discord";
@@ -28,7 +27,7 @@ export type DesktopMessagingAdapter = {
 export type DesktopMessagingAdapterFactory = (params: {
   config: DesktopMessagingConfig;
   store: MessagingStore;
-}) => DesktopMessagingAdapter[];
+}) => DesktopMessagingAdapter[] | Promise<DesktopMessagingAdapter[]>;
 
 const messagingLog = getMainLogger("pwragnt:messaging");
 
@@ -55,7 +54,7 @@ export class DesktopMessagingRuntime {
     this.started = true;
 
     const store = getDesktopMessagingStore();
-    const configuredAdapters = this.options.adapterFactory({
+    const configuredAdapters = await this.options.adapterFactory({
       config: this.options.config,
       store,
     });
@@ -160,11 +159,6 @@ export function resetDesktopMessagingRuntimeForTests(): void {
 function createConfiguredAdapters(params: {
   config: DesktopMessagingConfig;
   store: MessagingStore;
-}): DesktopMessagingAdapter[] {
-  return [
-    ...(params.config.telegram
-      ? [createTelegramAdapter(params.config.telegram, params.store)]
-      : []),
-    ...(params.config.discord ? [createDiscordAdapter(params.config.discord)] : []),
-  ];
+}): Promise<DesktopMessagingAdapter[]> {
+  return loadConfiguredMessagingAdapters(params);
 }

@@ -21,6 +21,7 @@ describe("desktop messaging config", () => {
     expect(config).toEqual({
       telegram: {
         channel: "telegram",
+        enabled: true,
         botToken: "tg-token",
         authorizedActorIds: ["user-1", "user-2"],
       },
@@ -70,11 +71,13 @@ describe("desktop messaging config", () => {
     expect(redacted).toEqual({
       telegram: {
         channel: "telegram",
+        enabled: true,
         botToken: "[REDACTED]",
         authorizedActorCount: 2,
       },
       discord: {
         channel: "discord",
+        enabled: true,
         applicationId: "app-id",
         botToken: "[REDACTED]",
         authorizedActorCount: 1,
