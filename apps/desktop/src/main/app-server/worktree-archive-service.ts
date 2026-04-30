@@ -137,11 +137,14 @@ function findWorktree(
 export class WorktreeArchiveService {
   async archive(params: ArchiveWorktreeParams): Promise<WorktreeSnapshotSummary> {
     const worktreePath = await realpath(path.resolve(params.worktreePath));
-    const repositoryPath =
-      params.repositoryPath
-        ? await realpath(path.resolve(params.repositoryPath))
-        : await this.readRepositoryPath(worktreePath);
-    const worktrees = await this.listWorktrees(repositoryPath);
+    const worktreeListPath = params.repositoryPath
+      ? await realpath(path.resolve(params.repositoryPath))
+      : worktreePath;
+    const worktrees = await this.listWorktrees(worktreeListPath);
+    const repositoryPath = await this.resolvePrimaryRepositoryPath({
+      worktreeListPath,
+      worktrees,
+    });
     const worktree = findWorktree(worktrees, worktreePath);
 
     if (!worktree) {
@@ -270,14 +273,16 @@ export class WorktreeArchiveService {
     }
   }
 
-  private async readRepositoryPath(worktreePath: string): Promise<string> {
-    const output = await runGit(worktreePath, ["worktree", "list", "--porcelain"]);
-    const worktrees = parseWorktreeList(output.stdout);
-    const primary = worktrees[0]?.path;
+  private async resolvePrimaryRepositoryPath(params: {
+    worktreeListPath: string;
+    worktrees: WorktreeInfo[];
+  }): Promise<string> {
+    const primary = params.worktrees[0]?.path;
     if (!primary) {
-      throw new Error(`Unable to resolve repository root for ${worktreePath}.`);
+      throw new Error(`Unable to resolve repository root for ${params.worktreeListPath}.`);
     }
-    return primary;
+
+    return await realpath(path.resolve(primary));
   }
 
   private async listWorktrees(repositoryPath: string): Promise<WorktreeInfo[]> {
