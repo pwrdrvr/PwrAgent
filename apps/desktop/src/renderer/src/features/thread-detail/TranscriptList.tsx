@@ -81,6 +81,10 @@ type ScrollSnapshot = {
   threadId?: string;
 };
 
+type SyncScrollStateOptions = {
+  preserveGlueOnResize?: boolean;
+};
+
 const BOTTOM_THRESHOLD_PX = 24;
 type ScrollBottomMode = "instant" | "smooth";
 
@@ -401,8 +405,31 @@ export function TranscriptList(props: TranscriptListProps) {
     props.threadId
   ]);
 
-  const syncScrollState = useCallback(() => {
-    const snapshot = captureSnapshot();
+  const syncScrollState = useCallback((options?: SyncScrollStateOptions) => {
+    let snapshot = captureSnapshot();
+    const previousSnapshot = snapshotRef.current;
+    const wasGluedToBottom =
+      isGluedToBottomRef.current ||
+      Boolean(previousSnapshot && previousSnapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX);
+    const resizedWhileBottomPinned = Boolean(
+      options?.preserveGlueOnResize &&
+        snapshot &&
+        previousSnapshot &&
+        wasGluedToBottom &&
+        snapshot.distanceFromBottom > BOTTOM_THRESHOLD_PX &&
+        snapshot.scrollTop === previousSnapshot.scrollTop &&
+        (snapshot.clientHeight !== previousSnapshot.clientHeight ||
+          snapshot.scrollHeight !== previousSnapshot.scrollHeight)
+    );
+
+    if (resizedWhileBottomPinned) {
+      const container = scrollContainerRef.current;
+      if (container) {
+        container.scrollTop = container.scrollHeight;
+        snapshot = captureSnapshot();
+      }
+    }
+
     snapshotRef.current = snapshot;
     const isAtBottom = Boolean(snapshot && snapshot.distanceFromBottom <= BOTTOM_THRESHOLD_PX);
     if (isAtBottom) {
@@ -580,7 +607,8 @@ export function TranscriptList(props: TranscriptListProps) {
 
   useEffect(() => {
     const content = scrollContentRef.current;
-    if (!content || typeof ResizeObserver === "undefined") {
+    const container = scrollContainerRef.current;
+    if (!content || !container || typeof ResizeObserver === "undefined") {
       return undefined;
     }
 
@@ -588,10 +616,11 @@ export function TranscriptList(props: TranscriptListProps) {
       if (isGluedToBottomRef.current) {
         scrollToBottom("instant");
       } else {
-        syncScrollState();
+        syncScrollState({ preserveGlueOnResize: true });
       }
     });
     observer.observe(content);
+    observer.observe(container);
     return () => {
       observer.disconnect();
     };
@@ -634,7 +663,9 @@ export function TranscriptList(props: TranscriptListProps) {
             disableBottomGlue();
           }
         }}
-        onScroll={syncScrollState}
+        onScroll={() => {
+          syncScrollState({ preserveGlueOnResize: true });
+        }}
       >
         <div ref={scrollContentRef} className="transcript-list__content">
           {transcriptRenderItems.map((item) => {

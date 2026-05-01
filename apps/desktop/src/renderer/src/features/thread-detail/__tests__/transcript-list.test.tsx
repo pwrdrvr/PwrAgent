@@ -1937,6 +1937,36 @@ describe("TranscriptList", () => {
     }
   });
 
+  it("keeps the bottom pinned when the transcript viewport shrinks without user scroll", () => {
+    const entries = Array.from({ length: 18 }, (_, index) => ({
+      type: "message" as const,
+      id: `viewport-resize-message-${index + 1}`,
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      text: `Viewport resize transcript message ${index + 1}`
+    }));
+    scrollHeight = 720;
+    clientHeight = 240;
+    render(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 480;
+    fireEvent.scroll(list);
+
+    clientHeight = 154;
+    fireEvent.scroll(list);
+
+    expect(list.scrollTop).toBe(720);
+    expect(screen.queryByRole("button", { name: "Jump to latest message" })).not.toBeInTheDocument();
+  });
+
   it("does not move the reader when new messages arrive below an older viewport", () => {
     const entries = Array.from({ length: 16 }, (_, index) => ({
       type: "message" as const,
