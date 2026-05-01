@@ -81,8 +81,8 @@ async function assertReadableText(params: {
   ).toBeGreaterThanOrEqual(params.minimum ?? 4.5);
 }
 
-async function assertTangerineFocusRing(locator: Locator) {
-  await locator.focus();
+async function assertTangerineFocusRing(locator: Locator, focusTarget = locator) {
+  await focusTarget.focus();
   await expect(locator).toHaveCSS("outline-color", "rgb(255, 138, 31)");
   await expect(locator).toHaveCSS("outline-style", "solid");
 }

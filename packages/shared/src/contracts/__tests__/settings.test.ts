@@ -84,6 +84,7 @@ describe("desktop settings contracts", () => {
   it("validates the supported composer options", () => {
     expect(isDesktopChatReplyComposer("textarea")).toBe(true);
     expect(isDesktopChatReplyComposer("tiptap-chips")).toBe(true);
+    expect(isDesktopChatReplyComposer("tiptap-wysiwyg-markdown-chips")).toBe(true);
     expect(isDesktopChatReplyComposer("custom-widget-chips")).toBe(true);
     expect(isDesktopChatReplyComposer("markdown")).toBe(false);
   });

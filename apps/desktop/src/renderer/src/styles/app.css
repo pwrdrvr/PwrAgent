@@ -426,6 +426,7 @@ textarea {
 .thread-row:focus,
 .transcript-activity__toggle:focus,
 .composer__input:focus,
+.composer-rich-input:focus-within,
 .composer__select:focus,
 .composer__review-input:focus,
 .composer__review-option:focus,
@@ -436,6 +437,7 @@ textarea {
 .thread-row:focus-visible,
 .transcript-activity__toggle:focus-visible,
 .composer__input:focus-visible,
+.composer-rich-input:focus-within,
 .composer__select:focus-visible,
 .composer__review-input:focus-visible,
 .composer__review-option:focus-visible,
@@ -804,7 +806,8 @@ textarea {
 }
 
 .tooltip-target[data-tooltip]:hover::after,
-.tooltip-target[data-tooltip]:focus-visible::after {
+.tooltip-target[data-tooltip]:focus-visible::after,
+.tooltip-target[data-tooltip]:focus-within::after {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
@@ -1540,6 +1543,19 @@ textarea {
   padding-right: 24px;
 }
 
+.thread-view__launchpad-composer {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-width: 0;
+  margin-top: auto;
+}
+
+.thread-view__launchpad-composer > .composer,
+.thread-view__launchpad-composer > .transcript-panel {
+  width: 100%;
+}
+
 .thread-header__title {
   font-size: 40px;
   font-weight: 700;
@@ -1973,9 +1989,36 @@ textarea {
 }
 
 .transcript-message__heading {
-  font-size: 15px;
   font-weight: 700;
   line-height: 1.4;
+}
+
+.transcript-message__heading:is(h1) {
+  font-size: 1.35em;
+}
+
+.transcript-message__heading:is(h2) {
+  font-size: 1.22em;
+}
+
+.transcript-message__heading:is(h3) {
+  font-size: 1.12em;
+}
+
+.transcript-message__heading:is(h4) {
+  font-size: 1.04em;
+}
+
+.transcript-message__heading:is(h5) {
+  font-size: 0.98em;
+  font-style: italic;
+}
+
+.transcript-message__heading:is(h6) {
+  color: var(--text-secondary);
+  font-size: 0.94em;
+  font-style: italic;
+  font-weight: 650;
 }
 
 .thread-header__summary .transcript-message__heading {
@@ -3135,6 +3178,42 @@ textarea {
   border: 1px solid var(--border-subtle);
 }
 
+.skill-chip--removable {
+  gap: 6px;
+  padding-right: 4px;
+}
+
+.skill-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skill-chip__remove {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.skill-chip__remove:hover,
+.skill-chip__remove:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
 .context-rail {
   display: flex;
   position: fixed;
@@ -3604,6 +3683,176 @@ textarea {
 
 .composer__input-wrap {
   position: relative;
+}
+
+.composer-rich-input {
+  display: block;
+  min-height: 144px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.composer-tiptap-input {
+  min-height: 144px;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.composer-tiptap-input__editor {
+  position: relative;
+  min-height: 142px;
+  padding: 12px;
+  outline: none;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.composer-tiptap-input__editor p {
+  margin: 0;
+}
+
+.composer-tiptap-input__editor h1,
+.composer-tiptap-input__editor h2,
+.composer-tiptap-input__editor h3,
+.composer-tiptap-input__editor h4,
+.composer-tiptap-input__editor h5,
+.composer-tiptap-input__editor h6 {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: 700;
+  line-height: inherit;
+}
+
+.composer-tiptap-input__editor h1 {
+  font-size: 1.35em;
+}
+
+.composer-tiptap-input__editor h2 {
+  font-size: 1.22em;
+}
+
+.composer-tiptap-input__editor h3 {
+  font-size: 1.12em;
+}
+
+.composer-tiptap-input__editor h4 {
+  font-size: 1.04em;
+}
+
+.composer-tiptap-input__editor h5 {
+  font-size: 0.98em;
+  font-style: italic;
+}
+
+.composer-tiptap-input__editor h6 {
+  color: var(--text-secondary);
+  font-size: 0.94em;
+  font-style: italic;
+  font-weight: 650;
+}
+
+.composer-tiptap-input__editor pre {
+  margin: 2px 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.composer-tiptap-input__editor pre code {
+  font: inherit;
+}
+
+.composer-tiptap-input__editor blockquote {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.composer-tiptap-input__editor ul,
+.composer-tiptap-input__editor ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.composer-tiptap-input.is-empty .composer-tiptap-input__editor::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.composer-tiptap-input__mention {
+  display: inline-flex;
+  height: 1.35em;
+  gap: 0.35em;
+  margin: 0 3px;
+  padding: 0 0.5em;
+  font-size: inherit;
+  line-height: normal;
+  vertical-align: 0.13em;
+}
+
+.composer-rich-input.is-disabled {
+  opacity: 0.72;
+}
+
+.composer-rich-input.is-empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.composer-rich-input__token {
+  display: inline-flex;
+  margin: 0 3px;
+  line-height: inherit;
+  vertical-align: 0.13em;
+}
+
+.composer-rich-input__token:first-child {
+  margin-left: 0;
+}
+
+.composer-rich-input .skill-chip {
+  height: 1.35em;
+  gap: 0.35em;
+  padding: 0 0.5em;
+  font-size: inherit;
+  line-height: normal;
+}
+
+.composer-rich-input .thread-row__chip-icon {
+  flex: 0 0 auto;
+  font-size: 0.72em;
+  line-height: 1;
+}
+
+.composer-rich-input .skill-chip__label {
+  line-height: normal;
 }
 
 .composer__mentioned-skills {
@@ -4105,7 +4354,6 @@ textarea {
   position: absolute;
   right: 0;
   left: 0;
-  bottom: calc(100% + 10px);
   z-index: 20;
   display: flex;
   flex-direction: column;
@@ -4122,15 +4370,24 @@ textarea {
   scrollbar-width: thin;
 }
 
+.composer__autocomplete--above {
+  bottom: calc(100% + 10px);
+}
+
+.composer__autocomplete--below {
+  top: calc(100% + 10px);
+}
+
 .composer__autocomplete-option {
   display: flex;
+  position: relative;
   width: 100%;
   min-width: 0;
   flex: 0 0 auto;
   flex-direction: column;
   gap: 4px;
   padding: 10px 12px;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
   color: var(--text-primary);
@@ -4138,9 +4395,25 @@ textarea {
   text-align: left;
 }
 
-.composer__autocomplete-option:hover,
+.composer__autocomplete-option:hover {
+  background: var(--bg-panel-hover);
+}
+
 .composer__autocomplete-option.is-active {
+  border-color: var(--accent-border);
   background: var(--bg-row-active);
+}
+
+.composer__autocomplete-option.is-active::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 5px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  content: "";
+  pointer-events: none;
 }
 
 .composer__autocomplete-title {

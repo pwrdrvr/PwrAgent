@@ -1399,35 +1399,37 @@ export function ThreadView(props: ThreadViewProps) {
           </dl>
         </div>
 
-        {launchpadMaterializing ? (
-          <section
-            className="transcript-panel transcript-panel--pending"
-            aria-label="Preparing transcript"
-          >
-            <div className="launchpad-pending">
-              <p className="eyebrow">Preparing transcript</p>
-              <h3>Starting {selectedLaunchpad.directoryLabel}</h3>
-              <p>Your prompt was sent. The transcript will appear here when the thread is ready.</p>
-            </div>
-          </section>
-        ) : (
-          <Composer
-            backends={props.backends}
-            applications={props.applications}
-            desktopApi={props.desktopApi}
-            composerImplementation={props.composerImplementation}
-            directory={props.selectedDirectory}
-            disabled={!launchpadBackend?.available}
-            launchpad={selectedLaunchpad}
-            launchpadError={props.launchpadError}
-            onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
-            onMaterializeLaunchpad={handleMaterializeLaunchpad}
-            onUpdateLaunchpad={props.onUpdateLaunchpad}
-            skillError={props.skillError}
-            skillLoading={props.skillLoading}
-            skills={props.skills}
-          />
-        )}
+        <div className="thread-view__launchpad-composer">
+          {launchpadMaterializing ? (
+            <section
+              className="transcript-panel transcript-panel--pending"
+              aria-label="Preparing transcript"
+            >
+              <div className="launchpad-pending">
+                <p className="eyebrow">Preparing transcript</p>
+                <h3>Starting {selectedLaunchpad.directoryLabel}</h3>
+                <p>Your prompt was sent. The transcript will appear here when the thread is ready.</p>
+              </div>
+            </section>
+          ) : (
+            <Composer
+              backends={props.backends}
+              applications={props.applications}
+              desktopApi={props.desktopApi}
+              composerImplementation={props.composerImplementation}
+              directory={props.selectedDirectory}
+              disabled={!launchpadBackend?.available}
+              launchpad={selectedLaunchpad}
+              launchpadError={props.launchpadError}
+              onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
+              onMaterializeLaunchpad={handleMaterializeLaunchpad}
+              onUpdateLaunchpad={props.onUpdateLaunchpad}
+              skillError={props.skillError}
+              skillLoading={props.skillLoading}
+              skills={props.skills}
+            />
+          )}
+        </div>
       </section>
     );
   }

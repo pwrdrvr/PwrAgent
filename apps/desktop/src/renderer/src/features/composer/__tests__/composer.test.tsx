@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   BackendSummary,
   NavigationLaunchpadDraft,
@@ -1223,6 +1223,7 @@ describe("Composer", () => {
 
     render(
       <Composer
+        composerImplementation="custom-widget-chips"
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startReview,
@@ -2176,8 +2177,10 @@ describe("Composer", () => {
     expect(screen.getByRole("listbox", { name: "Skills" })).toBeInTheDocument();
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    expect(screen.getAllByText("$frontend-design").length).toBeGreaterThan(0);
-    expect(screen.getByLabelText("Reply")).toHaveValue("Use $frontend-design ");
+    expect(textarea).toHaveValue(
+      "Use [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md) "
+    );
+    expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
@@ -2189,6 +2192,125 @@ describe("Composer", () => {
           {
             type: "text",
             text: "Use [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)",
+          },
+        ],
+      });
+    });
+  });
+
+  it("prioritizes skill name prefix matches over description-only matches", () => {
+    render(
+      <Composer
+        composerImplementation="custom-widget-chips"
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        skills={[
+          {
+            name: "adversarial-document-reviewer",
+            description: "Conditional reviewer used for CE document stress-testing.",
+            path: "/Users/huntharo/.codex/skills/adversarial-document-reviewer/SKILL.md",
+            enabled: true,
+          },
+          {
+            name: "ce:plan",
+            description: "Transform requirements into implementation plans.",
+            path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+            enabled: true,
+          },
+          {
+            name: "ce:work",
+            description: "Execute implementation plans.",
+            path: "/Users/huntharo/.codex/skills/ce-work/SKILL.md",
+            enabled: true,
+          },
+          {
+            name: "architecture-strategist",
+            description: "Analyzes patterns and design integrity.",
+            path: "/Users/huntharo/.codex/skills/architecture-strategist/SKILL.md",
+            enabled: true,
+          },
+        ]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "$ce" },
+    });
+
+    const options = within(screen.getByRole("listbox", { name: "Skills" }))
+      .getAllByRole("button")
+      .map((option) => option.textContent ?? "");
+
+    expect(options[0]).toContain("$ce:plan");
+    expect(options[1]).toContain("$ce:work");
+    expect(options.slice(2).join(" ")).toContain("$adversarial-document-reviewer");
+  });
+
+  it("renders selected skill chips without leaving raw mention text", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    render(
+      <Composer
+        composerImplementation="custom-widget-chips"
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[
+          {
+            name: "ce:plan",
+            description: "Turn feature descriptions into implementation plans.",
+            path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+            enabled: true,
+          },
+        ]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Use $ce:pl" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(within(screen.getByTestId("composer-rich-input")).getByText("$ce:plan")).toBeInTheDocument();
+    expect(textarea).toHaveValue("Use ");
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: "Use [$ce:plan](/Users/huntharo/.codex/skills/ce-plan/SKILL.md)",
           },
         ],
       });
@@ -2564,6 +2686,7 @@ describe("Composer", () => {
   it("applies the focused skill option when activated from the keyboard", async () => {
     render(
       <Composer
+        composerImplementation="custom-widget-chips"
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startTurn: async () => ({
@@ -2597,9 +2720,53 @@ describe("Composer", () => {
 
     const option = screen.getByRole("button", { name: /\$ce:plan/i });
     option.focus();
-    fireEvent.click(option);
+    fireEvent.keyDown(option, { key: "Enter" });
 
-    expect(screen.getByLabelText("Reply")).toHaveValue("$ce:plan ");
+    expect(within(screen.getByTestId("composer-rich-input")).getByText("$ce:plan")).toBeInTheDocument();
+    expect(screen.getByLabelText("Reply")).toHaveValue("");
+    expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
+  });
+
+  it("dismisses skill autocomplete when Escape is pressed from a focused option", () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        skills={[
+          {
+            name: "ce:plan",
+            description: "Turn feature descriptions into implementation plans.",
+            path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+            enabled: true,
+          },
+        ]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "$ce:pl" } });
+
+    const option = screen.getByRole("button", { name: /\$ce:plan/i });
+    option.focus();
+    fireEvent.keyDown(option, { key: "Escape" });
+
+    expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
+    expect(textarea).toHaveValue("$ce:pl");
   });
 
   it("shows a stop button for an active turn and interrupts it", async () => {

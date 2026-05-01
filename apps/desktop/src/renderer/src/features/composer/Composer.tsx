@@ -2,12 +2,15 @@ import {
   type ReactNode,
   type ClipboardEvent,
   type DragEvent,
+  type FormEvent as ReactFormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
   useId,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import type {
   AppServerCollaborationModeRequest,
   AppServerReviewTarget,
@@ -33,11 +36,18 @@ import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import {
   findSkillTrigger,
   hydrateSkillLabelsWithMarkdown,
-  insertSkillLabel,
   listMentionedSkills,
+  parseSkillMentionParts,
+  buildSkillMentionMarkdown,
 } from "../../lib/skill-mentions";
 import { parseReviewCommand } from "../../../../shared/review-command";
-import { SkillChip } from "./SkillChip";
+import {
+  ComposerRichInput,
+  type ComposerRichInputHandle,
+  type ComposerSkillToken,
+} from "./ComposerRichInput";
+import { ComposerTextareaInput } from "./ComposerTextareaInput";
+import { ComposerTiptapInput } from "./ComposerTiptapInput";
 
 type ComposerProps = {
   activeTurnId?: string;
@@ -128,6 +138,28 @@ type PendingSteerDraft = QueuedTurnDraft & {
   status: "pending" | "steering";
 };
 
+type DeletedSkillTokenHistoryEntry = {
+  draft: string;
+  selectionStart: number;
+  skillTokens: ComposerSkillToken[];
+};
+
+type PendingProgrammaticComposerChange = {
+  expectedDraft: string;
+  expectedSkillTokensSignature: string;
+  staleDraft: string;
+  staleSkillTokensSignature: string;
+};
+
+const COMPOSER_SKILL_TOKEN_SELECTOR = "[data-composer-skill-token-id]";
+
+type SkillTokenDeletionEvent = {
+  currentTarget: HTMLElement;
+  preventDefault: () => void;
+  stopPropagation: () => void;
+  target: EventTarget | null;
+};
+
 type ComposerImageFile = {
   file: File;
   type: string;
@@ -169,6 +201,7 @@ type ReviewConfigState = {
 type ComposerDraftState = {
   draft: string;
   imageAttachments: ComposerImageAttachment[];
+  skillTokens: ComposerSkillToken[];
 };
 
 const DEFAULT_REASONING_EFFORT = "medium";
@@ -452,6 +485,179 @@ function HighlightedAutocompleteLabel(props: {
   );
 }
 
+function createComposerSkillToken(
+  skill: AppServerSkillSummary,
+  index: number,
+): ComposerSkillToken {
+  return {
+    ...skill,
+    id: `${skill.path ?? skill.name}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    index,
+  };
+}
+
+function getComposerSkillTokensSignature(skillTokens: ComposerSkillToken[]): string {
+  return JSON.stringify(
+    skillTokens.map((token) => ({
+      id: token.id,
+      index: token.index,
+      name: token.name,
+      path: token.path,
+    })),
+  );
+}
+
+function clampSkillTokenIndex(index: number, draft: string): number {
+  return Math.max(0, Math.min(index, draft.length));
+}
+
+function serializeDraftWithSkillTokens(
+  draft: string,
+  skillTokens: ComposerSkillToken[],
+): string {
+  if (skillTokens.length === 0) {
+    return draft;
+  }
+
+  const sortedTokens = [...skillTokens].sort((left, right) => {
+    if (left.index !== right.index) {
+      return left.index - right.index;
+    }
+    return left.id.localeCompare(right.id);
+  });
+
+  let output = "";
+  let cursor = 0;
+  for (const token of sortedTokens) {
+    const index = clampSkillTokenIndex(token.index, draft);
+    output += draft.slice(cursor, index);
+    output += buildSkillMentionMarkdown(token);
+    cursor = index;
+  }
+
+  output += draft.slice(cursor);
+  return output;
+}
+
+function hydrateComposerDraft(
+  canonicalDraft: string,
+  skills: AppServerSkillSummary[],
+): {
+  draft: string;
+  skillTokens: ComposerSkillToken[];
+} {
+  let draft = "";
+  const skillTokens: ComposerSkillToken[] = [];
+
+  for (const part of parseSkillMentionParts(canonicalDraft)) {
+    if (part.type === "text") {
+      draft += part.text;
+      continue;
+    }
+
+    const matchingSkill =
+      skills.find((skill) => skill.path === part.path) ??
+      skills.find((skill) => skill.name === part.name);
+    skillTokens.push(
+      createComposerSkillToken(
+        matchingSkill ?? {
+          name: part.name,
+          path: part.path,
+        },
+        draft.length,
+      ),
+    );
+  }
+
+  return { draft, skillTokens };
+}
+
+function adjustSkillTokenIndexesForTextChange(params: {
+  currentDraft: string;
+  nextDraft: string;
+  skillTokens: ComposerSkillToken[];
+}): ComposerSkillToken[] {
+  const { currentDraft, nextDraft, skillTokens } = params;
+  if (currentDraft === nextDraft || skillTokens.length === 0) {
+    return skillTokens;
+  }
+
+  let prefixLength = 0;
+  while (
+    prefixLength < currentDraft.length &&
+    prefixLength < nextDraft.length &&
+    currentDraft[prefixLength] === nextDraft[prefixLength]
+  ) {
+    prefixLength += 1;
+  }
+
+  let suffixLength = 0;
+  while (
+    suffixLength < currentDraft.length - prefixLength &&
+    suffixLength < nextDraft.length - prefixLength &&
+    currentDraft[currentDraft.length - 1 - suffixLength] ===
+      nextDraft[nextDraft.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1;
+  }
+
+  const currentChangedEnd = currentDraft.length - suffixLength;
+  const nextChangedEnd = nextDraft.length - suffixLength;
+  const delta = nextChangedEnd - currentChangedEnd;
+
+  return skillTokens.map((token) => {
+    if (token.index <= prefixLength) {
+      return token;
+    }
+
+    if (token.index >= currentChangedEnd) {
+      return {
+        ...token,
+        index: clampSkillTokenIndex(token.index + delta, nextDraft),
+      };
+    }
+
+    return {
+      ...token,
+      index: clampSkillTokenIndex(prefixLength, nextDraft),
+    };
+  });
+}
+
+function rankSkillAutocompleteMatch(
+  skill: AppServerSkillSummary,
+  normalizedQuery: string,
+): number | undefined {
+  if (!normalizedQuery) {
+    return 0;
+  }
+
+  const name = skill.name.toLowerCase();
+  const shortDescription = skill.shortDescription?.toLowerCase() ?? "";
+  const description = skill.description?.toLowerCase() ?? "";
+
+  if (name === normalizedQuery) {
+    return 0;
+  }
+  if (name.startsWith(`${normalizedQuery}:`)) {
+    return 1;
+  }
+  if (name.startsWith(normalizedQuery)) {
+    return 2;
+  }
+  if (name.includes(normalizedQuery)) {
+    return 3;
+  }
+  if (shortDescription.includes(normalizedQuery)) {
+    return 4;
+  }
+  if (description.includes(normalizedQuery)) {
+    return 5;
+  }
+
+  return undefined;
+}
+
 function useDismissableMenu<T extends HTMLElement>(
   open: boolean,
   onDismiss: () => void,
@@ -599,10 +805,15 @@ function ComposerApplicationButton(props: {
 }
 
 export function Composer(props: ComposerProps) {
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<ComposerRichInputHandle>(null);
+  const inputWrapRef = useRef<HTMLDivElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const skillListboxId = useId();
+  const slashListboxId = useId();
   const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
+  const pendingProgrammaticComposerChangeRef =
+    useRef<PendingProgrammaticComposerChange | undefined>(undefined);
   const composerScopeKey = props.launchpad
     ? `launchpad:${props.launchpad.directoryKey}`
     : props.thread
@@ -611,6 +822,7 @@ export function Composer(props: ComposerProps) {
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
   const scopedThreadDraftsRef = useRef(new Map<string, ComposerDraftState>());
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
+  const deletedSkillTokenHistoryRef = useRef<DeletedSkillTokenHistoryEntry[]>([]);
   const [draft, setDraft] = useState("");
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const workspaceMenuRef = useDismissableMenu<HTMLDivElement>(
@@ -633,12 +845,21 @@ export function Composer(props: ComposerProps) {
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>([]);
   const [planModeEnabled, setPlanModeEnabled] = useState(false);
+  const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>([]);
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
+  const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
+  const [autocompleteLayout, setAutocompleteLayout] = useState<{
+    maxHeight: number;
+    placement: "above" | "below";
+  }>({ maxHeight: 320, placement: "above" });
   const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
   const [reviewConfig, setReviewConfig] = useState<ReviewConfigState>();
   const isLaunchpad = Boolean(props.launchpad && props.directory);
   const launchpad = props.launchpad;
+  const composerImplementation = props.composerImplementation ?? "textarea";
+  const composerSupportsSkillTokens = composerImplementation !== "textarea";
+  const composerUsesTiptap = composerImplementation.startsWith("tiptap-");
   const backend = useMemo(
     () =>
       props.backends?.find((candidate) =>
@@ -647,9 +868,60 @@ export function Composer(props: ComposerProps) {
     [props.backends, props.launchpad?.backend, props.thread?.source]
   );
 
-  const selectionStart = inputRef.current?.selectionStart ?? draft.length;
+  const selectionStart = Math.min(
+    inputRef.current?.selectionStart ?? draft.length,
+    draft.length,
+  );
   const isThreadComposerScope = (scopeKey: string): boolean =>
     scopeKey.startsWith("thread:");
+  const canonicalDraft = useMemo(
+    () =>
+      serializeDraftWithSkillTokens(
+        draft,
+        composerSupportsSkillTokens ? skillTokens : [],
+      ),
+    [composerSupportsSkillTokens, draft, skillTokens]
+  );
+  const hasComposerContent =
+    draft.trim().length > 0 ||
+    (composerSupportsSkillTokens && skillTokens.length > 0);
+  const setComposerDraftFromCanonical = (nextDraft: string): void => {
+    deletedSkillTokenHistoryRef.current = [];
+    if (!composerSupportsSkillTokens) {
+      setDraft(nextDraft);
+      setSkillTokens([]);
+      return;
+    }
+
+    const hydrated = hydrateComposerDraft(nextDraft, props.skills);
+    setDraft(hydrated.draft);
+    setSkillTokens(hydrated.skillTokens);
+  };
+  const clearComposerDraft = (): void => {
+    deletedSkillTokenHistoryRef.current = [];
+    setDraft("");
+    setSkillTokens([]);
+  };
+  const updateVisibleDraft = (
+    nextDraft: string,
+    nextSkillTokens?: ComposerSkillToken[],
+  ): void => {
+    deletedSkillTokenHistoryRef.current = [];
+    if (!composerSupportsSkillTokens) {
+      setSkillTokens([]);
+    } else if (nextSkillTokens) {
+      setSkillTokens(nextSkillTokens);
+    } else {
+      setSkillTokens((current) =>
+        adjustSkillTokenIndexesForTextChange({
+          currentDraft: draft,
+          nextDraft,
+          skillTokens: current,
+        })
+      );
+    }
+    setDraft(nextDraft);
+  };
   const saveThreadComposerDraft = (
     scopeKey: string,
     state: ComposerDraftState,
@@ -658,7 +930,11 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    if (!state.draft.trim() && state.imageAttachments.length === 0) {
+    if (
+      !state.draft.trim() &&
+      state.skillTokens.length === 0 &&
+      state.imageAttachments.length === 0
+    ) {
       scopedThreadDraftsRef.current.delete(scopeKey);
       return;
     }
@@ -682,21 +958,25 @@ export function Composer(props: ComposerProps) {
     }
 
     const normalizedQuery = trigger.query.trim().toLowerCase();
-    return props.skills.filter((skill) => {
-      if (!skill.path) {
-        return false;
-      }
-
-      if (!normalizedQuery) {
-        return true;
-      }
-
-      return (
-        skill.name.toLowerCase().includes(normalizedQuery) ||
-        skill.description?.toLowerCase().includes(normalizedQuery) ||
-        skill.shortDescription?.toLowerCase().includes(normalizedQuery)
-      );
-    });
+    return props.skills
+      .map((skill, index) => ({
+        index,
+        score: skill.path
+          ? rankSkillAutocompleteMatch(skill, normalizedQuery)
+          : undefined,
+        skill,
+      }))
+      .filter(
+        (match): match is { index: number; score: number; skill: AppServerSkillSummary } =>
+          match.score !== undefined
+      )
+      .sort((left, right) => {
+        if (left.score !== right.score) {
+          return left.score - right.score;
+        }
+        return left.index - right.index;
+      })
+      .map((match) => match.skill);
   }, [props.skills, trigger]);
   const filteredSlashCommands = useMemo(() => {
     if (!slashTrigger) {
@@ -710,11 +990,24 @@ export function Composer(props: ComposerProps) {
         command.description.toLowerCase().includes(typed.slice(1))
     );
   }, [draft, slashTrigger]);
-  const displayedAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
+  const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
     ? "skills"
     : slashTrigger && filteredSlashCommands.length > 0
       ? "slash"
       : undefined;
+  const autocompleteKey =
+    availableAutocompleteKind === "skills" && trigger
+      ? `skills:${trigger.start}:${trigger.end}:${trigger.query}`
+      : availableAutocompleteKind === "slash" && slashTrigger
+        ? `slash:${slashTrigger.start}:${slashTrigger.end}:${draft.slice(
+            slashTrigger.start,
+            slashTrigger.end,
+          )}`
+        : undefined;
+  const displayedAutocompleteKind =
+    autocompleteKey && autocompleteKey === dismissedAutocompleteKey
+      ? undefined
+      : availableAutocompleteKind;
   const autocompleteKind: AutocompleteKind | undefined =
     displayedAutocompleteKind === "slash" &&
     parseReviewCommand(draft) &&
@@ -726,10 +1019,16 @@ export function Composer(props: ComposerProps) {
     displayedAutocompleteKind === "skills" ? activeSkillIndex : activeSlashIndex;
   const autocompleteLength =
     displayedAutocompleteKind === "skills" ? filteredSkills.length : filteredSlashCommands.length;
-  const mentionedSkills = useMemo(
-    () => listMentionedSkills(draft, props.skills),
-    [draft, props.skills]
-  );
+  const autocompleteListboxId =
+    displayedAutocompleteKind === "skills"
+      ? skillListboxId
+      : displayedAutocompleteKind === "slash"
+        ? slashListboxId
+        : undefined;
+  const activeAutocompleteOptionId =
+    autocompleteListboxId && displayedAutocompleteKind
+      ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
+      : undefined;
   const reviewBranchOptions = useMemo(
     () => buildReviewBranchOptions({
       directory: props.directory,
@@ -748,6 +1047,7 @@ export function Composer(props: ComposerProps) {
     saveThreadComposerDraft(previousScopeKey, {
       draft,
       imageAttachments,
+      skillTokens,
     });
 
     activeComposerScopeKeyRef.current = composerScopeKey;
@@ -761,6 +1061,7 @@ export function Composer(props: ComposerProps) {
       const saved = scopedThreadDraftsRef.current.get(composerScopeKey);
       setDraft(saved?.draft ?? "");
       setImageAttachments(saved?.imageAttachments ?? []);
+      setSkillTokens(saved?.skillTokens ?? []);
     }
     setSending(false);
     setInterrupting(false);
@@ -770,7 +1071,7 @@ export function Composer(props: ComposerProps) {
     setReviewConfig(undefined);
     setQueuedTurn(undefined);
     setPendingSteer(undefined);
-  }, [composerScopeKey]);
+  }, [composerScopeKey, draft, imageAttachments, skillTokens]);
 
   useEffect(() => {
     setActiveSkillIndex(0);
@@ -781,6 +1082,25 @@ export function Composer(props: ComposerProps) {
   }, [slashTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
 
   useEffect(() => {
+    deletedSkillTokenHistoryRef.current = [];
+    if (composerImplementation === "textarea") {
+      if (skillTokens.length > 0) {
+        setDraft(serializeDraftWithSkillTokens(draft, skillTokens));
+        setSkillTokens([]);
+      }
+      return;
+    }
+
+    if (skillTokens.length === 0 && draft.includes("](")) {
+      const hydrated = hydrateComposerDraft(draft, props.skills);
+      if (hydrated.skillTokens.length > 0) {
+        setDraft(hydrated.draft);
+        setSkillTokens(hydrated.skillTokens);
+      }
+    }
+  }, [composerImplementation]);
+
+  useEffect(() => {
     if (!displayedAutocompleteKind) {
       return;
     }
@@ -788,6 +1108,38 @@ export function Composer(props: ComposerProps) {
     autocompleteOptionRefs.current[activeAutocompleteIndex]?.scrollIntoView?.({
       block: "nearest",
     });
+  }, [activeAutocompleteIndex, displayedAutocompleteKind]);
+
+  useEffect(() => {
+    if (!displayedAutocompleteKind) {
+      return;
+    }
+
+    const updateAutocompleteLayout = (): void => {
+      const inputWrap = inputWrapRef.current;
+      if (!inputWrap) {
+        return;
+      }
+
+      const viewportPadding = 12;
+      const gap = 10;
+      const rect = inputWrap.getBoundingClientRect();
+      const availableAbove = rect.top - viewportPadding - gap;
+      const availableBelow = window.innerHeight - rect.bottom - viewportPadding - gap;
+      const placement =
+        availableAbove >= 180 || availableAbove >= availableBelow ? "above" : "below";
+      const available = placement === "above" ? availableAbove : availableBelow;
+      setAutocompleteLayout({
+        placement,
+        maxHeight: Math.max(140, Math.min(320, available)),
+      });
+    };
+
+    updateAutocompleteLayout();
+    window.addEventListener("resize", updateAutocompleteLayout);
+    return () => {
+      window.removeEventListener("resize", updateAutocompleteLayout);
+    };
   }, [activeAutocompleteIndex, displayedAutocompleteKind]);
 
   useEffect(() => {
@@ -809,7 +1161,7 @@ export function Composer(props: ComposerProps) {
     }
 
     hydratedLaunchpadKeyRef.current = props.launchpad?.directoryKey;
-    setDraft(props.launchpad?.prompt ?? "");
+    setComposerDraftFromCanonical(props.launchpad?.prompt ?? "");
     setImageAttachments(props.launchpad?.imageAttachments ?? []);
     setSending(false);
     setInterrupting(false);
@@ -819,7 +1171,7 @@ export function Composer(props: ComposerProps) {
     setReviewConfig(undefined);
     setQueuedTurn(undefined);
     setPendingSteer(undefined);
-  }, [isLaunchpad, props.launchpad?.directoryKey]);
+  }, [isLaunchpad, props.launchpad?.directoryKey, props.launchpad?.prompt, props.skills]);
 
   useEffect(() => {
     if (!props.thread) {
@@ -913,7 +1265,7 @@ export function Composer(props: ComposerProps) {
         setSteering(false);
         if (pendingSteer?.status === "pending") {
           if (queuedTurn) {
-            setDraft(pendingSteer.text);
+            setComposerDraftFromCanonical(pendingSteer.text);
             setImageAttachments(pendingSteer.imageAttachments);
           } else {
             setQueuedTurn({
@@ -963,21 +1315,21 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    if (draft === launchpad.prompt) {
+    if (canonicalDraft === launchpad.prompt) {
       return;
     }
 
     const timeout = window.setTimeout(() => {
       void props.onUpdateLaunchpad?.(launchpad.directoryKey, {
         imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
-        prompt: draft,
+        prompt: canonicalDraft,
       });
     }, 250);
 
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [draft, imageAttachments, launchpad, props.onUpdateLaunchpad]);
+  }, [canonicalDraft, imageAttachments, launchpad, props.onUpdateLaunchpad]);
 
   const submitReviewCommand = async (reviewCommand: {
     displayText: string;
@@ -1003,7 +1355,7 @@ export function Composer(props: ComposerProps) {
           undefined,
           reviewCommand.target
         );
-        setDraft("");
+        clearComposerDraft();
         setReviewConfig(undefined);
         setImageAttachments([]);
       } catch (error) {
@@ -1035,7 +1387,7 @@ export function Composer(props: ComposerProps) {
       updateActiveTurnId(response.turnId);
       props.onActiveTurnIdChange?.(response.turnId);
       clearThreadComposerDraft(composerScopeKey);
-      setDraft("");
+      clearComposerDraft();
       setReviewConfig(undefined);
     } catch (error) {
       if (optimisticReviewId) {
@@ -1080,7 +1432,7 @@ export function Composer(props: ComposerProps) {
 
     const payload = queued
       ? buildTurnPayload(queued.text, queued.imageAttachments)
-      : buildTurnPayload(draft, imageAttachments);
+      : buildTurnPayload(canonicalDraft, imageAttachments);
     if (payload.input.length === 0 || props.disabled) {
       return;
     }
@@ -1127,7 +1479,7 @@ export function Composer(props: ComposerProps) {
         setQueuedTurn(undefined);
       } else {
         clearThreadComposerDraft(composerScopeKey);
-        setDraft("");
+        clearComposerDraft();
         setImageAttachments([]);
         if (collaborationMode) {
           setPlanModeEnabled(false);
@@ -1160,7 +1512,7 @@ export function Composer(props: ComposerProps) {
   }, [activeTurnId, queuedTurn, sending, props.disabled, props.launchpad]);
 
   const queueCurrentDraft = (): void => {
-    if (!draft.trim() && imageAttachments.length === 0) {
+    if (!hasComposerContent && imageAttachments.length === 0) {
       return;
     }
     if (queuedTurn) {
@@ -1169,11 +1521,11 @@ export function Composer(props: ComposerProps) {
     }
 
     setQueuedTurn({
-      text: draft,
+      text: canonicalDraft,
       imageAttachments,
     });
     clearThreadComposerDraft(composerScopeKey);
-    setDraft("");
+    clearComposerDraft();
     setImageAttachments([]);
     setReviewConfig(undefined);
     setSendError(undefined);
@@ -1263,7 +1615,7 @@ export function Composer(props: ComposerProps) {
       status: "pending",
     });
     clearThreadComposerDraft(composerScopeKey);
-    setDraft("");
+    clearComposerDraft();
     setImageAttachments([]);
     setReviewConfig(undefined);
     return true;
@@ -1282,7 +1634,7 @@ export function Composer(props: ComposerProps) {
     }
 
     createPendingSteer({
-      text: draft,
+      text: canonicalDraft,
       imageAttachments,
     });
   };
@@ -1330,7 +1682,7 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const payload = buildTurnPayload(draft, imageAttachments);
+    const payload = buildTurnPayload(canonicalDraft, imageAttachments);
     const collaborationMode = planModeEnabled && supportsPlanMode
       ? ({
           mode: "plan",
@@ -1354,7 +1706,7 @@ export function Composer(props: ComposerProps) {
           payload.input,
           collaborationMode
         );
-        setDraft("");
+        clearComposerDraft();
         setImageAttachments([]);
         if (collaborationMode) {
           setPlanModeEnabled(false);
@@ -1414,22 +1766,72 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const inserted = insertSkillLabel({
-      draft,
-      skill,
-      selectionStart: inputRef.current.selectionStart ?? draft.length,
-      selectionEnd: inputRef.current.selectionEnd ?? draft.length,
-    });
-    if (!inserted) {
+    const selectionStart = Math.min(
+      inputRef.current.selectionStart ?? draft.length,
+      draft.length,
+    );
+    const selectionEnd = Math.min(
+      inputRef.current.selectionEnd ?? selectionStart,
+      draft.length,
+    );
+    const trigger =
+      findSkillTrigger(draft, selectionStart) ?? findSkillTrigger(draft, draft.length);
+    if (!trigger) {
       return;
     }
 
-    setDraft(inserted.nextDraft);
-    setActiveSkillIndex(0);
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(inserted.nextSelection, inserted.nextSelection);
+    if (!composerSupportsSkillTokens) {
+      const before = draft.slice(0, trigger.start);
+      const after = draft.slice(Math.max(trigger.end, selectionEnd));
+      const mention = buildSkillMentionMarkdown(skill);
+      const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
+      const nextDraft = `${before}${mention}${needsTrailingSpace ? " " : ""}${after}`;
+      const nextSelection = before.length + mention.length + (needsTrailingSpace ? 1 : 0);
+
+      updateVisibleDraft(nextDraft, []);
+      setActiveSkillIndex(0);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      });
+      return;
+    }
+
+    const before = draft.slice(0, trigger.start);
+    const after = draft.slice(Math.max(trigger.end, selectionEnd));
+    const nextAfter = after.length > 0 && !/^\s/.test(after) ? ` ${after}` : after;
+    const nextDraft = `${before}${nextAfter}`;
+    const tokenIndex = before.length;
+    const nextSkillTokens = [
+      ...adjustSkillTokenIndexesForTextChange({
+        currentDraft: draft,
+        nextDraft,
+        skillTokens,
+      }),
+      createComposerSkillToken(skill, tokenIndex),
+    ];
+
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: nextDraft,
+      expectedSkillTokensSignature:
+        getComposerSkillTokensSignature(nextSkillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+      setDraft(nextDraft);
+      setActiveSkillIndex(0);
     });
+    const restoreSelection = (): void => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(tokenIndex, tokenIndex);
+    };
+    if (composerUsesTiptap) {
+      requestAnimationFrame(restoreSelection);
+    } else {
+      restoreSelection();
+    }
   };
 
   const applySlashCommand = (command: SlashCommandSuggestion): void => {
@@ -1437,8 +1839,14 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const selectionStart = inputRef.current.selectionStart ?? draft.length;
-    const selectionEnd = inputRef.current.selectionEnd ?? selectionStart;
+    const selectionStart = Math.min(
+      inputRef.current.selectionStart ?? draft.length,
+      draft.length,
+    );
+    const selectionEnd = Math.min(
+      inputRef.current.selectionEnd ?? selectionStart,
+      draft.length,
+    );
     const trigger = findSlashCommandTrigger(draft, selectionStart);
     if (!trigger) {
       return;
@@ -1450,7 +1858,7 @@ export function Composer(props: ComposerProps) {
     const nextDraft = `${before}${command.insertText}${needsTrailingSpace ? " " : ""}${after}`;
     const nextSelection = before.length + command.insertText.length + (needsTrailingSpace ? 1 : 0);
 
-    setDraft(nextDraft);
+    updateVisibleDraft(nextDraft);
     setActiveSlashIndex(0);
     requestAnimationFrame(() => {
       inputRef.current?.focus();
@@ -1464,6 +1872,7 @@ export function Composer(props: ComposerProps) {
       saveThreadComposerDraft(composerScopeKey, {
         draft,
         imageAttachments: nextAttachments,
+        skillTokens,
       });
       persistLaunchpadImageAttachments(nextAttachments);
       return nextAttachments;
@@ -1479,11 +1888,11 @@ export function Composer(props: ComposerProps) {
 
     void props.onUpdateLaunchpad(props.launchpad.directoryKey, {
       imageAttachments: attachments.length > 0 ? attachments : undefined,
-      prompt: draft,
+      prompt: canonicalDraft,
     });
   };
 
-  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
+  const handlePaste = (event: ClipboardEvent<HTMLElement>): void => {
     const pastedFiles = getImageFilesFromDataTransfer(event.clipboardData);
     if (pastedFiles.length === 0) {
       return;
@@ -1494,7 +1903,7 @@ export function Composer(props: ComposerProps) {
     void attachImages(pastedFiles);
   };
 
-  const handleDragOver = (event: DragEvent<HTMLTextAreaElement>): void => {
+  const handleDragOver = (event: DragEvent<HTMLElement>): void => {
     if (!hasImageFiles(event.dataTransfer)) {
       return;
     }
@@ -1503,7 +1912,7 @@ export function Composer(props: ComposerProps) {
     event.dataTransfer.dropEffect = "copy";
   };
 
-  const handleDrop = (event: DragEvent<HTMLTextAreaElement>): void => {
+  const handleDrop = (event: DragEvent<HTMLElement>): void => {
     const droppedFiles = getImageFilesFromDataTransfer(event.dataTransfer);
     if (droppedFiles.length === 0) {
       return;
@@ -1516,7 +1925,7 @@ export function Composer(props: ComposerProps) {
 
   const attachImages = async (files: ComposerImageFile[]): Promise<void> => {
     const pasteScope = pasteScopeRef.current;
-    const pasteDraft = draft;
+    const pasteDraft = canonicalDraft;
     const pasteImageAttachments = imageAttachments;
     const pasteLaunchpad = props.launchpad;
     const updateLaunchpad = props.onUpdateLaunchpad;
@@ -1582,10 +1991,12 @@ export function Composer(props: ComposerProps) {
         const saved = scopedThreadDraftsRef.current.get(pasteScope.key) ?? {
           draft: "",
           imageAttachments: [],
+          skillTokens: [],
         };
         saveThreadComposerDraft(pasteScope.key, {
           draft: saved.draft,
           imageAttachments: [...saved.imageAttachments, ...nextAttachments],
+          skillTokens: saved.skillTokens,
         });
         return;
       }
@@ -1595,6 +2006,7 @@ export function Composer(props: ComposerProps) {
         saveThreadComposerDraft(pasteScope.key, {
           draft,
           imageAttachments: mergedAttachments,
+          skillTokens,
         });
         persistLaunchpadImageAttachments(mergedAttachments);
         return mergedAttachments;
@@ -1795,6 +2207,535 @@ export function Composer(props: ComposerProps) {
     !sourceBranch ||
     (handoffDialog === "local-to-worktree" && !leaveLocalBranch);
 
+  const commitActiveAutocomplete = (): void => {
+    if (autocompleteKind === "skills") {
+      applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
+      return;
+    }
+
+    applySlashCommand(
+      filteredSlashCommands[activeSlashIndex] ?? filteredSlashCommands[0]!
+    );
+  };
+
+  const findEventTargetSkillTokenId = (
+    event: SkillTokenDeletionEvent,
+  ): string | undefined => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return undefined;
+    }
+
+    const tokenElement = target.closest(COMPOSER_SKILL_TOKEN_SELECTOR);
+    return tokenElement instanceof HTMLElement
+      ? tokenElement.dataset.composerSkillTokenId
+      : undefined;
+  };
+
+  const selectionBelongsToEditor = (editor: HTMLElement): boolean => {
+    const ownerDocument = editor.ownerDocument;
+    const selection = ownerDocument.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return editor.contains(ownerDocument.activeElement);
+    }
+
+    const range = selection.getRangeAt(0);
+    return (
+      editor.contains(range.startContainer) ||
+      editor.contains(range.endContainer) ||
+      range.intersectsNode(editor)
+    );
+  };
+
+  const findSelectedSkillTokenId = (
+    editor: HTMLElement,
+  ): string | undefined => {
+    const selection = editor.ownerDocument.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return undefined;
+    }
+
+    const range = selection.getRangeAt(0);
+    const tokenElement = Array.from(
+      editor.querySelectorAll<HTMLElement>(COMPOSER_SKILL_TOKEN_SELECTOR),
+    ).find((candidate) => range.intersectsNode(candidate));
+    return tokenElement?.dataset.composerSkillTokenId;
+  };
+
+  const hasRangedEditorSelection = (editor: HTMLElement): boolean => {
+    const selection = editor.ownerDocument.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return false;
+    }
+
+    const range = selection.getRangeAt(0);
+    return (
+      editor.contains(range.startContainer) ||
+      editor.contains(range.endContainer) ||
+      range.intersectsNode(editor)
+    );
+  };
+
+  const shouldGuardNativeTextDeletion = (
+    editor: HTMLElement,
+    direction: "backward" | "forward",
+  ): boolean => {
+    const selection = editor.ownerDocument.getSelection();
+    if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
+      return false;
+    }
+
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.startContainer)) {
+      return false;
+    }
+
+    if (range.startContainer.nodeType !== Node.TEXT_NODE) {
+      return true;
+    }
+
+    const textLength = range.startContainer.nodeValue?.length ?? 0;
+    return direction === "backward"
+      ? range.startOffset === 0
+      : range.startOffset >= textLength;
+  };
+
+  const findTokenIdInNode = (node: Node | undefined): string | undefined => {
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) {
+      return undefined;
+    }
+
+    const element = node as Element;
+    const tokenElement = element.matches(COMPOSER_SKILL_TOKEN_SELECTOR)
+      ? element
+      : element.querySelector(COMPOSER_SKILL_TOKEN_SELECTOR);
+    return tokenElement instanceof HTMLElement
+      ? tokenElement.dataset.composerSkillTokenId
+      : undefined;
+  };
+
+  const findEditorChildForNode = (
+    editor: HTMLElement,
+    node: Node,
+  ): Node | undefined => {
+    let current: Node | null = node;
+    while (current && current.parentNode !== editor) {
+      current = current.parentNode;
+    }
+    return current ?? undefined;
+  };
+
+  const findAdjacentSkillTokenId = (
+    editor: HTMLElement,
+    direction: "backward" | "forward",
+  ): string | undefined => {
+    const selection = editor.ownerDocument.getSelection();
+    if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
+      return undefined;
+    }
+
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.startContainer)) {
+      return undefined;
+    }
+
+    if (range.startContainer === editor) {
+      const sibling =
+        direction === "backward"
+          ? editor.childNodes[range.startOffset - 1]
+          : editor.childNodes[range.startOffset];
+      return findTokenIdInNode(sibling);
+    }
+
+    if (range.startContainer.nodeType === Node.TEXT_NODE) {
+      const textLength = range.startContainer.nodeValue?.length ?? 0;
+      if (direction === "backward" && range.startOffset > 0) {
+        return undefined;
+      }
+      if (direction === "forward" && range.startOffset < textLength) {
+        return undefined;
+      }
+    }
+
+    const editorChild = findEditorChildForNode(editor, range.startContainer);
+    if (!editorChild) {
+      return undefined;
+    }
+
+    const siblings = Array.from(editor.childNodes);
+    const childIndex = siblings.indexOf(editorChild as ChildNode);
+    const sibling =
+      direction === "backward"
+        ? siblings[childIndex - 1]
+        : siblings[childIndex + 1];
+    return findTokenIdInNode(sibling);
+  };
+
+  const removeSkillToken = (
+    token: ComposerSkillToken,
+    selectionStart: number,
+  ): void => {
+    deletedSkillTokenHistoryRef.current.push({
+      draft,
+      selectionStart,
+      skillTokens,
+    });
+    setSkillTokens((current) =>
+      current.filter((candidate) => candidate.id !== token.id)
+    );
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(selectionStart, selectionStart);
+    });
+  };
+
+  const removeEditorSkillToken = (
+    event: SkillTokenDeletionEvent,
+    direction: "backward" | "forward",
+  ): boolean => {
+    if (!inputRef.current) {
+      return false;
+    }
+
+    if (hasRangedEditorSelection(event.currentTarget)) {
+      return false;
+    }
+
+    const tokenId =
+      findEventTargetSkillTokenId(event) ??
+      findSelectedSkillTokenId(event.currentTarget) ??
+      findAdjacentSkillTokenId(event.currentTarget, direction);
+    const token =
+      tokenId
+        ? skillTokens.find((candidate) => candidate.id === tokenId)
+        : draft.length === 0 && skillTokens.length === 1
+          ? skillTokens[0]
+          : undefined;
+    if (!token) {
+      if (tokenId) {
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
+      return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    removeSkillToken(token, token.index);
+    void direction;
+    return true;
+  };
+
+  const deleteEditorText = (
+    event: SkillTokenDeletionEvent,
+    direction: "backward" | "forward",
+  ): boolean => {
+    if (!inputRef.current) {
+      return false;
+    }
+
+    const caret = Math.min(inputRef.current.selectionStart, draft.length);
+    const deleteStart = direction === "backward" ? Math.max(0, caret - 1) : caret;
+    const deleteEnd =
+      direction === "backward" ? caret : Math.min(draft.length, caret + 1);
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (deleteStart === deleteEnd) {
+      return true;
+    }
+
+    const nextDraft = `${draft.slice(0, deleteStart)}${draft.slice(deleteEnd)}`;
+    updateVisibleDraft(nextDraft);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(deleteStart, deleteStart);
+    });
+    return true;
+  };
+
+  const deleteEditorContent = (
+    event: SkillTokenDeletionEvent,
+    direction: "backward" | "forward",
+  ): boolean => {
+    if (inputRef.current && hasRangedEditorSelection(event.currentTarget)) {
+      event.preventDefault();
+      event.stopPropagation();
+      inputRef.current.deleteSelection(direction);
+      return true;
+    }
+
+    return (
+      removeEditorSkillToken(event, direction) ||
+      (shouldGuardNativeTextDeletion(event.currentTarget, direction)
+        ? deleteEditorText(event, direction)
+        : false)
+    );
+  };
+
+  useEffect(() => {
+    const ownerDocument = inputWrapRef.current?.ownerDocument ?? document;
+    const getEditor = (): HTMLElement | undefined =>
+      inputWrapRef.current?.querySelector<HTMLElement>(
+        '[data-testid="composer-rich-input"]',
+      ) ?? undefined;
+
+    const handleDocumentKeyDown = (event: KeyboardEvent): void => {
+      if (
+        event.defaultPrevented ||
+        (event.key !== "Backspace" && event.key !== "Delete")
+      ) {
+        return;
+      }
+
+      const editor = getEditor();
+      if (!editor || !selectionBelongsToEditor(editor)) {
+        return;
+      }
+
+      deleteEditorContent(
+        {
+          currentTarget: editor,
+          target: event.target,
+          preventDefault: () => event.preventDefault(),
+          stopPropagation: () => event.stopPropagation(),
+        },
+        event.key === "Backspace" ? "backward" : "forward",
+      );
+    };
+    const handleDocumentBeforeInput = (event: InputEvent): void => {
+      if (
+        event.defaultPrevented ||
+        (event.inputType !== "deleteContentBackward" &&
+          event.inputType !== "deleteContentForward")
+      ) {
+        return;
+      }
+
+      const editor = getEditor();
+      if (!editor || !selectionBelongsToEditor(editor)) {
+        return;
+      }
+
+      deleteEditorContent(
+        {
+          currentTarget: editor,
+          target: event.target,
+          preventDefault: () => event.preventDefault(),
+          stopPropagation: () => event.stopPropagation(),
+        },
+        event.inputType === "deleteContentBackward" ? "backward" : "forward",
+      );
+    };
+
+    ownerDocument.addEventListener("keydown", handleDocumentKeyDown, true);
+    ownerDocument.addEventListener("beforeinput", handleDocumentBeforeInput, true);
+    return () => {
+      ownerDocument.removeEventListener("keydown", handleDocumentKeyDown, true);
+      ownerDocument.removeEventListener(
+        "beforeinput",
+        handleDocumentBeforeInput,
+        true,
+      );
+    };
+  });
+
+  const restoreDeletedSkillToken = (
+    event: ReactKeyboardEvent<HTMLElement>,
+  ): boolean => {
+    if (
+      event.key.toLowerCase() !== "z" ||
+      (!event.metaKey && !event.ctrlKey) ||
+      event.shiftKey ||
+      deletedSkillTokenHistoryRef.current.length === 0
+    ) {
+      return false;
+    }
+
+    const previous = deletedSkillTokenHistoryRef.current.pop()!;
+    event.preventDefault();
+    setDraft(previous.draft);
+    setSkillTokens(previous.skillTokens);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(
+        previous.selectionStart,
+        previous.selectionStart,
+      );
+    });
+    return true;
+  };
+
+  const handleAutocompleteKeyDown = (
+    event: ReactKeyboardEvent<HTMLElement>,
+  ): void => {
+    if (!hasAutocomplete && event.key !== "Escape") {
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (autocompleteKind === "skills") {
+        setActiveSkillIndex((current) =>
+          Math.min(current + 1, autocompleteLength - 1)
+        );
+      } else {
+        setActiveSlashIndex((current) =>
+          Math.min(current + 1, autocompleteLength - 1)
+        );
+      }
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (autocompleteKind === "skills") {
+        setActiveSkillIndex((current) => Math.max(current - 1, 0));
+      } else {
+        setActiveSlashIndex((current) => Math.max(current - 1, 0));
+      }
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (autocompleteKey) {
+        setDismissedAutocompleteKey(autocompleteKey);
+      }
+      setActiveSkillIndex(0);
+      setActiveSlashIndex(0);
+      requestAnimationFrame(() => inputRef.current?.focus());
+      return;
+    }
+
+    const optionHasFocus = event.currentTarget instanceof HTMLButtonElement;
+    if (
+      (event.key === "Tab" && !event.shiftKey) ||
+      event.key === "Enter" ||
+      (event.key === " " && optionHasFocus)
+    ) {
+      if (event.key === "Enter" && event.shiftKey) {
+        return;
+      }
+      event.preventDefault();
+      commitActiveAutocomplete();
+    }
+  };
+
+  const composerDisabled =
+    launchpadSubmitting || (props.disabled && !hasComposerContent);
+  const composerPlaceholder = isLaunchpad
+    ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`
+    : "Reply to this thread";
+  const handleComposerChange = (
+    nextDraft: string,
+    nextSkillTokens?: ComposerSkillToken[],
+  ): void => {
+    const pendingProgrammaticChange =
+      pendingProgrammaticComposerChangeRef.current;
+    if (pendingProgrammaticChange && nextSkillTokens) {
+      const nextSkillTokensSignature =
+        getComposerSkillTokensSignature(nextSkillTokens);
+      if (
+        nextDraft === pendingProgrammaticChange.staleDraft &&
+        nextSkillTokensSignature ===
+          pendingProgrammaticChange.staleSkillTokensSignature
+      ) {
+        return;
+      }
+      pendingProgrammaticComposerChangeRef.current = undefined;
+    }
+
+    const deletedSkillTokenHistoryEntry =
+      composerSupportsSkillTokens &&
+      nextSkillTokens &&
+      nextSkillTokens.length < skillTokens.length
+        ? (() => {
+            const nextTokenIds = new Set(
+              nextSkillTokens.map((token) => token.id),
+            );
+            const deletedToken = skillTokens.find(
+              (token) => !nextTokenIds.has(token.id),
+            );
+            return deletedToken
+              ? {
+                  draft,
+                  selectionStart: deletedToken.index,
+                  skillTokens,
+                }
+              : undefined;
+          })()
+        : undefined;
+
+    updateVisibleDraft(nextDraft, nextSkillTokens);
+    if (deletedSkillTokenHistoryEntry) {
+      deletedSkillTokenHistoryRef.current.push(deletedSkillTokenHistoryEntry);
+    }
+    if (nextDraft.trim() !== "/review") {
+      setReviewConfig(undefined);
+    }
+    setSendError(undefined);
+  };
+  const handleComposerClick = (): void => {
+    setActiveSkillIndex(0);
+    setActiveSlashIndex(0);
+  };
+  const handlePlainComposerKeyDown = (
+    event: ReactKeyboardEvent<HTMLElement>,
+  ): void => {
+    if (event.defaultPrevented) {
+      return;
+    }
+
+    if (!hasAutocomplete) {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        void submitTurn(event.metaKey ? "steer" : "default");
+      }
+      return;
+    }
+
+    handleAutocompleteKeyDown(event);
+  };
+  const handleCustomComposerKeyDown = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ): void => {
+    if (event.defaultPrevented) {
+      return;
+    }
+
+    if (restoreDeletedSkillToken(event)) {
+      return;
+    }
+
+    if (
+      event.key === "Backspace" &&
+      deleteEditorContent(event, "backward")
+    ) {
+      return;
+    }
+
+    if (event.key === "Delete" && deleteEditorContent(event, "forward")) {
+      return;
+    }
+
+    handlePlainComposerKeyDown(event);
+  };
+  const handleTiptapComposerKeyDown = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ): void => {
+    if (event.defaultPrevented) {
+      return;
+    }
+
+    if (restoreDeletedSkillToken(event)) {
+      return;
+    }
+
+    handlePlainComposerKeyDown(event);
+  };
+
   return (
     <form
       className="composer"
@@ -1829,7 +2770,7 @@ export function Composer(props: ComposerProps) {
                   className="composer__secondary-action"
                   type="button"
                   onClick={() => {
-                    setDraft(pendingSteer.text);
+                    setComposerDraftFromCanonical(pendingSteer.text);
                     setImageAttachments(pendingSteer.imageAttachments);
                     setPendingSteer(undefined);
                     requestAnimationFrame(() => inputRef.current?.focus());
@@ -1878,7 +2819,7 @@ export function Composer(props: ComposerProps) {
               className="composer__secondary-action"
               type="button"
               onClick={() => {
-                setDraft(queuedTurn.text);
+                setComposerDraftFromCanonical(queuedTurn.text);
                 setImageAttachments(queuedTurn.imageAttachments);
                 setQueuedTurn(undefined);
                 requestAnimationFrame(() => inputRef.current?.focus());
@@ -1899,104 +2840,135 @@ export function Composer(props: ComposerProps) {
         </div>
       ) : null}
 
-      {mentionedSkills.length > 0 ? (
-        <div className="composer__mentioned-skills" aria-label="Mentioned skills">
-          {mentionedSkills.map((skill) => (
-            <SkillChip key={skill.path ?? skill.name} skill={skill} />
-          ))}
-        </div>
-      ) : null}
-
-      <div className="composer__input-wrap">
-        <textarea
-          ref={inputRef}
-          id="thread-composer"
-          className="composer__input"
-          disabled={launchpadSubmitting || (props.disabled && !draft)}
-          placeholder={
-            isLaunchpad
-              ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`
-              : "Reply to this thread"
-          }
-          value={draft}
-          onChange={(event) => {
-            const nextDraft = event.target.value;
-            setDraft(nextDraft);
-            if (nextDraft.trim() !== "/review") {
-              setReviewConfig(undefined);
-            }
-            setSendError(undefined);
-          }}
-          onPaste={handlePaste}
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-          onClick={() => {
-            setActiveSkillIndex(0);
-            setActiveSlashIndex(0);
-          }}
-          onKeyDown={(event) => {
-            if (!hasAutocomplete) {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void submitTurn(event.metaKey ? "steer" : "default");
+      <div className="composer__input-wrap" ref={inputWrapRef}>
+        {composerImplementation === "custom-widget-chips" ? (
+          <ComposerRichInput
+            ref={inputRef}
+            id="thread-composer"
+            ariaActiveDescendant={activeAutocompleteOptionId}
+            ariaControls={autocompleteListboxId}
+            ariaExpanded={hasAutocomplete}
+            disabled={composerDisabled}
+            label={isLaunchpad ? "New thread" : "Reply"}
+            placeholder={composerPlaceholder}
+            skillTokens={skillTokens}
+            value={draft}
+            onChange={handleComposerChange}
+            onPaste={handlePaste}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            onClick={handleComposerClick}
+            onBeforeInputCapture={(event) => {
+              const inputType = (event.nativeEvent as InputEvent).inputType;
+              if (
+                inputType === "deleteContentBackward" &&
+                deleteEditorContent(event, "backward")
+              ) {
+                return;
               }
-              return;
-            }
-
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              if (autocompleteKind === "skills") {
-                setActiveSkillIndex((current) =>
-                  Math.min(current + 1, autocompleteLength - 1)
-                );
-              } else {
-                setActiveSlashIndex((current) =>
-                  Math.min(current + 1, autocompleteLength - 1)
-                );
+              if (
+                inputType === "deleteContentForward" &&
+                deleteEditorContent(event, "forward")
+              ) {
+                return;
               }
-              return;
-            }
-
-            if (event.key === "ArrowUp") {
-              event.preventDefault();
-              if (autocompleteKind === "skills") {
-                setActiveSkillIndex((current) => Math.max(current - 1, 0));
-              } else {
-                setActiveSlashIndex((current) => Math.max(current - 1, 0));
+            }}
+            onBeforeInput={(event) => {
+              if (event.defaultPrevented) {
+                return;
               }
-              return;
-            }
-
-            if (event.key === "Escape") {
-              event.preventDefault();
-              setActiveSkillIndex(0);
-              setActiveSlashIndex(0);
-              return;
-            }
-
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              if (autocompleteKind === "skills") {
-                applySkill(filteredSkills[activeSkillIndex] ?? filteredSkills[0]!);
-              } else {
-                applySlashCommand(
-                  filteredSlashCommands[activeSlashIndex] ?? filteredSlashCommands[0]!
-                );
+              const inputType = (event.nativeEvent as InputEvent).inputType;
+              if (
+                inputType === "deleteContentBackward" &&
+                deleteEditorContent(event, "backward")
+              ) {
+                return;
               }
+              if (
+                inputType === "deleteContentForward" &&
+                deleteEditorContent(event, "forward")
+              ) {
+                return;
+              }
+            }}
+            onKeyDownCapture={(event) => {
+              if (
+                event.key === "Backspace" &&
+                deleteEditorContent(event, "backward")
+              ) {
+                return;
+              }
+
+              if (
+                event.key === "Delete" &&
+                deleteEditorContent(event, "forward")
+              ) {
+                return;
+              }
+            }}
+            onKeyDown={handleCustomComposerKeyDown}
+          />
+        ) : composerUsesTiptap ? (
+          <ComposerTiptapInput
+            key={composerImplementation}
+            ref={inputRef}
+            id="thread-composer"
+            ariaActiveDescendant={activeAutocompleteOptionId}
+            ariaControls={autocompleteListboxId}
+            ariaExpanded={hasAutocomplete}
+            disabled={composerDisabled}
+            label={isLaunchpad ? "New thread" : "Reply"}
+            markdownConversion={
+              composerImplementation === "tiptap-wysiwyg-markdown-chips"
             }
-          }}
-        />
+            placeholder={composerPlaceholder}
+            skillTokens={skillTokens}
+            value={draft}
+            onChange={handleComposerChange}
+            onPaste={handlePaste}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            onClick={handleComposerClick}
+            onKeyDown={handleTiptapComposerKeyDown}
+          />
+        ) : (
+          <ComposerTextareaInput
+            ref={inputRef}
+            id="thread-composer"
+            ariaActiveDescendant={activeAutocompleteOptionId}
+            ariaControls={autocompleteListboxId}
+            ariaExpanded={hasAutocomplete}
+            disabled={composerDisabled}
+            label={isLaunchpad ? "New thread" : "Reply"}
+            placeholder={composerPlaceholder}
+            value={draft}
+            onChange={(nextDraft) => handleComposerChange(nextDraft, [])}
+            onPaste={handlePaste}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            onClick={handleComposerClick}
+            onKeyDown={handlePlainComposerKeyDown}
+          />
+        )}
 
         {displayedAutocompleteKind === "skills" ? (
-          <div className="composer__autocomplete" role="listbox" aria-label="Skills">
+          <div
+            className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+            role="listbox"
+            aria-label="Skills"
+            id={skillListboxId}
+            style={{ maxHeight: autocompleteLayout.maxHeight }}
+          >
             {filteredSkills.map((skill, index) => (
               <button
                 key={skill.path ?? skill.name}
+                id={`${skillListboxId}-option-${index}`}
                 ref={(node) => {
                   autocompleteOptionRefs.current[index] = node;
                 }}
                 aria-selected={index === activeSkillIndex}
                 className={`composer__autocomplete-option${index === activeSkillIndex ? " is-active" : ""}`}
+                tabIndex={index === activeSkillIndex ? 0 : -1}
                 type="button"
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -2005,6 +2977,10 @@ export function Composer(props: ComposerProps) {
                 onClick={() => {
                   applySkill(skill);
                 }}
+                onFocus={() => {
+                  setActiveSkillIndex(index);
+                }}
+                onKeyDown={handleAutocompleteKeyDown}
               >
                 <span className="composer__autocomplete-title">
                   <span aria-hidden="true">🧰</span>
@@ -2020,15 +2996,23 @@ export function Composer(props: ComposerProps) {
             ))}
           </div>
         ) : displayedAutocompleteKind === "slash" ? (
-          <div className="composer__autocomplete" role="listbox" aria-label="Commands">
+          <div
+            className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+            role="listbox"
+            aria-label="Commands"
+            id={slashListboxId}
+            style={{ maxHeight: autocompleteLayout.maxHeight }}
+          >
             {filteredSlashCommands.map((command, index) => (
               <button
                 key={command.id}
+                id={`${slashListboxId}-option-${index}`}
                 ref={(node) => {
                   autocompleteOptionRefs.current[index] = node;
                 }}
                 aria-selected={index === activeSlashIndex}
                 className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
+                tabIndex={index === activeSlashIndex ? 0 : -1}
                 type="button"
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -2037,6 +3021,10 @@ export function Composer(props: ComposerProps) {
                 onClick={() => {
                   applySlashCommand(command);
                 }}
+                onFocus={() => {
+                  setActiveSlashIndex(index);
+                }}
+                onKeyDown={handleAutocompleteKeyDown}
               >
                 <span className="composer__autocomplete-title">
                   <span className="composer__autocomplete-token" aria-hidden="true">/</span>
@@ -2679,7 +3667,7 @@ export function Composer(props: ComposerProps) {
               props.disabled ||
               steering ||
               (!activeTurnId && sending) ||
-              (!draft.trim() && imageAttachments.length === 0)
+              (!hasComposerContent && imageAttachments.length === 0)
             }
             type="submit"
           >
