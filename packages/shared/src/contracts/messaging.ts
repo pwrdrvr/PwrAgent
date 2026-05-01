@@ -213,6 +213,7 @@ export type MessagingSurfacePresentationMode = "present" | "update" | "dismiss";
 export type MessagingSurfaceDeliveryPolicy = {
   mode?: MessagingSurfacePresentationMode;
   pin?: boolean;
+  replaceMarkup?: boolean;
   unpin?: boolean;
   fallback?: "present_new" | "fail";
 };

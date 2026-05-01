@@ -79,8 +79,10 @@ export function buildConfirmationIntent(params: {
   actions?: MessagingSurfaceAction[];
   body: string;
   createdAt: number;
+  delivery?: MessagingConfirmationIntent["delivery"];
   fallbackText?: string;
   id: string;
+  targetSurface?: MessagingConfirmationIntent["targetSurface"];
   title: string;
 }): MessagingConfirmationIntent {
   return {
@@ -89,7 +91,9 @@ export function buildConfirmationIntent(params: {
     actions: params.actions ?? [],
     body: params.body,
     createdAt: params.createdAt,
+    delivery: params.delivery,
     fallbackText: params.fallbackText,
+    targetSurface: params.targetSurface,
     title: params.title,
   };
 }

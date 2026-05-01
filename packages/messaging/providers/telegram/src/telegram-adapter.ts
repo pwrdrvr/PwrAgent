@@ -345,15 +345,15 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     ) {
       try {
         sentMessages.push(
-          await this.bot.api.editMessageText({
-            chat_id: target.chatId,
-            disable_web_page_preview: true,
-            message_id: target.messageId,
-            message_thread_id: target.messageThreadId,
-            parse_mode: "HTML",
-            reply_markup: replyMarkup,
-            text: text || " ",
-          }),
+      await this.bot.api.editMessageText({
+        chat_id: target.chatId,
+        disable_web_page_preview: true,
+        message_id: target.messageId,
+        message_thread_id: target.messageThreadId,
+        parse_mode: "HTML",
+        reply_markup: replyMarkup ?? (intent.delivery.replaceMarkup ? { inline_keyboard: [] } : undefined),
+        text: text || " ",
+      }),
         );
         outcome = "updated";
       } catch (error) {

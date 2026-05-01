@@ -494,6 +494,66 @@ describe("TelegramAdapter", () => {
     });
   });
 
+  it("clears Telegram inline keyboard when an update replaces markup without actions", async () => {
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      now: () => 1000,
+    });
+
+    await adapter.deliver({
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      body: "No thread binding changed.",
+      createdAt: 1000,
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+      id: "intent-clear-markup",
+      kind: "confirmation",
+      targetSurface: {
+        channel: "telegram",
+        id: "200",
+        state: {
+          opaque: {
+            chatId: 777,
+            messageId: 200,
+          },
+        },
+      },
+      title: "Resume cancelled",
+      actions: [],
+    });
+
+    expect(api.editMessageText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: 777,
+        message_id: 200,
+        reply_markup: {
+          inline_keyboard: [],
+        },
+        text: expect.stringContaining("Resume cancelled"),
+      }),
+    );
+  });
+
   it("falls back to a new message when Telegram edit fails", async () => {
     const api = createApi();
     api.editMessageText.mockRejectedValueOnce(

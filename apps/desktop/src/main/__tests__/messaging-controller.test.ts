@@ -396,6 +396,30 @@ describe("MessagingController", () => {
     });
   });
 
+  it("updates the browse surface and removes actions when cancelling resume", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:cancel",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Resume cancelled",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+      targetSurface: expect.objectContaining({
+        id: expect.stringContaining("surface:"),
+      }),
+    });
+  });
+
   it("rejects unauthorized actors without revealing thread data", async () => {
     const harness = await createHarness();
 

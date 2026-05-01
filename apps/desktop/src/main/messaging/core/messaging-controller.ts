@@ -700,8 +700,15 @@ export class MessagingController {
         buildConfirmationIntent({
           id: this.newIntentId("browse-cancelled"),
           createdAt: this.now(),
+          delivery: session.surface
+            ? {
+                mode: "update",
+                replaceMarkup: true,
+              }
+            : undefined,
           title: "Resume cancelled",
           body: "No thread binding changed.",
+          targetSurface: session.surface,
         }),
         undefined,
         event,
