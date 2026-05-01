@@ -27,3 +27,23 @@ export function parseListValue(value: string): string[] {
 export function sourceBadge<T>(setting: DesktopSettingsValue<T>): string {
   return formatSourceLabel(setting.source, setting.overriddenByEnv);
 }
+
+export function optionalStringSourceBadge(
+  setting: DesktopSettingsValue<string>,
+): string {
+  if (setting.source === "default" && !setting.value.trim()) {
+    return "unset";
+  }
+
+  return sourceBadge(setting);
+}
+
+export function optionalListSourceBadge(
+  setting: DesktopSettingsValue<string[]>,
+): string {
+  if (setting.source === "default" && setting.value.length === 0) {
+    return "unset";
+  }
+
+  return sourceBadge(setting);
+}

@@ -3,7 +3,14 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
 } from "@pwragnt/shared";
-import { formatSourceLabel, joinListValue, parseListValue, sourceBadge } from "./settings-fields";
+import {
+  formatSourceLabel,
+  joinListValue,
+  optionalListSourceBadge,
+  optionalStringSourceBadge,
+  parseListValue,
+  sourceBadge,
+} from "./settings-fields";
 
 export function MessagingSettings(props: {
   saving: boolean;
@@ -49,7 +56,7 @@ export function MessagingSettings(props: {
         <ListField
           disabled={props.saving}
           label="Authorized User IDs"
-          source={sourceBadge(telegram.authorizedUserIds)}
+          source={optionalListSourceBadge(telegram.authorizedUserIds)}
           value={telegram.authorizedUserIds.value}
           onSave={(authorizedUserIds) => {
             void props.onSaveTelegram({
@@ -64,7 +71,7 @@ export function MessagingSettings(props: {
         <ListField
           disabled={props.saving}
           label="Authorized SuperGroups"
-          source={sourceBadge(telegram.authorizedSupergroups)}
+          source={optionalListSourceBadge(telegram.authorizedSupergroups)}
           value={telegram.authorizedSupergroups.value}
           onSave={(authorizedSupergroups) => {
             void props.onSaveTelegram({
@@ -102,7 +109,7 @@ export function MessagingSettings(props: {
         <TextField
           disabled={props.saving}
           label="Application ID"
-          source={sourceBadge(discord.applicationId)}
+          source={optionalStringSourceBadge(discord.applicationId)}
           value={discord.applicationId.value}
           onSave={(applicationId) => {
             void props.onSaveDiscord({
@@ -117,7 +124,7 @@ export function MessagingSettings(props: {
         <ListField
           disabled={props.saving}
           label="Authorized User IDs"
-          source={sourceBadge(discord.authorizedUserIds)}
+          source={optionalListSourceBadge(discord.authorizedUserIds)}
           value={discord.authorizedUserIds.value}
           onSave={(authorizedUserIds) => {
             void props.onSaveDiscord({
@@ -132,7 +139,7 @@ export function MessagingSettings(props: {
         <ListField
           disabled={props.saving}
           label="Authorized Guilds"
-          source={sourceBadge(discord.authorizedGuilds)}
+          source={optionalListSourceBadge(discord.authorizedGuilds)}
           value={discord.authorizedGuilds.value}
           onSave={(authorizedGuilds) => {
             void props.onSaveDiscord({
