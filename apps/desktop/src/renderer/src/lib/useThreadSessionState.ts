@@ -1109,6 +1109,105 @@ function reviewEntryFromCompletedItem(params: {
   };
 }
 
+function messageContentFromUserItem(item: Record<string, unknown>): {
+  parts?: AppServerThreadMessageEntry["parts"];
+  text: string;
+} {
+  type MessagePart = NonNullable<AppServerThreadMessageEntry["parts"]>[number];
+  const content = Array.isArray(item.content) ? item.content : [];
+  const parts: MessagePart[] = content
+    .map((part): MessagePart | undefined => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) {
+        return undefined;
+      }
+
+      const record = part as Record<string, unknown>;
+      if (record.type === "text" && typeof record.text === "string") {
+        return { type: "text", text: record.text };
+      }
+
+      const imageUrl =
+        typeof record.url === "string"
+          ? record.url
+          : typeof record.image_url === "string"
+            ? record.image_url
+            : undefined;
+      if (
+        imageUrl &&
+        (record.type === "image" ||
+          record.type === "input_image" ||
+          record.type === "image_url")
+      ) {
+        const alt =
+          typeof record.alt === "string"
+            ? record.alt
+            : typeof record.name === "string"
+              ? record.name
+              : undefined;
+        return {
+          type: "image",
+          url: imageUrl,
+          ...(alt ? { alt } : {}),
+        };
+      }
+
+      return undefined;
+    })
+    .filter((part): part is MessagePart => Boolean(part));
+  const text =
+    parts
+      .filter((part): part is Extract<MessagePart, { type: "text" }> => part.type === "text")
+      .map((part) => part.text.trim())
+      .filter(Boolean)
+      .join("\n\n") ||
+    (typeof item.text === "string" ? item.text.trim() : "");
+
+  return {
+    ...(parts.length > 0 ? { parts } : {}),
+    text,
+  };
+}
+
+function userMessageEntryFromCompletedItem(params: {
+  turnId?: string;
+  item?: {
+    id?: string;
+    type?: string;
+    content?: unknown;
+    text?: unknown;
+  };
+}): AppServerThreadMessageEntry | undefined {
+  const item = params.item;
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return undefined;
+  }
+
+  const record = item as Record<string, unknown>;
+  if (record.type !== "userMessage") {
+    return undefined;
+  }
+
+  const content = messageContentFromUserItem(record);
+  if (!content.text && !content.parts?.length) {
+    return undefined;
+  }
+
+  const turn = buildTurnMetadata({
+    fallbackId: typeof params.turnId === "string" ? params.turnId : undefined,
+    fallbackStatus: "in_progress",
+  });
+
+  return {
+    type: "message",
+    id: typeof record.id === "string" ? record.id : `user-${Date.now()}`,
+    role: "user",
+    text: content.text,
+    ...(content.parts ? { parts: content.parts } : {}),
+    ...(turn ? { turn } : {}),
+    createdAt: Date.now(),
+  };
+}
+
 function hasReviewEntryForTurn(
   response: AppServerReadThreadResponse | undefined,
   turnId: string | undefined
@@ -1849,6 +1948,33 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "item/completed") {
+          const userMessageEntry = userMessageEntryFromCompletedItem(
+            event.notification.params
+          );
+          if (userMessageEntry) {
+            const nextResponse = appendMessageEntries(
+              current.response,
+              {
+                backend: event.backend,
+                threadId: notificationThreadId,
+              },
+              [userMessageEntry]
+            );
+
+            return {
+              ...current,
+              expectOwnUpdate: true,
+              interacted: true,
+              lastTouchedAt: nextLastTouchedAt,
+              optimisticEntries: current.optimisticEntries.filter(
+                (entry) =>
+                  entry.type !== "message" ||
+                  !messageMatchesOptimisticEntry(userMessageEntry, entry)
+              ),
+              response: nextResponse,
+            };
+          }
+
           if (isContextCompactionItemNotification(event.notification)) {
             return {
               ...current,

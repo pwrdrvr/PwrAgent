@@ -160,6 +160,137 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it("materializes completed steer user messages in the transcript", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: `${threadId}-message-1`,
+              role: "assistant" as const,
+              text: `Loaded ${threadId}`,
+            },
+          ],
+          messages: [
+            {
+              id: `${threadId}-message-1`,
+              role: "assistant" as const,
+              text: `Loaded ${threadId}`,
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.addOptimisticUserMessage("Steer while thinking.");
+    });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              type: "userMessage",
+              id: "steer-message-1",
+              content: [
+                {
+                  type: "text",
+                  text: "Steer while thinking.",
+                },
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+        )
+      ).toEqual([
+        "assistant:Loaded thread-1",
+        "user:Steer while thinking.",
+      ]);
+    });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              output: [{ type: "text", text: "Steer acknowledged." }],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        result.current.entries.map((entry) =>
+          entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+        )
+      ).toEqual([
+        "assistant:Loaded thread-1",
+        "user:Steer while thinking.",
+        "assistant:Steer acknowledged.",
+      ]);
+    });
+  });
+
   it("keeps live protocol activity before hydrated review output after completion", async () => {
     let agentEventHandler:
       | ((event: {
