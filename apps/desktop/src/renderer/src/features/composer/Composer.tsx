@@ -859,6 +859,7 @@ export function Composer(props: ComposerProps) {
   const launchpad = props.launchpad;
   const composerImplementation = props.composerImplementation ?? "textarea";
   const composerSupportsSkillTokens = composerImplementation !== "textarea";
+  const composerUsesTiptap = composerImplementation.startsWith("tiptap-");
   const backend = useMemo(
     () =>
       props.backends?.find((candidate) =>
@@ -1826,7 +1827,7 @@ export function Composer(props: ComposerProps) {
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(tokenIndex, tokenIndex);
     };
-    if (composerImplementation === "tiptap-chips") {
+    if (composerUsesTiptap) {
       requestAnimationFrame(restoreSelection);
     } else {
       restoreSelection();
@@ -2907,8 +2908,9 @@ export function Composer(props: ComposerProps) {
             }}
             onKeyDown={handleCustomComposerKeyDown}
           />
-        ) : composerImplementation === "tiptap-chips" ? (
+        ) : composerUsesTiptap ? (
           <ComposerTiptapInput
+            key={composerImplementation}
             ref={inputRef}
             id="thread-composer"
             ariaActiveDescendant={activeAutocompleteOptionId}
@@ -2916,6 +2918,9 @@ export function Composer(props: ComposerProps) {
             ariaExpanded={hasAutocomplete}
             disabled={composerDisabled}
             label={isLaunchpad ? "New thread" : "Reply"}
+            markdownConversion={
+              composerImplementation === "tiptap-wysiwyg-markdown-chips"
+            }
             placeholder={composerPlaceholder}
             skillTokens={skillTokens}
             value={draft}

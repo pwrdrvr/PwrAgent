@@ -3699,6 +3699,49 @@ textarea {
   margin: 0;
 }
 
+.composer-tiptap-input__editor h1,
+.composer-tiptap-input__editor h2,
+.composer-tiptap-input__editor h3,
+.composer-tiptap-input__editor h4,
+.composer-tiptap-input__editor h5,
+.composer-tiptap-input__editor h6 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: inherit;
+  font-weight: 700;
+  line-height: inherit;
+}
+
+.composer-tiptap-input__editor pre {
+  margin: 2px 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.composer-tiptap-input__editor pre code {
+  font: inherit;
+}
+
+.composer-tiptap-input__editor blockquote {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.composer-tiptap-input__editor ul,
+.composer-tiptap-input__editor ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
 .composer-tiptap-input.is-empty .composer-tiptap-input__editor::before {
   content: attr(data-placeholder);
   position: absolute;

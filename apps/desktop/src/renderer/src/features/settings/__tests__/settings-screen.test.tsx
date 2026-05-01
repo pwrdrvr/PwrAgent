@@ -156,10 +156,19 @@ describe("SettingsScreen", () => {
     });
 
     fireEvent.click(within(sections).getByRole("button", { name: "Experimental" }));
-    fireEvent.click(screen.getByRole("radio", { name: "TipTap with chips" }));
+    fireEvent.click(screen.getByRole("radio", { name: "TipTap raw Markdown + chips" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { chatReplyComposer: "tiptap-chips" },
+      });
+    });
+
+    fireEvent.click(
+      screen.getByRole("radio", { name: "TipTap WYSIWYG Markdown + chips" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { chatReplyComposer: "tiptap-wysiwyg-markdown-chips" },
       });
     });
 

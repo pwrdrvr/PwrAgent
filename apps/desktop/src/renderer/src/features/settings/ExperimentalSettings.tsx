@@ -6,7 +6,11 @@ const COMPOSER_OPTIONS: Array<{
   value: DesktopChatReplyComposer;
 }> = [
   { label: "Textarea", value: "textarea" },
-  { label: "TipTap with chips", value: "tiptap-chips" },
+  { label: "TipTap raw Markdown + chips", value: "tiptap-chips" },
+  {
+    label: "TipTap WYSIWYG Markdown + chips",
+    value: "tiptap-wysiwyg-markdown-chips",
+  },
   { label: "Custom widget with chips", value: "custom-widget-chips" },
 ];
 

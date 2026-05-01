@@ -11,6 +11,9 @@ const CUSTOM_WIDGET_COMPOSER_ENV = {
 const TIPTAP_COMPOSER_ENV = {
   PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-chips",
 };
+const TIPTAP_WYSIWYG_COMPOSER_ENV = {
+  PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-wysiwyg-markdown-chips",
+};
 
 async function createDirectoryLaunchpadSkillsFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -459,6 +462,98 @@ test("directory launchpad Tiptap composer keeps placeholder on the caret line", 
     expect(Math.abs(metrics.paragraphOffsetTop - metrics.paddingTop)).toBeLessThanOrEqual(
       1,
     );
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad Tiptap raw composer keeps markdown shortcuts literal", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    env: TIPTAP_COMPOSER_ENV,
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "New thread" });
+    await textbox.focus();
+    await app.window.keyboard.type("## Heading");
+
+    await expect(tiptapInput).toHaveAttribute("data-value", "## Heading");
+    await expect(tiptapInput.locator("h2")).toHaveCount(0);
+
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await app.window.keyboard.press("Delete");
+    await app.window.keyboard.type("``` ");
+
+    await expect(tiptapInput).toHaveAttribute("data-value", "``` ");
+    await expect(tiptapInput.locator("pre")).toHaveCount(0);
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    env: TIPTAP_WYSIWYG_COMPOSER_ENV,
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    await expect(app.window.locator(".composer")).toHaveAttribute(
+      "data-composer-implementation",
+      "tiptap-wysiwyg-markdown-chips",
+    );
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "New thread" });
+    await textbox.focus();
+    await app.window.keyboard.type("## Heading");
+
+    await expect(tiptapInput.locator("h2", { hasText: "Heading" })).toBeVisible();
+    await expect(tiptapInput).toHaveAttribute("data-value", "## Heading");
+
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await app.window.keyboard.press("Delete");
+    await app.window.keyboard.type("```js ");
+    await app.window.keyboard.type("const x = 1;");
+    await app.window.keyboard.press("Shift+Enter");
+    await app.window.keyboard.type("return x;");
+
+    const codeBlock = tiptapInput.locator("pre", {
+      hasText: "const x = 1;\nreturn x;",
+    });
+    await expect(codeBlock).toBeVisible();
+    await expect(codeBlock).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      "```js\nconst x = 1;\nreturn x;\n```",
+    );
+
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await app.window.keyboard.press("Delete");
+    await app.window.keyboard.type("Before ");
+    await typeSkillChip(app, "$ce:plan", /\$ce:plan/i);
+    await app.window.keyboard.type(" after");
+
+    await expect(
+      tiptapInput.locator(".composer-tiptap-input__mention", { hasText: "$ce:plan" }),
+    ).toBeVisible();
+    await expect(tiptapInput).toHaveAttribute("data-value", "Before  after");
   } finally {
     await app.close();
     await fixture.cleanup();

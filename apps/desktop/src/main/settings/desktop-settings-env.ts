@@ -88,6 +88,7 @@ function isDesktopChatReplyComposer(
   return (
     value === "textarea"
     || value === "tiptap-chips"
+    || value === "tiptap-wysiwyg-markdown-chips"
     || value === "custom-widget-chips"
   );
 }

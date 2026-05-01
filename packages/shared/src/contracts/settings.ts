@@ -1,6 +1,7 @@
 export const DESKTOP_CHAT_REPLY_COMPOSERS = [
   "textarea",
   "tiptap-chips",
+  "tiptap-wysiwyg-markdown-chips",
   "custom-widget-chips",
 ] as const;
 

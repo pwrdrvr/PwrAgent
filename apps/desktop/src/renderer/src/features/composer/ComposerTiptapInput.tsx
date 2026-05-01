@@ -21,6 +21,22 @@ import type {
   ComposerSkillToken,
 } from "./ComposerRichInput";
 
+type ComposerTiptapInputProps = ComposerRichInputProps & {
+  markdownConversion?: boolean;
+};
+
+type TiptapReadMode = "markdown" | "text";
+
+type TiptapReadState = {
+  skillTokens: ComposerSkillToken[];
+  value: string;
+};
+
+type TiptapEditor = NonNullable<ReturnType<typeof useEditor>>;
+type ProseMirrorNode = Parameters<
+  Parameters<TiptapEditor["state"]["doc"]["forEach"]>[0]
+>[0];
+
 const SkillMention = Mention.extend({
   addAttributes() {
     return {
@@ -143,7 +159,179 @@ function mentionAttrsToSkill(
   };
 }
 
-function readTiptapContent(editor: NonNullable<ReturnType<typeof useEditor>>): {
+function getMarkdownMarkDelimiters(
+  node: ProseMirrorNode,
+): { prefix: string; suffix: string } {
+  return node.marks.reduce(
+    (delimiters, mark) => {
+      if (mark.type.name === "bold") {
+        return {
+          prefix: `${delimiters.prefix}**`,
+          suffix: `**${delimiters.suffix}`,
+        };
+      }
+      if (mark.type.name === "italic") {
+        return {
+          prefix: `${delimiters.prefix}*`,
+          suffix: `*${delimiters.suffix}`,
+        };
+      }
+      if (mark.type.name === "strike") {
+        return {
+          prefix: `${delimiters.prefix}~~`,
+          suffix: `~~${delimiters.suffix}`,
+        };
+      }
+      if (mark.type.name === "code") {
+        return {
+          prefix: `${delimiters.prefix}\``,
+          suffix: `\`${delimiters.suffix}`,
+        };
+      }
+      return delimiters;
+    },
+    { prefix: "", suffix: "" },
+  );
+}
+
+function appendMarkdownInlineContent(
+  node: ProseMirrorNode,
+  state: TiptapReadState,
+): void {
+  node.forEach((child) => {
+    if (child.isText) {
+      const delimiters = getMarkdownMarkDelimiters(child);
+      state.value += `${delimiters.prefix}${child.text ?? ""}${delimiters.suffix}`;
+      return;
+    }
+
+    if (child.type.name === "hardBreak") {
+      state.value += "\n";
+      return;
+    }
+
+    if (child.type.name === "mention") {
+      state.skillTokens.push(mentionAttrsToSkill(child.attrs, state.value.length));
+      return;
+    }
+
+    appendMarkdownInlineContent(child, state);
+  });
+}
+
+function appendMarkdownListItem(
+  node: ProseMirrorNode,
+  state: TiptapReadState,
+): void {
+  let wroteFirstBlock = false;
+  node.forEach((child) => {
+    if (wroteFirstBlock) {
+      state.value += "\n  ";
+    }
+    wroteFirstBlock = true;
+    if (child.type.name === "paragraph") {
+      appendMarkdownInlineContent(child, state);
+      return;
+    }
+    appendMarkdownBlock(child, state, 0);
+  });
+}
+
+function appendMarkdownBlock(
+  node: ProseMirrorNode,
+  state: TiptapReadState,
+  index: number,
+): void {
+  if (index > 0) {
+    state.value += "\n\n";
+  }
+
+  if (node.type.name === "paragraph") {
+    appendMarkdownInlineContent(node, state);
+    return;
+  }
+
+  if (node.type.name === "heading") {
+    const level = typeof node.attrs.level === "number" ? node.attrs.level : 1;
+    state.value += `${"#".repeat(Math.min(Math.max(level, 1), 6))} `;
+    appendMarkdownInlineContent(node, state);
+    return;
+  }
+
+  if (node.type.name === "codeBlock") {
+    const language = typeof node.attrs.language === "string" ? node.attrs.language : "";
+    state.value += `\`\`\`${language}\n${node.textContent}\n\`\`\``;
+    return;
+  }
+
+  if (node.type.name === "bulletList") {
+    node.forEach((child, _offset, listIndex) => {
+      if (listIndex > 0) {
+        state.value += "\n";
+      }
+      state.value += "- ";
+      appendMarkdownListItem(child, state);
+    });
+    return;
+  }
+
+  if (node.type.name === "orderedList") {
+    const start = typeof node.attrs.start === "number" ? node.attrs.start : 1;
+    node.forEach((child, _offset, listIndex) => {
+      if (listIndex > 0) {
+        state.value += "\n";
+      }
+      state.value += `${start + listIndex}. `;
+      appendMarkdownListItem(child, state);
+    });
+    return;
+  }
+
+  if (node.type.name === "blockquote") {
+    const quotedState: TiptapReadState = { skillTokens: [], value: "" };
+    node.forEach((child, _offset, childIndex) => {
+      appendMarkdownBlock(child, quotedState, childIndex);
+    });
+    const quoteStart = state.value.length;
+    state.value += quotedState.value
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+    quotedState.skillTokens.forEach((token) => {
+      state.skillTokens.push({ ...token, index: quoteStart + token.index + 2 });
+    });
+    return;
+  }
+
+  appendMarkdownInlineContent(node, state);
+}
+
+function readTiptapMarkdownContent(
+  editor: NonNullable<ReturnType<typeof useEditor>>,
+): {
+  skillTokens: ComposerSkillToken[];
+  value: string;
+} {
+  const state: TiptapReadState = { skillTokens: [], value: "" };
+  const nodes: ProseMirrorNode[] = [];
+  editor.state.doc.forEach((node) => {
+    nodes.push(node);
+  });
+  let lastContentIndex = nodes.length - 1;
+  while (
+    lastContentIndex >= 0 &&
+    nodes[lastContentIndex]?.type.name === "paragraph" &&
+    nodes[lastContentIndex]?.content.size === 0
+  ) {
+    lastContentIndex -= 1;
+  }
+  nodes.slice(0, lastContentIndex + 1).forEach((node, index) => {
+    appendMarkdownBlock(node, state, index);
+  });
+  return state;
+}
+
+function readTiptapTextContent(editor: NonNullable<ReturnType<typeof useEditor>>): {
   skillTokens: ComposerSkillToken[];
   value: string;
 } {
@@ -177,6 +365,18 @@ function readTiptapContent(editor: NonNullable<ReturnType<typeof useEditor>>): {
   });
 
   return { value, skillTokens };
+}
+
+function readTiptapContent(
+  editor: NonNullable<ReturnType<typeof useEditor>>,
+  mode: TiptapReadMode,
+): {
+  skillTokens: ComposerSkillToken[];
+  value: string;
+} {
+  return mode === "markdown"
+    ? readTiptapMarkdownContent(editor)
+    : readTiptapTextContent(editor);
 }
 
 function getDraftIndexAtPosition(
@@ -301,16 +501,34 @@ function getContentSignature(params: {
 
 export const ComposerTiptapInput = forwardRef<
   ComposerRichInputHandle,
-  ComposerRichInputProps
+  ComposerTiptapInputProps
 >(function ComposerTiptapInput(props, ref) {
   const propsRef = useRef(props);
   const selectionIndexRef = useRef(props.value.length);
   const pendingExternalSignatureRef = useRef<string | undefined>(undefined);
   const pendingSelectionIndexRef = useRef<number | undefined>(undefined);
+  const readMode: TiptapReadMode = props.markdownConversion ? "markdown" : "text";
   const propsSignature = getContentSignature({
     value: props.value,
     skillTokens: props.skillTokens,
   });
+  const extensions = useMemo(
+    () => [
+      props.markdownConversion
+        ? StarterKit
+        : StarterKit.configure({
+            blockquote: false,
+            bulletList: false,
+            codeBlock: false,
+            heading: false,
+            horizontalRule: false,
+            listItem: false,
+            orderedList: false,
+          }),
+      SkillMention,
+    ],
+    [props.markdownConversion],
+  );
 
   propsRef.current = props;
   const initialContent = useMemo(
@@ -342,7 +560,17 @@ export const ComposerTiptapInput = forwardRef<
           propsRef.current.onDrop?.(event as unknown as DragEvent<HTMLDivElement>);
           return event.defaultPrevented;
         },
-        keydown: (_view, event) => {
+        keydown: (view, event) => {
+          if (
+            propsRef.current.markdownConversion &&
+            event.key === "Enter" &&
+            event.shiftKey &&
+            view.state.selection.$from.parent.type.name === "codeBlock"
+          ) {
+            event.preventDefault();
+            view.dispatch(view.state.tr.insertText("\n"));
+            return true;
+          }
           propsRef.current.onKeyDown?.(event as unknown as KeyboardEvent<HTMLDivElement>);
           return event.defaultPrevented;
         },
@@ -352,9 +580,11 @@ export const ComposerTiptapInput = forwardRef<
         },
       },
     },
-    extensions: [StarterKit, SkillMention],
+    enableInputRules: props.markdownConversion ? true : false,
+    enablePasteRules: props.markdownConversion ? true : false,
+    extensions,
     onUpdate: ({ editor: nextEditor }) => {
-      const next = readTiptapContent(nextEditor);
+      const next = readTiptapContent(nextEditor, readMode);
       const pendingSignature = pendingExternalSignatureRef.current;
       if (
         pendingSignature &&
@@ -409,7 +639,7 @@ export const ComposerTiptapInput = forwardRef<
       return;
     }
 
-    const current = readTiptapContent(editor);
+    const current = readTiptapContent(editor, readMode);
     const currentSignature = getContentSignature(current);
     if (currentSignature === propsSignature) {
       pendingExternalSignatureRef.current = undefined;
@@ -431,7 +661,7 @@ export const ComposerTiptapInput = forwardRef<
         getPositionAtDraftIndex(editor, nextSelectionIndex),
       );
     }
-  }, [editor, props.skillTokens, props.value, propsSignature]);
+  }, [editor, props.skillTokens, props.value, propsSignature, readMode]);
 
   useEffect(() => {
     if (!editor) {
@@ -464,7 +694,10 @@ export const ComposerTiptapInput = forwardRef<
       editor?.commands.deleteSelection();
     },
     focus: () => {
-      if (editor && getContentSignature(readTiptapContent(editor)) !== propsSignature) {
+      if (
+        editor &&
+        getContentSignature(readTiptapContent(editor, readMode)) !== propsSignature
+      ) {
         pendingExternalSignatureRef.current = propsSignature;
       }
       editor?.commands.focus();
@@ -479,7 +712,7 @@ export const ComposerTiptapInput = forwardRef<
       if (!editor) {
         return;
       }
-      const current = readTiptapContent(editor);
+      const current = readTiptapContent(editor, readMode);
       if (getContentSignature(current) !== propsSignature) {
         pendingExternalSignatureRef.current = propsSignature;
         pendingSelectionIndexRef.current = start;
