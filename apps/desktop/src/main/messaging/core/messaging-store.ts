@@ -152,6 +152,29 @@ export class MessagingStore {
     );
   }
 
+  async findActivePendingIntentsForRequest(params: {
+    backend: MessagingBindingRecord["backend"];
+    threadId: MessagingBindingRecord["threadId"];
+    requestId: string;
+    now?: number;
+  }): Promise<MessagingPendingIntentRecord[]> {
+    const now = params.now ?? Date.now();
+    return await this.withReadData((data) =>
+      Object.values(data.pendingIntents)
+        .filter((intent) => {
+          const requestContext = intent.intent.requestContext;
+          return (
+            intent.expiresAt > now &&
+            requestContext?.backend === params.backend &&
+            requestContext.threadId === params.threadId &&
+            requestContext.requestId === params.requestId
+          );
+        })
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map((intent) => structuredClone(intent)),
+    );
+  }
+
   async deletePendingIntent(id: string): Promise<void> {
     await this.withData((data) => {
       delete data.pendingIntents[id];

@@ -181,6 +181,10 @@ export class MessagingController {
     if (!threadId) {
       return;
     }
+    if (event.notification.method === "serverRequest/resolved") {
+      await this.handleBackendRequestResolved(event);
+      return;
+    }
 
     const bindings = await this.options.store.findActiveBindingsForThread({
       backend: event.backend,
@@ -567,15 +571,38 @@ export class MessagingController {
     });
   }
 
+  private async handleBackendRequestResolved(event: AgentEvent): Promise<void> {
+    if (event.notification.method !== "serverRequest/resolved") {
+      return;
+    }
+
+    const pendingIntents =
+      await this.options.store.findActivePendingIntentsForRequest({
+        backend: event.backend,
+        threadId: event.notification.params.threadId,
+        requestId: event.notification.params.requestId,
+        now: this.now(),
+      });
+
+    for (const pendingIntent of pendingIntents) {
+      await this.retireApprovalIntent(pendingIntent);
+      await this.options.store.deletePendingIntent(pendingIntent.id);
+    }
+  }
+
   private async retireApprovalIntent(
     pendingIntent: MessagingPendingIntentRecord,
-    event: MessagingInboundCallbackEvent,
+    event?: MessagingInboundCallbackEvent,
   ): Promise<void> {
     if (pendingIntent.intent.kind !== "approval") {
       return;
     }
 
-    const targetSurface = pendingIntent.surface ?? event.interaction;
+    const targetSurface = pendingIntent.surface ?? event?.interaction;
+    if (!targetSurface) {
+      return;
+    }
+
     try {
       await this.deliver(
         {
@@ -1652,6 +1679,20 @@ export class MessagingController {
       bindingId: binding?.id ?? intent.bindingId,
       intentId: routedIntent.id,
     });
+    if (binding && isPermanentMessagingTargetFailure(result)) {
+      await this.options.store.revokeBinding({
+        bindingId: binding.id,
+        revokedAt: this.now(),
+      });
+      this.logger.debug?.("messaging binding revoked after permanent delivery failure", {
+        bindingId: binding.id,
+        channel: binding.channel.channel,
+        conversationId: binding.channel.conversation.id,
+        errorMessage: result.errorMessage,
+        outcome: result.outcome,
+        threadId: binding.threadId,
+      });
+    }
     return result;
   }
 
@@ -1768,6 +1809,13 @@ function compactLogPreview(text: string, limit = 96): string {
   const compact = text.replace(/\s+/g, " ").trim();
   const preview = compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
   return preview.replace(/["\\]/g, "\\$&");
+}
+
+function isPermanentMessagingTargetFailure(result: MessagingDeliveryResult): boolean {
+  return (
+    result.outcome === "failed" &&
+    Boolean(result.errorMessage?.match(/\bUnknown Channel\b|chat not found/i))
+  );
 }
 
 function assistantMessageDeliveryKey(event: AgentEvent, text: string): string {

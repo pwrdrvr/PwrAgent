@@ -6,6 +6,7 @@ import type {
   AgentEvent,
   AppServerPendingRequestNotification,
   ListBackendsResponse,
+  MessagingDeliveryResult,
   MessagingInboundCallbackEvent,
   MessagingInboundEvent,
   MessagingInboundTextEvent,
@@ -645,6 +646,52 @@ describe("MessagingController", () => {
     expect(harness.delivered).toEqual([]);
   });
 
+  it("revokes stale bindings when a delivery target no longer exists", async () => {
+    const harness = await createHarness({
+      deliver: async () => ({
+        channel: "discord",
+        deliveredAt: 1000,
+        outcome: "failed",
+        errorMessage: "DiscordAPIError[10003]: Unknown Channel",
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:discord:channel::discord-channel:codex:thread-1",
+      channel: {
+        channel: "discord",
+        conversation: {
+          id: "discord-channel",
+          kind: "channel",
+        },
+      },
+      backend: "codex",
+      threadId: "thread-1",
+      authorizedActorIds: ["user-1"],
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+          },
+        },
+      },
+    });
+
+    await expect(
+      harness.store.getBinding("binding:discord:channel::discord-channel:codex:thread-1"),
+    ).resolves.toMatchObject({
+      revokedAt: 1000,
+    });
+  });
+
   it("presents Plan questionnaires as semantic questionnaire intents", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(
@@ -789,6 +836,55 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: "Approval response sent.",
+    });
+  });
+
+  it("clears approval buttons after the backend resolves the request elsewhere", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        prompt: "Run tests?",
+        command: "/bin/zsh -lc 'pnpm test -- messaging-controller'",
+      },
+    });
+    const approvalIntent = harness.delivered.find((intent) => intent.kind === "approval");
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: "approval-1",
+        },
+      },
+    });
+
+    expect(harness.submitServerRequest).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "approval",
+      decisions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+        fallback: "fail",
+      },
+      targetSurface: {
+        id: `surface:${approvalIntent?.id}`,
+      },
     });
   });
 
@@ -1005,7 +1101,9 @@ describe("MessagingController", () => {
   });
 });
 
-async function createHarness(): Promise<{
+async function createHarness(options?: {
+  deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
+}): Promise<{
   controller: MessagingController;
   compactThread: ReturnType<typeof vi.fn>;
   delivered: MessagingSurfaceIntent[];
@@ -1022,20 +1120,23 @@ async function createHarness(): Promise<{
   const store = await createStore();
   const delivered: MessagingSurfaceIntent[] = [];
   const adapter: MessagingAdapter = {
-    deliver: vi.fn(async (intent) => {
-      delivered.push(intent);
-      return {
-        channel: "telegram" as const,
-        deliveredAt: 1000,
-        outcome: intent.kind === "status" && intent.delivery?.pin
-          ? "pinned" as const
-          : "presented" as const,
-        surface: {
-          channel: "telegram" as const,
-          id: `surface:${intent.id}`,
-        },
-      };
-    }),
+    deliver: vi.fn(
+      options?.deliver ??
+        (async (intent) => {
+          delivered.push(intent);
+          return {
+            channel: "telegram" as const,
+            deliveredAt: 1000,
+            outcome: intent.kind === "status" && intent.delivery?.pin
+              ? "pinned" as const
+              : "presented" as const,
+            surface: {
+              channel: "telegram" as const,
+              id: `surface:${intent.id}`,
+            },
+          };
+        }),
+    ),
   };
   const getNavigationSnapshot = vi.fn(async () => buildNavigationSnapshot());
   const startThread = vi.fn(async (request: StartThreadRequest) => ({
