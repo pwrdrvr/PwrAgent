@@ -3533,7 +3533,7 @@ textarea {
 
 .composer__queued {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
@@ -3568,6 +3568,35 @@ textarea {
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.composer__queued-images {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.composer__queued-image,
+.composer__queued-image-count {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-hover);
+}
+
+.composer__queued-image {
+  object-fit: cover;
+}
+
+.composer__queued-image-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .composer__queued-actions {
