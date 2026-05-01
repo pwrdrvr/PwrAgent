@@ -81,6 +81,12 @@ describe("App", () => {
           apiKey: { configured: false, source: "unset", writable: true },
         },
       },
+      applications: {
+        editors: [],
+        terminals: [],
+        preferredEditorId: { value: "", source: "default" },
+        preferredTerminalId: { value: "", source: "default" },
+      },
     } satisfies DesktopSettingsSnapshot;
 
     Object.defineProperty(window, "pwragnt", {

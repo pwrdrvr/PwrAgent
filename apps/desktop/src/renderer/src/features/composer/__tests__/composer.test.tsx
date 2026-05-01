@@ -81,6 +81,85 @@ function backendSummary(
 }
 
 describe("Composer", () => {
+  it("opens the current workspace in discovered applications", async () => {
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+
+    render(
+      <Composer
+        applications={{
+          editors: [
+            {
+              id: "vscode",
+              kind: "editor",
+              name: "VS Code",
+              source: "application",
+              appPath: "/Applications/Visual Studio Code.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [
+            {
+              id: "terminal",
+              kind: "terminal",
+              name: "Terminal",
+              source: "application",
+              appPath: "/System/Applications/Utilities/Terminal.app",
+              canOpenWorkspace: true,
+            },
+            {
+              id: "ghostty",
+              kind: "terminal",
+              name: "Ghostty",
+              source: "application",
+              appPath: "/Applications/Ghostty.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          preferredEditorId: { value: "", source: "default" },
+          preferredTerminalId: { value: "ghostty", source: "config" },
+        }}
+        backends={[backendSummary("codex")]}
+        desktopApi={{ openApplication }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Application launch",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              kind: "local",
+              label: "PwrAgnt",
+              path: "/repo/PwrAgnt",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenCalledWith({
+        applicationId: "vscode",
+        kind: "editor",
+        targetPath: "/repo/PwrAgnt",
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Ghostty" }));
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenCalledWith({
+        applicationId: "ghostty",
+        kind: "terminal",
+        targetPath: "/repo/PwrAgnt",
+      });
+    });
+  });
+
   it("shows an orange moon for reported context window usage", () => {
     render(
       <Composer
@@ -1336,10 +1415,35 @@ describe("Composer", () => {
 
   it("shows handoff to local for existing worktree threads", async () => {
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
 
-    render(
+    const { rerender } = render(
       <Composer
+        applications={{
+          editors: [
+            {
+              id: "vscode",
+              kind: "editor",
+              name: "VS Code",
+              source: "application",
+              appPath: "/Applications/Visual Studio Code.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+          preferredEditorId: { value: "", source: "default" },
+          preferredTerminalId: { value: "", source: "default" },
+        }}
         backends={[backendSummary("codex")]}
+        desktopApi={{ openApplication }}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/repo",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+        }}
         onHandoffThreadWorkspace={onHandoffThreadWorkspace}
         skills={[]}
         thread={{
@@ -1363,6 +1467,15 @@ describe("Composer", () => {
       />
     );
 
+    fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenLastCalledWith({
+        applicationId: "vscode",
+        kind: "editor",
+        targetPath: "/repo/.worktrees/pwragnt-feature",
+      });
+    });
+
     fireEvent.click(screen.getByLabelText("Workspace mode"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
     expect(screen.getByRole("dialog", { name: "Handoff to Local" })).toBeInTheDocument();
@@ -1375,6 +1488,64 @@ describe("Composer", () => {
         sourcePath: "/repo/.worktrees/pwragnt-feature",
         sourceBranch: "feature/handoff",
         leaveLocalBranch: undefined,
+      });
+    });
+
+    rerender(
+      <Composer
+        applications={{
+          editors: [
+            {
+              id: "vscode",
+              kind: "editor",
+              name: "VS Code",
+              source: "application",
+              appPath: "/Applications/Visual Studio Code.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+          preferredEditorId: { value: "", source: "default" },
+          preferredTerminalId: { value: "", source: "default" },
+        }}
+        backends={[backendSummary("codex")]}
+        desktopApi={{ openApplication }}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/repo",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+        }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Worktree thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          gitBranch: "feature/handoff",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgnt",
+              path: "/repo",
+              kind: "local",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenLastCalledWith({
+        applicationId: "vscode",
+        kind: "editor",
+        targetPath: "/repo",
       });
     });
   });

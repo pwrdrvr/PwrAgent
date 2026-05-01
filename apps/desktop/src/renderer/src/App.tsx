@@ -138,6 +138,7 @@ function DesktopAppShell(props: {
           addOptimisticUserMessage={session.addOptimisticUserMessage}
           backendError={backendSummaries.error}
           backends={backendSummaries.backends}
+          applications={settings.snapshot?.applications}
           clearPendingRequest={session.clearPendingRequest}
           composerDisabled={
             !navigation.selectedThread ||

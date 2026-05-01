@@ -6,6 +6,8 @@ const registerAppServerIpcHandlersMock = vi.fn();
 const disposeAppServerIpcHandlersMock = vi.fn();
 const registerAgentIpcHandlersMock = vi.fn();
 const disposeAgentIpcHandlersMock = vi.fn();
+const registerApplicationIpcHandlersMock = vi.fn();
+const disposeApplicationIpcHandlersMock = vi.fn();
 const registerImageNormalizationIpcHandlersMock = vi.fn();
 const disposeImageNormalizationIpcHandlersMock = vi.fn();
 const registerPreloadLogIpcHandlersMock = vi.fn();
@@ -64,6 +66,11 @@ vi.mock("../ipc/agent-ipc", () => ({
   disposeAgentIpcHandlers: disposeAgentIpcHandlersMock,
 }));
 
+vi.mock("../ipc/applications", () => ({
+  registerApplicationIpcHandlers: registerApplicationIpcHandlersMock,
+  disposeApplicationIpcHandlers: disposeApplicationIpcHandlersMock,
+}));
+
 vi.mock("../ipc/image-normalization", () => ({
   registerImageNormalizationIpcHandlers: registerImageNormalizationIpcHandlersMock,
   disposeImageNormalizationIpcHandlers: disposeImageNormalizationIpcHandlersMock,
@@ -110,6 +117,8 @@ describe("bootstrapApp", () => {
     disposeAppServerIpcHandlersMock.mockReset();
     registerAgentIpcHandlersMock.mockReset();
     disposeAgentIpcHandlersMock.mockReset();
+    registerApplicationIpcHandlersMock.mockReset();
+    disposeApplicationIpcHandlersMock.mockReset();
     registerImageNormalizationIpcHandlersMock.mockReset();
     disposeImageNormalizationIpcHandlersMock.mockReset();
     registerPreloadLogIpcHandlersMock.mockReset();
@@ -162,6 +171,7 @@ describe("bootstrapApp", () => {
     });
     expect(registerAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerAgentIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(registerApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerImageNormalizationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerPreloadLogIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerRendererErrorIpcHandlersMock).toHaveBeenCalledTimes(1);
@@ -202,6 +212,7 @@ describe("bootstrapApp", () => {
     expect(registerRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
 
     appEventHandlers.get("before-quit")?.();
+    expect(disposeApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
   });

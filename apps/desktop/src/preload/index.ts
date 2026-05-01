@@ -55,6 +55,8 @@ import type {
   SubmitServerRequestResponse,
   ClearDesktopSettingsSecretRequest,
   DesktopSettingsWriteResponse,
+  OpenDesktopApplicationRequest,
+  OpenDesktopApplicationResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
@@ -95,6 +97,7 @@ import {
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
+  APPLICATION_OPEN_CHANNEL,
   BACKEND_LIST_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
@@ -179,6 +182,10 @@ const desktopApi = Object.freeze({
     request?: RefreshDesktopCodexDiscoveryRequest,
   ): Promise<ReadDesktopSettingsResponse> =>
     await ipcRenderer.invoke(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL, request),
+  openApplication: async (
+    request: OpenDesktopApplicationRequest,
+  ): Promise<OpenDesktopApplicationResponse> =>
+    await ipcRenderer.invoke(APPLICATION_OPEN_CHANNEL, request),
   readThread: async (
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> =>

@@ -47,3 +47,4 @@ export const SETTINGS_REPLACE_SECRET_CHANNEL = "settings:replace-secret";
 export const SETTINGS_CLEAR_SECRET_CHANNEL = "settings:clear-secret";
 export const SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL =
   "settings:refresh-codex-discovery";
+export const APPLICATION_OPEN_CHANNEL = "application:open";

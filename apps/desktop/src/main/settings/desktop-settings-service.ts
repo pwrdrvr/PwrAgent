@@ -33,6 +33,7 @@ import {
   readEnvString,
 } from "./desktop-settings-env";
 import { discoverCodexCommands } from "./codex-discovery";
+import { discoverDesktopApplications } from "./application-discovery";
 
 type DesktopSettingsServiceOptions = {
   configPath?: string;
@@ -81,6 +82,13 @@ export class DesktopSettingsService {
       configuredCommand: config.models?.codex?.path,
       env: this.env,
     });
+    const applications = await discoverDesktopApplications({ env: this.env });
+    const preferredEditorId = this.resolveConfigString(
+      config.applications?.editor?.preferredId,
+    );
+    const preferredTerminalId = this.resolveConfigString(
+      config.applications?.terminal?.preferredId,
+    );
 
     return {
       fetchedAt: this.now(),
@@ -143,6 +151,11 @@ export class DesktopSettingsService {
         grok: {
           apiKey: grokApiKey,
         },
+      },
+      applications: {
+        ...applications,
+        preferredEditorId,
+        preferredTerminalId,
       },
     };
   }
@@ -260,6 +273,15 @@ export class DesktopSettingsService {
       };
     }
 
+    return {
+      value: configValue ?? "",
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveConfigString(
+    configValue: string | undefined,
+  ): DesktopSettingsValue<string> {
     return {
       value: configValue ?? "",
       source: configValue === undefined ? "default" : "config",

@@ -15,6 +15,8 @@ import type {
   AppServerThreadImagePart,
   AppServerTurnInputItem,
   BackendSummary,
+  DesktopApplicationDiscoveryCandidate,
+  DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   HandoffThreadWorkspaceRequest,
   NavigationDirectorySummary,
@@ -45,6 +47,7 @@ type ComposerProps = {
     imageParts?: AppServerThreadImagePart[]
   ) => string;
   backends?: BackendSummary[];
+  applications?: DesktopApplicationsSnapshot;
   desktopApi?: DesktopApi;
   directory?: NavigationDirectorySummary;
   disabled?: boolean;
@@ -539,6 +542,39 @@ function ComposerDropdown(props: {
   );
 }
 
+function ComposerApplicationButton(props: {
+  application: DesktopApplicationDiscoveryCandidate;
+  label: string;
+  onOpen: (application: DesktopApplicationDiscoveryCandidate) => Promise<void>;
+}) {
+  return (
+    <button
+      className="composer__application-button"
+      title={`Open workspace in ${props.application.name}`}
+      type="button"
+      onClick={() => {
+        void props.onOpen(props.application);
+      }}
+    >
+      {props.application.iconDataUrl ? (
+        <img
+          alt=""
+          className="composer__application-icon"
+          src={props.application.iconDataUrl}
+        />
+      ) : (
+        <span
+          aria-hidden="true"
+          className="composer__application-icon composer__application-icon--fallback"
+        >
+          {props.application.name.slice(0, 1)}
+        </span>
+      )}
+      <span>{props.label}</span>
+    </button>
+  );
+}
+
 export function Composer(props: ComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(undefined);
@@ -571,6 +607,7 @@ export function Composer(props: ComposerProps) {
   const [pendingSteer, setPendingSteer] = useState<PendingSteerDraft>();
   const [activeTurnId, setActiveTurnId] = useState<string | undefined>(undefined);
   const [sendError, setSendError] = useState<string>();
+  const [applicationOpenError, setApplicationOpenError] = useState<string>();
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>([]);
   const [planModeEnabled, setPlanModeEnabled] = useState(false);
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
@@ -1609,6 +1646,25 @@ export function Composer(props: ComposerProps) {
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
   const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
+  const workspaceOpenPath = getComposerWorkspaceOpenPath({
+    directory: props.directory,
+    launchpad: props.launchpad,
+    threadWorkspace,
+  });
+  const editorApplication = props.applications?.editors.find(
+    (application) =>
+      application.canOpenWorkspace &&
+      application.id === props.applications?.preferredEditorId.value,
+  ) ?? props.applications?.editors.find(
+    (application) => application.canOpenWorkspace,
+  );
+  const terminalApplication = props.applications?.terminals.find(
+    (application) =>
+      application.canOpenWorkspace &&
+      application.id === props.applications?.preferredTerminalId.value,
+  ) ?? props.applications?.terminals.find(
+    (application) => application.canOpenWorkspace,
+  );
   const sourceBranch =
     props.directory?.gitStatus?.currentBranch ??
     props.thread?.observedGitBranch ??
@@ -1665,6 +1721,30 @@ export function Composer(props: ComposerProps) {
       setHandoffError(error instanceof Error ? error.message : String(error));
     } finally {
       setHandoffSubmitting(false);
+    }
+  };
+
+  const openWorkspaceApplication = async (
+    application: DesktopApplicationDiscoveryCandidate,
+  ): Promise<void> => {
+    if (!props.desktopApi?.openApplication) {
+      setApplicationOpenError("Desktop bridge is missing openApplication().");
+      return;
+    }
+    if (!workspaceOpenPath) {
+      setApplicationOpenError("No workspace path is available for this thread.");
+      return;
+    }
+
+    setApplicationOpenError(undefined);
+    try {
+      await props.desktopApi.openApplication({
+        applicationId: application.id,
+        kind: application.kind,
+        targetPath: workspaceOpenPath,
+      });
+    } catch (error) {
+      setApplicationOpenError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -2478,6 +2558,9 @@ export function Composer(props: ComposerProps) {
         <p className="composer__meta composer__meta--error">{props.launchpadError}</p>
       ) : null}
       {sendError ? <p className="composer__meta composer__meta--error">{sendError}</p> : null}
+      {applicationOpenError ? (
+        <p className="composer__meta composer__meta--error">{applicationOpenError}</p>
+      ) : null}
       {props.setExecutionModeError ? (
         <p className="composer__meta composer__meta--error">
           {props.setExecutionModeError}
@@ -2512,40 +2595,63 @@ export function Composer(props: ComposerProps) {
         </p>
       ) : null}
 
-      <div className="composer__actions">
-        <ContextWindowMoon contextWindow={props.contextWindow} />
-        {activeTurnId ? (
+      <div className="composer__footer">
+        {workspaceOpenPath && (editorApplication || terminalApplication) ? (
+          <div className="composer__application-actions" aria-label="Open workspace">
+            {editorApplication ? (
+              <ComposerApplicationButton
+                application={editorApplication}
+                label={editorApplication.name}
+                onOpen={openWorkspaceApplication}
+              />
+            ) : null}
+            {terminalApplication ? (
+              <ComposerApplicationButton
+                application={terminalApplication}
+                label={terminalApplication.name}
+                onOpen={openWorkspaceApplication}
+              />
+            ) : null}
+          </div>
+        ) : (
+          <span aria-hidden="true" className="composer__footer-spacer" />
+        )}
+
+        <div className="composer__actions">
+          <ContextWindowMoon contextWindow={props.contextWindow} />
+          {activeTurnId ? (
+            <button
+              className="button button--ghost"
+              disabled={props.disabled || interrupting}
+              type="button"
+              onClick={() => {
+                void stopTurn();
+              }}
+            >
+              {interrupting ? "Stopping…" : "Stop"}
+            </button>
+          ) : null}
           <button
-            className="button button--ghost"
-            disabled={props.disabled || interrupting}
-            type="button"
-            onClick={() => {
-              void stopTurn();
-            }}
+            className="button button--primary"
+            disabled={
+              props.disabled ||
+              steering ||
+              (!activeTurnId && sending) ||
+              (!draft.trim() && imageAttachments.length === 0)
+            }
+            type="submit"
           >
-            {interrupting ? "Stopping…" : "Stop"}
+            {activeTurnId
+              ? "Queue"
+              : sending
+              ? props.launchpad
+                ? "Starting…"
+                : "Sending…"
+              : props.launchpad
+                ? "Start thread"
+                : "Send"}
           </button>
-        ) : null}
-        <button
-          className="button button--primary"
-          disabled={
-            props.disabled ||
-            steering ||
-            (!activeTurnId && sending) ||
-            (!draft.trim() && imageAttachments.length === 0)
-          }
-          type="submit"
-        >
-          {activeTurnId
-            ? "Queue"
-            : sending
-            ? props.launchpad
-              ? "Starting…"
-              : "Sending…"
-            : props.launchpad
-              ? "Start thread"
-              : "Send"}
-        </button>
+        </div>
       </div>
     </form>
   );
@@ -2852,6 +2958,18 @@ type ThreadWorkspace = {
   repositoryPath: string;
   sourcePath: string;
 };
+
+function getComposerWorkspaceOpenPath(params: {
+  directory?: NavigationDirectorySummary;
+  launchpad?: NavigationLaunchpadDraft;
+  threadWorkspace?: ThreadWorkspace;
+}): string | undefined {
+  return (
+    params.launchpad?.directoryPath ??
+    params.threadWorkspace?.sourcePath ??
+    params.directory?.path
+  );
+}
 
 function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | undefined {
   const worktreeDirectory = thread.linkedDirectories.find(

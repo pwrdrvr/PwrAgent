@@ -70,6 +70,41 @@ function createSnapshot(
         apiKey: { configured: false, source: "unset", writable: true },
       },
     },
+    applications: {
+      editors: [
+        {
+          id: "vscode",
+          kind: "editor",
+          name: "VS Code",
+          source: "application",
+          appPath: "/Applications/Visual Studio Code.app",
+          iconDataUrl: "data:image/png;base64,editor",
+          canOpenWorkspace: true,
+        },
+      ],
+      terminals: [
+        {
+          id: "terminal",
+          kind: "terminal",
+          name: "Terminal",
+          source: "application",
+          appPath: "/System/Applications/Utilities/Terminal.app",
+          iconDataUrl: "data:image/png;base64,terminal",
+          canOpenWorkspace: true,
+        },
+        {
+          id: "ghostty",
+          kind: "terminal",
+          name: "Ghostty",
+          source: "application",
+          appPath: "/Applications/Ghostty.app",
+          iconDataUrl: "data:image/png;base64,terminal",
+          canOpenWorkspace: true,
+        },
+      ],
+      preferredEditorId: { value: "", source: "default" },
+      preferredTerminalId: { value: "", source: "default" },
+    },
     ...overrides,
   };
 }
@@ -95,11 +130,32 @@ describe("SettingsScreen", () => {
     render(<SettingsScreen settings={settings} onClose={() => undefined} />);
 
     const sections = screen.getByRole("navigation", { name: "Settings sections" });
-    expect(within(sections).getByRole("button", { name: "Experimental" })).toHaveAttribute(
+    expect(within(sections).getByRole("button", { name: "Applications" })).toHaveAttribute(
       "aria-current",
       "page",
     );
 
+    expect(screen.getByRole("heading", { name: "Editor" })).toBeInTheDocument();
+    expect(screen.getByText("VS Code")).toBeInTheDocument();
+    expect(screen.getByText("/Applications/Visual Studio Code.app")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Terminal" })).toBeInTheDocument();
+    expect(screen.getAllByText("Terminal").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("/System/Applications/Utilities/Terminal.app")).toBeInTheDocument();
+    expect(screen.getByText("Ghostty")).toBeInTheDocument();
+    expect(screen.getByText("/Applications/Ghostty.app")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        applications: {
+          terminal: {
+            preferredId: "ghostty",
+          },
+        },
+      });
+    });
+
+    fireEvent.click(within(sections).getByRole("button", { name: "Experimental" }));
     fireEvent.click(screen.getByRole("radio", { name: "TipTap with chips" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -133,6 +189,12 @@ describe("SettingsScreen", () => {
         },
       });
     });
+
+    fireEvent.click(within(sections).getByRole("button", { name: "Applications" }));
+    expect(within(sections).getByRole("button", { name: "Experimental" })).not.toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 
   it("returns to the previous app surface", () => {

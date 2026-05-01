@@ -65,6 +65,12 @@ describe("desktop settings contracts", () => {
           },
         },
       },
+      applications: {
+        editors: [],
+        terminals: [],
+        preferredEditorId: { value: "", source: "default" },
+        preferredTerminalId: { value: "", source: "default" },
+      },
     };
 
     const encoded = JSON.stringify(snapshot);

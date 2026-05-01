@@ -1,5 +1,9 @@
 import { app, BrowserWindow, Menu, shell } from "electron";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
+import {
+  disposeApplicationIpcHandlers,
+  registerApplicationIpcHandlers,
+} from "./ipc/applications";
 import { disposeAppServerIpcHandlers, registerAppServerIpcHandlers } from "./ipc/app-server";
 import {
   disposeImageNormalizationIpcHandlers,
@@ -59,6 +63,7 @@ export function bootstrapApp(): void {
     installApplicationMenu();
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();
+    registerApplicationIpcHandlers();
     registerImageNormalizationIpcHandlers();
     registerPreloadLogIpcHandlers();
     registerRendererErrorIpcHandlers();
@@ -87,6 +92,7 @@ export function bootstrapApp(): void {
 
   app.on("before-quit", () => {
     disposeAgentIpcHandlers();
+    disposeApplicationIpcHandlers();
     disposeImageNormalizationIpcHandlers();
     disposePreloadLogIpcHandlers();
     disposeSettingsIpcHandlers();
