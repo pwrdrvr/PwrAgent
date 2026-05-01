@@ -376,6 +376,62 @@ describe("Composer", () => {
     });
   });
 
+  it("shows queued image thumbnails while a turn is active", async () => {
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-2",
+    }));
+    const imageFile = new File([new Uint8Array([1, 2, 3])], "queued.png", {
+      type: "image/png",
+    });
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Active image turn",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => imageFile,
+          },
+        ],
+      },
+    });
+
+    expect(await screen.findByAltText("queued.png")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("1 image")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Queued image attachments: 1")
+    ).toBeInTheDocument();
+    expect(screen.getByAltText("queued.png")).toBeInTheDocument();
+  });
+
   it("steers Command Enter during an active turn when supported", async () => {
     let agentEventHandler:
       | ((event: {

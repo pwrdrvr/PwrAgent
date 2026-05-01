@@ -1,4 +1,5 @@
 import {
+  type ReactNode,
   type ClipboardEvent,
   type DragEvent,
   useEffect,
@@ -336,6 +337,38 @@ function formatDraftPreview(draft: QueuedTurnDraft): string {
   return `${draft.imageAttachments.length} image${
     draft.imageAttachments.length === 1 ? "" : "s"
   }`;
+}
+
+function QueuedImageAttachments(props: {
+  attachments: ComposerImageAttachment[];
+}): ReactNode {
+  if (props.attachments.length === 0) {
+    return null;
+  }
+
+  const visibleAttachments = props.attachments.slice(0, 3);
+  const overflowCount = props.attachments.length - visibleAttachments.length;
+
+  return (
+    <div
+      className="composer__queued-images"
+      aria-label={`Queued image attachments: ${props.attachments.length}`}
+    >
+      {visibleAttachments.map((attachment, index) => (
+        <img
+          className="composer__queued-image"
+          key={attachment.id}
+          src={attachment.url}
+          alt={formatPastedImageAlt(attachment, index)}
+        />
+      ))}
+      {overflowCount > 0 ? (
+        <span className="composer__queued-image-count">
+          +{overflowCount}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 function collectTextFragments(value: unknown): string[] {
@@ -1656,6 +1689,7 @@ export function Composer(props: ComposerProps) {
               {formatDraftPreview(pendingSteer)}
             </span>
           </div>
+          <QueuedImageAttachments attachments={pendingSteer.imageAttachments} />
           <div className="composer__queued-actions">
             {pendingSteer.status === "pending" ? (
               <>
@@ -1694,6 +1728,7 @@ export function Composer(props: ComposerProps) {
               {formatDraftPreview(queuedTurn)}
             </span>
           </div>
+          <QueuedImageAttachments attachments={queuedTurn.imageAttachments} />
           <div className="composer__queued-actions">
             {supportsSteering ? (
               <button
