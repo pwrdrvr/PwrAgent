@@ -1299,10 +1299,33 @@ describe("Composer", () => {
 
   it("shows handoff to local for existing worktree threads", async () => {
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
 
-    render(
+    const { rerender } = render(
       <Composer
+        applications={{
+          editors: [
+            {
+              id: "vscode",
+              kind: "editor",
+              name: "VS Code",
+              source: "application",
+              appPath: "/Applications/Visual Studio Code.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+        }}
         backends={[backendSummary("codex")]}
+        desktopApi={{ openApplication }}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/repo",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+        }}
         onHandoffThreadWorkspace={onHandoffThreadWorkspace}
         skills={[]}
         thread={{
@@ -1326,6 +1349,15 @@ describe("Composer", () => {
       />
     );
 
+    fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenLastCalledWith({
+        applicationId: "vscode",
+        kind: "editor",
+        targetPath: "/repo/.worktrees/pwragnt-feature",
+      });
+    });
+
     fireEvent.click(screen.getByLabelText("Workspace mode"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
     expect(screen.getByRole("dialog", { name: "Handoff to Local" })).toBeInTheDocument();
@@ -1338,6 +1370,62 @@ describe("Composer", () => {
         sourcePath: "/repo/.worktrees/pwragnt-feature",
         sourceBranch: "feature/handoff",
         leaveLocalBranch: undefined,
+      });
+    });
+
+    rerender(
+      <Composer
+        applications={{
+          editors: [
+            {
+              id: "vscode",
+              kind: "editor",
+              name: "VS Code",
+              source: "application",
+              appPath: "/Applications/Visual Studio Code.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+        }}
+        backends={[backendSummary("codex")]}
+        desktopApi={{ openApplication }}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/repo",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+        }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Worktree thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          gitBranch: "feature/handoff",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgnt",
+              path: "/repo",
+              kind: "local",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenLastCalledWith({
+        applicationId: "vscode",
+        kind: "editor",
+        targetPath: "/repo",
       });
     });
   });

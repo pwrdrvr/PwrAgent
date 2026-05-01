@@ -2912,8 +2912,8 @@ function getComposerWorkspaceOpenPath(params: {
 }): string | undefined {
   return (
     params.launchpad?.directoryPath ??
-    params.directory?.path ??
-    params.threadWorkspace?.sourcePath
+    params.threadWorkspace?.sourcePath ??
+    params.directory?.path
   );
 }
 
