@@ -1665,6 +1665,10 @@ export class DesktopBackendRegistry {
         executionMode,
         ...modelSettings,
       };
+      const identityChanged =
+        normalizedExisting.directoryKind !== request.directoryKind ||
+        normalizedExisting.directoryLabel !== request.directoryLabel ||
+        normalizedExisting.directoryPath !== request.directoryPath;
 
       if (isEmptyDirectoryLaunchpadDraft(existing)) {
         const refreshed: NavigationLaunchpadDraft = {
@@ -1689,6 +1693,7 @@ export class DesktopBackendRegistry {
       }
 
       if (
+        identityChanged ||
         normalizedExisting.backend !== existing.backend ||
         normalizedExisting.executionMode !== existing.executionMode ||
         normalizedExisting.model !== existing.model ||
@@ -1699,6 +1704,9 @@ export class DesktopBackendRegistry {
         return {
           launchpad: await this.overlayStore.upsertDirectoryLaunchpad({
             ...normalizedExisting,
+            directoryKind: request.directoryKind,
+            directoryLabel: request.directoryLabel,
+            directoryPath: request.directoryPath,
             updatedAt: Date.now(),
           }),
           defaults,

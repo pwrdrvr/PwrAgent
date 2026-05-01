@@ -1034,6 +1034,51 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("repairs stale non-empty launchpad directory metadata when reopened", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: { prompt: "Already drafted" },
+    });
+
+    const reopened = await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+      currentBranch: "main",
+    });
+
+    expect(reopened.launchpad).toMatchObject({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+      prompt: "Already drafted",
+    });
+    await expect(
+      overlayStore.getDirectoryLaunchpad({ directoryKey: "directory:/repo-a" }),
+    ).resolves.toMatchObject({
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+
+    await registry.close();
+  });
+
   it("does not rewrite sticky defaults when only pending prompt data is saved", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({

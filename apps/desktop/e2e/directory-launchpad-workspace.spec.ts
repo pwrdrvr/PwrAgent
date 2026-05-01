@@ -404,6 +404,54 @@ test("directory launchpad draft save does not leak the directory key into projec
   }
 });
 
+test("directory launchpad repairs stale drafts that saved the internal directory key as the label", async () => {
+  const fixture = await createDirectoryLaunchpadFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    const rootDir = path.dirname(fixture.fixturePath);
+    const repoDir = path.join(rootDir, "FixtureRepo");
+    const directoryKey = `directory:${repoDir}`;
+
+    await app.window.evaluate(async (key) => {
+      await (window as any).pwragnt.updateDirectoryLaunchpad({
+        directoryKey: key,
+        patch: {
+          prompt: "A stale draft that already has content",
+        },
+      });
+    }, directoryKey);
+
+    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window
+      .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
+    ).toBeVisible();
+    await expect(app.window.getByText(/^directory:/)).toHaveCount(0);
+
+    await expect
+      .poll(async () => {
+        const overlay = await readOverlayState(app.homeRoot);
+        return overlay.directoryLaunchpads?.[directoryKey];
+      })
+      .toMatchObject({
+        directoryKey,
+        directoryKind: "directory",
+        directoryLabel: "FixtureRepo",
+        directoryPath: repoDir,
+        prompt: "A stale draft that already has content",
+      });
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("directory launchpad keeps full access as the sticky default after user changes access mode", async () => {
   const fixture = await createDirectoryLaunchpadFixture();
   const app = await launchElectronApp({

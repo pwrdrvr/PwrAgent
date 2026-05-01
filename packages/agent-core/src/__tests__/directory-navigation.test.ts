@@ -94,6 +94,61 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("uses the directory basename when a linked thread label is an internal directory key", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "directory:/Users/huntharo/github/PwrAgnt",
+              path: "/Users/huntharo/github/PwrAgnt",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "directory:/Users/huntharo/github/PwrAgnt",
+        label: "PwrAgnt",
+      }),
+    ]);
+  });
+
+  it("normalizes stale launchpad labels that contain internal directory keys", () => {
+    const directories = buildDirectorySummaries({
+      threads: [],
+      launchpadsByKey: {
+        "directory:/Users/huntharo/github/PwrAgnt": {
+          directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+          directoryKind: "directory",
+          directoryLabel: "directory:/Users/huntharo/github/PwrAgnt",
+          directoryPath: "/Users/huntharo/github/PwrAgnt",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Existing draft",
+          workMode: "local",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      },
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "directory:/Users/huntharo/github/PwrAgnt",
+        label: "PwrAgnt",
+        launchpad: expect.objectContaining({
+          directoryLabel: "PwrAgnt",
+          prompt: "Existing draft",
+        }),
+      }),
+    ]);
+  });
+
   it("ignores opened-only launchpads with no pending data or touched settings", () => {
     const directories = buildDirectorySummaries({
       threads: [],
