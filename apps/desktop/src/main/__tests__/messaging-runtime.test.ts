@@ -106,6 +106,103 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
+  it("routes backend approval requests to bound channel adapters", async () => {
+    const { runtime, adapter, emitBackendEvent } = await createRuntimeHarness();
+
+    await runtime.start();
+    await adapter.listener?.(
+      buildCallbackEvent("bind:codex:thread-1", {
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    );
+    adapter.delivered.length = 0;
+
+    await emitBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "approval-1",
+          prompt: "Run tests?",
+          command: "pnpm test -- messaging-runtime",
+        },
+      },
+    });
+
+    expect(adapter.delivered.find((intent) => intent.kind === "approval"))
+      .toMatchObject({
+        kind: "approval",
+        requestContext: {
+          backend: "codex",
+          requestId: "approval-1",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      });
+    expect(adapter.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      status: "waiting",
+    });
+  });
+
+  it("routes backend user-input requests to bound channel adapters", async () => {
+    const { runtime, adapter, emitBackendEvent } = await createRuntimeHarness();
+
+    await runtime.start();
+    await adapter.listener?.(
+      buildCallbackEvent("bind:codex:thread-1", {
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    );
+    adapter.delivered.length = 0;
+
+    await emitBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "input-1",
+          questions: [
+            {
+              id: "q1",
+              header: "Mode",
+              question: "How should I proceed?",
+              isOther: true,
+              isSecret: false,
+              options: [
+                {
+                  label: "Implement",
+                  description: "Start coding.",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(adapter.delivered.find((intent) => intent.kind === "questionnaire"))
+      .toMatchObject({
+        kind: "questionnaire",
+        requestContext: {
+          backend: "codex",
+          requestId: "input-1",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      });
+    expect(adapter.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      status: "waiting",
+    });
+  });
+
   it("logs rejected inbound actor ids before returning the authorization error", async () => {
     const { runtime, adapter } = await createRuntimeHarness();
 

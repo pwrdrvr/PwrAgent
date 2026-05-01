@@ -1,7 +1,7 @@
 import { MessagingController } from "./core/messaging-controller";
 import type { MessagingStore } from "./core/messaging-store";
 import type { MessagingBackendBridge } from "./core/messaging-adapter";
-import type { AgentEvent } from "@pwragnt/shared";
+import type { AgentEvent, AppServerPendingRequestNotification } from "@pwragnt/shared";
 import type {
   MessagingDeliveryResult,
   MessagingInboundEvent,
@@ -106,7 +106,14 @@ export class DesktopMessagingRuntime {
       await Promise.all(
         this.controllers.map(async (controller) => {
           try {
-            await controller.handleBackendEvent(event);
+            if (isMessagingPendingRequest(event.notification)) {
+              await controller.handleBackendPendingRequest(
+                event.backend,
+                event.notification,
+              );
+            } else {
+              await controller.handleBackendEvent(event);
+            }
           } catch (error) {
             messagingLog.error("messaging controller failed to handle backend event", {
               backend: event.backend,
@@ -171,4 +178,14 @@ function createConfiguredAdapters(params: {
   store: MessagingStore;
 }): Promise<DesktopMessagingAdapter[]> {
   return loadConfiguredMessagingAdapters(params);
+}
+
+function isMessagingPendingRequest(
+  notification: AgentEvent["notification"],
+): notification is AppServerPendingRequestNotification {
+  if (notification.method === "item/tool/requestUserInput") {
+    return true;
+  }
+
+  return notification.method.toLowerCase().includes("requestapproval");
 }
