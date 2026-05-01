@@ -22,6 +22,27 @@ function pathBaseName(value?: string): string {
   return parts.at(-1) ?? normalized;
 }
 
+function isInternalDirectoryLabel(value?: string): boolean {
+  return Boolean(value?.startsWith("directory:") || value?.startsWith("workspace:"));
+}
+
+function displayDirectoryLabel(params: {
+  kind?: DirectoryDescriptor["kind"];
+  label?: string;
+  path?: string;
+}): string {
+  const label = params.label?.trim();
+  if (label && !isInternalDirectoryLabel(label)) {
+    return label;
+  }
+
+  if (params.kind === "workspace") {
+    return "Workspaces";
+  }
+
+  return pathBaseName(params.path) || label || "Directory";
+}
+
 function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescriptor {
   const scratchWorkspaceMatch = directory.path.match(
     /^(.*[\\/]\.pwragnt[\\/]projects)[\\/][^\\/]+$/,
@@ -64,7 +85,11 @@ function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescript
   return {
     key: `directory:${directory.path}`,
     kind: "directory",
-    label: directory.label,
+    label: displayDirectoryLabel({
+      kind: "directory",
+      label: directory.label,
+      path: directory.path,
+    }),
     path: directory.path,
   };
 }
@@ -190,10 +215,21 @@ export function buildDirectorySummaries(params: {
     const summary = ensureSummary(summaries, {
       key: directoryKey,
       kind: launchpad.directoryKind,
-      label: launchpad.directoryLabel,
+      label: displayDirectoryLabel({
+        kind: launchpad.directoryKind,
+        label: launchpad.directoryLabel,
+        path: launchpad.directoryPath,
+      }),
       path: launchpad.directoryPath,
     });
-    summary.launchpad = launchpad;
+    summary.launchpad = {
+      ...launchpad,
+      directoryLabel: displayDirectoryLabel({
+        kind: launchpad.directoryKind,
+        label: launchpad.directoryLabel,
+        path: launchpad.directoryPath,
+      }),
+    };
     summary.latestUpdatedAt = Math.max(summary.latestUpdatedAt ?? 0, launchpad.updatedAt);
   }
 
