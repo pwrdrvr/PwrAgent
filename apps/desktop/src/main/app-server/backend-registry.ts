@@ -1451,7 +1451,7 @@ export class DesktopBackendRegistry {
 
     const result =
       params.backend === "codex"
-        ? await this.withCodexThreadClient(params.threadId, steerWithClient)
+        ? await this.withActiveCodexThreadClient(params.threadId, steerWithClient)
         : await steerWithClient(this.grokClient);
 
     return {
@@ -2189,6 +2189,30 @@ export class DesktopBackendRegistry {
     }
 
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  private async withActiveCodexThreadClient<T>(
+    threadId: string,
+    operation: (client: BackendClient, mode: ThreadExecutionMode) => Promise<T>,
+  ): Promise<T> {
+    const activeMode = this.findActiveCodexThreadMode(threadId);
+    if (activeMode) {
+      return await operation(this.getClient("codex", activeMode), activeMode);
+    }
+
+    return await this.withCodexThreadClient(threadId, operation);
+  }
+
+  private findActiveCodexThreadMode(threadId: string): ThreadExecutionMode | undefined {
+    const keyPrefix = `${threadId}:`;
+    const modes = new Set<ThreadExecutionMode>();
+    for (const [key, mode] of this.activeCodexTurnModes.entries()) {
+      if (key.startsWith(keyPrefix)) {
+        modes.add(mode);
+      }
+    }
+
+    return modes.size === 1 ? [...modes][0] : undefined;
   }
 
   private async archiveWithClient(

@@ -411,6 +411,29 @@ function isSteerInjectionOpportunity(method: string): boolean {
   return method === "item/completed" || method === "exec_command/ended";
 }
 
+function parseStaleSteerError(
+  error: unknown
+): { activeTurnId?: string; active: boolean } | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  if (normalized.includes("no active turn to steer")) {
+    return { active: false };
+  }
+
+  const activeTurnMatch = message.match(/found `([^`]+)`/);
+  if (
+    normalized.includes("expected active turn id") &&
+    activeTurnMatch?.[1]
+  ) {
+    return {
+      active: true,
+      activeTurnId: activeTurnMatch[1],
+    };
+  }
+
+  return undefined;
+}
+
 function HighlightedAutocompleteLabel(props: {
   label: string;
   query: string;
@@ -1189,6 +1212,25 @@ export function Composer(props: ComposerProps) {
         input: payload.input,
       });
     } catch (error) {
+      const staleSteer = parseStaleSteerError(error);
+      if (staleSteer) {
+        if (queuedTurn) {
+          setDraft(pending.text);
+          setImageAttachments(pending.imageAttachments);
+        } else {
+          setQueuedTurn({
+            text: pending.text,
+            imageAttachments: pending.imageAttachments,
+          });
+        }
+        setPendingSteer(undefined);
+        setSendError(undefined);
+        const nextActiveTurnId = staleSteer.active ? staleSteer.activeTurnId : undefined;
+        updateActiveTurnId(nextActiveTurnId);
+        props.onActiveTurnIdChange?.(nextActiveTurnId);
+        props.onPendingStatusChange?.(staleSteer.active ? "Thinking" : undefined);
+        return;
+      }
       setPendingSteer((current) =>
         current?.text === pending.text &&
         current.imageAttachments === pending.imageAttachments
