@@ -275,6 +275,8 @@ export async function discoverDesktopApplications(params?: {
     terminals: terminals.filter(
       (candidate): candidate is DesktopApplicationDiscoveryCandidate => Boolean(candidate),
     ),
+    preferredEditorId: { value: "", source: "default" },
+    preferredTerminalId: { value: "", source: "default" },
   };
 }
 

@@ -12,17 +12,17 @@ import { useState } from "react";
 type SettingsSection = "experimental" | "messaging" | "models" | "applications";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
-  { id: "experimental", label: "Experimental" },
+  { id: "applications", label: "Applications" },
   { id: "messaging", label: "Messaging" },
   { id: "models", label: "Models" },
-  { id: "applications", label: "Applications" },
+  { id: "experimental", label: "Experimental" },
 ];
 
 export function SettingsScreen(props: {
   settings: DesktopSettingsState;
   onClose?: () => void;
 }) {
-  const [section, setSection] = useState<SettingsSection>("experimental");
+  const [section, setSection] = useState<SettingsSection>("applications");
   const snapshot = props.settings.snapshot;
 
   return (
@@ -165,7 +165,20 @@ function SettingsSectionBody(props: {
   }
 
   if (props.section === "applications") {
-    return <ApplicationsSettings snapshot={props.snapshot} />;
+    return (
+      <ApplicationsSettings
+        saving={props.settings.saving}
+        snapshot={props.snapshot}
+        onPreferredApplicationChange={async (kind, preferredId) => {
+          await props.settings.writeConfig({
+            applications:
+              kind === "editor"
+                ? { editor: { preferredId } }
+                : { terminal: { preferredId } },
+          });
+        }}
+      />
+    );
   }
 
   return (

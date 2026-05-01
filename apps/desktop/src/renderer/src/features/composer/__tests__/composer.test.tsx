@@ -99,6 +99,14 @@ describe("Composer", () => {
           ],
           terminals: [
             {
+              id: "terminal",
+              kind: "terminal",
+              name: "Terminal",
+              source: "application",
+              appPath: "/System/Applications/Utilities/Terminal.app",
+              canOpenWorkspace: true,
+            },
+            {
               id: "ghostty",
               kind: "terminal",
               name: "Ghostty",
@@ -107,6 +115,8 @@ describe("Composer", () => {
               canOpenWorkspace: true,
             },
           ],
+          preferredEditorId: { value: "", source: "default" },
+          preferredTerminalId: { value: "ghostty", source: "config" },
         }}
         backends={[backendSummary("codex")]}
         desktopApi={{ openApplication }}
@@ -1315,6 +1325,8 @@ describe("Composer", () => {
             },
           ],
           terminals: [],
+          preferredEditorId: { value: "", source: "default" },
+          preferredTerminalId: { value: "", source: "default" },
         }}
         backends={[backendSummary("codex")]}
         desktopApi={{ openApplication }}
@@ -1387,6 +1399,8 @@ describe("Composer", () => {
             },
           ],
           terminals: [],
+          preferredEditorId: { value: "", source: "default" },
+          preferredTerminalId: { value: "", source: "default" },
         }}
         backends={[backendSummary("codex")]}
         desktopApi={{ openApplication }}

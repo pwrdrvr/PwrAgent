@@ -1463,13 +1463,17 @@ textarea {
 
 .settings-application {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 10px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   background: var(--bg-input);
+}
+
+.settings-application.is-selected {
+  border-color: var(--accent-border);
 }
 
 .settings-application__icon {

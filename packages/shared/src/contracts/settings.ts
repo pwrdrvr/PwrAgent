@@ -82,6 +82,8 @@ export type DesktopApplicationDiscoveryCandidate = {
 export type DesktopApplicationsSnapshot = {
   editors: DesktopApplicationDiscoveryCandidate[];
   terminals: DesktopApplicationDiscoveryCandidate[];
+  preferredEditorId: DesktopSettingsValue<string>;
+  preferredTerminalId: DesktopSettingsValue<string>;
 };
 
 export type DesktopSettingsSnapshot = {
@@ -141,6 +143,14 @@ export type DesktopSettingsConfigPatch = {
   models?: {
     codex?: {
       path?: string;
+    };
+  };
+  applications?: {
+    editor?: {
+      preferredId?: string;
+    };
+    terminal?: {
+      preferredId?: string;
     };
   };
 };

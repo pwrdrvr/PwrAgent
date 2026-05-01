@@ -1609,9 +1609,17 @@ export function Composer(props: ComposerProps) {
     threadWorkspace,
   });
   const editorApplication = props.applications?.editors.find(
+    (application) =>
+      application.canOpenWorkspace &&
+      application.id === props.applications?.preferredEditorId.value,
+  ) ?? props.applications?.editors.find(
     (application) => application.canOpenWorkspace,
   );
   const terminalApplication = props.applications?.terminals.find(
+    (application) =>
+      application.canOpenWorkspace &&
+      application.id === props.applications?.preferredTerminalId.value,
+  ) ?? props.applications?.terminals.find(
     (application) => application.canOpenWorkspace,
   );
   const sourceBranch =

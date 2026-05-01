@@ -41,6 +41,12 @@ describe("DesktopSettingsService", () => {
         "",
         "[models.codex]",
         'path = "codex-beta"',
+        "",
+        "[applications.editor]",
+        'preferred_id = "vscode"',
+        "",
+        "[applications.terminal]",
+        'preferred_id = "ghostty"',
       ].join("\n"),
       "utf8",
     );
@@ -77,6 +83,14 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.messaging.discord.messageContentIntent.value).toBe(true);
     expect(snapshot.models.codex.path).toEqual({
       value: "codex-beta",
+      source: "config",
+    });
+    expect(snapshot.applications.preferredEditorId).toEqual({
+      value: "vscode",
+      source: "config",
+    });
+    expect(snapshot.applications.preferredTerminalId).toEqual({
+      value: "ghostty",
       source: "config",
     });
   });
@@ -168,6 +182,11 @@ describe("DesktopSettingsService", () => {
           path: "codex",
         },
       },
+      applications: {
+        terminal: {
+          preferredId: "ghostty",
+        },
+      },
     });
     await service.replaceSecret("telegramBotToken", "123456789:secret-token");
 
@@ -176,6 +195,8 @@ describe("DesktopSettingsService", () => {
 
     expect(contents).toContain("[messaging.telegram]");
     expect(contents).toContain('authorized_user_ids = ["111111111"]');
+    expect(contents).toContain("[applications.terminal]");
+    expect(contents).toContain('preferred_id = "ghostty"');
     expect(contents).not.toContain("123456789:secret-token");
     expect(JSON.stringify(snapshot)).not.toContain("123456789:secret-token");
     expect(snapshot.messaging.telegram.botToken).toMatchObject({

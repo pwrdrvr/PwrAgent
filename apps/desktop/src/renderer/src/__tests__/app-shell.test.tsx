@@ -84,6 +84,8 @@ describe("App", () => {
       applications: {
         editors: [],
         terminals: [],
+        preferredEditorId: { value: "", source: "default" },
+        preferredTerminalId: { value: "", source: "default" },
       },
     } satisfies DesktopSettingsSnapshot;
 

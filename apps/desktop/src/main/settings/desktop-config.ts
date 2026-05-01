@@ -33,6 +33,14 @@ export type DesktopSettingsConfig = {
       path?: string;
     };
   };
+  applications?: {
+    editor?: {
+      preferredId?: string;
+    };
+    terminal?: {
+      preferredId?: string;
+    };
+  };
 };
 
 type TomlScalar = string | boolean | string[];
@@ -101,6 +109,16 @@ export function mergeDesktopSettingsConfig(
       codex: {
         ...current.models?.codex,
         ...patch.models?.codex,
+      },
+    },
+    applications: {
+      editor: {
+        ...current.applications?.editor,
+        ...patch.applications?.editor,
+      },
+      terminal: {
+        ...current.applications?.terminal,
+        ...patch.applications?.terminal,
       },
     },
   });
@@ -211,6 +229,26 @@ export function stringifyDesktopSettingsToml(
     );
   }
 
+  const editor = config.applications?.editor;
+  if (editor?.preferredId !== undefined) {
+    sections.push(
+      [
+        "[applications.editor]",
+        `preferred_id = ${formatTomlValue(editor.preferredId)}`,
+      ].join("\n"),
+    );
+  }
+
+  const terminal = config.applications?.terminal;
+  if (terminal?.preferredId !== undefined) {
+    sections.push(
+      [
+        "[applications.terminal]",
+        `preferred_id = ${formatTomlValue(terminal.preferredId)}`,
+      ].join("\n"),
+    );
+  }
+
   return sections.join("\n\n").concat(sections.length ? "\n" : "");
 }
 
@@ -221,6 +259,8 @@ function normalizeDesktopConfig(
   const telegram = tables["messaging.telegram"];
   const discord = tables["messaging.discord"];
   const codex = tables["models.codex"];
+  const editor = tables["applications.editor"];
+  const terminal = tables["applications.terminal"];
 
   return pruneEmptyConfig({
     experimental: {
@@ -243,6 +283,14 @@ function normalizeDesktopConfig(
     models: {
       codex: {
         path: readString(codex?.path),
+      },
+    },
+    applications: {
+      editor: {
+        preferredId: readString(editor?.preferred_id),
+      },
+      terminal: {
+        preferredId: readString(terminal?.preferred_id),
       },
     },
   });
@@ -273,6 +321,21 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const codex = config.models?.codex;
   if (codex && hasDefinedValue(codex)) {
     pruned.models = { codex };
+  }
+
+  const editor = config.applications?.editor;
+  const terminal = config.applications?.terminal;
+  if (
+    (editor && hasDefinedValue(editor))
+    || (terminal && hasDefinedValue(terminal))
+  ) {
+    pruned.applications = {};
+    if (editor && hasDefinedValue(editor)) {
+      pruned.applications.editor = editor;
+    }
+    if (terminal && hasDefinedValue(terminal)) {
+      pruned.applications.terminal = terminal;
+    }
   }
 
   return pruned;
