@@ -255,92 +255,111 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return await this.deliverActivity(intent, target);
     }
 
-    const components = buildDiscordComponents(
-      actionsForDiscordIntent(intent),
-      (action) => this.createCustomId(intent, action),
-      intent.actionLayout,
-    );
-    const imageUrl = this.firstImageUrl(intent);
-    const chunks = splitDiscordContent(textForDiscordIntent(intent) || " ");
-    const componentPayload =
-      components ?? (intent.delivery?.replaceMarkup ? [] : undefined);
-
-    if (
-      target.applicationId &&
-      target.interactionToken &&
-      chunks.length === 1 &&
-      !imageUrl
-    ) {
-      const message = await this.api.updateInteractionOriginalResponse(
-        target.applicationId,
-        target.interactionToken,
-        {
-          allowed_mentions: defensiveAllowedMentions(),
-          components: componentPayload,
-          content: chunks[0] ?? " ",
-        },
+    try {
+      const components = buildDiscordComponents(
+        actionsForDiscordIntent(intent),
+        (action) => this.createCustomId(intent, action),
+        intent.actionLayout,
       );
-      return {
-        channel: this.channel,
-        deliveredAt: this.now(),
-        outcome: "updated",
-        surface: this.surfaceForMessage(message, target),
-      };
-    }
+      const imageUrl = this.firstImageUrl(intent);
+      const chunks = splitDiscordContent(textForDiscordIntent(intent) || " ");
+      const componentPayload =
+        components ?? (intent.delivery?.replaceMarkup ? [] : undefined);
 
-    if (
-      intent.delivery?.mode === "update" &&
-      target.messageId &&
-      chunks.length === 1 &&
-      !imageUrl
-    ) {
-      try {
-        const message = await this.api.updateMessage(target.channelId, target.messageId, {
-          allowed_mentions: defensiveAllowedMentions(),
-          components: componentPayload,
-          content: chunks[0] ?? " ",
-        });
+      if (
+        target.applicationId &&
+        target.interactionToken &&
+        chunks.length === 1 &&
+        !imageUrl
+      ) {
+        const message = await this.api.updateInteractionOriginalResponse(
+          target.applicationId,
+          target.interactionToken,
+          {
+            allowed_mentions: defensiveAllowedMentions(),
+            components: componentPayload,
+            content: chunks[0] ?? " ",
+          },
+        );
         return {
           channel: this.channel,
           deliveredAt: this.now(),
           outcome: "updated",
           surface: this.surfaceForMessage(message, target),
         };
-      } catch (error) {
-        if (intent.delivery.fallback !== "present_new") {
-          throw error;
+      }
+
+      if (
+        intent.delivery?.mode === "update" &&
+        target.messageId &&
+        chunks.length === 1 &&
+        !imageUrl
+      ) {
+        try {
+          const message = await this.api.updateMessage(
+            target.channelId,
+            target.messageId,
+            {
+              allowed_mentions: defensiveAllowedMentions(),
+              components: componentPayload,
+              content: chunks[0] ?? " ",
+            },
+          );
+          return {
+            channel: this.channel,
+            deliveredAt: this.now(),
+            outcome: "updated",
+            surface: this.surfaceForMessage(message, target),
+          };
+        } catch (error) {
+          if (intent.delivery.fallback !== "present_new") {
+            throw error;
+          }
         }
       }
-    }
 
-    const messages: DiscordMessage[] = [];
+      const messages: DiscordMessage[] = [];
 
-    for (const [index, chunk] of chunks.entries()) {
-      const request: DiscordCreateMessageRequest = {
-        allowed_mentions: defensiveAllowedMentions(),
-        components: index === chunks.length - 1 ? components : undefined,
-        content: chunk,
-        embeds:
-          index === chunks.length - 1 && imageUrl
-            ? [
-                {
-                  image: {
-                    url: imageUrl,
+      for (const [index, chunk] of chunks.entries()) {
+        const request: DiscordCreateMessageRequest = {
+          allowed_mentions: defensiveAllowedMentions(),
+          components: index === chunks.length - 1 ? components : undefined,
+          content: chunk,
+          embeds:
+            index === chunks.length - 1 && imageUrl
+              ? [
+                  {
+                    image: {
+                      url: imageUrl,
+                    },
                   },
-                },
-              ]
-            : undefined,
-      };
-      messages.push(await this.api.createMessage(target.channelId, request));
-    }
+                ]
+              : undefined,
+        };
+        messages.push(await this.api.createMessage(target.channelId, request));
+      }
 
-    const lastMessage = messages.at(-1);
-    return {
-      channel: this.channel,
-      deliveredAt: this.now(),
-      outcome: intent.delivery?.mode === "update" ? "presented_new" : "presented",
-      surface: lastMessage ? this.surfaceForMessage(lastMessage, target) : undefined,
-    };
+      const lastMessage = messages.at(-1);
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome:
+          intent.delivery?.mode === "update" ? "presented_new" : "presented",
+        surface: lastMessage ? this.surfaceForMessage(lastMessage, target) : undefined,
+      };
+    } catch (error) {
+      const message = errorMessage(error);
+      this.options.logger?.warn?.(
+        `discord deliver failed kind=${intent.kind} channel=${target.channelId} error=${message}`,
+      );
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: message,
+        outcome: "failed",
+        surface: intent.targetSurface,
+      };
+    }
   }
 
   async handleGatewayEvent(event: DiscordGatewayEvent): Promise<void> {
