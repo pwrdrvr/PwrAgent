@@ -35,7 +35,7 @@ afterEach(async () => {
 });
 
 describe("DiscordAdapter", () => {
-  it("normalizes /threads and renders a picker with components", async () => {
+  it("normalizes /resume and renders a picker with components", async () => {
     const harness = await createControllerHarness();
 
     await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
@@ -46,7 +46,7 @@ describe("DiscordAdapter", () => {
           username: "ada",
         },
         channel_id: "channel-1",
-        content: "/threads",
+        content: "/resume",
         guild_id: "guild-1",
         id: "message-1",
       },
@@ -243,7 +243,7 @@ describe("DiscordAdapter", () => {
           username: "ada",
         },
         channel_id: "channel-1",
-        content: "/threads",
+        content: "/resume",
         guild_id: "guild-1",
         id: "message-1",
       },
@@ -360,7 +360,7 @@ describe("DiscordAdapter", () => {
           username: "ada",
         },
         channel_id: "channel-1",
-        content: "/threads",
+        content: "/resume",
         guild_id: "guild-1",
         id: "message-3",
       },

@@ -36,10 +36,10 @@ afterEach(async () => {
 });
 
 describe("MessagingController", () => {
-  it("presents a channel-neutral thread picker for authorized /threads commands", async () => {
+  it("presents a channel-neutral thread picker for authorized /resume commands", async () => {
     const harness = await createHarness();
 
-    await harness.controller.handleInboundEvent(buildCommandEvent("/threads"));
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
 
     expect(harness.delivered).toHaveLength(1);
     expect(harness.delivered[0]).toMatchObject({
@@ -145,7 +145,7 @@ describe("MessagingController", () => {
     );
 
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/threads").channel),
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "thread-1",
@@ -166,12 +166,12 @@ describe("MessagingController", () => {
 
   it("maps text fallback replies against pending picker actions", async () => {
     const harness = await createHarness();
-    await harness.controller.handleInboundEvent(buildCommandEvent("/threads"));
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
 
     await harness.controller.handleInboundEvent(buildTextEvent("1"));
 
     await expect(
-      harness.store.findActiveBindingForChannel(buildCommandEvent("/threads").channel),
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "thread-1",
@@ -374,7 +374,7 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
-        actionId: "command:threads",
+        actionId: "command:resume",
       }),
     );
 
@@ -384,11 +384,23 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not treat legacy /threads as a resume alias", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/threads"));
+
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "PwrAgnt",
+    });
+  });
+
   it("rejects unauthorized actors without revealing thread data", async () => {
     const harness = await createHarness();
 
     await harness.controller.handleInboundEvent(
-      buildCommandEvent("/threads", {
+      buildCommandEvent("/resume", {
         platformUserId: "other-user",
         username: "Mutable Username",
       }),

@@ -267,12 +267,7 @@ export class MessagingController {
       await this.detachBinding(event);
       return;
     }
-    if (
-      command === "resume" ||
-      command === "threads" ||
-      command === "thread" ||
-      command === "bind"
-    ) {
+    if (command === "resume") {
       await this.presentResumeBrowser(event);
       return;
     }

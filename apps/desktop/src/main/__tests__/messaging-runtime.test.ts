@@ -52,7 +52,7 @@ describe("DesktopMessagingRuntime", () => {
     const { runtime, adapter, bridge } = await createRuntimeHarness();
 
     await runtime.start();
-    await adapter.listener?.(buildCommandEvent("/threads"));
+    await adapter.listener?.(buildCommandEvent("/resume"));
 
     expect(adapter.start).toHaveBeenCalledTimes(1);
     expect(bridge.getNavigationSnapshot).toHaveBeenCalledWith({
@@ -110,7 +110,7 @@ describe("DesktopMessagingRuntime", () => {
     const { runtime, adapter } = await createRuntimeHarness();
 
     await runtime.start();
-    const event = buildCommandEvent("/threads");
+    const event = buildCommandEvent("/resume");
     event.actor = {
       displayName: "Other User",
       platformUserId: "user-2",

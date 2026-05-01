@@ -36,7 +36,7 @@ afterEach(async () => {
 });
 
 describe("TelegramAdapter", () => {
-  it("normalizes /threads and renders a thread picker with inline keyboard handles", async () => {
+  it("normalizes /resume and renders a thread picker with inline keyboard handles", async () => {
     const harness = await createControllerHarness();
 
     await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
@@ -55,7 +55,7 @@ describe("TelegramAdapter", () => {
           username: "mutable_username",
         },
         message_id: 100,
-        text: "/threads",
+        text: "/resume",
       },
     });
 
@@ -416,20 +416,12 @@ describe("TelegramAdapter", () => {
           description: "Resume or start a PwrAgnt thread",
         },
         {
-          command: "threads",
-          description: "Choose a PwrAgnt thread",
-        },
-        {
           command: "status",
           description: "Show the current PwrAgnt binding",
         },
         {
           command: "detach",
           description: "Detach this chat from PwrAgnt",
-        },
-        {
-          command: "bind",
-          description: "Bind this chat to a PwrAgnt thread",
         },
       ],
     });
@@ -653,7 +645,7 @@ describe("TelegramAdapter", () => {
           is_bot: false,
         },
         message_id: 100,
-        text: "/threads",
+        text: "/resume",
       },
     });
     const callbackData =
@@ -712,7 +704,7 @@ describe("TelegramAdapter", () => {
           is_bot: false,
         },
         message_id: 100,
-        text: "/threads",
+        text: "/resume",
       },
     });
     const callbackData =
@@ -829,7 +821,7 @@ describe("TelegramAdapter", () => {
           username: "mutable_username",
         },
         message_id: 103,
-        text: "/threads",
+        text: "/resume",
       },
     });
 

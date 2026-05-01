@@ -266,20 +266,12 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           description: "Resume or start a PwrAgnt thread",
         },
         {
-          command: "threads",
-          description: "Choose a PwrAgnt thread",
-        },
-        {
           command: "status",
           description: "Show the current PwrAgnt binding",
         },
         {
           command: "detach",
           description: "Detach this chat from PwrAgnt",
-        },
-        {
-          command: "bind",
-          description: "Bind this chat to a PwrAgnt thread",
         },
       ],
     });
