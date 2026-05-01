@@ -163,6 +163,7 @@ test("keeps a thread reply draft after opening settings and returning to the thr
   try {
     const draft = "$ce:plan keep this draft through settings";
     const reply = app.window.getByRole("textbox", { name: "Reply" });
+    const replyValue = app.window.getByTestId("composer-tiptap-input");
 
     await app.window
       .getByRole("button", { name: /Draft survives settings thread/i })
@@ -192,7 +193,7 @@ test("keeps a thread reply draft after opening settings and returning to the thr
       .getByRole("button", { name: /Draft survives settings thread/i })
       .first()
       .click();
-    await expect(reply).toHaveValue(draft);
+    await expect(replyValue).toHaveAttribute("data-value", draft);
 
     await app.window.getByRole("button", { name: "Open settings" }).click();
     await expect(
@@ -222,7 +223,7 @@ test("keeps a thread reply draft after opening settings and returning to the thr
         name: "Draft survives settings thread",
       }),
     ).toBeVisible();
-    await expect(reply).toHaveValue(draft);
+    await expect(replyValue).toHaveAttribute("data-value", draft);
   } finally {
     await app.close();
     await fixture.cleanup();
