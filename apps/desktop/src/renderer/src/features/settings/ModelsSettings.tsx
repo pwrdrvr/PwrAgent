@@ -8,11 +8,11 @@ import { formatSourceLabel, sourceBadge } from "./settings-fields";
 export function ModelsSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
-  onClearSecret: (secret: DesktopSettingsSecretName) => Promise<void>;
+  onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
   onReplaceSecret: (
     secret: DesktopSettingsSecretName,
     value: string,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   onSaveCodexPath: (path: string) => Promise<void>;
 }) {
   const [codexPath, setCodexPath] = useState(props.snapshot.models.codex.path.value);
@@ -79,6 +79,7 @@ export function ModelsSettings(props: {
         </div>
         <div className="settings-secret">
           <input
+            aria-label="Grok API Key"
             className="settings-input"
             disabled={props.saving || !grok.writable}
             placeholder="••••••••"
@@ -92,8 +93,11 @@ export function ModelsSettings(props: {
             type="button"
             onClick={() => {
               const nextValue = grokKey.trim();
-              setGrokKey("");
-              void props.onReplaceSecret("grokApiKey", nextValue);
+              void props.onReplaceSecret("grokApiKey", nextValue).then((saved) => {
+                if (saved) {
+                  setGrokKey("");
+                }
+              });
             }}
           >
             Replace

@@ -1053,9 +1053,9 @@ export class GrokAppServerClient {
 
     loadLocalEnv({ override: false });
     const runtimeConfig = resolveGrokAppServerRuntimeConfig();
-    const apiKey = this.options.apiKey?.trim() || runtimeConfig.apiKey;
+    const apiKey = this.options.apiKey?.trim();
     if (!apiKey) {
-      throw new Error("grok app server unavailable: XAI_API_KEY is not set");
+      throw new Error("grok app server unavailable: Grok API key is not set");
     }
 
     const provider = new GrokProvider({

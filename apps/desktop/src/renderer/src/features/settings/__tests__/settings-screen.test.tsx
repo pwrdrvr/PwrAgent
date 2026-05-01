@@ -71,14 +71,14 @@ function createSettingsState(
   snapshot = createSnapshot(),
 ): DesktopSettingsState {
   return {
-    clearSecret: vi.fn(async () => undefined),
+    clearSecret: vi.fn(async () => true),
     composerImplementation: snapshot.experimental.chatReplyComposer.value,
     loading: false,
     refresh: vi.fn(async () => undefined),
-    replaceSecret: vi.fn(async () => undefined),
+    replaceSecret: vi.fn(async () => true),
     saving: false,
     snapshot,
-    writeConfig: vi.fn(async () => undefined),
+    writeConfig: vi.fn(async () => true),
   };
 }
 
@@ -116,5 +116,45 @@ describe("SettingsScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
 
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a secret draft when replacement fails", async () => {
+    const settings = createSettingsState();
+    settings.replaceSecret = vi.fn(async () => false);
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Messaging" }));
+    const tokenInput = screen.getAllByLabelText("Bot Token")[0];
+    fireEvent.change(tokenInput, {
+      target: { value: "123456789:secret-token" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Replace" })[0]);
+
+    await waitFor(() => {
+      expect(settings.replaceSecret).toHaveBeenCalledWith(
+        "telegramBotToken",
+        "123456789:secret-token",
+      );
+    });
+    expect(tokenInput).toHaveValue("123456789:secret-token");
+  });
+
+  it("blocks settings edits when the config file cannot be parsed", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState(
+          createSnapshot({
+            configError: "line 3: expected a key",
+            configPath: "/tmp/pwragnt/config.toml",
+          }),
+        )}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Settings config did not load");
+    expect(screen.getByRole("alert")).toHaveTextContent("line 3: expected a key");
+    expect(screen.getByRole("alert")).toHaveTextContent("/tmp/pwragnt/config.toml");
+    expect(screen.queryByRole("radio", { name: "TipTap with chips" })).not.toBeInTheDocument();
   });
 });

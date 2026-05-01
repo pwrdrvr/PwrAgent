@@ -45,26 +45,71 @@ describe("XaiEphemeralObjectCaller", () => {
   });
 
   it("returns unavailable when no xAI credentials are configured", async () => {
-    const caller = new XaiEphemeralObjectCaller({
-      resolveRuntimeConfig: () => ({
-        apiKey: undefined,
-        baseUrl: undefined,
-        model: "grok-4.20-reasoning",
-        configPath: "/tmp/grok-config.toml",
-        stateRoot: "/tmp/grok-state",
-      }),
-    });
+    const originalXaiApiKey = process.env.XAI_API_KEY;
+    delete process.env.XAI_API_KEY;
 
-    await expect(
-      caller.generateObject({
-        schema: { type: "object" },
-        system: "Return a title.",
-        prompt: "Name this thread.",
-      })
-    ).resolves.toEqual({
-      status: "unavailable",
-      reason: "xai_unavailable",
-    });
+    try {
+      const caller = new XaiEphemeralObjectCaller({
+        resolveRuntimeConfig: () => ({
+          apiKey: undefined,
+          baseUrl: undefined,
+          model: "grok-4.20-reasoning",
+          configPath: "/tmp/grok-config.toml",
+          stateRoot: "/tmp/grok-state",
+        }),
+      });
+
+      await expect(
+        caller.generateObject({
+          schema: { type: "object" },
+          system: "Return a title.",
+          prompt: "Name this thread.",
+        })
+      ).resolves.toEqual({
+        status: "unavailable",
+        reason: "xai_unavailable",
+      });
+    } finally {
+      if (originalXaiApiKey === undefined) {
+        delete process.env.XAI_API_KEY;
+      } else {
+        process.env.XAI_API_KEY = originalXaiApiKey;
+      }
+    }
+  });
+
+  it("ignores xAI credentials from runtime config", async () => {
+    const originalXaiApiKey = process.env.XAI_API_KEY;
+    delete process.env.XAI_API_KEY;
+
+    try {
+      const caller = new XaiEphemeralObjectCaller({
+        resolveRuntimeConfig: () => ({
+          apiKey: "config-key",
+          baseUrl: "https://api.example.test/v1",
+          model: "grok-4.20-reasoning",
+          configPath: "/tmp/grok-config.toml",
+          stateRoot: "/tmp/grok-state",
+        }),
+      });
+
+      await expect(
+        caller.generateObject({
+          schema: { type: "object" },
+          system: "Return a title.",
+          prompt: "Name this thread.",
+        })
+      ).resolves.toEqual({
+        status: "unavailable",
+        reason: "xai_unavailable",
+      });
+    } finally {
+      if (originalXaiApiKey === undefined) {
+        delete process.env.XAI_API_KEY;
+      } else {
+        process.env.XAI_API_KEY = originalXaiApiKey;
+      }
+    }
   });
 
   it("returns failed when the object call rejects", async () => {

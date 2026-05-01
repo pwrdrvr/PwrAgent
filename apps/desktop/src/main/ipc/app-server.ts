@@ -92,6 +92,7 @@ function directoryStatusesEqual(
 
 class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
+  private focusedDiffServiceApiKey: string | undefined;
   private readonly previousDirectoriesByBackend = new Map<
     AppServerBackendScope,
     NavigationSnapshot["directories"]
@@ -362,6 +363,8 @@ class DesktopAppServerService {
   }
 
   async close(): Promise<void> {
+    this.focusedDiffService = null;
+    this.focusedDiffServiceApiKey = undefined;
     await disposeDesktopBackendRegistry();
   }
 
@@ -370,13 +373,15 @@ class DesktopAppServerService {
   }
 
   private getFocusedDiffService(): FocusedDiffService {
-    if (this.focusedDiffService) {
+    const apiKey = getDesktopSettingsService().resolveGrokApiKeySync();
+    if (this.focusedDiffService && this.focusedDiffServiceApiKey === apiKey) {
       return this.focusedDiffService;
     }
 
     this.focusedDiffService = new FocusedDiffService({
-      apiKey: getDesktopSettingsService().resolveGrokApiKeySync(),
+      apiKey,
     });
+    this.focusedDiffServiceApiKey = apiKey;
     return this.focusedDiffService;
   }
 }

@@ -1,20 +1,53 @@
 import { useState, type CSSProperties, type PointerEvent } from "react";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { SettingsScreen } from "./features/settings/SettingsScreen";
-import { useDesktopSettings } from "./features/settings/useDesktopSettings";
+import {
+  useDesktopSettings,
+  type DesktopSettingsState,
+} from "./features/settings/useDesktopSettings";
 import { ThreadView } from "./features/thread-detail/ThreadView";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
-import { useDesktopApi } from "./lib/desktop-api";
+import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { useThreadSkills } from "./lib/useThreadSkills";
 
 export function App() {
-  const [sidebarWidth, setSidebarWidth] = useState(408);
-  const [mainView, setMainView] = useState<"thread" | "settings">("thread");
   const desktopApi = useDesktopApi();
   const settings = useDesktopSettings(desktopApi);
+
+  if (desktopApi?.readSettings && !settings.snapshot) {
+    return (
+      <div className="app-shell app-shell--fatal-settings">
+        <main className="app-main">
+          <SettingsScreen settings={settings} />
+        </main>
+      </div>
+    );
+  }
+
+  if (settings.snapshot?.configError) {
+    return (
+      <div className="app-shell app-shell--fatal-settings">
+        <main className="app-main">
+          <SettingsScreen settings={settings} />
+        </main>
+      </div>
+    );
+  }
+
+  return <DesktopAppShell desktopApi={desktopApi} settings={settings} />;
+}
+
+function DesktopAppShell(props: {
+  desktopApi?: DesktopApi;
+  settings: DesktopSettingsState;
+}) {
+  const [sidebarWidth, setSidebarWidth] = useState(408);
+  const [mainView, setMainView] = useState<"thread" | "settings">("thread");
+  const desktopApi = props.desktopApi;
+  const settings = props.settings;
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
   const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);

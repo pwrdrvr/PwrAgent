@@ -18,7 +18,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
 
 export function SettingsScreen(props: {
   settings: DesktopSettingsState;
-  onClose: () => void;
+  onClose?: () => void;
 }) {
   const [section, setSection] = useState<SettingsSection>("experimental");
   const snapshot = props.settings.snapshot;
@@ -30,9 +30,11 @@ export function SettingsScreen(props: {
           <p className="eyebrow">Settings</p>
           <h1>Settings</h1>
         </div>
-        <button className="button button--secondary" type="button" onClick={props.onClose}>
-          Back
-        </button>
+        {props.onClose ? (
+          <button className="button button--secondary" type="button" onClick={props.onClose}>
+            Back
+          </button>
+        ) : null}
       </header>
 
       <div className="settings-layout">
@@ -65,6 +67,28 @@ export function SettingsScreen(props: {
               >
                 Retry
               </button>
+            </div>
+          ) : snapshot?.configError ? (
+            <div className="settings-panel settings-panel--error" role="alert">
+              <div className="settings-panel__header">
+                <div>
+                  <p className="eyebrow">Config Error</p>
+                  <h2>Settings config did not load</h2>
+                </div>
+              </div>
+              <div className="settings-error-block">
+                <p>{snapshot.configError}</p>
+                <code>{snapshot.configPath}</code>
+                <button
+                  className="button button--secondary"
+                  type="button"
+                  onClick={() => {
+                    void props.settings.refresh();
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
             </div>
           ) : snapshot ? (
             <SettingsSectionBody

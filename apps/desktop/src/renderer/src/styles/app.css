@@ -72,6 +72,10 @@ textarea {
   color: var(--text-primary);
 }
 
+.app-shell--fatal-settings {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .sidebar {
   display: flex;
   position: relative;
@@ -1248,6 +1252,11 @@ textarea {
   background: var(--bg-panel-elevated);
 }
 
+.settings-panel--error {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+}
+
 .settings-panel__header {
   display: flex;
   align-items: flex-start;
@@ -1319,6 +1328,30 @@ textarea {
 
 .settings-empty {
   color: var(--text-secondary);
+}
+
+.settings-error-block {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.settings-error-block p {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.settings-error-block code {
+  width: max-content;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-input {

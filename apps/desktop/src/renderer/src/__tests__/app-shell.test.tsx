@@ -8,13 +8,99 @@ import {
   waitFor,
   within
 } from "@testing-library/react";
-import type { StartTurnRequest, StartTurnResponse } from "@pwragnt/shared";
+import type {
+  DesktopSettingsSnapshot,
+  StartTurnRequest,
+  StartTurnResponse,
+} from "@pwragnt/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 
 describe("App", () => {
   afterEach(() => {
     cleanup();
+  });
+
+  it("blocks the app shell when desktop settings config is malformed", async () => {
+    const listBackends = vi.fn(async () => ({
+      fetchedAt: Date.now(),
+      backends: [],
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const snapshot = {
+      fetchedAt: 1,
+      configPath: "/tmp/pwragnt/config.toml",
+      configError: "line 3: expected a key",
+      secretStorage: {
+        available: true,
+        backend: "memory",
+        encrypted: false,
+      },
+      experimental: {
+        chatReplyComposer: {
+          value: "textarea",
+          source: "default",
+        },
+      },
+      messaging: {
+        telegram: {
+          enabled: { value: false, source: "default" },
+          botToken: { configured: false, source: "unset", writable: true },
+          authorizedUserIds: { value: [], source: "default" },
+          authorizedSupergroups: { value: [], source: "default" },
+        },
+        discord: {
+          enabled: { value: false, source: "default" },
+          botToken: { configured: false, source: "unset", writable: true },
+          applicationId: { value: "", source: "default" },
+          authorizedUserIds: { value: [], source: "default" },
+          authorizedGuilds: { value: [], source: "default" },
+          messageContentIntent: { value: false, source: "default" },
+        },
+      },
+      models: {
+        codex: {
+          path: { value: "", source: "default" },
+          discovery: {
+            selectedCommand: undefined,
+            candidates: [],
+          },
+        },
+        grok: {
+          apiKey: { configured: false, source: "unset", writable: true },
+        },
+      },
+    } satisfies DesktopSettingsSnapshot;
+
+    Object.defineProperty(window, "pwragnt", {
+      configurable: true,
+      value: {
+        readSettings: async () => ({ snapshot }),
+        listBackends,
+        getNavigationSnapshot,
+      },
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Settings config did not load",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("line 3: expected a key");
+    expect(screen.queryByRole("complementary", { name: "Threads" })).not.toBeInTheDocument();
+    expect(listBackends).not.toHaveBeenCalled();
+    expect(getNavigationSnapshot).not.toHaveBeenCalled();
   });
 
   it("renders the live thread shell with transcript history", async () => {

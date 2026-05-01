@@ -16,13 +16,13 @@ export type DesktopSettingsState = {
   loading: boolean;
   saving: boolean;
   snapshot?: DesktopSettingsSnapshot;
-  clearSecret: (secret: DesktopSettingsSecretName) => Promise<void>;
+  clearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
   refresh: () => Promise<void>;
   replaceSecret: (
     secret: DesktopSettingsSecretName,
     value: string,
-  ) => Promise<void>;
-  writeConfig: (patch: DesktopSettingsConfigPatch) => Promise<void>;
+  ) => Promise<boolean>;
+  writeConfig: (patch: DesktopSettingsConfigPatch) => Promise<boolean>;
 };
 
 export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsState {
@@ -53,10 +53,10 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
   }, [refresh]);
 
   const writeConfig = useCallback(
-    async (patch: DesktopSettingsConfigPatch): Promise<void> => {
+    async (patch: DesktopSettingsConfigPatch): Promise<boolean> => {
       if (!desktopApi?.writeSettingsConfig) {
         setError("Settings are unavailable.");
-        return;
+        return false;
       }
 
       setSaving(true);
@@ -65,8 +65,10 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         const request: WriteDesktopSettingsConfigRequest = { patch };
         const response = await desktopApi.writeSettingsConfig(request);
         setSnapshot(response.snapshot);
+        return true;
       } catch (writeError) {
         setError(writeError instanceof Error ? writeError.message : String(writeError));
+        return false;
       } finally {
         setSaving(false);
       }
@@ -75,10 +77,10 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
   );
 
   const replaceSecret = useCallback(
-    async (secret: DesktopSettingsSecretName, value: string): Promise<void> => {
+    async (secret: DesktopSettingsSecretName, value: string): Promise<boolean> => {
       if (!desktopApi?.replaceSettingsSecret) {
         setError("Settings are unavailable.");
-        return;
+        return false;
       }
 
       setSaving(true);
@@ -87,8 +89,10 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         const request: ReplaceDesktopSettingsSecretRequest = { secret, value };
         const response = await desktopApi.replaceSettingsSecret(request);
         setSnapshot(response.snapshot);
+        return true;
       } catch (writeError) {
         setError(writeError instanceof Error ? writeError.message : String(writeError));
+        return false;
       } finally {
         setSaving(false);
       }
@@ -97,10 +101,10 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
   );
 
   const clearSecret = useCallback(
-    async (secret: DesktopSettingsSecretName): Promise<void> => {
+    async (secret: DesktopSettingsSecretName): Promise<boolean> => {
       if (!desktopApi?.clearSettingsSecret) {
         setError("Settings are unavailable.");
-        return;
+        return false;
       }
 
       setSaving(true);
@@ -109,8 +113,10 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         const request: ClearDesktopSettingsSecretRequest = { secret };
         const response = await desktopApi.clearSettingsSecret(request);
         setSnapshot(response.snapshot);
+        return true;
       } catch (writeError) {
         setError(writeError instanceof Error ? writeError.message : String(writeError));
+        return false;
       } finally {
         setSaving(false);
       }

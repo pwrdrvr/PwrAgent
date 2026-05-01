@@ -7,6 +7,7 @@ import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const tempRoots: string[] = [];
+const disposeDesktopBackendRegistryMock = vi.fn(async () => undefined);
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -24,6 +25,10 @@ vi.mock("electron", () => ({
   },
 }));
 
+vi.mock("../app-server/backend-registry", () => ({
+  disposeDesktopBackendRegistry: disposeDesktopBackendRegistryMock,
+}));
+
 describe("settings ipc", () => {
   afterEach(() => {
     for (const root of tempRoots.splice(0)) {
@@ -33,6 +38,7 @@ describe("settings ipc", () => {
 
   beforeEach(() => {
     handlers.clear();
+    disposeDesktopBackendRegistryMock.mockClear();
   });
 
   it("registers redacted read and write handlers", async () => {
@@ -84,6 +90,7 @@ describe("settings ipc", () => {
         },
       },
     );
+    expect(disposeDesktopBackendRegistryMock).not.toHaveBeenCalled();
     await handlers.get(SETTINGS_REPLACE_SECRET_CHANNEL)?.(
       {},
       {
@@ -100,5 +107,44 @@ describe("settings ipc", () => {
 
     disposeSettingsIpcHandlers();
     expect(handlers.has(SETTINGS_READ_CHANNEL)).toBe(false);
+  });
+
+  it("disposes backend clients after model settings change", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragnt-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const {
+      SETTINGS_CLEAR_SECRET_CHANNEL,
+      SETTINGS_WRITE_CONFIG_CHANNEL,
+    } = await import("../../shared/ipc");
+
+    registerSettingsIpcHandlers(service);
+
+    await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
+      {},
+      {
+        patch: {
+          models: {
+            codex: {
+              path: "codex-next",
+            },
+          },
+        },
+      },
+    );
+    await handlers.get(SETTINGS_CLEAR_SECRET_CHANNEL)?.(
+      {},
+      {
+        secret: "grokApiKey",
+      },
+    );
+
+    expect(disposeDesktopBackendRegistryMock).toHaveBeenCalledTimes(2);
   });
 });

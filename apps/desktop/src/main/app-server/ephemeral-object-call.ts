@@ -113,7 +113,7 @@ export class XaiEphemeralObjectCaller {
     }
 
     const runtimeConfig = this.getRuntimeConfig();
-    const apiKey = this.configuredApiKey ?? runtimeConfig.apiKey;
+    const apiKey = this.configuredApiKey;
     if (!apiKey) {
       this.envClient = null;
       return this.envClient;

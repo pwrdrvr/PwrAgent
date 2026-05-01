@@ -23,7 +23,6 @@ import {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_MESSAGE_CONTENT_INTENT_ENV,
-  GROK_API_KEY_ENV,
   TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
@@ -75,7 +74,7 @@ export class DesktopSettingsService {
     );
     const grokApiKey = await this.readSecretState(
       "grokApiKey",
-      GROK_API_KEY_ENV,
+      undefined,
       secretStorage.available,
     );
     const codexDiscovery = await discoverCodexCommands({
@@ -151,10 +150,15 @@ export class DesktopSettingsService {
   async writeConfigPatch(
     patch: DesktopSettingsConfigPatch,
   ): Promise<DesktopSettingsSnapshot> {
-    const current = this.readConfig().config;
+    const current = this.readConfig();
+    if (current.error) {
+      throw new Error(
+        `Cannot save settings because ${this.configPath} could not be parsed: ${current.error}`,
+      );
+    }
     writeDesktopSettingsConfig(
       this.configPath,
-      mergeDesktopSettingsConfig(current, patch),
+      mergeDesktopSettingsConfig(current.config, patch),
     );
     return this.readSettings();
   }
@@ -175,17 +179,11 @@ export class DesktopSettingsService {
   }
 
   async resolveGrokApiKey(): Promise<string | undefined> {
-    return (
-      readEnvString(this.env, GROK_API_KEY_ENV)
-      || (await this.options.secretStore.getSecret("grokApiKey"))
-    );
+    return await this.options.secretStore.getSecret("grokApiKey");
   }
 
   resolveGrokApiKeySync(): string | undefined {
-    return (
-      readEnvString(this.env, GROK_API_KEY_ENV)
-      || this.options.secretStore.getSecretSync?.("grokApiKey")
-    );
+    return this.options.secretStore.getSecretSync?.("grokApiKey");
   }
 
   resolveCodexCommandPreference(): string | undefined {
@@ -289,10 +287,10 @@ export class DesktopSettingsService {
 
   private async readSecretState(
     secret: DesktopSettingsSecretName,
-    envKey: string,
+    envKey: string | undefined,
     storageAvailable: boolean,
   ): Promise<DesktopSettingsSecretState> {
-    if (readEnvString(this.env, envKey)) {
+    if (envKey && readEnvString(this.env, envKey)) {
       return {
         configured: true,
         source: "env",

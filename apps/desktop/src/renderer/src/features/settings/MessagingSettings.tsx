@@ -8,11 +8,11 @@ import { formatSourceLabel, joinListValue, parseListValue, sourceBadge } from ".
 export function MessagingSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
-  onClearSecret: (secret: DesktopSettingsSecretName) => Promise<void>;
+  onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
   onReplaceSecret: (
     secret: DesktopSettingsSecretName,
     value: string,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   onSaveDiscord: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["discord"]>,
   ) => Promise<void>;
@@ -254,11 +254,11 @@ function SecretField(props: {
   label: string;
   secret: DesktopSettingsSecretName;
   state: DesktopSettingsSnapshot["models"]["grok"]["apiKey"];
-  onClearSecret: (secret: DesktopSettingsSecretName) => Promise<void>;
+  onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
   onReplaceSecret: (
     secret: DesktopSettingsSecretName,
     value: string,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
 }) {
   const [value, setValue] = useState("");
   const status = props.state.configured ? "Set" : "Not set";
@@ -270,6 +270,7 @@ function SecretField(props: {
       <span className="settings-source">{status} · {source}</span>
       <div className="settings-secret">
         <input
+          aria-label={props.label}
           className="settings-input"
           disabled={props.disabled}
           placeholder="••••••••"
@@ -283,8 +284,11 @@ function SecretField(props: {
           type="button"
           onClick={() => {
             const nextValue = value.trim();
-            setValue("");
-            void props.onReplaceSecret(props.secret, nextValue);
+            void props.onReplaceSecret(props.secret, nextValue).then((saved) => {
+              if (saved) {
+                setValue("");
+              }
+            });
           }}
         >
           Replace

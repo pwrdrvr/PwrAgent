@@ -81,7 +81,7 @@ describe("DesktopSettingsService", () => {
     });
   });
 
-  it("applies env overrides above TOML and keychain values", async () => {
+  it("applies env overrides above TOML and keeps the Grok API key in keychain", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(
@@ -138,11 +138,10 @@ describe("DesktopSettingsService", () => {
     });
     expect(snapshot.models.grok.apiKey).toMatchObject({
       configured: true,
-      source: "env",
-      writable: false,
-      overriddenByEnv: true,
+      source: "keychain",
+      writable: true,
     });
-    expect(await service.resolveGrokApiKey()).toBe("xai-env");
+    expect(await service.resolveGrokApiKey()).toBe("xai-keychain");
     expect(service.resolveCodexCommandPreference()).toBe("codex-env");
   });
 
@@ -221,6 +220,31 @@ describe("DesktopSettingsService", () => {
       value: "textarea",
       source: "default",
     });
+  });
+
+  it("refuses to overwrite malformed TOML on save", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      "[experimental]\nchat_reply_composer\n[messaging.telegram]\nenabled = true\n",
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await expect(
+      service.writeConfigPatch({
+        experimental: {
+          chatReplyComposer: "tiptap-chips",
+        },
+      }),
+    ).rejects.toThrow("could not be parsed");
+    expect(fs.readFileSync(configPath, "utf8")).toContain("chat_reply_composer");
+    expect(fs.readFileSync(configPath, "utf8")).toContain("enabled = true");
   });
 
   it("reports unavailable secret storage and blocks secret writes", async () => {
