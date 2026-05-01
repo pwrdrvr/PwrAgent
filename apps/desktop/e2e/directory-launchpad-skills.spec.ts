@@ -413,6 +413,56 @@ test("directory launchpad renders Tiptap composer when enabled and keeps skill a
   }
 });
 
+test("directory launchpad Tiptap composer keeps placeholder on the caret line", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    env: TIPTAP_COMPOSER_ENV,
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "New thread" });
+    await textbox.focus();
+    await expect(tiptapInput).toHaveClass(/is-empty/);
+
+    const metrics = await tiptapInput.evaluate((element) => {
+      const editor = element.querySelector<HTMLElement>(
+        ".composer-tiptap-input__editor",
+      );
+      const paragraph = editor?.querySelector<HTMLElement>("p");
+      if (!editor || !paragraph) {
+        throw new Error("Expected empty Tiptap editor paragraph");
+      }
+
+      const editorRect = editor.getBoundingClientRect();
+      const paragraphRect = paragraph.getBoundingClientRect();
+      const editorStyle = getComputedStyle(editor);
+      const placeholderStyle = getComputedStyle(editor, "::before");
+
+      return {
+        paragraphOffsetTop: paragraphRect.top - editorRect.top,
+        placeholderContent: placeholderStyle.content,
+        placeholderPosition: placeholderStyle.position,
+        placeholderTop: Number.parseFloat(placeholderStyle.top),
+        paddingTop: Number.parseFloat(editorStyle.paddingTop),
+      };
+    });
+
+    expect(metrics.placeholderContent).toContain("Start a new thread in FixtureRepo");
+    expect(metrics.placeholderPosition).toBe("absolute");
+    expect(Math.abs(metrics.placeholderTop - metrics.paddingTop)).toBeLessThanOrEqual(1);
+    expect(Math.abs(metrics.paragraphOffsetTop - metrics.paddingTop)).toBeLessThanOrEqual(
+      1,
+    );
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("directory launchpad Tiptap composer selects focused skills as undoable inline chips", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({

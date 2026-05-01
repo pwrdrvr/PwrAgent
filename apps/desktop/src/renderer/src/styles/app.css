@@ -3687,6 +3687,7 @@ textarea {
 }
 
 .composer-tiptap-input__editor {
+  position: relative;
   min-height: 142px;
   padding: 12px;
   outline: none;
@@ -3700,6 +3701,9 @@ textarea {
 
 .composer-tiptap-input.is-empty .composer-tiptap-input__editor::before {
   content: attr(data-placeholder);
+  position: absolute;
+  top: 12px;
+  left: 12px;
   color: var(--text-muted);
   pointer-events: none;
 }
