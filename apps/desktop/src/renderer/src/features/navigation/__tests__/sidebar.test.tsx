@@ -350,6 +350,7 @@ describe("Sidebar", () => {
 
     const approvalChip = within(threadButton).getByTitle("Waiting for approval");
     expect(approvalChip).toHaveTextContent("Waiting for approval");
+    expect(approvalChip).not.toHaveTextContent("!");
     expect(approvalChip).toHaveAttribute("title", "Waiting for approval");
   });
 

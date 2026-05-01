@@ -708,10 +708,14 @@ textarea {
 }
 
 .thread-row__chip--approval {
-  border: 1px solid var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--text-primary);
-  font-weight: 600;
+  border: 1px solid var(--accent-strong);
+  background: var(--accent);
+  color: var(--button-text);
+  font-weight: 700;
+}
+
+.thread-row__chip--approval:hover {
+  background: var(--accent-strong);
 }
 
 .path-copy-target {
