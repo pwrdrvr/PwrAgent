@@ -7,9 +7,10 @@ import {
 
 function createEvent(
   envelope: JsonRpcObserverEvent["envelope"],
+  direction: JsonRpcObserverEvent["direction"] = "inbound",
 ): JsonRpcObserverEvent {
   return {
-    direction: "inbound",
+    direction,
     envelope,
     raw: JSON.stringify(envelope),
   };
@@ -36,14 +37,59 @@ describe("protocol log observer", () => {
 
     expect(info).toHaveBeenCalledWith("message", {
       backend: "codex",
-      direction: "inbound",
-      id: undefined,
-      itemId: undefined,
+      direction: "in",
       kind: "notification",
       method: "turn/started",
       paramKeys: ["turnId", "threadId"],
       turnId: "turn-1",
       threadId: "thread-1",
+    });
+  });
+
+  it("omits absent ids and attributes responses to their request method", () => {
+    const info = vi.fn();
+    const observer = createProtocolLogObserver({
+      backend: "codex",
+      logger: { info },
+    });
+
+    observer.onMessage(
+      createEvent(
+        {
+          id: "rpc-1",
+          jsonrpc: "2.0",
+          method: "thread/list",
+          params: {
+            archived: false,
+            limit: 100,
+            sortKey: "recent",
+          },
+        },
+        "outbound",
+      ),
+    );
+    observer.onMessage(
+      createEvent({
+        id: "rpc-1",
+        jsonrpc: "2.0",
+        result: { threads: [] },
+      }),
+    );
+
+    expect(info).toHaveBeenNthCalledWith(1, "message", {
+      backend: "codex",
+      direction: "out",
+      id: "rpc-1",
+      kind: "request",
+      method: "thread/list",
+      paramKeys: ["archived", "limit", "sortKey"],
+    });
+    expect(info).toHaveBeenNthCalledWith(2, "message", {
+      backend: "codex",
+      direction: "in",
+      id: "rpc-1",
+      kind: "response",
+      method: "thread/list",
     });
   });
 

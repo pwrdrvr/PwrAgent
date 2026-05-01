@@ -74,6 +74,7 @@ export function createProtocolLogObserver(
   const streamLogIntervalMs =
     options.streamLogIntervalMs ?? STREAM_LOG_INTERVAL_MS;
   const deltaBuffers = new Map<string, DeltaBuffer>();
+  const requestMethodsById = new Map<string, string>();
 
   function logDeltaBuffer(
     key: string,
@@ -127,8 +128,10 @@ export function createProtocolLogObserver(
       const envelope = event.envelope;
       const params = asRecord(envelope.params);
       const item = asRecord(params?.item);
-      const method = envelope.method ?? "response";
       const id = envelope.id == null ? undefined : String(envelope.id);
+      const kind = classifyEnvelope(envelope);
+      const method =
+        envelope.method ?? (id ? requestMethodsById.get(id) : undefined) ?? "response";
       const delta = pickRawString(params, "delta");
       const deltaKey = delta
         ? buildDeltaKey({
@@ -165,17 +168,27 @@ export function createProtocolLogObserver(
       }
 
       flushDeltaBuffersFor(envelope);
-      logger.info("message", {
-        backend: options.backend,
-        direction: event.direction,
-        id,
-        itemId: pickString(params, "itemId") ?? pickString(item, "id"),
-        kind: classifyEnvelope(envelope),
-        method,
-        paramKeys: Object.keys(params ?? {}),
-        turnId: pickString(params, "turnId"),
-        threadId: pickString(params, "threadId"),
-      });
+      if (kind === "request" && id && envelope.method) {
+        requestMethodsById.set(id, envelope.method);
+      }
+      const paramKeys = Object.keys(params ?? {});
+      logger.info(
+        "message",
+        compactFields({
+          backend: options.backend,
+          direction: compactDirection(event.direction),
+          id,
+          itemId: pickString(params, "itemId") ?? pickString(item, "id"),
+          kind,
+          method,
+          paramKeys: paramKeys.length > 0 ? paramKeys : undefined,
+          turnId: pickString(params, "turnId"),
+          threadId: pickString(params, "threadId"),
+        }),
+      );
+      if (kind === "response" && id) {
+        requestMethodsById.delete(id);
+      }
     },
   };
 }
@@ -197,6 +210,16 @@ function classifyEnvelope(envelope: JsonRpcEnvelope): "notification" | "request"
     return "notification";
   }
   return "response";
+}
+
+function compactDirection(direction: JsonRpcObserverEvent["direction"]): "in" | "out" {
+  return direction === "inbound" ? "in" : "out";
+}
+
+function compactFields<T extends Record<string, unknown>>(fields: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => value !== undefined),
+  ) as Partial<T>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

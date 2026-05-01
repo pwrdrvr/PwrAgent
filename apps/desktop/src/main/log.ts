@@ -28,16 +28,21 @@ type CompactField = {
   value: string;
 };
 
-function compactStructuredLogData(data: unknown[]): unknown[] {
+export function compactStructuredLogData(data: unknown[]): unknown[] {
   if (data.length < 2 || typeof data[0] !== "string") {
     return data;
   }
 
   const compacted: string[] = [];
   const passthrough: unknown[] = [];
+  let hadStructuredPayload = false;
   for (const item of data.slice(1)) {
     if (isPlainObject(item)) {
-      compacted.push(compactObjectFields(item));
+      hadStructuredPayload = true;
+      const compactedFields = compactObjectFields(item);
+      if (compactedFields) {
+        compacted.push(compactedFields);
+      }
     } else {
       passthrough.push(item);
     }
@@ -45,6 +50,8 @@ function compactStructuredLogData(data: unknown[]): unknown[] {
 
   return compacted.length > 0
     ? [`${data[0]} ${compacted.filter(Boolean).join(" ")}`, ...passthrough]
+    : hadStructuredPayload
+      ? [data[0], ...passthrough]
     : data;
 }
 
@@ -68,6 +75,9 @@ function collectCompactFields(
   for (const [key, child] of Object.entries(value)) {
     if (fields.length >= MAX_COMPACT_FIELDS) {
       return;
+    }
+    if (child === undefined) {
+      continue;
     }
     const fieldKey = prefix ? `${prefix}.${key}` : key;
     if (
