@@ -44,7 +44,7 @@ The immediate users are desktop app users configuring experimental UI behavior, 
 **Messaging Settings**
 - R17. Messaging includes separate Telegram and Discord groups.
 - R18. Telegram settings include Enabled, Bot Token, Authorized User IDs, and Authorized Supergroups.
-- R19. Discord settings include Enabled, Bot Token, Application ID, Authorized User IDs, Authorized Guilds, and Message Content Intent.
+- R19. Discord settings include Enabled, Bot Token, Application ID, Authorized User IDs, and Authorized Guilds. Message Content Intent is configured in Discord's Developer Portal, not in PwrAgnt.
 - R20. Authorized User IDs, Authorized Supergroups, and Authorized Guilds are editable as list fields and support comma-separated environment variable values.
 - R21. Discord's stored concept for server-level authorization is Guilds, while the UI may label the field as Servers / Guilds if that improves readability.
 - R22. Bot tokens are treated as secrets and stored in the OS keychain, with TOML storing only non-secret settings and whatever non-secret metadata is needed to locate the keychain item.
@@ -56,7 +56,6 @@ The immediate users are desktop app users configuring experimental UI behavior, 
   - `PWRAGNT_MESSAGING_DISCORD_BOT_TOKEN`
   - `PWRAGNT_MESSAGING_DISCORD_APPLICATION_ID`
   - `PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS`
-  - `PWRAGNT_MESSAGING_DISCORD_MESSAGE_CONTENT_INTENT`
 - R26. The first pass is config/settings only: it does not need to connect Telegram or Discord bots, validate tokens with external services, listen for messages, or send messages.
 
 **Model Settings**

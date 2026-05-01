@@ -4,5 +4,4 @@ export type DiscordMessagingConfig = {
   botToken: string;
   channel: "discord";
   enabled?: boolean;
-  messageContentIntent?: boolean;
 };

@@ -151,21 +151,6 @@ export function MessagingSettings(props: {
             });
           }}
         />
-        <ToggleField
-          checked={discord.messageContentIntent.value}
-          disabled={props.saving}
-          label="Message Content Intent"
-          source={sourceBadge(discord.messageContentIntent)}
-          onChange={(messageContentIntent) => {
-            void props.onSaveDiscord({
-              ...discord,
-              messageContentIntent: {
-                ...discord.messageContentIntent,
-                value: messageContentIntent,
-              },
-            });
-          }}
-        />
       </MessagingGroup>
     </section>
   );

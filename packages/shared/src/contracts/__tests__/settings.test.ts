@@ -47,7 +47,6 @@ describe("desktop settings contracts", () => {
           applicationId: { value: "", source: "default" },
           authorizedUserIds: { value: [], source: "default" },
           authorizedGuilds: { value: [], source: "default" },
-          messageContentIntent: { value: false, source: "default" },
         },
       },
       models: {

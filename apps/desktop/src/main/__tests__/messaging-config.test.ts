@@ -6,7 +6,6 @@ import {
   DISCORD_APPLICATION_ID_ENV,
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
-  DISCORD_MESSAGE_CONTENT_INTENT_ENV,
   loadDesktopMessagingConfig,
   loadDesktopMessagingConfigFromSettings,
   redactDesktopMessagingConfig,
@@ -49,7 +48,6 @@ describe("desktop messaging config", () => {
       DISCORD_BOT_TOKEN: "legacy-discord-token",
       [DISCORD_APPLICATION_ID_ENV]: "discord-app",
       [DISCORD_AUTHORIZED_USER_IDS_ENV]: "100,200",
-      [DISCORD_MESSAGE_CONTENT_INTENT_ENV]: "true",
     });
 
     expect(config).toMatchObject({
@@ -61,7 +59,6 @@ describe("desktop messaging config", () => {
         applicationId: "discord-app",
         botToken: "legacy-discord-token",
         authorizedActorIds: ["100", "200"],
-        messageContentIntent: true,
       },
     });
   });
@@ -80,7 +77,6 @@ describe("desktop messaging config", () => {
         "enabled = true",
         'application_id = "discord-app"',
         'authorized_user_ids = ["222222222"]',
-        "message_content_intent = true",
       ].join("\n"),
       "utf8",
     );
@@ -108,7 +104,6 @@ describe("desktop messaging config", () => {
         applicationId: "discord-app",
         botToken: "settings-discord-token",
         authorizedActorIds: ["222222222"],
-        messageContentIntent: true,
       },
     });
   });
@@ -160,7 +155,6 @@ describe("desktop messaging config", () => {
         applicationId: "app-id",
         botToken: "[REDACTED]",
         authorizedActorCount: 1,
-        messageContentIntent: undefined,
       },
     });
   });

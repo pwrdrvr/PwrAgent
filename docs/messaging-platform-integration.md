@@ -53,7 +53,6 @@ Discord:
 - `PWRAGNT_MESSAGING_DISCORD_BOT_TOKEN`
 - `PWRAGNT_MESSAGING_DISCORD_APPLICATION_ID`
 - `PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS`
-- `PWRAGNT_MESSAGING_DISCORD_MESSAGE_CONTENT_INTENT`
 
 The authorized ID variables are comma-separated lists. Bot tokens are redacted
 from runtime logs. Telegram also accepts `TELEGRAM_BOT_TOKEN` and Discord also
@@ -99,7 +98,7 @@ Telegram:
 
 Discord:
 
-1. Confirm the bot has Gateway access and message content intent enabled.
+1. In the Discord Developer Portal, confirm the bot has Gateway access and the privileged Message Content Intent enabled.
 2. Send `/threads` from an allowlisted Discord user.
 3. Verify a numbered thread picker appears with components.
 4. Choose a thread by component, then repeat by replying `1`.

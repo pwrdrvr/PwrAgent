@@ -6,7 +6,6 @@ import {
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
-  DISCORD_MESSAGE_CONTENT_INTENT_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
@@ -18,7 +17,6 @@ export {
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
-  DISCORD_MESSAGE_CONTENT_INTENT_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
@@ -61,9 +59,6 @@ export function loadDesktopMessagingConfig(
             botToken: discordBotToken,
             applicationId: readEnv(env, DISCORD_APPLICATION_ID_ENV),
             authorizedActorIds: discordAuthorizedActorIds,
-            messageContentIntent: parseBoolean(
-              env[DISCORD_MESSAGE_CONTENT_INTENT_ENV],
-            ),
           },
         }
       : {}),
@@ -123,9 +118,6 @@ export async function loadDesktopMessagingConfigFromSettings(
                 ?? snapshot.messaging.discord.applicationId.value)
               || undefined,
             authorizedActorIds: discordAuthorizedActorIds,
-            messageContentIntent:
-              envConfig.discord?.messageContentIntent
-              ?? snapshot.messaging.discord.messageContentIntent.value,
           },
         }
       : {}),
@@ -151,7 +143,6 @@ export function redactDesktopMessagingConfig(
           applicationId: config.discord.applicationId,
           botToken: "[REDACTED]",
           authorizedActorCount: config.discord.authorizedActorIds.length,
-          messageContentIntent: config.discord.messageContentIntent,
         }
       : undefined,
   };
@@ -174,14 +165,6 @@ function parseList(value: string | undefined): string[] {
         .filter(Boolean),
     ),
   ];
-}
-
-function parseBoolean(value: string | undefined): boolean | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
 function shouldEnableSettingsChannel<TConfig>(

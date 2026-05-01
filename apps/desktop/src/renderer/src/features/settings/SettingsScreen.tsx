@@ -144,7 +144,6 @@ function SettingsSectionBody(props: {
                 authorizedGuilds: discord.authorizedGuilds.value,
                 authorizedUserIds: discord.authorizedUserIds.value,
                 enabled: discord.enabled.value,
-                messageContentIntent: discord.messageContentIntent.value,
               },
             },
           });

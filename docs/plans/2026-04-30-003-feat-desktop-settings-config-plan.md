@@ -97,7 +97,6 @@ The desktop app currently has thread/draft controls in the composer and separate
 | Discord Application ID | `messaging.discord.application_id` | `PWRAGNT_MESSAGING_DISCORD_APPLICATION_ID` | No |
 | Discord Authorized User IDs | `messaging.discord.authorized_user_ids` | `PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS` | No |
 | Discord Authorized Guilds | `messaging.discord.authorized_guilds` | `PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_GUILDS` | No |
-| Discord Message Content Intent | `messaging.discord.message_content_intent` | `PWRAGNT_MESSAGING_DISCORD_MESSAGE_CONTENT_INTENT` | No |
 | Codex Path | `models.codex.path` | `PWRAGNT_CODEX_COMMAND` | No |
 | Grok API Key | keychain-backed secret | `XAI_API_KEY` | Yes |
 
@@ -119,7 +118,6 @@ enabled = false
 application_id = "123456789012345678"
 authorized_user_ids = ["333333333333333333"]
 authorized_guilds = []
-message_content_intent = true
 
 [models.codex]
 path = "codex"
@@ -417,7 +415,7 @@ The main process owns all config parsing, secret reads/writes, override preceden
 
 **Approach:**
 - Experimental: render a three-way segmented control for Chat Reply Composer, defaulting to `textarea`.
-- Messaging: render Telegram and Discord grouped settings with enabled toggles, masked token states, replace/clear actions, list fields, Discord Application ID, Discord Authorized Servers / Guilds label, and Message Content Intent.
+- Messaging: render Telegram and Discord grouped settings with enabled toggles, masked token states, replace/clear actions, list fields, Discord Application ID, and Discord Authorized Servers / Guilds label.
 - Models: render Codex auto-discovery results, selected path/version/source, explicit path override controls, and Grok API key secret state with replace/clear actions.
 - For secret fields, use local input state only for replacement; clear the local raw value immediately after a successful write and never populate it from a settings snapshot.
 - For list fields, support comma-separated entry and normalize display into stable chips or rows without requiring messaging runtime validation.

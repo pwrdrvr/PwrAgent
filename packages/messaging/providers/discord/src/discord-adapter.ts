@@ -191,12 +191,6 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
-    if (this.options.config.messageContentIntent === false) {
-      throw new Error(
-        "Discord message content intent is required for free-form PwrAgnt control.",
-      );
-    }
-
     this.listener = listener;
     this.unsubscribeGateway = this.gateway.onEvent(async (event) => {
       await this.handleGatewayEvent(event);

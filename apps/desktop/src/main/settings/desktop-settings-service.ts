@@ -22,7 +22,6 @@ import {
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
-  DISCORD_MESSAGE_CONTENT_INTENT_ENV,
   TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
@@ -135,11 +134,6 @@ export class DesktopSettingsService {
           authorizedGuilds: this.resolveList(
             config.messaging?.discord?.authorizedGuilds,
             DISCORD_AUTHORIZED_GUILDS_ENV,
-          ),
-          messageContentIntent: this.resolveBoolean(
-            config.messaging?.discord?.messageContentIntent,
-            false,
-            DISCORD_MESSAGE_CONTENT_INTENT_ENV,
           ),
         },
       },

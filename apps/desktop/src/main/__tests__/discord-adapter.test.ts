@@ -426,20 +426,37 @@ describe("DiscordAdapter", () => {
     });
   });
 
-  it("surfaces missing message content intent as a startup/config error", async () => {
+  it("surfaces missing Discord message content as a runtime platform error", async () => {
+    const gateway = createGateway();
     const adapter = new DiscordAdapter({
       api: createApi() as unknown as DiscordApi,
       config: {
         channel: "discord",
         botToken: "discord-token",
         authorizedActorIds: ["42"],
-        messageContentIntent: false,
       },
-      gateway: createGateway(),
+      gateway,
     });
 
-    await expect(adapter.start(async () => {})).rejects.toThrow(
-      "message content intent is required",
+    await adapter.start(async () => {});
+
+    await expect(
+      gateway.emit({
+        d: {
+          author: {
+            id: "42",
+            username: "ada",
+          },
+          channel_id: "channel-1",
+          guild_id: "guild-1",
+          id: "message-5",
+        },
+        op: 0,
+        s: 6,
+        t: "MESSAGE_CREATE",
+      }),
+    ).rejects.toThrow(
+      "Discord message content is unavailable; enable the privileged message content intent.",
     );
   });
 

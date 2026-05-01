@@ -37,7 +37,6 @@ describe("DesktopSettingsService", () => {
         "[messaging.discord]",
         'application_id = "123456789012345678"',
         'authorized_guilds = ["guild-one"]',
-        "message_content_intent = true",
         "",
         "[models.codex]",
         'path = "codex-beta"',
@@ -80,7 +79,6 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.messaging.discord.authorizedGuilds.value).toEqual([
       "guild-one",
     ]);
-    expect(snapshot.messaging.discord.messageContentIntent.value).toBe(true);
     expect(snapshot.models.codex.path).toEqual({
       value: "codex-beta",
       source: "config",

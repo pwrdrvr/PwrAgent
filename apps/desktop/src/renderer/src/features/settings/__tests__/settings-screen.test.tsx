@@ -39,7 +39,6 @@ function createSnapshot(
         applicationId: { value: "", source: "default" },
         authorizedUserIds: { value: [], source: "default" },
         authorizedGuilds: { value: [], source: "default" },
-        messageContentIntent: { value: false, source: "default" },
       },
     },
     models: {
@@ -176,7 +175,7 @@ describe("SettingsScreen", () => {
     expect(screen.getByRole("heading", { name: "Telegram" })).toBeInTheDocument();
     expect(screen.getByText("Authorized SuperGroups")).toBeInTheDocument();
     expect(screen.getAllByText("unset").length).toBeGreaterThanOrEqual(5);
-    expect(screen.getAllByText("default").length).toBeGreaterThanOrEqual(3);
+    expect(screen.getAllByText("default").length).toBeGreaterThanOrEqual(2);
 
     fireEvent.click(within(sections).getByRole("button", { name: "Models" }));
     expect(screen.getByRole("heading", { name: "Codex" })).toBeInTheDocument();

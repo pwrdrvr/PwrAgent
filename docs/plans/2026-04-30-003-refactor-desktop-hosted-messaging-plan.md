@@ -112,7 +112,7 @@ Messaging should therefore be a desktop main-process integration:
 - Exact file move strategy: pure move versus recreate under `apps/desktop/src/main/messaging/core` and `packages/messaging/interface` and delete old files after tests pass.
 - Exact workspace/package naming, with `@pwragnt/messaging-interface`, `@pwragnt/messaging-provider-telegram`, and `@pwragnt/messaging-provider-discord` as the planned default unless implementation reveals a repo naming constraint.
 - Exact Electron packaging behavior for dynamic provider imports. Use literal specifiers first; if electron-vite packaging cannot retain provider chunks, add an explicit provider manifest or packaging include rule.
-- Whether Discord should initially support free-form guild channel text or limit MVP text entry to DMs/mentions unless `PWRAGNT_MESSAGING_DISCORD_MESSAGE_CONTENT_INTENT` is explicitly enabled.
+- Whether Discord should initially support free-form guild channel text or limit MVP text entry to DMs/mentions unless the bot has Discord's privileged message content intent enabled in the Developer Portal.
 - Whether the current JSON messaging store format can be preserved as-is under the desktop module or needs a version migration after moving ownership.
 
 ## High-Level Technical Design

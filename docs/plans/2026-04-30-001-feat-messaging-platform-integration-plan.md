@@ -485,7 +485,7 @@ flowchart TB
 - Happy path: assistant markdown with inline code and fenced code block is preserved across message chunks.
 - Happy path: image parts become attachments when source and size policy allow.
 - Edge case: content longer than Discord's message limit is chunked and preserves continuation markers.
-- Edge case: missing message content intent produces a clear adapter startup/config error rather than silently treating all messages as empty.
+- Edge case: missing Discord Developer Portal message content intent produces a clear runtime diagnostic rather than silently treating all messages as empty.
 - Error path: Gateway heartbeat miss triggers reconnect/resume without duplicate pending intent creation.
 - Error path: REST rate limit response backs off and records failed/pending delivery without exposing secrets.
 - Security: `allowed_mentions` prevents agent output from pinging everyone, roles, or arbitrary users unless a future explicit policy allows it.
@@ -560,7 +560,7 @@ flowchart TB
 | Unauthorized users gain thread control from a shared channel | Medium | High | Require allowlisted actor identity, binding confirmation, per-binding allowed actors, and audit context on sensitive actions. |
 | Callback handles outlive their intended prompt | Medium | Medium | Store pending intents with TTL, binding id, actor scope, and revocation cleanup; reject stale callbacks with a safe expired prompt. |
 | Markdown conversion breaks code-heavy agent output | High | Medium | Adapter-owned formatting tests for inline code, fenced code blocks, escaping, chunking, and plain-text fallback. |
-| Discord message content intent is missing | Medium | High | Fail adapter startup/config clearly; do not silently run a free-form control channel that cannot read text. |
+| Discord message content intent is missing | Medium | High | Surface a clear runtime diagnostic when Discord withholds message content; do not silently run a free-form control channel that cannot read text. |
 | Local desktop runtime is not always-on enough for CarPlay use | High | Medium | Accept for MVP; keep controller/store/contract outside Electron-specific files so an always-on service can host the same core later. |
 | Model-backed fallback adds latency or bad interpretations | Medium | Medium | Deterministic-first mapping, model only for scoped ambiguous pending intents, pass-through on timeout/low confidence, and tests for "new instruction" cases. |
 

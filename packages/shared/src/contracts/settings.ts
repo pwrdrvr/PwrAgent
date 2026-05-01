@@ -108,7 +108,6 @@ export type DesktopSettingsSnapshot = {
       applicationId: DesktopSettingsValue<string>;
       authorizedUserIds: DesktopSettingsValue<string[]>;
       authorizedGuilds: DesktopSettingsValue<string[]>;
-      messageContentIntent: DesktopSettingsValue<boolean>;
     };
   };
   models: {
@@ -138,7 +137,6 @@ export type DesktopSettingsConfigPatch = {
       applicationId?: string;
       authorizedUserIds?: string[];
       authorizedGuilds?: string[];
-      messageContentIntent?: boolean;
     };
   };
   models?: {
