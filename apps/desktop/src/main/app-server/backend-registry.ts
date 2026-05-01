@@ -424,6 +424,19 @@ function buildPendingRequestKey(params: {
   return `${params.backend}:${params.threadId}:${params.requestId}`;
 }
 
+function buildActiveTurnModeKey(threadId: string, turnId: string): string {
+  return `${threadId}:${turnId}`;
+}
+
+function readStatusType(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || !("type" in value)) {
+    return undefined;
+  }
+
+  const type = value.type;
+  return typeof type === "string" ? type : undefined;
+}
+
 function mergeMethods(results: InitializeResult[]): string[] {
   return [...new Set(results.flatMap((result) => result.methods ?? []))];
 }
@@ -777,6 +790,7 @@ export class DesktopBackendRegistry {
       token: number;
     }
   >();
+  private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
   private readonly attemptedTitleGenerations = new Set<string>();
   private titleGenerationSequence = 0;
 
@@ -1247,14 +1261,17 @@ export class DesktopBackendRegistry {
       reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
       fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
     });
+    let activeTurnMode: ThreadExecutionMode | undefined;
     const result =
       params.backend === "codex"
-        ? await this.withCodexThreadClient(params.threadId, async (client) =>
-            await client.startTurn({
+        ? await this.withCodexThreadClient(params.threadId, async (client, mode) => {
+            const started = await client.startTurn({
               ...params,
               ...turnParams,
-            }),
-          )
+            });
+            activeTurnMode = mode;
+            return started;
+          })
         : await this.grokClient.startTurn({
             threadId: params.threadId,
             input: params.input,
@@ -1275,6 +1292,12 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         ...turnParams,
       });
+    }
+    if (params.backend === "codex" && activeTurnMode) {
+      this.activeCodexTurnModes.set(
+        buildActiveTurnModeKey(result.threadId, result.turnId),
+        activeTurnMode,
+      );
     }
 
     const response = {
@@ -1323,12 +1346,26 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    const result =
+    const activeCodexTurnMode =
       params.backend === "codex"
-        ? await this.withCodexThreadClient(params.threadId, async (client) =>
-            await client.interruptTurn(params),
+        ? this.activeCodexTurnModes.get(
+            buildActiveTurnModeKey(params.threadId, params.turnId),
           )
+        : undefined;
+    const result =
+      params.backend === "codex" && activeCodexTurnMode
+        ? await this.getClient("codex", activeCodexTurnMode).interruptTurn(params)
+        : params.backend === "codex"
+          ? await this.withCodexThreadClient(params.threadId, async (client) =>
+              await client.interruptTurn(params),
+            )
         : await this.grokClient.interruptTurn(params);
+
+    if (params.backend === "codex") {
+      this.activeCodexTurnModes.delete(
+        buildActiveTurnModeKey(result.threadId, result.turnId),
+      );
+    }
 
     return {
       backend: params.backend,
@@ -2393,6 +2430,32 @@ export class DesktopBackendRegistry {
   }
 
   private async emit(event: AgentEvent): Promise<void> {
+    if (
+      event.backend === "codex" &&
+      event.notification.method === "turn/completed" &&
+      event.notification.params.turnId
+    ) {
+      this.activeCodexTurnModes.delete(
+        buildActiveTurnModeKey(
+          event.notification.params.threadId,
+          event.notification.params.turnId,
+        ),
+      );
+    }
+
+    if (
+      event.backend === "codex" &&
+      event.notification.method === "thread/status/changed" &&
+      readStatusType(event.notification.params.status) !== "active"
+    ) {
+      const keyPrefix = `${event.notification.params.threadId}:`;
+      for (const key of this.activeCodexTurnModes.keys()) {
+        if (key.startsWith(keyPrefix)) {
+          this.activeCodexTurnModes.delete(key);
+        }
+      }
+    }
+
     if (event.notification.method === "serverRequest/resolved") {
       const key = buildPendingRequestKey({
         backend: event.backend,

@@ -112,3 +112,38 @@ test("dismisses the pending approval UI after approval", async () => {
     await app.close();
   }
 });
+
+test("stops the active turn on its original execution mode after access mode changes", async () => {
+  const app = await openApprovalPendingReplay();
+
+  try {
+    await expect
+      .poll(async () => await app.getLastStartTurn({ executionMode: "default" }))
+      .toMatchObject({
+        threadId: "thread-approval-pending",
+      });
+    expect(await app.getLastStartTurn({ executionMode: "full-access" })).toBeUndefined();
+
+    const accessMode = app.window.getByLabel("Access mode");
+    await expect(accessMode).toHaveAttribute("data-value", "default");
+    await accessMode.click();
+    await app.window.getByRole("option", { name: "Full Access" }).click();
+    await expect(accessMode).toHaveAttribute("data-value", "full-access");
+
+    await app.window.getByRole("button", { name: "Stop" }).click();
+
+    await expect
+      .poll(async () => await app.getInterruptTurnCalls({ executionMode: "default" }))
+      .toEqual([
+        {
+          threadId: "thread-approval-pending",
+          turnId: "turn-approval-2",
+        },
+      ]);
+    await expect
+      .poll(async () => await app.getInterruptTurnCalls({ executionMode: "full-access" }))
+      .toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
