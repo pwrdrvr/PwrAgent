@@ -63,6 +63,7 @@ textarea {
 
 .app-shell {
   display: grid;
+  position: relative;
   grid-template-columns: var(--sidebar-width, 408px) minmax(0, 1fr);
   align-items: stretch;
   height: 100vh;
@@ -1151,6 +1152,17 @@ textarea {
   min-width: 0;
   padding: 24px 0 24px 28px;
   overflow: hidden;
+}
+
+.app-shell__settings-layer {
+  display: flex;
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+  padding: 24px;
+  background: var(--bg-app);
 }
 
 .thread-view {
@@ -4597,6 +4609,12 @@ textarea {
   .app-main {
     display: block;
     overflow: visible;
+    padding: 20px 16px 24px;
+  }
+
+  .app-shell__settings-layer {
+    position: fixed;
+    overflow: auto;
     padding: 20px 16px 24px;
   }
 
