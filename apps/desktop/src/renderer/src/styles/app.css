@@ -3714,10 +3714,23 @@ textarea {
   gap: 8px;
 }
 
+.composer__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .composer__application-actions {
   display: inline-flex;
+  min-width: 0;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
+}
+
+.composer__footer-spacer {
+  min-width: 0;
 }
 
 .composer__application-button {
@@ -4238,6 +4251,7 @@ textarea {
 .composer__actions {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 8px;
   justify-content: flex-end;
 }

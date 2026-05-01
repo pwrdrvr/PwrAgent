@@ -2130,25 +2130,6 @@ export function Composer(props: ComposerProps) {
           className="composer__setup"
           aria-label={props.launchpad ? "New thread settings" : "Thread settings"}
         >
-          {workspaceOpenPath && (editorApplication || terminalApplication) ? (
-            <div className="composer__application-actions" aria-label="Open workspace">
-              {editorApplication ? (
-                <ComposerApplicationButton
-                  application={editorApplication}
-                  label={editorApplication.name}
-                  onOpen={openWorkspaceApplication}
-                />
-              ) : null}
-              {terminalApplication ? (
-                <ComposerApplicationButton
-                  application={terminalApplication}
-                  label={terminalApplication.name}
-                  onOpen={openWorkspaceApplication}
-                />
-              ) : null}
-            </div>
-          ) : null}
-
           {props.launchpad && providerOptions.length > 0 ? (
             <ComposerDropdown
               id="composer-provider"
@@ -2560,40 +2541,63 @@ export function Composer(props: ComposerProps) {
         </p>
       ) : null}
 
-      <div className="composer__actions">
-        <ContextWindowMoon contextWindow={props.contextWindow} />
-        {activeTurnId ? (
+      <div className="composer__footer">
+        {workspaceOpenPath && (editorApplication || terminalApplication) ? (
+          <div className="composer__application-actions" aria-label="Open workspace">
+            {editorApplication ? (
+              <ComposerApplicationButton
+                application={editorApplication}
+                label={editorApplication.name}
+                onOpen={openWorkspaceApplication}
+              />
+            ) : null}
+            {terminalApplication ? (
+              <ComposerApplicationButton
+                application={terminalApplication}
+                label={terminalApplication.name}
+                onOpen={openWorkspaceApplication}
+              />
+            ) : null}
+          </div>
+        ) : (
+          <span aria-hidden="true" className="composer__footer-spacer" />
+        )}
+
+        <div className="composer__actions">
+          <ContextWindowMoon contextWindow={props.contextWindow} />
+          {activeTurnId ? (
+            <button
+              className="button button--ghost"
+              disabled={props.disabled || interrupting}
+              type="button"
+              onClick={() => {
+                void stopTurn();
+              }}
+            >
+              {interrupting ? "Stopping…" : "Stop"}
+            </button>
+          ) : null}
           <button
-            className="button button--ghost"
-            disabled={props.disabled || interrupting}
-            type="button"
-            onClick={() => {
-              void stopTurn();
-            }}
+            className="button button--primary"
+            disabled={
+              props.disabled ||
+              steering ||
+              (!activeTurnId && sending) ||
+              (!draft.trim() && imageAttachments.length === 0)
+            }
+            type="submit"
           >
-            {interrupting ? "Stopping…" : "Stop"}
+            {activeTurnId
+              ? "Queue"
+              : sending
+              ? props.launchpad
+                ? "Starting…"
+                : "Sending…"
+              : props.launchpad
+                ? "Start thread"
+                : "Send"}
           </button>
-        ) : null}
-        <button
-          className="button button--primary"
-          disabled={
-            props.disabled ||
-            steering ||
-            (!activeTurnId && sending) ||
-            (!draft.trim() && imageAttachments.length === 0)
-          }
-          type="submit"
-        >
-          {activeTurnId
-            ? "Queue"
-            : sending
-            ? props.launchpad
-              ? "Starting…"
-              : "Sending…"
-            : props.launchpad
-              ? "Start thread"
-              : "Send"}
-        </button>
+        </div>
       </div>
     </form>
   );
