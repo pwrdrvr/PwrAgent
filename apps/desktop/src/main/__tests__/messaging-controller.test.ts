@@ -692,6 +692,38 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not revoke a binding from a failure result for another channel", async () => {
+    const harness = await createHarness({
+      deliver: async () => ({
+        channel: "discord",
+        deliveredAt: 1000,
+        outcome: "failed",
+        errorMessage: "DiscordAPIError[10003]: Unknown Channel",
+      }),
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+          },
+        },
+      },
+    });
+
+    await expect(
+      harness.store.getBinding("binding:telegram:dm::chat-1:codex:thread-1"),
+    ).resolves.not.toMatchObject({
+      revokedAt: expect.any(Number),
+    });
+  });
+
   it("presents Plan questionnaires as semantic questionnaire intents", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(

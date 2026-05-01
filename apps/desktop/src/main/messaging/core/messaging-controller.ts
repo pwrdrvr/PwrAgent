@@ -7,6 +7,7 @@ import type {
   MessagingBindingRecord,
   MessagingBrowseSessionRecord,
   MessagingActiveTurnSummary,
+  MessagingChannelKind,
   MessagingDeliveryResult,
   MessagingInboundCallbackEvent,
   MessagingInboundCommandEvent,
@@ -105,6 +106,7 @@ export type MessagingControllerOptions = {
   adapter: MessagingAdapter;
   authorizedActorIds: string[];
   backend: MessagingBackendBridge;
+  channel?: MessagingChannelKind;
   interactionMapper?: MessagingInteractionMapper;
   logger?: MessagingControllerLogger;
   now?: () => number;
@@ -186,10 +188,12 @@ export class MessagingController {
       return;
     }
 
-    const bindings = await this.options.store.findActiveBindingsForThread({
-      backend: event.backend,
-      threadId,
-    });
+    const bindings = this.filterBindingsForChannel(
+      await this.options.store.findActiveBindingsForThread({
+        backend: event.backend,
+        threadId,
+      }),
+    );
     const lifecycle = turnLifecycleForBackendEvent(event, this.now());
     for (const binding of bindings) {
       let currentBinding = binding;
@@ -256,10 +260,12 @@ export class MessagingController {
     backend: AppServerBackendKind,
     request: AppServerPendingRequestNotification,
   ): Promise<void> {
-    const bindings = await this.options.store.findActiveBindingsForThread({
-      backend,
-      threadId: request.params.threadId,
-    });
+    const bindings = this.filterBindingsForChannel(
+      await this.options.store.findActiveBindingsForThread({
+        backend,
+        threadId: request.params.threadId,
+      }),
+    );
 
     for (const binding of bindings) {
       const intent = this.intentForPendingRequest(request);
@@ -584,7 +590,9 @@ export class MessagingController {
         now: this.now(),
       });
 
-    for (const pendingIntent of pendingIntents) {
+    for (const pendingIntent of pendingIntents.filter((intent) =>
+      this.isChannelInScope(intent.channel),
+    )) {
       await this.retireApprovalIntent(pendingIntent);
       await this.options.store.deletePendingIntent(pendingIntent.id);
     }
@@ -1679,7 +1687,11 @@ export class MessagingController {
       bindingId: binding?.id ?? intent.bindingId,
       intentId: routedIntent.id,
     });
-    if (binding && isPermanentMessagingTargetFailure(result)) {
+    if (
+      binding &&
+      result.channel === binding.channel.channel &&
+      isPermanentMessagingTargetFailure(result)
+    ) {
       await this.options.store.revokeBinding({
         bindingId: binding.id,
         revokedAt: this.now(),
@@ -1694,6 +1706,19 @@ export class MessagingController {
       });
     }
     return result;
+  }
+
+  private filterBindingsForChannel(
+    bindings: MessagingBindingRecord[],
+  ): MessagingBindingRecord[] {
+    if (!this.options.channel) {
+      return bindings;
+    }
+    return bindings.filter((binding) => binding.channel.channel === this.options.channel);
+  }
+
+  private isChannelInScope(channel: MessagingBindingRecord["channel"] | undefined): boolean {
+    return !this.options.channel || channel?.channel === this.options.channel;
   }
 
   private withRoutingAudit(

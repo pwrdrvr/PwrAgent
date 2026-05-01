@@ -73,6 +73,7 @@ export class DesktopMessagingRuntime {
         adapter,
         authorizedActorIds,
         backend: this.options.backendBridge,
+        channel: adapter.channel,
         store,
       });
 

@@ -65,6 +65,7 @@ describe("DesktopMessagingRuntime", () => {
   });
 
   it("uses adapter-supplied authorization without provider-specific runtime config", async () => {
+    await prepareRuntimeStore();
     const adapter = createAdapter("custom", {
       authorizedActorIds: ["driver-1"],
     });
@@ -184,6 +185,133 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
+  it("does not route backend requests to adapters for bindings owned by another channel", async () => {
+    await prepareRuntimeStore();
+    const telegramAdapter = createAdapter("telegram");
+    const discordAdapter = createAdapter("discord");
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const bridge = createBackendBridge();
+    const runtime = new Runtime({
+      adapterFactory: () => [telegramAdapter, discordAdapter],
+      backendBridge: bridge,
+      config: {
+        discord: {
+          channel: "discord",
+          botToken: "discord-token",
+          authorizedActorIds: ["user-1"],
+        },
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: ["user-1"],
+        },
+      },
+    });
+
+    await runtime.start();
+    await telegramAdapter.listener?.(
+      buildCallbackEvent("bind:codex:thread-1", {
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    );
+    telegramAdapter.delivered.length = 0;
+    discordAdapter.delivered.length = 0;
+
+    await bridge.emitBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "approval-1",
+          prompt: "Run tests?",
+          command: "pnpm test -- messaging-runtime",
+        },
+      },
+    });
+
+    expect(telegramAdapter.delivered.find((intent) => intent.kind === "approval"))
+      .toMatchObject({
+        kind: "approval",
+      });
+    expect(discordAdapter.delivered).toEqual([]);
+  });
+
+  it("clears resolved approval buttons through the owning channel adapter only", async () => {
+    await prepareRuntimeStore();
+    const telegramAdapter = createAdapter("telegram");
+    const discordAdapter = createAdapter("discord");
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const bridge = createBackendBridge();
+    const runtime = new Runtime({
+      adapterFactory: () => [telegramAdapter, discordAdapter],
+      backendBridge: bridge,
+      config: {
+        discord: {
+          channel: "discord",
+          botToken: "discord-token",
+          authorizedActorIds: ["user-1"],
+        },
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: ["user-1"],
+        },
+      },
+    });
+
+    await runtime.start();
+    await telegramAdapter.listener?.(
+      buildCallbackEvent("bind:codex:thread-1", {
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    );
+
+    await bridge.emitBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "approval-1",
+          prompt: "Run tests?",
+          command: "pnpm test -- messaging-runtime",
+        },
+      },
+    });
+    telegramAdapter.delivered.length = 0;
+    discordAdapter.delivered.length = 0;
+
+    await bridge.emitBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: "approval-1",
+        },
+      },
+    });
+
+    expect(telegramAdapter.delivered.at(-1)).toMatchObject({
+      kind: "approval",
+      decisions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+    });
+    expect(discordAdapter.delivered).toEqual([]);
+  });
+
   it("routes backend user-input requests to bound channel adapters", async () => {
     const { runtime, adapter, emitBackendEvent } = await createRuntimeHarness();
 
@@ -273,6 +401,7 @@ describe("DesktopMessagingRuntime", () => {
   });
 
   it("keeps other adapters available when one adapter fails during startup", async () => {
+    await prepareRuntimeStore();
     const failingAdapter = createAdapter("telegram", {
       start: vi.fn(async () => {
         throw new Error("telegram unavailable");
@@ -318,6 +447,7 @@ describe("DesktopMessagingRuntime", () => {
   });
 
   it("isolates backend event delivery failures between adapters", async () => {
+    await prepareRuntimeStore();
     const failingAdapter = createAdapter("telegram", {
       deliver: vi.fn(async (
         intent: MessagingSurfaceIntent,
@@ -366,7 +496,7 @@ describe("DesktopMessagingRuntime", () => {
       buildCallbackEvent("bind:codex:thread-1", {
         backend: "codex",
         threadId: "thread-1",
-      }),
+      }, "discord"),
     );
     failingAdapter.delivered.length = 0;
     workingAdapter.delivered.length = 0;
@@ -406,6 +536,7 @@ describe("DesktopMessagingRuntime", () => {
   });
 
   it("stops the started adapter instances without rebuilding the factory", async () => {
+    await prepareRuntimeStore();
     const adapter = createAdapter("telegram");
     const factory = vi.fn<DesktopMessagingAdapterFactory>(() => [adapter]);
     const { DesktopMessagingRuntime: Runtime } = await import(
@@ -438,13 +569,7 @@ async function createRuntimeHarness(): Promise<{
   emitBackendEvent: (event: AgentEvent) => Promise<void>;
   runtime: DesktopMessagingRuntime;
 }> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-runtime-"));
-  tempDirs.push(tempDir);
-  vi.stubEnv("PWRAGNT_STATE_ROOT", tempDir);
-  const { resetDesktopMessagingStoreForTests } = await import(
-    "../messaging/desktop-messaging-store"
-  );
-  resetDesktopMessagingStoreForTests();
+  await prepareRuntimeStore();
 
   const adapter = createAdapter("telegram");
   const bridge = createBackendBridge();
@@ -470,6 +595,16 @@ async function createRuntimeHarness(): Promise<{
     emitBackendEvent: bridge.emitBackendEvent,
     runtime,
   };
+}
+
+async function prepareRuntimeStore(): Promise<void> {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-runtime-"));
+  tempDirs.push(tempDir);
+  vi.stubEnv("PWRAGNT_STATE_ROOT", tempDir);
+  const { resetDesktopMessagingStoreForTests } = await import(
+    "../messaging/desktop-messaging-store"
+  );
+  resetDesktopMessagingStoreForTests();
 }
 
 function createAdapter(
@@ -593,6 +728,7 @@ function buildCommandEvent(rawText: string): MessagingInboundEvent & { kind: "co
 function buildCallbackEvent(
   actionId: string,
   value: NonNullable<Extract<MessagingInboundEvent, { kind: "callback" }>["value"]>,
+  channel: MessagingChannelKind = "telegram",
 ): Extract<MessagingInboundEvent, { kind: "callback" }> {
   return {
     id: "event-callback",
@@ -601,14 +737,14 @@ function buildCallbackEvent(
       platformUserId: "user-1",
     },
     channel: {
-      channel: "telegram",
+      channel,
       conversation: {
         id: "chat-1",
         kind: "dm",
       },
     },
     interaction: {
-      channel: "telegram",
+      channel,
       id: actionId,
     },
     actionId,
