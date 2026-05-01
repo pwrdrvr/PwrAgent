@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
+  DesktopCodexDiscoveryCandidate,
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
 } from "@pwragnt/shared";
 import { formatSourceLabel, sourceBadge } from "./settings-fields";
+
+type CodexPathMode = "auto" | "specified";
 
 export function ModelsSettings(props: {
   saving: boolean;
@@ -16,9 +19,28 @@ export function ModelsSettings(props: {
   onSaveCodexPath: (path: string) => Promise<void>;
 }) {
   const [codexPath, setCodexPath] = useState(props.snapshot.models.codex.path.value);
+  const [codexMode, setCodexMode] = useState<CodexPathMode>(
+    props.snapshot.models.codex.path.value.trim() ? "specified" : "auto",
+  );
   const [grokKey, setGrokKey] = useState("");
   const codex = props.snapshot.models.codex;
   const grok = props.snapshot.models.grok.apiKey;
+  const envForced = codex.path.source === "env";
+  const autoCandidates = codex.discovery.candidates.filter(
+    (candidate) => candidate.source === "path" || candidate.source === "application",
+  );
+  const selectedLabel = codex.discovery.selectedCommand
+    ? `Using ${codex.discovery.selectedCommand}`
+    : "No executable Codex found";
+
+  useEffect(() => {
+    setCodexPath(codex.path.value);
+    setCodexMode(codex.path.value.trim() || envForced ? "specified" : "auto");
+  }, [codex.path.value, envForced]);
+
+  const saveCodexPath = (path: string): void => {
+    void props.onSaveCodexPath(path.trim());
+  };
 
   return (
     <section className="settings-stack" aria-label="Model settings">
@@ -28,39 +50,80 @@ export function ModelsSettings(props: {
             <p className="eyebrow">Models</p>
             <h2 id="settings-codex-title">Codex</h2>
           </div>
-          <span className="settings-source">{sourceBadge(codex.path)}</span>
+          <span className="settings-source">
+            {codex.path.source === "default" ? "auto" : sourceBadge(codex.path)}
+          </span>
         </div>
-        <label className="settings-row">
-          <span className="settings-row__label">Codex path</span>
-          <input
-            className="settings-input"
-            disabled={props.saving}
-            placeholder="Auto discovery"
-            value={codexPath}
-            onBlur={() => {
-              void props.onSaveCodexPath(codexPath.trim());
-            }}
-            onChange={(event) => setCodexPath(event.currentTarget.value)}
-          />
-        </label>
+        <div className="settings-field">
+          <div>
+            <span className="settings-row__label">Codex selection</span>
+            <span className="settings-source settings-source--wide">{selectedLabel}</span>
+          </div>
+          <div
+            className="settings-segmented settings-segmented--two"
+            role="radiogroup"
+            aria-label="Codex selection mode"
+          >
+            <button
+              aria-checked={codexMode === "auto" && !envForced}
+              className={`settings-segmented__button${
+                codexMode === "auto" && !envForced ? " is-active" : ""
+              }`}
+              disabled={props.saving || envForced}
+              role="radio"
+              type="button"
+              onClick={() => {
+                setCodexMode("auto");
+                setCodexPath("");
+                saveCodexPath("");
+              }}
+            >
+              Auto Discovery - Use Newest
+            </button>
+            <button
+              aria-checked={codexMode === "specified" || envForced}
+              className={`settings-segmented__button${
+                codexMode === "specified" || envForced ? " is-active" : ""
+              }`}
+              disabled={props.saving || envForced}
+              role="radio"
+              type="button"
+              onClick={() => setCodexMode("specified")}
+            >
+              Specified Path
+            </button>
+          </div>
+        </div>
+
+        {codexMode === "specified" || envForced ? (
+          <label className="settings-row">
+            <span className="settings-row__label">Codex path</span>
+            <input
+              className="settings-input"
+              disabled={props.saving || envForced}
+              placeholder="Path to codex"
+              value={codexPath}
+              onBlur={() => saveCodexPath(codexPath)}
+              onChange={(event) => setCodexPath(event.currentTarget.value)}
+            />
+          </label>
+        ) : null}
 
         <div className="settings-discovery" aria-label="Codex discovery">
-          {codex.discovery.candidates.length === 0 ? (
+          {autoCandidates.length === 0 ? (
             <p className="settings-empty">No Codex candidates found.</p>
           ) : (
-            codex.discovery.candidates.map((candidate) => (
-              <div
+            autoCandidates.map((candidate) => (
+              <CodexDiscoveryRow
                 key={`${candidate.source}:${candidate.command}`}
-                className={`settings-discovery__row${
-                  candidate.selected ? " is-selected" : ""
-                }`}
-              >
-                <span className="settings-discovery__command">{candidate.command}</span>
-                <span className="settings-source">{candidate.source}</span>
-                <span className="settings-source">
-                  {candidate.version ?? candidate.failureReason ?? "version unknown"}
-                </span>
-              </div>
+                candidate={candidate}
+                disabled={props.saving || envForced}
+                onUse={(command) => {
+                  setCodexMode("specified");
+                  setCodexPath(command);
+                  saveCodexPath(command);
+                }}
+              />
             ))
           )}
         </div>
@@ -118,5 +181,35 @@ export function ModelsSettings(props: {
         ) : null}
       </section>
     </section>
+  );
+}
+
+function CodexDiscoveryRow(props: {
+  candidate: DesktopCodexDiscoveryCandidate;
+  disabled?: boolean;
+  onUse: (command: string) => void;
+}) {
+  const status = props.candidate.selected ? "Using" : "Available";
+  const version = props.candidate.version ?? "version unknown";
+
+  return (
+    <div
+      className={`settings-discovery__row${
+        props.candidate.selected ? " is-selected" : ""
+      }`}
+    >
+      <span className="settings-discovery__command">{props.candidate.command}</span>
+      <span className="settings-source">{props.candidate.source}</span>
+      <span className="settings-source">{version}</span>
+      <span className="settings-source">{status}</span>
+      <button
+        className="button button--secondary"
+        disabled={props.disabled}
+        type="button"
+        onClick={() => props.onUse(props.candidate.command)}
+      >
+        Use
+      </button>
+    </div>
   );
 }

@@ -56,6 +56,13 @@ function createSnapshot(
               source: "path",
               version: "0.130.0",
             },
+            {
+              command: "/Applications/Codex.app/Contents/Resources/codex",
+              executable: true,
+              selected: false,
+              source: "application",
+              version: "0.120.0",
+            },
           ],
         },
       },
@@ -109,6 +116,23 @@ describe("SettingsScreen", () => {
     fireEvent.click(within(sections).getByRole("button", { name: "Models" }));
     expect(screen.getByRole("heading", { name: "Codex" })).toBeInTheDocument();
     expect(screen.getByText("/usr/local/bin/codex")).toBeInTheDocument();
+    expect(
+      screen.getByRole("radio", { name: "Auto Discovery - Use Newest" }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("0.130.0")).toBeInTheDocument();
+    expect(screen.getByText("Using /usr/local/bin/codex")).toBeInTheDocument();
+
+    const useButtons = screen.getAllByRole("button", { name: "Use" });
+    fireEvent.click(useButtons[1]);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        models: {
+          codex: {
+            path: "/Applications/Codex.app/Contents/Resources/codex",
+          },
+        },
+      });
+    });
   });
 
   it("returns to the previous app surface", () => {

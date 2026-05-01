@@ -52,6 +52,7 @@ describe("Codex discovery", () => {
       selected: true,
       version: "0.130.0",
     });
+    expect(accessMock).toHaveBeenCalledWith("/usr/local/bin/codex-env", 1);
   });
 
   it("keeps invalid configured commands visible with a failure reason", async () => {
@@ -77,5 +78,7 @@ describe("Codex discovery", () => {
       executable: false,
       failureReason: "not_executable",
     });
+    expect(snapshot.candidates.some((candidate) => candidate.source === "path")).toBe(false);
+    expect(snapshot.candidates.some((candidate) => candidate.source === "application")).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +21,7 @@ export type ResolvedCodexCommandCandidate = {
 
 export async function pathIsExecutable(candidate: string): Promise<boolean> {
   try {
-    await access(candidate, 0o111);
+    await access(candidate, fsConstants.X_OK);
     return true;
   } catch {
     return false;
@@ -208,6 +209,7 @@ export async function discoverCodexCommands(params?: {
     ])
   )
     .filter((candidate): candidate is DesktopCodexDiscoveryCandidate => Boolean(candidate))
+    .filter((candidate) => candidate.executable)
     .sort((left, right) => compareCodexCliVersions(right.version, left.version));
 
   const candidates = [...fixedCandidates, ...autoCandidates];
