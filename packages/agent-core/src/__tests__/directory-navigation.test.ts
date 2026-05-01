@@ -149,6 +149,37 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("derives stale launchpad display labels from the directory key when path is missing", () => {
+    const directories = buildDirectorySummaries({
+      threads: [],
+      launchpadsByKey: {
+        "directory:/Users/huntharo/github/PwrAgnt": {
+          directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+          directoryKind: "directory",
+          directoryLabel: "directory:/Users/huntharo/github/PwrAgnt",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Existing draft",
+          workMode: "local",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      },
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "directory:/Users/huntharo/github/PwrAgnt",
+        label: "PwrAgnt",
+        path: "/Users/huntharo/github/PwrAgnt",
+        launchpad: expect.objectContaining({
+          directoryLabel: "PwrAgnt",
+          directoryPath: "/Users/huntharo/github/PwrAgnt",
+        }),
+      }),
+    ]);
+  });
+
   it("ignores opened-only launchpads with no pending data or touched settings", () => {
     const directories = buildDirectorySummaries({
       threads: [],

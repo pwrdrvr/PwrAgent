@@ -43,6 +43,15 @@ function displayDirectoryLabel(params: {
   return pathBaseName(params.path) || label || "Directory";
 }
 
+function pathFromDirectoryKey(directoryKey: string): string | undefined {
+  const directoryPath = directoryKey.startsWith("directory:")
+    ? directoryKey.slice("directory:".length)
+    : directoryKey.startsWith("workspace:")
+      ? directoryKey.slice("workspace:".length)
+      : undefined;
+  return directoryPath?.trim() || undefined;
+}
+
 function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescriptor {
   const scratchWorkspaceMatch = directory.path.match(
     /^(.*[\\/]\.pwragnt[\\/]projects)[\\/][^\\/]+$/,
@@ -212,23 +221,22 @@ export function buildDirectorySummaries(params: {
     if (!launchpad || !hasPersistableLaunchpadState(launchpad)) {
       continue;
     }
+    const launchpadPath = launchpad.directoryPath ?? pathFromDirectoryKey(directoryKey);
+    const launchpadLabel = displayDirectoryLabel({
+      kind: launchpad.directoryKind,
+      label: launchpad.directoryLabel,
+      path: launchpadPath,
+    });
     const summary = ensureSummary(summaries, {
       key: directoryKey,
       kind: launchpad.directoryKind,
-      label: displayDirectoryLabel({
-        kind: launchpad.directoryKind,
-        label: launchpad.directoryLabel,
-        path: launchpad.directoryPath,
-      }),
-      path: launchpad.directoryPath,
+      label: launchpadLabel,
+      path: launchpadPath,
     });
     summary.launchpad = {
       ...launchpad,
-      directoryLabel: displayDirectoryLabel({
-        kind: launchpad.directoryKind,
-        label: launchpad.directoryLabel,
-        path: launchpad.directoryPath,
-      }),
+      directoryLabel: launchpadLabel,
+      directoryPath: launchpadPath,
     };
     summary.latestUpdatedAt = Math.max(summary.latestUpdatedAt ?? 0, launchpad.updatedAt);
   }
