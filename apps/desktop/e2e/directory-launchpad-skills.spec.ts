@@ -345,9 +345,11 @@ test("directory launchpad skill autocomplete supports active keyboard selection"
 
     await app.window.keyboard.press("ArrowDown");
     const secondActiveOption = listbox.locator('[aria-selected="true"]');
+    await expect
+      .poll(async () => await secondActiveOption.getAttribute("id"))
+      .not.toBe(firstActiveOptionId);
     const secondActiveOptionId = await secondActiveOption.getAttribute("id");
     expect(secondActiveOptionId).toBeTruthy();
-    expect(secondActiveOptionId).not.toBe(firstActiveOptionId);
     const secondActiveSkillLabel = (
       (await secondActiveOption
         .locator(".composer__autocomplete-title")
