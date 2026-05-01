@@ -837,6 +837,16 @@ describe("MessagingController", () => {
       kind: "status",
       text: expect.stringContaining("Permissions: Full Access"),
     });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("run npm view dive"));
+
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      }),
+    );
   });
 
   it("stops an active turn through the backend bridge", async () => {

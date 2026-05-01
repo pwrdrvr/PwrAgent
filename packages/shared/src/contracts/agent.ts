@@ -37,6 +37,9 @@ export type StartTurnRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   input: AppServerTurnInputItem[];
+  executionMode?: ThreadExecutionMode;
+  approvalPolicy?: string;
+  sandbox?: string;
   model?: string;
   collaborationMode?: AppServerCollaborationModeRequest;
   serviceTier?: string;

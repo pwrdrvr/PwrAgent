@@ -3799,6 +3799,8 @@ export class CodexAppServerClient {
   async startTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
+    approvalPolicy?: string;
+    sandbox?: string;
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
     serviceTier?: string;
@@ -3812,6 +3814,8 @@ export class CodexAppServerClient {
       methods: ["thread/resume"],
       payloads: buildThreadResumePayloads({
         threadId: params.threadId,
+        approvalPolicy: params.approvalPolicy,
+        sandbox: params.sandbox,
         model: params.model,
         serviceTier: params.serviceTier,
         reasoningEffort: params.reasoningEffort,

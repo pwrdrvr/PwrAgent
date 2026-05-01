@@ -30,6 +30,7 @@ export function buildBindingStatusIntent(params: {
   const permissionsMode =
     preferences?.permissionsMode ??
     (preferences?.executionMode === "full-access" ? "full-access" : undefined) ??
+    (thread?.executionMode === "full-access" ? "full-access" : undefined) ??
     (defaults?.executionMode === "full-access" ? "full-access" : "default");
   const activeTurn = params.binding.activeTurn;
 

@@ -17,6 +17,7 @@ import type {
   MessagingPendingIntentRecord,
   MessagingSurfaceIntent,
   NavigationSnapshot,
+  ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragnt/shared";
 import { MessagingStore, buildMessagingConversationKey } from "./messaging-store.js";
@@ -52,6 +53,16 @@ const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 const messagingControllerLog = getMainLogger("pwragnt:messaging");
+
+function executionModeForBinding(
+  binding: MessagingBindingRecord,
+): ThreadExecutionMode | undefined {
+  return (
+    binding.preferences?.executionMode ??
+    (binding.preferences?.permissionsMode === "full-access" ? "full-access" : undefined) ??
+    (binding.preferences?.permissionsMode === "default" ? "default" : undefined)
+  );
+}
 
 type MessagingControllerLogger = {
   debug?(message: string, data?: Record<string, unknown>): void;
@@ -377,6 +388,7 @@ export class MessagingController {
           text: event.text,
         },
       ],
+      executionMode: executionModeForBinding(binding),
       fastMode: binding.preferences?.fastMode,
       model: binding.preferences?.model,
       reasoningEffort: binding.preferences?.reasoningEffort,

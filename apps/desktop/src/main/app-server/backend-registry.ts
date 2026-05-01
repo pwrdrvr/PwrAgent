@@ -156,6 +156,8 @@ type BackendClient = {
   startTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
+    approvalPolicy?: string;
+    sandbox?: string;
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
     serviceTier?: string;
@@ -1308,6 +1310,9 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
+    executionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
     serviceTier?: string;
@@ -1329,13 +1334,19 @@ export class DesktopBackendRegistry {
     const result =
       params.backend === "codex"
         ? await this.withCodexThreadClient(params.threadId, async (client, mode) => {
+            const effectiveMode = params.executionMode ?? mode;
+            const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
             const started = await client.startTurn({
-              ...params,
+              threadId: params.threadId,
+              input: params.input,
+              collaborationMode: params.collaborationMode,
               ...turnParams,
+              approvalPolicy: params.approvalPolicy ?? modeSettings.approvalPolicy,
+              sandbox: params.sandbox ?? modeSettings.sandbox,
             });
-            activeTurnMode = mode;
+            activeTurnMode = effectiveMode;
             return started;
-          })
+          }, params.executionMode)
         : await this.grokClient.startTurn({
             threadId: params.threadId,
             input: params.input,
@@ -1355,6 +1366,13 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: result.threadId,
         ...turnParams,
+      });
+    }
+    if (params.backend === "codex" && params.executionMode) {
+      await this.overlayStore.setThreadExecutionMode({
+        backend: params.backend,
+        threadId: result.threadId,
+        executionMode: params.executionMode,
       });
     }
     if (params.backend === "codex" && activeTurnMode) {
@@ -2205,12 +2223,13 @@ export class DesktopBackendRegistry {
   private async withCodexThreadClient<T>(
     threadId: string,
     operation: (client: BackendClient, mode: ThreadExecutionMode) => Promise<T>,
+    requestedMode?: ThreadExecutionMode,
   ): Promise<T> {
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: "codex",
       threadId,
     });
-    const preferredMode = overlay?.executionMode;
+    const preferredMode = requestedMode ?? overlay?.executionMode;
     const modes: ThreadExecutionMode[] = preferredMode
       ? [preferredMode, preferredMode === "default" ? "full-access" : "default"]
       : ["default", "full-access"];

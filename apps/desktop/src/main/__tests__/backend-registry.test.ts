@@ -75,12 +75,18 @@ function createOverlayStoreMock(params?: {
       backend: "codex" | "grok";
       threadId: string;
       executionMode: "default" | "full-access";
-    }) => ({
-      backend,
-      threadId,
-      executionMode,
-      extraLinkedDirectories: [],
-    }),
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const next = {
+        ...overlays.get(key),
+        backend,
+        threadId,
+        executionMode,
+        extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     setThreadModelSettings: async (settings: {
       backend: "codex" | "grok";
       threadId: string;
@@ -278,6 +284,9 @@ class MockBackendClient {
     backend?: "codex" | "grok";
     threadId: string;
     input: AppServerTurnInputItem[];
+    executionMode?: "default" | "full-access";
+    approvalPolicy?: string;
+    sandbox?: string;
     model?: string;
     serviceTier?: string;
     reasoningEffort?: string;
@@ -470,6 +479,9 @@ class MockBackendClient {
     backend?: "codex" | "grok";
     threadId: string;
     input: AppServerTurnInputItem[];
+    executionMode?: "default" | "full-access";
+    approvalPolicy?: string;
+    sandbox?: string;
     model?: string;
     serviceTier?: string;
     reasoningEffort?: string;
@@ -1176,9 +1188,10 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(codexClient.lastStartTurnParams).toEqual({
-      backend: "codex",
       threadId: "thread-modelled",
       input: [{ type: "text", text: "Use this thread's model settings" }],
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
       model: "gpt-5.5",
       serviceTier: "priority",
       reasoningEffort: "high",
@@ -1192,13 +1205,60 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(codexClient.lastStartTurnParams).toEqual({
-      backend: "codex",
       threadId: "thread-plain",
       input: [{ type: "text", text: "Do not inherit another thread's settings" }],
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
       model: "gpt-5.5",
       serviceTier: undefined,
       reasoningEffort: "medium",
       fastMode: undefined,
+    });
+
+    await registry.close();
+  });
+
+  it("applies requested full-access execution settings when starting Codex turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const codexFullAccessClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      executionMode: "default",
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "full-access",
+      input: [{ type: "text", text: "Run npm view dive" }],
+    });
+
+    expect(codexClient.lastStartTurnParams).toBeUndefined();
+    expect(codexFullAccessClient.lastStartTurnParams).toEqual({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Run npm view dive" }],
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      model: "gpt-5.5",
+      serviceTier: undefined,
+      reasoningEffort: "medium",
+      fastMode: undefined,
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      executionMode: "full-access",
     });
 
     await registry.close();
