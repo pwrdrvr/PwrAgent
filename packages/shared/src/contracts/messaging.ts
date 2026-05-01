@@ -267,12 +267,14 @@ export type MessagingThreadPickerIntent = MessagingBaseSurfaceIntent & {
   kind: "thread_picker";
   navigation: Pick<NavigationSnapshot, "backend" | "fetchedAt" | "unchanged">;
   page: MessagingPickerPage<NavigationThreadSummary | AppServerThreadSummary>;
+  prompt: string;
 };
 
 export type MessagingProjectPickerIntent = MessagingBaseSurfaceIntent & {
   kind: "project_picker";
   navigation: Pick<NavigationSnapshot, "backend" | "fetchedAt" | "unchanged">;
   page: MessagingPickerPage<NavigationDirectorySummary>;
+  prompt: string;
 };
 
 export type MessagingSingleSelectIntent = MessagingBaseSurfaceIntent & {

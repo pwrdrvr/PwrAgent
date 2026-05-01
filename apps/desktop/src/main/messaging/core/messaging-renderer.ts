@@ -37,6 +37,7 @@ export function buildThreadPickerIntent(params: {
   id: string;
   navigation: NavigationSnapshot;
   pageSize: number;
+  prompt?: string;
 }): MessagingThreadPickerIntent {
   return {
     id: params.id,
@@ -55,6 +56,7 @@ export function buildThreadPickerIntent(params: {
       pageSize: params.pageSize,
       totalItems: params.navigation.threads.length,
     },
+    prompt: params.prompt ?? params.fallbackText,
   };
 }
 

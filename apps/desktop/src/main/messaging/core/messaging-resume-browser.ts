@@ -194,7 +194,7 @@ function buildThreadPickerIntent(params: {
       mode: params.session.surface ? "update" : "present",
       fallback: "present_new",
     },
-    fallbackText: threadPickerText(params.session, page.totalPages, page.totalItems),
+    fallbackText: threadPickerFallbackText(params.session, page),
     navigation: {
       backend: params.navigation.backend,
       fetchedAt: params.navigation.fetchedAt,
@@ -208,6 +208,7 @@ function buildThreadPickerIntent(params: {
       pageSize: params.session.pageSize,
       totalItems: page.totalItems,
     },
+    prompt: threadPickerPromptText(params.session, page.totalPages, page.totalItems),
     targetSurface: params.session.surface,
   };
 }
@@ -250,7 +251,7 @@ function buildProjectPickerIntent(params: {
       mode: params.session.surface ? "update" : "present",
       fallback: "present_new",
     },
-    fallbackText: projectPickerText(params.session, page.totalPages, page.totalItems),
+    fallbackText: projectPickerFallbackText(params.session, page),
     navigation: {
       backend: params.navigation.backend,
       fetchedAt: params.navigation.fetchedAt,
@@ -264,6 +265,7 @@ function buildProjectPickerIntent(params: {
       pageSize: params.session.pageSize,
       totalItems: page.totalItems,
     },
+    prompt: projectPickerPromptText(params.session, page.totalPages, page.totalItems),
     targetSurface: params.session.surface,
   };
 }
@@ -381,7 +383,7 @@ function navigationActions(
   return actions;
 }
 
-function threadPickerText(
+function threadPickerPromptText(
   session: MessagingBrowseSessionRecord,
   totalPages: number,
   totalItems: number,
@@ -392,14 +394,44 @@ function threadPickerText(
     : "Showing recent PwrAgnt threads.";
   return [
     `${scope} ${pageLabel}.`,
-    "Tap a thread to resume it. Use Projects to browse by project, New to start a thread, or Cancel to close this picker.",
+    "Choose a thread to resume. Use Projects to browse by project, New to start a thread, or Cancel to close this picker.",
     totalItems === 0 ? "No matching PwrAgnt threads found." : "",
   ]
     .filter(Boolean)
     .join("\n");
 }
 
-function projectPickerText(
+function threadPickerFallbackText(
+  session: MessagingBrowseSessionRecord,
+  page: {
+    items: NavigationThreadSummary[];
+    pageIndex: number;
+    startIndex: number;
+    totalItems: number;
+    totalPages: number;
+  },
+): string {
+  const controls = [
+    page.pageIndex > 0 ? "previous" : undefined,
+    page.pageIndex < page.totalPages - 1 ? "next" : undefined,
+    "projects",
+    "new",
+    "cancel",
+  ].filter(Boolean);
+  return [
+    threadPickerPromptText(session, page.totalPages, page.totalItems),
+    ...page.items.map(
+      (thread, index) => `${page.startIndex + index + 1}. ${formatThreadLabel(thread)}`,
+    ),
+    page.totalItems > 0
+      ? `Reply with a number, or reply ${formatControlList(controls)}.`
+      : `Reply ${formatControlList(controls)}.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function projectPickerPromptText(
   session: MessagingBrowseSessionRecord,
   totalPages: number,
   totalItems: number,
@@ -420,11 +452,52 @@ function projectPickerText(
     .join("\n");
 }
 
+function projectPickerFallbackText(
+  session: MessagingBrowseSessionRecord,
+  page: {
+    items: NavigationDirectorySummary[];
+    pageIndex: number;
+    startIndex: number;
+    totalItems: number;
+    totalPages: number;
+  },
+): string {
+  const controls = [
+    page.pageIndex > 0 ? "previous" : undefined,
+    page.pageIndex < page.totalPages - 1 ? "next" : undefined,
+    session.launchAction === "resume_thread" ? "recent" : undefined,
+    "cancel",
+  ].filter(Boolean);
+  return [
+    projectPickerPromptText(session, page.totalPages, page.totalItems),
+    ...page.items.map(
+      (project, index) =>
+        `${page.startIndex + index + 1}. ${project.label} (${project.threadKeys.length})`,
+    ),
+    page.totalItems > 0
+      ? `Reply with a number, or reply ${formatControlList(controls)}.`
+      : `Reply ${formatControlList(controls)}.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function formatThreadLabel(thread: NavigationThreadSummary): string {
   const directory = thread.linkedDirectories.find((item) => item.kind === "worktree") ??
     thread.linkedDirectories[0];
   const suffix = directory?.label ? ` (${directory.label})` : "";
   return `${thread.title}${suffix}`;
+}
+
+function formatControlList(controls: Array<string | undefined>): string {
+  const values = controls.filter((value): value is string => Boolean(value));
+  if (values.length <= 1) {
+    return values[0] ?? "cancel";
+  }
+  if (values.length === 2) {
+    return `${values[0]} or ${values[1]}`;
+  }
+  return `${values.slice(0, -1).join(", ")}, or ${values.at(-1)}`;
 }
 
 function paginate<T>(

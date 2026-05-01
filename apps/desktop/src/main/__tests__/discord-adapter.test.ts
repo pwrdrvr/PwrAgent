@@ -91,6 +91,8 @@ describe("DiscordAdapter", () => {
     );
     const customId = request?.components?.[0]?.components[0]?.custom_id;
     const secondCustomId = request?.components?.[0]?.components[1]?.custom_id;
+    expect(request?.content).toContain("Choose a thread to resume");
+    expect(request?.content).not.toContain("1. Thread one");
     expect(customId).toMatch(/^dc:/);
     expect(Buffer.byteLength(customId ?? "", "utf8")).toBeLessThanOrEqual(
       DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES,

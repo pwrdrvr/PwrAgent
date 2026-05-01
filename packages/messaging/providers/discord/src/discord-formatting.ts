@@ -75,15 +75,9 @@ export function textForDiscordIntent(intent: MessagingSurfaceIntent): string {
     case "progress":
       return [intent.label, intent.detail].filter(Boolean).join("\n");
     case "thread_picker":
-      return [
-        intent.fallbackText ?? "Choose a thread.",
-        ...intent.page.items.map((item, index) => `${index + 1}. ${item.title}`),
-      ].join("\n");
+      return intent.prompt;
     case "project_picker":
-      return [
-        intent.fallbackText ?? "Choose a project.",
-        ...intent.page.items.map((item, index) => `${index + 1}. ${item.label}`),
-      ].join("\n");
+      return intent.prompt;
     case "single_select":
       return intent.prompt;
     case "multi_select":

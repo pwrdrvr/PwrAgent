@@ -95,6 +95,8 @@ describe("TelegramAdapter", () => {
       }),
     );
     const request = harness.api.sendMessage.mock.calls.at(-1)?.[0];
+    expect(request?.text).toContain("Choose a thread to resume");
+    expect(request?.text).not.toContain("1. Thread one");
     const callbackData = request?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data;
     const secondCallbackData =
       request?.reply_markup?.inline_keyboard[1]?.[0]?.callback_data;

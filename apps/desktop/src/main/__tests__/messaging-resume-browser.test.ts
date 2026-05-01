@@ -44,6 +44,7 @@ describe("messaging resume browser", () => {
     expect(intent).toMatchObject({
       kind: "thread_picker",
       fallbackText: expect.stringContaining("Showing recent PwrAgnt threads"),
+      prompt: expect.stringContaining("Choose a thread to resume"),
       page: {
         actions: expect.arrayContaining([
           expect.objectContaining({ id: "browse:mode:projects" }),
@@ -52,6 +53,9 @@ describe("messaging resume browser", () => {
         ]),
       },
     });
+    expect(intent.prompt).not.toContain("1. Thread one");
+    expect(intent.fallbackText).toContain("1. Thread one");
+    expect(intent.fallbackText).toContain("Reply with a number");
   });
 
   it("renders project-specific thread context after selecting a project", () => {
@@ -96,6 +100,7 @@ describe("messaging resume browser", () => {
     expect(intent).toMatchObject({
       kind: "project_picker",
       fallbackText: expect.stringContaining("new PwrAgnt thread"),
+      prompt: expect.stringContaining("Choose a project"),
       page: {
         items: [
           expect.objectContaining({
@@ -104,6 +109,8 @@ describe("messaging resume browser", () => {
         ],
       },
     });
+    expect(intent.prompt).not.toContain("1. PwrAgnt");
+    expect(intent.fallbackText).toContain("1. PwrAgnt");
   });
 });
 

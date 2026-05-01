@@ -50,6 +50,7 @@ describe("messaging surface contract", () => {
       bindingId: "binding-1",
       createdAt: 1000,
       fallbackText: "Reply with a number, Next, Back, or Cancel.",
+      prompt: "Choose a thread.",
       navigation: {
         backend: "codex",
         fetchedAt: 1000,

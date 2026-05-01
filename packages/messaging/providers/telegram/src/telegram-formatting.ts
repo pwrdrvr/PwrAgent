@@ -84,21 +84,9 @@ export function textForTelegramIntent(intent: MessagingSurfaceIntent): string {
         "plain",
       );
     case "thread_picker":
-      return renderTelegramHtml(
-        [
-          intent.fallbackText ?? "Choose a thread.",
-          ...intent.page.items.map((item, index) => `${index + 1}. ${item.title}`),
-        ].join("\n"),
-        "plain",
-      );
+      return renderTelegramHtml(intent.prompt, "plain");
     case "project_picker":
-      return renderTelegramHtml(
-        [
-          intent.fallbackText ?? "Choose a project.",
-          ...intent.page.items.map((item, index) => `${index + 1}. ${item.label}`),
-        ].join("\n"),
-        "plain",
-      );
+      return renderTelegramHtml(intent.prompt, "plain");
     case "single_select":
       return renderTelegramHtml(intent.prompt, "plain");
     case "multi_select":
