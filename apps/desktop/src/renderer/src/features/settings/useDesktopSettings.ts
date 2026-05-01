@@ -9,6 +9,7 @@ import type {
   WriteDesktopSettingsConfigRequest,
 } from "@pwragnt/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 
 export type DesktopSettingsState = {
   composerImplementation: DesktopChatReplyComposer;
@@ -65,6 +66,9 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         const request: WriteDesktopSettingsConfigRequest = { patch };
         const response = await desktopApi.writeSettingsConfig(request);
         setSnapshot(response.snapshot);
+        if (patch.models?.codex?.path !== undefined) {
+          window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+        }
         return true;
       } catch (writeError) {
         setError(writeError instanceof Error ? writeError.message : String(writeError));
@@ -89,6 +93,9 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         const request: ReplaceDesktopSettingsSecretRequest = { secret, value };
         const response = await desktopApi.replaceSettingsSecret(request);
         setSnapshot(response.snapshot);
+        if (secret === "grokApiKey") {
+          window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+        }
         return true;
       } catch (writeError) {
         setError(writeError instanceof Error ? writeError.message : String(writeError));
@@ -113,6 +120,9 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         const request: ClearDesktopSettingsSecretRequest = { secret };
         const response = await desktopApi.clearSettingsSecret(request);
         setSnapshot(response.snapshot);
+        if (secret === "grokApiKey") {
+          window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+        }
         return true;
       } catch (writeError) {
         setError(writeError instanceof Error ? writeError.message : String(writeError));

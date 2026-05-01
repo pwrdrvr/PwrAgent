@@ -794,6 +794,17 @@ function launchpadDefaultsEqual(
   );
 }
 
+function resolveGrokApiKeyForLiveClient(): string | undefined {
+  try {
+    return getDesktopSettingsService().resolveGrokApiKeySync();
+  } catch (error) {
+    backendRegistryLog.warn("grok_api_key_unavailable", {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
 export class DesktopBackendRegistry {
   private readonly codexDefaultClient: BackendClient;
   private readonly codexFullAccessClient: BackendClient;
@@ -886,9 +897,18 @@ export class DesktopBackendRegistry {
         backend: "grok",
       }),
     ]);
-    const settingsService = getDesktopSettingsService();
-    const codexCommand = settingsService.resolveCodexCommandPreference();
-    const grokApiKey = settingsService.resolveGrokApiKeySync();
+    const createsLiveCodexDefaultClient =
+      !options?.codexClient && !replayClients?.codexDefaultClient;
+    const createsLiveCodexFullAccessClient =
+      !options?.codexFullAccessClient && !replayClients?.codexFullAccessClient;
+    const codexCommand =
+      createsLiveCodexDefaultClient || createsLiveCodexFullAccessClient
+        ? getDesktopSettingsService().resolveCodexCommandPreference()
+        : undefined;
+    const createsLiveGrokClient = !options?.grokClient && !replayClients?.grokClient;
+    const grokApiKey = createsLiveGrokClient
+      ? resolveGrokApiKeyForLiveClient()
+      : undefined;
 
     this.codexDefaultClient =
       options?.codexClient ??
@@ -937,9 +957,11 @@ export class DesktopBackendRegistry {
                           this.codexDefaultClient.generateTitle!(params),
                       }
                     : undefined,
-                  grok: new GrokThreadTitleGenerator({
-                    apiKey: grokApiKey,
-                  }),
+                  grok: createsLiveGrokClient
+                    ? new GrokThreadTitleGenerator({
+                        apiKey: grokApiKey,
+                      })
+                    : undefined,
                 },
               }));
 

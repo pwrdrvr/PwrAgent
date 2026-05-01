@@ -7,6 +7,9 @@ type BackendSummaryState = {
   error?: string;
 };
 
+export const BACKEND_SUMMARIES_REFRESH_EVENT =
+  "pwragnt:backend-summaries-refresh";
+
 export function useBackendSummaries(desktopApi?: DesktopApi): BackendSummaryState {
   const [state, setState] = useState<BackendSummaryState>({
     backends: []
@@ -39,6 +42,13 @@ export function useBackendSummaries(desktopApi?: DesktopApi): BackendSummaryStat
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    window.addEventListener(BACKEND_SUMMARIES_REFRESH_EVENT, refresh);
+    return () => {
+      window.removeEventListener(BACKEND_SUMMARIES_REFRESH_EVENT, refresh);
+    };
   }, [refresh]);
 
   useEffect(() => {
