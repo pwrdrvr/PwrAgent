@@ -32,6 +32,7 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
 
 function createOverlayStoreMock(params?: {
   executionMode?: "default" | "full-access";
+  launchpadDefaults?: NavigationLaunchpadDefaults;
   overlays?: Record<string, ThreadOverlayState>;
 }) {
   const initialOverlay = params?.executionMode
@@ -49,6 +50,7 @@ function createOverlayStoreMock(params?: {
     backend: "codex",
     executionMode: "default",
     workMode: "local",
+    ...params?.launchpadDefaults,
   };
   const launchpads = new Map<string, NavigationLaunchpadDraft>();
   if (initialOverlay) {
@@ -933,6 +935,58 @@ describe("DesktopBackendRegistry", () => {
     expect(workspace.launchpad.directoryLabel).toBe("Workspaces");
     expect(workspace.launchpad.workMode).toBe("local");
     expect(workspace.launchpad.branchName).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("falls back to OpenAI launchpad state when sticky Grok defaults are unavailable", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+        models: [
+          {
+            id: "gpt-5.4",
+            label: "GPT-5.4",
+            supportsReasoning: true,
+          },
+        ],
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        launchpadDefaults: {
+          backend: "grok",
+          executionMode: "default",
+          model: "grok-4.20-reasoning",
+          reasoningEffort: "medium",
+          workMode: "local",
+        },
+      }),
+    });
+
+    const launchpad = await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+
+    expect(launchpad.defaults).toMatchObject({
+      backend: "codex",
+      executionMode: "default",
+      model: "gpt-5.4",
+      reasoningEffort: "medium",
+    });
+    expect(launchpad.launchpad).toMatchObject({
+      backend: "codex",
+      executionMode: "default",
+      model: "gpt-5.4",
+      reasoningEffort: "medium",
+    });
 
     await registry.close();
   });

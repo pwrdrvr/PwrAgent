@@ -765,6 +765,33 @@ function resolveModelSettingsFromOptions(
   };
 }
 
+function getAvailableExecutionMode(
+  backend: BackendSummary,
+  preferred: ThreadExecutionMode,
+): ThreadExecutionMode {
+  return (
+    backend.executionModes.find((mode) => mode.available && mode.mode === preferred)?.mode ??
+    backend.executionModes.find((mode) => mode.available && mode.isDefault)?.mode ??
+    backend.executionModes.find((mode) => mode.available)?.mode ??
+    preferred
+  );
+}
+
+function launchpadDefaultsEqual(
+  left: NavigationLaunchpadDefaults,
+  right: NavigationLaunchpadDefaults,
+): boolean {
+  return (
+    left.backend === right.backend &&
+    left.executionMode === right.executionMode &&
+    left.workMode === right.workMode &&
+    left.model === right.model &&
+    left.reasoningEffort === right.reasoningEffort &&
+    left.serviceTier === right.serviceTier &&
+    left.fastMode === right.fastMode
+  );
+}
+
 export class DesktopBackendRegistry {
   private readonly codexDefaultClient: BackendClient;
   private readonly codexFullAccessClient: BackendClient;
@@ -1584,15 +1611,34 @@ export class DesktopBackendRegistry {
     const existing = await this.overlayStore.getDirectoryLaunchpad({
       directoryKey: request.directoryKey,
     });
-    const defaults = await this.overlayStore.getLaunchpadDefaults();
+    const defaults = await this.resolveLaunchpadDefaults(
+      await this.overlayStore.getLaunchpadDefaults(),
+      request.preferredBackend,
+    );
     if (existing) {
+      const backend = await this.resolveLaunchpadBackend(existing.backend);
+      const modelSettings = await this.resolveLaunchpadModelSettings(
+        backend,
+        existing,
+      );
+      const executionMode = getAvailableExecutionMode(
+        backend,
+        existing.executionMode,
+      );
+      const normalizedExisting: NavigationLaunchpadDraft = {
+        ...existing,
+        backend: backend.kind,
+        executionMode,
+        ...modelSettings,
+      };
+
       if (isEmptyDirectoryLaunchpadDraft(existing)) {
         const refreshed: NavigationLaunchpadDraft = {
-          ...existing,
+          ...normalizedExisting,
           directoryKind: request.directoryKind,
           directoryLabel: request.directoryLabel,
           directoryPath: request.directoryPath,
-          backend: request.preferredBackend ?? defaults.backend,
+          backend: defaults.backend,
           executionMode: defaults.executionMode,
           model: defaults.model,
           reasoningEffort: defaults.reasoningEffort,
@@ -1609,6 +1655,23 @@ export class DesktopBackendRegistry {
         };
       }
 
+      if (
+        normalizedExisting.backend !== existing.backend ||
+        normalizedExisting.executionMode !== existing.executionMode ||
+        normalizedExisting.model !== existing.model ||
+        normalizedExisting.reasoningEffort !== existing.reasoningEffort ||
+        normalizedExisting.serviceTier !== existing.serviceTier ||
+        normalizedExisting.fastMode !== existing.fastMode
+      ) {
+        return {
+          launchpad: await this.overlayStore.upsertDirectoryLaunchpad({
+            ...normalizedExisting,
+            updatedAt: Date.now(),
+          }),
+          defaults,
+        };
+      }
+
       return {
         launchpad: existing,
         defaults,
@@ -1620,7 +1683,7 @@ export class DesktopBackendRegistry {
       directoryKind: request.directoryKind,
       directoryLabel: request.directoryLabel,
       directoryPath: request.directoryPath,
-      backend: request.preferredBackend ?? defaults.backend,
+      backend: defaults.backend,
       executionMode: defaults.executionMode,
       model: defaults.model,
       reasoningEffort: defaults.reasoningEffort,
@@ -1793,6 +1856,63 @@ export class DesktopBackendRegistry {
       await this.getBackendLaunchpadOptions(backend),
       settings,
     );
+  }
+
+  private async resolveLaunchpadBackend(
+    preferred: AppServerBackendKind,
+  ): Promise<BackendSummary> {
+    const { backends } = await this.listBackends({ includeUnavailable: true });
+    const availableBackends = backends.filter(
+      (backend) => backend.available && backend.capabilities.createThread,
+    );
+
+    return (
+      availableBackends.find((backend) => backend.kind === preferred) ??
+      availableBackends.find((backend) => backend.kind === "codex") ??
+      availableBackends[0] ??
+      backends.find((backend) => backend.kind === preferred) ??
+      backends.find((backend) => backend.kind === "codex") ??
+      backends[0]!
+    );
+  }
+
+  private async resolveLaunchpadModelSettings(
+    backend: BackendSummary,
+    settings: ModelSettings,
+  ): Promise<ModelSettings> {
+    return resolveModelSettingsFromOptions(
+      backend.kind,
+      backend.launchpadOptions,
+      settings,
+    );
+  }
+
+  private async resolveLaunchpadDefaults(
+    storedDefaults: NavigationLaunchpadDefaults,
+    preferredBackend?: AppServerBackendKind,
+  ): Promise<NavigationLaunchpadDefaults> {
+    const backend = await this.resolveLaunchpadBackend(
+      preferredBackend ?? storedDefaults.backend,
+    );
+    const modelSettings = await this.resolveLaunchpadModelSettings(
+      backend,
+      storedDefaults,
+    );
+    const resolvedDefaults: NavigationLaunchpadDefaults = {
+      ...storedDefaults,
+      backend: backend.kind,
+      executionMode: getAvailableExecutionMode(
+        backend,
+        storedDefaults.executionMode,
+      ),
+      ...modelSettings,
+    };
+
+    if (launchpadDefaultsEqual(storedDefaults, resolvedDefaults)) {
+      return storedDefaults;
+    }
+
+    return await this.overlayStore.setLaunchpadDefaults(resolvedDefaults);
   }
 
   private readCodexDefaultModelsOnce(): Promise<BackendModelOption[]> {
