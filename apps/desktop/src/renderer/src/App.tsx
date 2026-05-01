@@ -125,12 +125,6 @@ function DesktopAppShell(props: {
       />
 
       <main className="app-main">
-        {mainView === "settings" ? (
-          <SettingsScreen
-            settings={settings}
-            onClose={() => setMainView("thread")}
-          />
-        ) : (
         <ThreadView
           activeTurnId={session.activeTurnId}
           activeTurnStartedAt={session.activeTurnStartedAt}
@@ -217,8 +211,16 @@ function DesktopAppShell(props: {
           removeOptimisticMessage={session.removeOptimisticMessage}
           transcriptViewport={session.viewport}
         />
-        )}
       </main>
+
+      {mainView === "settings" ? (
+        <div className="app-shell__settings-layer">
+          <SettingsScreen
+            settings={settings}
+            onClose={() => setMainView("thread")}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
