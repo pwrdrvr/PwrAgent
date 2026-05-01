@@ -275,6 +275,17 @@ async function createDirectoryLaunchpadFixture(): Promise<{
   };
 }
 
+async function readOverlayState(homeRoot: string): Promise<{
+  directoryLaunchpads?: Record<string, unknown>;
+}> {
+  return JSON.parse(
+    await readFile(
+      path.join(homeRoot, ".local", "state", "pwragnt", "overlay-state.json"),
+      "utf8",
+    ),
+  );
+}
+
 test("directory launchpad can switch from local checkout to a new worktree", async () => {
   const fixture = await createDirectoryLaunchpadFixture();
   const app = await launchElectronApp({
@@ -309,7 +320,7 @@ test("directory launchpad can switch from local checkout to a new worktree", asy
   }
 });
 
-test("opening a directory launchpad without edits does not persist a pending draft", async () => {
+test("opening a directory launchpad persists directory identity for future draft saves", async () => {
   const fixture = await createDirectoryLaunchpadFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -324,13 +335,69 @@ test("opening a directory launchpad without edits does not persist a pending dra
     await expect(
       app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
     ).toBeVisible();
-    const overlay = JSON.parse(
-      await readFile(
-        path.join(app.homeRoot, ".local", "state", "pwragnt", "overlay-state.json"),
-        "utf8",
-      ),
-    );
-    expect(overlay.directoryLaunchpads).toEqual({});
+
+    const rootDir = path.dirname(fixture.fixturePath);
+    const repoDir = path.join(rootDir, "FixtureRepo");
+    const directoryKey = `directory:${repoDir}`;
+    await expect
+      .poll(async () => {
+        const overlay = await readOverlayState(app.homeRoot);
+        return overlay.directoryLaunchpads?.[directoryKey];
+      })
+      .toMatchObject({
+        directoryKind: "directory",
+        directoryLabel: "FixtureRepo",
+        directoryPath: repoDir,
+        prompt: "",
+      });
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad draft save does not leak the directory key into project labels", async () => {
+  const fixture = await createDirectoryLaunchpadFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    const rootDir = path.dirname(fixture.fixturePath);
+    const repoDir = path.join(rootDir, "FixtureRepo");
+    const directoryKey = `directory:${repoDir}`;
+
+    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window
+      .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
+    ).toBeVisible();
+
+    await app.window
+      .getByRole("textbox", { name: "New thread" })
+      .fill("Keep the project identity stable");
+
+    await expect
+      .poll(async () => {
+        const overlay = await readOverlayState(app.homeRoot);
+        return overlay.directoryLaunchpads?.[directoryKey];
+      })
+      .toMatchObject({
+        directoryKey,
+        directoryKind: "directory",
+        directoryLabel: "FixtureRepo",
+        directoryPath: repoDir,
+        prompt: "Keep the project identity stable",
+      });
+
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
+    ).toBeVisible();
+    await expect(app.window.getByText(/^directory:/)).toHaveCount(0);
+    await expect(app.window.getByText("FixtureRepo").first()).toBeVisible();
   } finally {
     await app.close();
     await fixture.cleanup();

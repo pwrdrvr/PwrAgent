@@ -963,7 +963,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("does not persist a directory launchpad just from opening it", async () => {
+  it("persists directory launchpad identity when opening it", async () => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
@@ -988,7 +988,48 @@ describe("DesktopBackendRegistry", () => {
     expect(opened.launchpad.prompt).toBe("");
     await expect(
       overlayStore.getDirectoryLaunchpad({ directoryKey: "directory:/repo-a" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+      prompt: "",
+    });
+
+    await registry.close();
+  });
+
+  it("keeps launchpad directory metadata when the first draft update arrives", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+      currentBranch: "main",
+    });
+
+    const updated = await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: { prompt: "Fix the app" },
+    });
+
+    expect(updated.launchpad.directoryLabel).toBe("Repo A");
+    expect(updated.launchpad.directoryPath).toBe("/repo-a");
+    expect(updated.launchpad.branchName).toBe("main");
 
     await registry.close();
   });
