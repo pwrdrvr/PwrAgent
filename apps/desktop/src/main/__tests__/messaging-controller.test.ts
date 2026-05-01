@@ -738,6 +738,60 @@ describe("MessagingController", () => {
     });
   });
 
+  it("clears approval buttons after approval button callbacks", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        prompt: "Run tests?",
+        command: "/bin/zsh -lc 'pnpm test -- messaging-controller'",
+      },
+    });
+    const approvalIntent = harness.delivered.find((intent) => intent.kind === "approval");
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "approval:accept" }),
+    );
+
+    expect(harness.submitServerRequest).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "approval-1",
+      response: {
+        decision: "accept",
+      },
+    });
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "approval",
+      decisions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+        fallback: "fail",
+      },
+      targetSurface: {
+        id: `surface:${approvalIntent?.id}`,
+      },
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: "Approval response sent.",
+    });
+  });
+
   it("reports expired approval callbacks with retry guidance", async () => {
     const harness = await createHarness();
 

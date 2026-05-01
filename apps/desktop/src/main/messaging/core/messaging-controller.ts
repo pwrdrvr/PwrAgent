@@ -248,8 +248,14 @@ export class MessagingController {
         now: this.now(),
         threadId: request.params.threadId,
       });
-      await this.storePendingIntent(intent, binding);
-      await this.deliver(intent, binding);
+      const pendingIntent = await this.storePendingIntent(intent, binding);
+      const delivery = await this.deliver(intent, binding);
+      if (delivery.surface) {
+        await this.options.store.upsertPendingIntent({
+          ...pendingIntent,
+          surface: delivery.surface,
+        });
+      }
       if (request.params.turnId) {
         const updatedBinding = await this.options.store.upsertBinding({
           ...binding,
@@ -463,6 +469,7 @@ export class MessagingController {
       );
       if (action && pendingIntent.intent.kind === "approval") {
         await this.submitApprovalAction(pendingIntent.intent, action.id);
+        await this.retireApprovalIntent(pendingIntent, event);
         await this.options.store.deletePendingIntent(pendingIntent.id);
         await this.deliver(
           buildStatusIntent({
@@ -525,6 +532,38 @@ export class MessagingController {
         decision,
       },
     });
+  }
+
+  private async retireApprovalIntent(
+    pendingIntent: MessagingPendingIntentRecord,
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    if (pendingIntent.intent.kind !== "approval") {
+      return;
+    }
+
+    const targetSurface = pendingIntent.surface ?? event.interaction;
+    try {
+      await this.deliver(
+        {
+          ...pendingIntent.intent,
+          decisions: [],
+          delivery: {
+            mode: "update",
+            replaceMarkup: true,
+            fallback: "fail",
+          },
+          targetSurface,
+        },
+        undefined,
+        event,
+      );
+    } catch (error) {
+      this.logger.debug?.("messaging approval retirement update failed", {
+        error: error instanceof Error ? error.message : String(error),
+        intentId: pendingIntent.intent.id,
+      });
+    }
   }
 
   private async deliverAssistantMessage(
