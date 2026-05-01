@@ -83,10 +83,12 @@ import {
 } from "./protocol-log-observer";
 import {
   ThreadTitleGenerationService,
+  GrokThreadTitleGenerator,
   type ThreadTitleGenerator,
   type ThreadTitleGenerationResult,
 } from "./thread-title-generation-service";
 import { getMainLogger } from "../log";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 
 type InitializeResult = {
   serverInfo?: {
@@ -792,6 +794,17 @@ function launchpadDefaultsEqual(
   );
 }
 
+function resolveGrokApiKeyForLiveClient(): string | undefined {
+  try {
+    return getDesktopSettingsService().resolveGrokApiKeySync();
+  } catch (error) {
+    backendRegistryLog.warn("grok_api_key_unavailable", {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
 export class DesktopBackendRegistry {
   private readonly codexDefaultClient: BackendClient;
   private readonly codexFullAccessClient: BackendClient;
@@ -884,11 +897,24 @@ export class DesktopBackendRegistry {
         backend: "grok",
       }),
     ]);
+    const createsLiveCodexDefaultClient =
+      !options?.codexClient && !replayClients?.codexDefaultClient;
+    const createsLiveCodexFullAccessClient =
+      !options?.codexFullAccessClient && !replayClients?.codexFullAccessClient;
+    const codexCommand =
+      createsLiveCodexDefaultClient || createsLiveCodexFullAccessClient
+        ? getDesktopSettingsService().resolveCodexCommandPreference()
+        : undefined;
+    const createsLiveGrokClient = !options?.grokClient && !replayClients?.grokClient;
+    const grokApiKey = createsLiveGrokClient
+      ? resolveGrokApiKeyForLiveClient()
+      : undefined;
 
     this.codexDefaultClient =
       options?.codexClient ??
       replayClients?.codexDefaultClient ??
       new CodexAppServerClient({
+        command: codexCommand,
         connectionObserver: codexDefaultObserver,
       });
     this.codexFullAccessClient =
@@ -896,12 +922,14 @@ export class DesktopBackendRegistry {
       replayClients?.codexFullAccessClient ??
       new CodexAppServerClient({
         args: buildCodexClientArgs("full-access"),
+        command: codexCommand,
         connectionObserver: codexFullAccessObserver,
       });
     this.grokClient =
       options?.grokClient ??
       replayClients?.grokClient ??
       new GrokAppServerClient({
+        apiKey: grokApiKey,
         connectionObserver: grokObserver,
       });
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
@@ -928,6 +956,11 @@ export class DesktopBackendRegistry {
                         generateTitle: (params) =>
                           this.codexDefaultClient.generateTitle!(params),
                       }
+                    : undefined,
+                  grok: createsLiveGrokClient
+                    ? new GrokThreadTitleGenerator({
+                        apiKey: grokApiKey,
+                      })
                     : undefined,
                 },
               }));

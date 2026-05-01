@@ -13,6 +13,14 @@ export default defineConfig({
       },
       {
         test: {
+          name: "shared",
+          globals: true,
+          environment: "node",
+          include: ["packages/shared/src/**/__tests__/**/*.test.ts"]
+        }
+      },
+      {
+        test: {
           name: "desktop-main",
           globals: true,
           environment: "node",

@@ -1,0 +1,478 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { DesktopChatReplyComposer } from "@pwragnt/shared";
+import { DESKTOP_CONFIG_PATH_ENV } from "./desktop-settings-env";
+
+type DesktopConfigPathOptions = {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  xdgConfigHome?: string;
+};
+
+export type DesktopSettingsConfig = {
+  experimental?: {
+    chatReplyComposer?: DesktopChatReplyComposer;
+  };
+  messaging?: {
+    telegram?: {
+      enabled?: boolean;
+      authorizedUserIds?: string[];
+      authorizedSupergroups?: string[];
+    };
+    discord?: {
+      enabled?: boolean;
+      applicationId?: string;
+      authorizedUserIds?: string[];
+      authorizedGuilds?: string[];
+      messageContentIntent?: boolean;
+    };
+  };
+  models?: {
+    codex?: {
+      path?: string;
+    };
+  };
+};
+
+type TomlScalar = string | boolean | string[];
+
+export function defaultDesktopConfigDir(
+  options?: DesktopConfigPathOptions,
+): string {
+  const env = options?.env ?? process.env;
+  const homeDir = options?.homeDir ?? os.homedir();
+  const xdgConfigHome =
+    options?.xdgConfigHome?.trim() || env.XDG_CONFIG_HOME?.trim();
+
+  return path.join(xdgConfigHome || path.join(homeDir, ".config"), "pwragnt");
+}
+
+export function resolveDesktopConfigPath(
+  options?: DesktopConfigPathOptions,
+): string {
+  const env = options?.env ?? process.env;
+  return (
+    env[DESKTOP_CONFIG_PATH_ENV]?.trim()
+    || path.join(defaultDesktopConfigDir(options), "config.toml")
+  );
+}
+
+export function readDesktopSettingsConfig(
+  configPath: string,
+): DesktopSettingsConfig {
+  if (!fs.existsSync(configPath)) {
+    return {};
+  }
+
+  return parseDesktopSettingsToml(fs.readFileSync(configPath, "utf8"), configPath);
+}
+
+export function writeDesktopSettingsConfig(
+  configPath: string,
+  config: DesktopSettingsConfig,
+): void {
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const temporaryPath = `${configPath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPath, stringifyDesktopSettingsToml(config), "utf8");
+  fs.renameSync(temporaryPath, configPath);
+}
+
+export function mergeDesktopSettingsConfig(
+  current: DesktopSettingsConfig,
+  patch: DesktopSettingsConfig,
+): DesktopSettingsConfig {
+  return pruneEmptyConfig({
+    experimental: {
+      ...current.experimental,
+      ...patch.experimental,
+    },
+    messaging: {
+      telegram: {
+        ...current.messaging?.telegram,
+        ...patch.messaging?.telegram,
+      },
+      discord: {
+        ...current.messaging?.discord,
+        ...patch.messaging?.discord,
+      },
+    },
+    models: {
+      codex: {
+        ...current.models?.codex,
+        ...patch.models?.codex,
+      },
+    },
+  });
+}
+
+export function parseDesktopSettingsToml(
+  contents: string,
+  filePath: string,
+): DesktopSettingsConfig {
+  const tables: Record<string, Record<string, TomlScalar>> = {};
+  let currentTable = "";
+
+  for (const [index, rawLine] of contents.split(/\r?\n/).entries()) {
+    const line = stripInlineComment(rawLine).trim();
+    if (!line) {
+      continue;
+    }
+
+    if (line.startsWith("[") && line.endsWith("]")) {
+      currentTable = line.slice(1, -1).trim();
+      if (!currentTable) {
+        throw new Error(`Invalid TOML table on line ${index + 1} in ${filePath}`);
+      }
+      tables[currentTable] ??= {};
+      continue;
+    }
+
+    const separatorIndex = line.indexOf("=");
+    if (separatorIndex < 1) {
+      throw new Error(`Invalid TOML line ${index + 1} in ${filePath}`);
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    const rawValue = line.slice(separatorIndex + 1).trim();
+    if (!key) {
+      throw new Error(`Invalid TOML key on line ${index + 1} in ${filePath}`);
+    }
+
+    tables[currentTable] ??= {};
+    tables[currentTable][key] = parseTomlValue(rawValue, filePath, index + 1);
+  }
+
+  return normalizeDesktopConfig(tables);
+}
+
+export function stringifyDesktopSettingsToml(
+  config: DesktopSettingsConfig,
+): string {
+  const sections: string[] = [];
+
+  if (config.experimental?.chatReplyComposer) {
+    sections.push(
+      [
+        "[experimental]",
+        `chat_reply_composer = ${formatTomlValue(
+          config.experimental.chatReplyComposer,
+        )}`,
+      ].join("\n"),
+    );
+  }
+
+  const telegram = config.messaging?.telegram;
+  if (telegram && hasDefinedValue(telegram)) {
+    sections.push(
+      [
+        "[messaging.telegram]",
+        formatOptionalTomlEntry("enabled", telegram.enabled),
+        formatOptionalTomlEntry(
+          "authorized_user_ids",
+          telegram.authorizedUserIds,
+        ),
+        formatOptionalTomlEntry(
+          "authorized_supergroups",
+          telegram.authorizedSupergroups,
+        ),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+
+  const discord = config.messaging?.discord;
+  if (discord && hasDefinedValue(discord)) {
+    sections.push(
+      [
+        "[messaging.discord]",
+        formatOptionalTomlEntry("enabled", discord.enabled),
+        formatOptionalTomlEntry("application_id", discord.applicationId),
+        formatOptionalTomlEntry(
+          "authorized_user_ids",
+          discord.authorizedUserIds,
+        ),
+        formatOptionalTomlEntry("authorized_guilds", discord.authorizedGuilds),
+        formatOptionalTomlEntry(
+          "message_content_intent",
+          discord.messageContentIntent,
+        ),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+
+  const codex = config.models?.codex;
+  if (codex?.path !== undefined) {
+    sections.push(
+      ["[models.codex]", `path = ${formatTomlValue(codex.path)}`].join("\n"),
+    );
+  }
+
+  return sections.join("\n\n").concat(sections.length ? "\n" : "");
+}
+
+function normalizeDesktopConfig(
+  tables: Record<string, Record<string, TomlScalar>>,
+): DesktopSettingsConfig {
+  const experimental = tables["experimental"];
+  const telegram = tables["messaging.telegram"];
+  const discord = tables["messaging.discord"];
+  const codex = tables["models.codex"];
+
+  return pruneEmptyConfig({
+    experimental: {
+      chatReplyComposer: readComposer(experimental?.chat_reply_composer),
+    },
+    messaging: {
+      telegram: {
+        enabled: readBoolean(telegram?.enabled),
+        authorizedUserIds: readStringArray(telegram?.authorized_user_ids),
+        authorizedSupergroups: readStringArray(telegram?.authorized_supergroups),
+      },
+      discord: {
+        enabled: readBoolean(discord?.enabled),
+        applicationId: readString(discord?.application_id),
+        authorizedUserIds: readStringArray(discord?.authorized_user_ids),
+        authorizedGuilds: readStringArray(discord?.authorized_guilds),
+        messageContentIntent: readBoolean(discord?.message_content_intent),
+      },
+    },
+    models: {
+      codex: {
+        path: readString(codex?.path),
+      },
+    },
+  });
+}
+
+function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig {
+  const pruned: DesktopSettingsConfig = {};
+
+  if (config.experimental && hasDefinedValue(config.experimental)) {
+    pruned.experimental = config.experimental;
+  }
+
+  const telegram = config.messaging?.telegram;
+  const discord = config.messaging?.discord;
+  if (
+    (telegram && hasDefinedValue(telegram))
+    || (discord && hasDefinedValue(discord))
+  ) {
+    pruned.messaging = {};
+    if (telegram && hasDefinedValue(telegram)) {
+      pruned.messaging.telegram = telegram;
+    }
+    if (discord && hasDefinedValue(discord)) {
+      pruned.messaging.discord = discord;
+    }
+  }
+
+  const codex = config.models?.codex;
+  if (codex && hasDefinedValue(codex)) {
+    pruned.models = { codex };
+  }
+
+  return pruned;
+}
+
+function hasDefinedValue(values: object): boolean {
+  return Object.values(values).some((value) => value !== undefined);
+}
+
+function readComposer(value: TomlScalar | undefined): DesktopChatReplyComposer | undefined {
+  return typeof value === "string" && isDesktopChatReplyComposer(value)
+    ? value
+    : undefined;
+}
+
+function isDesktopChatReplyComposer(
+  value: string,
+): value is DesktopChatReplyComposer {
+  return (
+    value === "textarea"
+    || value === "tiptap-chips"
+    || value === "custom-widget-chips"
+  );
+}
+
+function readBoolean(value: TomlScalar | undefined): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readString(value: TomlScalar | undefined): string | undefined {
+  return typeof value === "string" ? value.trim() : undefined;
+}
+
+function readStringArray(value: TomlScalar | undefined): string[] | undefined {
+  return Array.isArray(value) ? value.map((item) => item.trim()).filter(Boolean) : undefined;
+}
+
+function parseTomlValue(
+  value: string,
+  filePath: string,
+  lineNumber: number,
+): TomlScalar {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  if (value.startsWith("[") && value.endsWith("]")) {
+    return parseStringArray(value, filePath, lineNumber);
+  }
+  if (value.startsWith("\"") && value.endsWith("\"")) {
+    return unescapeQuotedString(value.slice(1, -1), filePath, lineNumber);
+  }
+  throw new Error(`Unsupported TOML value on line ${lineNumber} in ${filePath}`);
+}
+
+function parseStringArray(
+  value: string,
+  filePath: string,
+  lineNumber: number,
+): string[] {
+  const inner = value.slice(1, -1).trim();
+  if (!inner) {
+    return [];
+  }
+
+  const values: string[] = [];
+  let current = "";
+  let inQuotedString = false;
+  let escaped = false;
+
+  for (let index = 0; index < inner.length; index += 1) {
+    const character = inner[index];
+    if (escaped) {
+      current += `\\${character}`;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = inQuotedString;
+      if (!inQuotedString) {
+        throw new Error(`Invalid TOML array on line ${lineNumber} in ${filePath}`);
+      }
+      continue;
+    }
+    if (character === "\"") {
+      inQuotedString = !inQuotedString;
+      current += character;
+      continue;
+    }
+    if (character === "," && !inQuotedString) {
+      values.push(parseStringArrayItem(current.trim(), filePath, lineNumber));
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+
+  if (inQuotedString) {
+    throw new Error(`Unterminated TOML string on line ${lineNumber} in ${filePath}`);
+  }
+
+  values.push(parseStringArrayItem(current.trim(), filePath, lineNumber));
+  return values;
+}
+
+function parseStringArrayItem(
+  value: string,
+  filePath: string,
+  lineNumber: number,
+): string {
+  const parsed = parseTomlValue(value, filePath, lineNumber);
+  if (typeof parsed !== "string") {
+    throw new Error(`Expected TOML string array on line ${lineNumber} in ${filePath}`);
+  }
+  return parsed;
+}
+
+function stripInlineComment(line: string): string {
+  let inQuotedString = false;
+  let escaped = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = inQuotedString;
+      continue;
+    }
+    if (character === "\"") {
+      inQuotedString = !inQuotedString;
+      continue;
+    }
+    if (character === "#" && !inQuotedString) {
+      return line.slice(0, index);
+    }
+  }
+
+  return line;
+}
+
+function unescapeQuotedString(
+  value: string,
+  filePath: string,
+  lineNumber: number,
+): string {
+  let result = "";
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character !== "\\") {
+      result += character;
+      continue;
+    }
+
+    index += 1;
+    const escape = value[index];
+    if (escape === undefined) {
+      throw new Error(`Invalid TOML escape on line ${lineNumber} in ${filePath}`);
+    }
+    if (escape === "\\" || escape === "\"") {
+      result += escape;
+      continue;
+    }
+    if (escape === "n") {
+      result += "\n";
+      continue;
+    }
+    if (escape === "t") {
+      result += "\t";
+      continue;
+    }
+    throw new Error(`Unsupported TOML escape \\${escape} on line ${lineNumber} in ${filePath}`);
+  }
+
+  return result;
+}
+
+function formatOptionalTomlEntry(
+  key: string,
+  value: string | boolean | string[] | undefined,
+): string | undefined {
+  return value === undefined ? undefined : `${key} = ${formatTomlValue(value)}`;
+}
+
+function formatTomlValue(value: string | boolean | string[]): string {
+  if (typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => formatTomlValue(item)).join(", ")}]`;
+  }
+
+  return `"${value
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/\t/g, "\\t")
+    .replace(/"/g, '\\"')}"`;
+}

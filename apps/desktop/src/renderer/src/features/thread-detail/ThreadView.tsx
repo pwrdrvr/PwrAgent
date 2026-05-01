@@ -15,6 +15,7 @@ import type {
   AppServerThreadReplayPagination,
   AppServerSkillSummary,
   BackendSummary,
+  DesktopChatReplyComposer,
   HandoffThreadWorkspaceRequest,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
@@ -580,6 +581,7 @@ type ThreadViewProps = {
   backends: BackendSummary[];
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   composerDisabled: boolean;
+  composerImplementation?: DesktopChatReplyComposer;
   desktopApi?: DesktopApi;
   launchpadError?: string;
   loading: boolean;
@@ -1409,6 +1411,7 @@ export function ThreadView(props: ThreadViewProps) {
           <Composer
             backends={props.backends}
             desktopApi={props.desktopApi}
+            composerImplementation={props.composerImplementation}
             directory={props.selectedDirectory}
             disabled={!launchpadBackend?.available}
             launchpad={selectedLaunchpad}
@@ -1486,6 +1489,7 @@ export function ThreadView(props: ThreadViewProps) {
             addOptimisticUserMessage={props.addOptimisticUserMessage}
             backends={props.backends}
             desktopApi={props.desktopApi}
+            composerImplementation={props.composerImplementation}
             directory={props.selectedDirectory}
             disabled={props.composerDisabled}
             contextWindow={props.contextWindow}

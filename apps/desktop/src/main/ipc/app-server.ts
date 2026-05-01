@@ -57,6 +57,7 @@ import {
 } from "../../shared/ipc";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { getMainLogger } from "../log";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const appServerLog = getMainLogger("pwragnt:app-server");
@@ -91,6 +92,7 @@ function directoryStatusesEqual(
 
 class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
+  private focusedDiffServiceApiKey: string | undefined;
   private readonly previousDirectoriesByBackend = new Map<
     AppServerBackendScope,
     NavigationSnapshot["directories"]
@@ -361,6 +363,8 @@ class DesktopAppServerService {
   }
 
   async close(): Promise<void> {
+    this.focusedDiffService = null;
+    this.focusedDiffServiceApiKey = undefined;
     await disposeDesktopBackendRegistry();
   }
 
@@ -369,11 +373,15 @@ class DesktopAppServerService {
   }
 
   private getFocusedDiffService(): FocusedDiffService {
-    if (this.focusedDiffService) {
+    const apiKey = getDesktopSettingsService().resolveGrokApiKeySync();
+    if (this.focusedDiffService && this.focusedDiffServiceApiKey === apiKey) {
       return this.focusedDiffService;
     }
 
-    this.focusedDiffService = new FocusedDiffService();
+    this.focusedDiffService = new FocusedDiffService({
+      apiKey,
+    });
+    this.focusedDiffServiceApiKey = apiKey;
     return this.focusedDiffService;
   }
 }

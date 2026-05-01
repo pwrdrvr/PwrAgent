@@ -2,7 +2,10 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragnt/shared";
 import type { DesktopApi } from "../desktop-api";
-import { useBackendSummaries } from "../useBackendSummaries";
+import {
+  BACKEND_SUMMARIES_REFRESH_EVENT,
+  useBackendSummaries,
+} from "../useBackendSummaries";
 
 describe("useBackendSummaries", () => {
   it("refreshes backend details when Codex rate limits update", async () => {
@@ -146,5 +149,80 @@ describe("useBackendSummaries", () => {
       expect(result.current.backends[0]?.account?.planType).toBe("team");
       expect(result.current.backends[0]?.rateLimits?.[0]?.remaining).toBe(90);
     });
+  });
+
+  it("refreshes backend details when settings request a summary refresh", async () => {
+    const listBackends = vi
+      .fn<NonNullable<DesktopApi["listBackends"]>>()
+      .mockResolvedValueOnce({
+        fetchedAt: 1,
+        backends: [
+          {
+            kind: "grok",
+            label: "Grok",
+            available: false,
+            unavailableReason: "Grok API key is not set",
+            methods: [],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: true,
+              transcriptPagination: false,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: false,
+            },
+            executionModes: [],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        fetchedAt: 2,
+        backends: [
+          {
+            kind: "grok",
+            label: "Grok",
+            available: true,
+            methods: [],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: true,
+              transcriptPagination: false,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: false,
+            },
+            executionModes: [],
+          },
+        ],
+      });
+    const desktopApi: DesktopApi = {
+      listBackends,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useBackendSummaries(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.backends[0]?.available).toBe(false);
+    });
+
+    window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+
+    await waitFor(() => {
+      expect(result.current.backends[0]?.available).toBe(true);
+    });
+    expect(listBackends).toHaveBeenCalledTimes(2);
   });
 });

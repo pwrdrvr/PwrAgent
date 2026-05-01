@@ -923,10 +923,9 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
-  it("initializes from ~/.config/grok-app-server when env vars are absent", async () => {
+  it("initializes with API key from settings and legacy config for model/base URL", async () => {
     const originalHome = process.env.HOME;
     const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
-    delete process.env.XAI_API_KEY;
     delete process.env.GROK_MODEL;
     delete process.env.XAI_BASE_URL;
     delete process.env.XDG_CONFIG_HOME;
@@ -942,7 +941,7 @@ describe("GrokAppServerClient", () => {
     );
 
     try {
-      const client = new GrokAppServerClient();
+      const client = new GrokAppServerClient({ apiKey: "keychain-key" });
       await expect(client.getInitializeResult()).resolves.toEqual(
         expect.objectContaining({
           serverInfo: expect.objectContaining({
@@ -966,10 +965,9 @@ describe("GrokAppServerClient", () => {
     }
   });
 
-  it("initializes from config.toml when env vars are absent", async () => {
+  it("initializes with API key from settings and config.toml for model/base URL", async () => {
     const originalHome = process.env.HOME;
     const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
-    delete process.env.XAI_API_KEY;
     delete process.env.GROK_MODEL;
     delete process.env.XAI_BASE_URL;
     delete process.env.XDG_CONFIG_HOME;
@@ -990,7 +988,7 @@ describe("GrokAppServerClient", () => {
     );
 
     try {
-      const client = new GrokAppServerClient();
+      const client = new GrokAppServerClient({ apiKey: "keychain-key" });
       await expect(client.getInitializeResult()).resolves.toEqual(
         expect.objectContaining({
           serverInfo: expect.objectContaining({
@@ -1039,7 +1037,7 @@ describe("GrokAppServerClient", () => {
       });
 
       await expect(client.getInitializeResult()).rejects.toThrow(
-        "grok app server unavailable: XAI_API_KEY is not set",
+        "grok app server unavailable: Grok API key is not set",
       );
       expect(observed).toEqual([]);
       await client.close();

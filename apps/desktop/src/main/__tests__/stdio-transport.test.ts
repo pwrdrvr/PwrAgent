@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareCodexCliVersions } from "../codex-app-server/stdio-transport";
+import { compareCodexCliVersions } from "../settings/codex-discovery";
 
 describe("stdio transport Codex CLI resolution", () => {
   it("orders stable Codex CLI releases ahead of prereleases with the same version", () => {

@@ -134,6 +134,7 @@ afterEach(() => {
 
 describe("Sidebar", () => {
   it("renders Inbox as the first thread lens and keeps directory rows available", () => {
+    const onOpenSettings = vi.fn();
     render(
       <Sidebar
         backends={backends}
@@ -148,11 +149,14 @@ describe("Sidebar", () => {
         threads={[sharedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
+        onOpenSettings={onOpenSettings}
         onOpenLaunchpad={async () => undefined}
         onSelectThread={() => undefined}
       />
     );
 
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    expect(onOpenSettings).toHaveBeenCalledOnce();
     expect(screen.queryByRole("heading", { level: 2, name: "Browse" })).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Thread browser" })).toBeInTheDocument();
     const lensButtons = within(

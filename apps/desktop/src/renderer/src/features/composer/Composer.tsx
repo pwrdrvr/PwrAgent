@@ -14,6 +14,7 @@ import type {
   AppServerThreadImagePart,
   AppServerTurnInputItem,
   BackendSummary,
+  DesktopChatReplyComposer,
   HandoffThreadWorkspaceRequest,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
@@ -47,6 +48,7 @@ type ComposerProps = {
   directory?: NavigationDirectorySummary;
   disabled?: boolean;
   contextWindow?: ThreadContextWindowState;
+  composerImplementation?: DesktopChatReplyComposer;
   launchpad?: NavigationLaunchpadDraft;
   launchpadError?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
@@ -1631,6 +1633,7 @@ export function Composer(props: ComposerProps) {
   return (
     <form
       className="composer"
+      data-composer-implementation={props.composerImplementation ?? "textarea"}
       onSubmit={(event) => {
         event.preventDefault();
         void submitTurn();

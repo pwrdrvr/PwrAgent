@@ -59,10 +59,17 @@ import type {
   StartTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  ClearDesktopSettingsSecretRequest,
+  DesktopSettingsWriteResponse,
+  ReadDesktopSettingsRequest,
+  ReadDesktopSettingsResponse,
+  RefreshDesktopCodexDiscoveryRequest,
+  ReplaceDesktopSettingsSecretRequest,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
   UpdateThreadExpectedBranchRequest,
   UpdateThreadExpectedBranchResponse,
+  WriteDesktopSettingsConfigRequest,
 } from "@pwragnt/shared";
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 
@@ -131,6 +138,21 @@ export type DesktopApi = {
   listBackends?: (
     request?: ListBackendsRequest
   ) => Promise<ListBackendsResponse>;
+  readSettings?: (
+    request?: ReadDesktopSettingsRequest
+  ) => Promise<ReadDesktopSettingsResponse>;
+  writeSettingsConfig?: (
+    request: WriteDesktopSettingsConfigRequest
+  ) => Promise<DesktopSettingsWriteResponse>;
+  replaceSettingsSecret?: (
+    request: ReplaceDesktopSettingsSecretRequest
+  ) => Promise<DesktopSettingsWriteResponse>;
+  clearSettingsSecret?: (
+    request: ClearDesktopSettingsSecretRequest
+  ) => Promise<DesktopSettingsWriteResponse>;
+  refreshCodexDiscovery?: (
+    request?: RefreshDesktopCodexDiscoveryRequest
+  ) => Promise<ReadDesktopSettingsResponse>;
   listThreads?: (
     request?: AppServerListThreadsRequest
   ) => Promise<AppServerListThreadsResponse>;

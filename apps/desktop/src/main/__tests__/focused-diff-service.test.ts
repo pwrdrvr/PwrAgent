@@ -283,7 +283,7 @@ describe("FocusedDiffService", () => {
     expect(client.generateObject).not.toHaveBeenCalled();
   });
 
-  it("reads xAI credentials from runtime config.toml and uses the focused-diff model", async () => {
+  it("uses the configured xAI key with the focused-diff runtime model and base URL", async () => {
     const temp = await createTemporaryTestDirectory();
     const originalHome = process.env.HOME;
     const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
@@ -338,7 +338,7 @@ describe("FocusedDiffService", () => {
 
       globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-      const service = new FocusedDiffService();
+      const service = new FocusedDiffService({ apiKey: "keychain-key" });
       const response = await service.analyze(makeRequest());
 
       expect(response).toMatchObject({
@@ -351,7 +351,7 @@ describe("FocusedDiffService", () => {
         "https://api.example.test/v1/responses",
         expect.objectContaining({
           headers: expect.objectContaining({
-            authorization: "Bearer config-key",
+            authorization: "Bearer keychain-key",
             "x-grok-conv-id": "focused-diff-v1"
           }),
           body: expect.stringContaining('"model":"grok-4-1-fast-reasoning"')
