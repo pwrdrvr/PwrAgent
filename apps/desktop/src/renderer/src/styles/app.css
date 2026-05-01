@@ -3674,6 +3674,47 @@ textarea {
   white-space: pre-wrap;
 }
 
+.composer-tiptap-input {
+  min-height: 144px;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.composer-tiptap-input__editor {
+  min-height: 142px;
+  padding: 12px;
+  outline: none;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.composer-tiptap-input__editor p {
+  margin: 0;
+}
+
+.composer-tiptap-input.is-empty .composer-tiptap-input__editor::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.composer-tiptap-input__mention {
+  display: inline-flex;
+  height: 1.35em;
+  gap: 0.35em;
+  margin: 0 3px;
+  padding: 0 0.5em;
+  font-size: inherit;
+  line-height: normal;
+  vertical-align: 0.13em;
+}
+
 .composer-rich-input.is-disabled {
   opacity: 0.72;
 }

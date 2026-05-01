@@ -1223,6 +1223,7 @@ describe("Composer", () => {
 
     render(
       <Composer
+        composerImplementation="custom-widget-chips"
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startReview,
@@ -2176,13 +2177,9 @@ describe("Composer", () => {
     expect(screen.getByRole("listbox", { name: "Skills" })).toBeInTheDocument();
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    const richInput = screen.getByTestId("composer-rich-input");
-    expect(within(richInput).getByText("$frontend-design")).toBeInTheDocument();
-    expect(within(richInput).getByText("$frontend-design").closest(".skill-chip")).toHaveAttribute(
-      "data-tooltip",
-      expect.stringContaining("/Users/huntharo/.codex/skills/frontend-design/SKILL.md")
+    expect(textarea).toHaveValue(
+      "Use [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md) "
     );
-    expect(screen.getByLabelText("Reply")).toHaveValue("Use ");
     expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
@@ -2204,6 +2201,7 @@ describe("Composer", () => {
   it("prioritizes skill name prefix matches over description-only matches", () => {
     render(
       <Composer
+        composerImplementation="custom-widget-chips"
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startTurn: async () => ({
@@ -2271,6 +2269,7 @@ describe("Composer", () => {
     }));
     render(
       <Composer
+        composerImplementation="custom-widget-chips"
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startTurn,
@@ -2687,6 +2686,7 @@ describe("Composer", () => {
   it("applies the focused skill option when activated from the keyboard", async () => {
     render(
       <Composer
+        composerImplementation="custom-widget-chips"
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startTurn: async () => ({

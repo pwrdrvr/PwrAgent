@@ -46,6 +46,8 @@ import {
   type ComposerRichInputHandle,
   type ComposerSkillToken,
 } from "./ComposerRichInput";
+import { ComposerTextareaInput } from "./ComposerTextareaInput";
+import { ComposerTiptapInput } from "./ComposerTiptapInput";
 
 type ComposerProps = {
   activeTurnId?: string;
@@ -835,6 +837,8 @@ export function Composer(props: ComposerProps) {
   const [reviewConfig, setReviewConfig] = useState<ReviewConfigState>();
   const isLaunchpad = Boolean(props.launchpad && props.directory);
   const launchpad = props.launchpad;
+  const composerImplementation = props.composerImplementation ?? "textarea";
+  const composerSupportsSkillTokens = composerImplementation !== "textarea";
   const backend = useMemo(
     () =>
       props.backends?.find((candidate) =>
@@ -850,12 +854,24 @@ export function Composer(props: ComposerProps) {
   const isThreadComposerScope = (scopeKey: string): boolean =>
     scopeKey.startsWith("thread:");
   const canonicalDraft = useMemo(
-    () => serializeDraftWithSkillTokens(draft, skillTokens),
-    [draft, skillTokens]
+    () =>
+      serializeDraftWithSkillTokens(
+        draft,
+        composerSupportsSkillTokens ? skillTokens : [],
+      ),
+    [composerSupportsSkillTokens, draft, skillTokens]
   );
-  const hasComposerContent = draft.trim().length > 0 || skillTokens.length > 0;
+  const hasComposerContent =
+    draft.trim().length > 0 ||
+    (composerSupportsSkillTokens && skillTokens.length > 0);
   const setComposerDraftFromCanonical = (nextDraft: string): void => {
     deletedSkillTokenHistoryRef.current = [];
+    if (!composerSupportsSkillTokens) {
+      setDraft(nextDraft);
+      setSkillTokens([]);
+      return;
+    }
+
     const hydrated = hydrateComposerDraft(nextDraft, props.skills);
     setDraft(hydrated.draft);
     setSkillTokens(hydrated.skillTokens);
@@ -870,7 +886,9 @@ export function Composer(props: ComposerProps) {
     nextSkillTokens?: ComposerSkillToken[],
   ): void => {
     deletedSkillTokenHistoryRef.current = [];
-    if (nextSkillTokens) {
+    if (!composerSupportsSkillTokens) {
+      setSkillTokens([]);
+    } else if (nextSkillTokens) {
       setSkillTokens(nextSkillTokens);
     } else {
       setSkillTokens((current) =>
@@ -1041,6 +1059,25 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     setActiveSlashIndex(0);
   }, [slashTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
+
+  useEffect(() => {
+    deletedSkillTokenHistoryRef.current = [];
+    if (composerImplementation === "textarea") {
+      if (skillTokens.length > 0) {
+        setDraft(serializeDraftWithSkillTokens(draft, skillTokens));
+        setSkillTokens([]);
+      }
+      return;
+    }
+
+    if (skillTokens.length === 0 && draft.includes("](")) {
+      const hydrated = hydrateComposerDraft(draft, props.skills);
+      if (hydrated.skillTokens.length > 0) {
+        setDraft(hydrated.draft);
+        setSkillTokens(hydrated.skillTokens);
+      }
+    }
+  }, [composerImplementation]);
 
   useEffect(() => {
     if (!displayedAutocompleteKind) {
@@ -1716,8 +1753,26 @@ export function Composer(props: ComposerProps) {
       inputRef.current.selectionEnd ?? selectionStart,
       draft.length,
     );
-    const trigger = findSkillTrigger(draft, selectionStart);
+    const trigger =
+      findSkillTrigger(draft, selectionStart) ?? findSkillTrigger(draft, draft.length);
     if (!trigger) {
+      return;
+    }
+
+    if (!composerSupportsSkillTokens) {
+      const before = draft.slice(0, trigger.start);
+      const after = draft.slice(Math.max(trigger.end, selectionEnd));
+      const mention = buildSkillMentionMarkdown(skill);
+      const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
+      const nextDraft = `${before}${mention}${needsTrailingSpace ? " " : ""}${after}`;
+      const nextSelection = before.length + mention.length + (needsTrailingSpace ? 1 : 0);
+
+      updateVisibleDraft(nextDraft, []);
+      setActiveSkillIndex(0);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      });
       return;
     }
 
@@ -1802,7 +1857,7 @@ export function Composer(props: ComposerProps) {
     });
   };
 
-  const handlePaste = (event: ClipboardEvent<HTMLDivElement>): void => {
+  const handlePaste = (event: ClipboardEvent<HTMLElement>): void => {
     const pastedFiles = getImageFilesFromDataTransfer(event.clipboardData);
     if (pastedFiles.length === 0) {
       return;
@@ -1813,7 +1868,7 @@ export function Composer(props: ComposerProps) {
     void attachImages(pastedFiles);
   };
 
-  const handleDragOver = (event: DragEvent<HTMLDivElement>): void => {
+  const handleDragOver = (event: DragEvent<HTMLElement>): void => {
     if (!hasImageFiles(event.dataTransfer)) {
       return;
     }
@@ -1822,7 +1877,7 @@ export function Composer(props: ComposerProps) {
     event.dataTransfer.dropEffect = "copy";
   };
 
-  const handleDrop = (event: DragEvent<HTMLDivElement>): void => {
+  const handleDrop = (event: DragEvent<HTMLElement>): void => {
     const droppedFiles = getImageFilesFromDataTransfer(event.dataTransfer);
     if (droppedFiles.length === 0) {
       return;
@@ -2533,6 +2588,67 @@ export function Composer(props: ComposerProps) {
     }
   };
 
+  const composerDisabled =
+    launchpadSubmitting || (props.disabled && !hasComposerContent);
+  const composerPlaceholder = isLaunchpad
+    ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`
+    : "Reply to this thread";
+  const handleComposerChange = (
+    nextDraft: string,
+    nextSkillTokens?: ComposerSkillToken[],
+  ): void => {
+    updateVisibleDraft(nextDraft, nextSkillTokens);
+    if (nextDraft.trim() !== "/review") {
+      setReviewConfig(undefined);
+    }
+    setSendError(undefined);
+  };
+  const handleComposerClick = (): void => {
+    setActiveSkillIndex(0);
+    setActiveSlashIndex(0);
+  };
+  const handlePlainComposerKeyDown = (
+    event: ReactKeyboardEvent<HTMLElement>,
+  ): void => {
+    if (event.defaultPrevented) {
+      return;
+    }
+
+    if (!hasAutocomplete) {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        void submitTurn(event.metaKey ? "steer" : "default");
+      }
+      return;
+    }
+
+    handleAutocompleteKeyDown(event);
+  };
+  const handleCustomComposerKeyDown = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ): void => {
+    if (event.defaultPrevented) {
+      return;
+    }
+
+    if (restoreDeletedSkillToken(event)) {
+      return;
+    }
+
+    if (
+      event.key === "Backspace" &&
+      deleteEditorContent(event, "backward")
+    ) {
+      return;
+    }
+
+    if (event.key === "Delete" && deleteEditorContent(event, "forward")) {
+      return;
+    }
+
+    handlePlainComposerKeyDown(event);
+  };
+
   return (
     <form
       className="composer"
@@ -2638,117 +2754,111 @@ export function Composer(props: ComposerProps) {
       ) : null}
 
       <div className="composer__input-wrap" ref={inputWrapRef}>
-        <ComposerRichInput
-          ref={inputRef}
-          id="thread-composer"
-          ariaActiveDescendant={activeAutocompleteOptionId}
-          ariaControls={autocompleteListboxId}
-          ariaExpanded={hasAutocomplete}
-          disabled={launchpadSubmitting || (props.disabled && !hasComposerContent)}
-          label={isLaunchpad ? "New thread" : "Reply"}
-          placeholder={
-            isLaunchpad
-              ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`
-              : "Reply to this thread"
-          }
-          skillTokens={skillTokens}
-          value={draft}
-          onChange={(nextDraft, nextSkillTokens) => {
-            updateVisibleDraft(nextDraft, nextSkillTokens);
-            if (nextDraft.trim() !== "/review") {
-              setReviewConfig(undefined);
-            }
-            setSendError(undefined);
-          }}
-          onPaste={handlePaste}
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-          onClick={() => {
-            setActiveSkillIndex(0);
-            setActiveSlashIndex(0);
-          }}
-          onBeforeInputCapture={(event) => {
-            const inputType = (event.nativeEvent as InputEvent).inputType;
-            if (
-              inputType === "deleteContentBackward" &&
-              deleteEditorContent(event, "backward")
-            ) {
-              return;
-            }
-            if (
-              inputType === "deleteContentForward" &&
-              deleteEditorContent(event, "forward")
-            ) {
-              return;
-            }
-          }}
-          onBeforeInput={(event) => {
-            if (event.defaultPrevented) {
-              return;
-            }
-            const inputType = (event.nativeEvent as InputEvent).inputType;
-            if (
-              inputType === "deleteContentBackward" &&
-              deleteEditorContent(event, "backward")
-            ) {
-              return;
-            }
-            if (
-              inputType === "deleteContentForward" &&
-              deleteEditorContent(event, "forward")
-            ) {
-              return;
-            }
-          }}
-          onKeyDownCapture={(event) => {
-            if (
-              event.key === "Backspace" &&
-              deleteEditorContent(event, "backward")
-            ) {
-              return;
-            }
-
-            if (
-              event.key === "Delete" &&
-              deleteEditorContent(event, "forward")
-            ) {
-              return;
-            }
-          }}
-          onKeyDown={(event) => {
-            if (event.defaultPrevented) {
-              return;
-            }
-
-            if (restoreDeletedSkillToken(event)) {
-              return;
-            }
-
-            if (
-              event.key === "Backspace" &&
-              deleteEditorContent(event, "backward")
-            ) {
-              return;
-            }
-
-            if (
-              event.key === "Delete" &&
-              deleteEditorContent(event, "forward")
-            ) {
-              return;
-            }
-
-            if (!hasAutocomplete) {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void submitTurn(event.metaKey ? "steer" : "default");
+        {composerImplementation === "custom-widget-chips" ? (
+          <ComposerRichInput
+            ref={inputRef}
+            id="thread-composer"
+            ariaActiveDescendant={activeAutocompleteOptionId}
+            ariaControls={autocompleteListboxId}
+            ariaExpanded={hasAutocomplete}
+            disabled={composerDisabled}
+            label={isLaunchpad ? "New thread" : "Reply"}
+            placeholder={composerPlaceholder}
+            skillTokens={skillTokens}
+            value={draft}
+            onChange={handleComposerChange}
+            onPaste={handlePaste}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            onClick={handleComposerClick}
+            onBeforeInputCapture={(event) => {
+              const inputType = (event.nativeEvent as InputEvent).inputType;
+              if (
+                inputType === "deleteContentBackward" &&
+                deleteEditorContent(event, "backward")
+              ) {
+                return;
               }
-              return;
-            }
+              if (
+                inputType === "deleteContentForward" &&
+                deleteEditorContent(event, "forward")
+              ) {
+                return;
+              }
+            }}
+            onBeforeInput={(event) => {
+              if (event.defaultPrevented) {
+                return;
+              }
+              const inputType = (event.nativeEvent as InputEvent).inputType;
+              if (
+                inputType === "deleteContentBackward" &&
+                deleteEditorContent(event, "backward")
+              ) {
+                return;
+              }
+              if (
+                inputType === "deleteContentForward" &&
+                deleteEditorContent(event, "forward")
+              ) {
+                return;
+              }
+            }}
+            onKeyDownCapture={(event) => {
+              if (
+                event.key === "Backspace" &&
+                deleteEditorContent(event, "backward")
+              ) {
+                return;
+              }
 
-            handleAutocompleteKeyDown(event);
-          }}
-        />
+              if (
+                event.key === "Delete" &&
+                deleteEditorContent(event, "forward")
+              ) {
+                return;
+              }
+            }}
+            onKeyDown={handleCustomComposerKeyDown}
+          />
+        ) : composerImplementation === "tiptap-chips" ? (
+          <ComposerTiptapInput
+            ref={inputRef}
+            id="thread-composer"
+            ariaActiveDescendant={activeAutocompleteOptionId}
+            ariaControls={autocompleteListboxId}
+            ariaExpanded={hasAutocomplete}
+            disabled={composerDisabled}
+            label={isLaunchpad ? "New thread" : "Reply"}
+            placeholder={composerPlaceholder}
+            skillTokens={skillTokens}
+            value={draft}
+            onChange={handleComposerChange}
+            onPaste={handlePaste}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            onClick={handleComposerClick}
+            onKeyDown={handlePlainComposerKeyDown}
+          />
+        ) : (
+          <ComposerTextareaInput
+            ref={inputRef}
+            id="thread-composer"
+            ariaActiveDescendant={activeAutocompleteOptionId}
+            ariaControls={autocompleteListboxId}
+            ariaExpanded={hasAutocomplete}
+            disabled={composerDisabled}
+            label={isLaunchpad ? "New thread" : "Reply"}
+            placeholder={composerPlaceholder}
+            value={draft}
+            onChange={(nextDraft) => handleComposerChange(nextDraft, [])}
+            onPaste={handlePaste}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            onClick={handleComposerClick}
+            onKeyDown={handlePlainComposerKeyDown}
+          />
+        )}
 
         {displayedAutocompleteKind === "skills" ? (
           <div

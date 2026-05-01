@@ -21,6 +21,10 @@
   "dependencies": {
     "@pwragnt/agent-core": "workspace:*",
     "@pwragnt/shared": "workspace:*",
+    "@tiptap/extension-mention": "^3.22.5",
+    "@tiptap/react": "^3.22.5",
+    "@tiptap/starter-kit": "^3.22.5",
+    "@tiptap/suggestion": "^3.22.5",
     "electron-log": "^5.4.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

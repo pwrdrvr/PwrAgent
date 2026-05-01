@@ -27,7 +27,7 @@ export type ComposerRichInputHandle = {
   setSelectionRange: (start: number, end: number) => void;
 };
 
-type ComposerRichInputProps = {
+export type ComposerRichInputProps = {
   ariaActiveDescendant?: string;
   ariaControls?: string;
   ariaExpanded?: boolean;

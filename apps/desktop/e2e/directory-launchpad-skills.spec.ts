@@ -5,6 +5,13 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
+const CUSTOM_WIDGET_COMPOSER_ENV = {
+  PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "custom-widget-chips",
+};
+const TIPTAP_COMPOSER_ENV = {
+  PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-chips",
+};
+
 async function createDirectoryLaunchpadSkillsFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
@@ -248,6 +255,7 @@ async function typeSkillChip(
 test("directory launchpad loads skill autocomplete from user and local scope", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
+    env: CUSTOM_WIDGET_COMPOSER_ENV,
     fixturePath: fixture.fixturePath,
   });
 
@@ -271,6 +279,7 @@ test("directory launchpad loads skill autocomplete from user and local scope", a
 test("directory launchpad keyboard typing updates the rich input once", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
+    env: CUSTOM_WIDGET_COMPOSER_ENV,
     fixturePath: fixture.fixturePath,
   });
 
@@ -298,6 +307,7 @@ test("directory launchpad keyboard typing updates the rich input once", async ()
 test("directory launchpad skill autocomplete supports active keyboard selection", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
+    env: CUSTOM_WIDGET_COMPOSER_ENV,
     fixturePath: fixture.fixturePath,
   });
 
@@ -374,9 +384,38 @@ test("directory launchpad skill autocomplete supports active keyboard selection"
   }
 });
 
+test("directory launchpad renders Tiptap composer when enabled and keeps skill autocomplete", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    env: TIPTAP_COMPOSER_ENV,
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    await expect(app.window.locator(".composer")).toHaveAttribute(
+      "data-composer-implementation",
+      "tiptap-chips",
+    );
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "New thread" });
+    await textbox.focus();
+    await app.window.keyboard.type("$ce:pl");
+    await expect(tiptapInput).toHaveAttribute("data-value", "$ce:pl");
+    await expect(app.window.getByRole("listbox", { name: "Skills" })).toBeVisible();
+    await expect(app.window.getByRole("button", { name: /\$ce:plan/i })).toBeVisible();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("directory launchpad preserves multiple skill chips across boundary edits", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
+    env: CUSTOM_WIDGET_COMPOSER_ENV,
     fixturePath: fixture.fixturePath,
   });
 
@@ -446,6 +485,7 @@ test("directory launchpad preserves multiple skill chips across boundary edits",
 test("directory launchpad select all delete clears chips without renderer crash", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
+    env: CUSTOM_WIDGET_COMPOSER_ENV,
     fixturePath: fixture.fixturePath,
   });
 
@@ -488,6 +528,7 @@ test("directory launchpad select all delete clears chips without renderer crash"
 test("directory launchpad skill autocomplete selects focused options as undoable inline chips", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
+    env: CUSTOM_WIDGET_COMPOSER_ENV,
     fixturePath: fixture.fixturePath,
   });
 
@@ -539,6 +580,7 @@ test("directory launchpad skill autocomplete selects focused options as undoable
     await app.window.keyboard.press("Backspace");
     await expect(chip).toBeHidden();
 
+    await richInput.focus();
     await app.window.keyboard.press(
       process.platform === "darwin" ? "Meta+Z" : "Control+Z",
     );
@@ -565,6 +607,7 @@ test("directory launchpad skill autocomplete selects focused options as undoable
 test("directory launchpad skill chips stay text-sized and baseline aligned", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
+    env: CUSTOM_WIDGET_COMPOSER_ENV,
     fixturePath: fixture.fixturePath,
   });
 
@@ -639,6 +682,7 @@ test("directory launchpad skill chips stay text-sized and baseline aligned", asy
 test("directory launchpad types at the clicked text caret between skill chips", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
+    env: CUSTOM_WIDGET_COMPOSER_ENV,
     fixturePath: fixture.fixturePath,
   });
 
@@ -703,6 +747,7 @@ test("directory launchpad deletes a persisted skill chip with repeated backspace
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
     env: {
+      ...CUSTOM_WIDGET_COMPOSER_ENV,
       PWRAGNT_STATE_ROOT: stateRoot,
     },
   });
@@ -738,6 +783,7 @@ test("directory launchpad deletes a persisted skill chip with repeated backspace
 test("directory launchpad does not intercept macOS ctrl-a as select all", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
+    env: CUSTOM_WIDGET_COMPOSER_ENV,
     fixturePath: fixture.fixturePath,
   });
 
@@ -811,6 +857,7 @@ test("directory launchpad does not intercept macOS ctrl-a as select all", async 
 test("directory launchpad skill autocomplete stays inside a small window and scrolls", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
+    env: CUSTOM_WIDGET_COMPOSER_ENV,
     fixturePath: fixture.fixturePath,
     windowSize: {
       width: 760,
@@ -855,6 +902,7 @@ test("directory launchpad skill autocomplete stays inside a small window and scr
 test("directory launchpad parks the composer at the bottom for skill autocomplete space", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({
+    env: CUSTOM_WIDGET_COMPOSER_ENV,
     fixturePath: fixture.fixturePath,
     windowSize: {
       width: 1000,
