@@ -53,6 +53,7 @@ export type DesktopCodexDiscoveryCandidate = {
   executable: boolean;
   selected: boolean;
   version?: string;
+  versionFailureReason?: string;
   failureReason?: string;
 };
 

@@ -189,8 +189,16 @@ function CodexDiscoveryRow(props: {
   disabled?: boolean;
   onUse: (command: string) => void;
 }) {
-  const status = props.candidate.selected ? "Using" : "Available";
-  const version = props.candidate.version ?? "version unknown";
+  const status = !props.candidate.executable
+    ? "Not executable"
+    : props.candidate.selected
+      ? "Using"
+      : "Available";
+  const version =
+    props.candidate.version
+    ?? props.candidate.versionFailureReason
+    ?? props.candidate.failureReason
+    ?? "version unknown";
 
   return (
     <div
@@ -204,7 +212,7 @@ function CodexDiscoveryRow(props: {
       <span className="settings-source">{status}</span>
       <button
         className="button button--secondary"
-        disabled={props.disabled}
+        disabled={props.disabled || !props.candidate.executable}
         type="button"
         onClick={() => props.onUse(props.candidate.command)}
       >

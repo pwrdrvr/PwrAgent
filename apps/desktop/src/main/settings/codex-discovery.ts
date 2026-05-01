@@ -33,7 +33,7 @@ async function resolvePathCommand(
   env: NodeJS.ProcessEnv,
 ): Promise<string | undefined> {
   if (command.includes(path.sep)) {
-    return (await pathIsExecutable(command)) ? command : undefined;
+    return command;
   }
 
   try {
@@ -50,16 +50,28 @@ async function resolvePathCommand(
 async function readCodexVersion(
   command: string,
   env: NodeJS.ProcessEnv,
-): Promise<string | undefined> {
+): Promise<{
+  ran: boolean;
+  version?: string;
+  failureReason?: string;
+}> {
   try {
     const result = await execFile(command, ["--version"], {
       env,
       timeout: 2_000,
     });
-    const match = result.stdout.trim().match(/\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/);
-    return match?.[1];
-  } catch {
-    return undefined;
+    const output = `${result.stdout}\n${result.stderr ?? ""}`;
+    const match = output.match(/\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/);
+    return {
+      ran: true,
+      version: match?.[1],
+      failureReason: match ? undefined : "version_not_reported",
+    };
+  } catch (error) {
+    return {
+      ran: false,
+      failureReason: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -169,18 +181,21 @@ async function buildDiscoveryCandidate(
     source === "path" || !trimmedCommand.includes(path.sep)
       ? await resolvePathCommand(trimmedCommand, env)
       : trimmedCommand;
-  const executable = resolvedCommand
+  const accessExecutable = resolvedCommand
     ? await pathIsExecutable(resolvedCommand)
     : false;
+  const versionResult = resolvedCommand
+    ? await readCodexVersion(resolvedCommand, env)
+    : { ran: false, failureReason: "not_found" };
+  const executable = accessExecutable || versionResult.ran;
 
   return {
     command: resolvedCommand || trimmedCommand,
     source,
     executable,
     selected: false,
-    version: executable && resolvedCommand
-      ? await readCodexVersion(resolvedCommand, env)
-      : undefined,
+    version: versionResult.version,
+    versionFailureReason: executable ? versionResult.failureReason : undefined,
     failureReason: executable ? undefined : "not_executable",
   };
 }

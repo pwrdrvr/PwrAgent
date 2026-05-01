@@ -81,4 +81,58 @@ describe("Codex discovery", () => {
     expect(snapshot.candidates.some((candidate) => candidate.source === "path")).toBe(false);
     expect(snapshot.candidates.some((candidate) => candidate.source === "application")).toBe(false);
   });
+
+  it("treats a successful version probe as executable when access fails", async () => {
+    accessMock.mockRejectedValue(new Error("access denied"));
+    execFileMock.mockImplementation(
+      (
+        command: string,
+        args: string[],
+        _options: Record<string, unknown>,
+        callback: (error: Error | null, result?: { stdout: string; stderr?: string }) => void,
+      ) => {
+        if (command === "/usr/bin/which") {
+          callback(null, { stdout: `/opt/homebrew/bin/${args[0]}\n` });
+          return;
+        }
+        callback(null, { stdout: "codex-cli 0.125.0\n" });
+      },
+    );
+    const { discoverCodexCommands } = await import("../settings/codex-discovery");
+
+    const snapshot = await discoverCodexCommands({ env: {} });
+
+    expect(snapshot.selectedCommand).toBe("/opt/homebrew/bin/codex");
+    expect(snapshot.candidates.find((candidate) => candidate.source === "path")).toMatchObject({
+      executable: true,
+      selected: true,
+      version: "0.125.0",
+    });
+  });
+
+  it("reads Codex versions from stderr when needed", async () => {
+    accessMock.mockResolvedValue(undefined);
+    execFileMock.mockImplementation(
+      (
+        command: string,
+        args: string[],
+        _options: Record<string, unknown>,
+        callback: (error: Error | null, result?: { stdout: string; stderr?: string }) => void,
+      ) => {
+        if (command === "/usr/bin/which") {
+          callback(null, { stdout: `/opt/homebrew/bin/${args[0]}\n` });
+          return;
+        }
+        callback(null, { stdout: "", stderr: "codex-cli 0.126.0-alpha.8\n" });
+      },
+    );
+    const { discoverCodexCommands } = await import("../settings/codex-discovery");
+
+    const snapshot = await discoverCodexCommands({ env: {} });
+
+    expect(snapshot.candidates.find((candidate) => candidate.source === "path")).toMatchObject({
+      executable: true,
+      version: "0.126.0-alpha.8",
+    });
+  });
 });
