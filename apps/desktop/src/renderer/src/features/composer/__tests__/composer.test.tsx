@@ -1229,6 +1229,55 @@ describe("Composer", () => {
     });
   });
 
+  it("renders the worktree base branch menu as a branch chooser", () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "develop",
+            branches: [
+              "feat/desktop-settings-config",
+              "codex/plan-github-actions-rollout",
+              "develop",
+              "main",
+            ],
+            syncState: "untracked",
+          },
+        }}
+        launchpad={{
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgnt",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          branchName: "feat/desktop-settings-config",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        skills={[]}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText("Base branch"));
+
+    expect(screen.getByRole("listbox").closest(".composer-dropdown")).toHaveClass(
+      "composer-dropdown--branch"
+    );
+    expect(
+      screen.getByRole("option", { name: "feat/desktop-settings-config" })
+    ).toHaveAttribute("aria-selected", "true");
+  });
+
   it("shows handoff to local for existing worktree threads", async () => {
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
 

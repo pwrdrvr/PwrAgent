@@ -431,6 +431,7 @@ function ComposerDropdown(props: {
   compact?: boolean;
   disabled?: boolean;
   id?: string;
+  kind?: "branch";
   onChange: (value: string) => void;
   options: ComposerDropdownOption[];
   value: string;
@@ -443,7 +444,13 @@ function ComposerDropdown(props: {
 
   return (
     <div
-      className={`composer-dropdown${props.compact ? " composer-dropdown--compact" : ""}`}
+      className={[
+        "composer-dropdown",
+        props.compact ? "composer-dropdown--compact" : "",
+        props.kind === "branch" ? "composer-dropdown--branch" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       ref={ref}
     >
       <button
@@ -490,7 +497,7 @@ function ComposerDropdown(props: {
               ) : (
                 <span aria-hidden="true" className="composer-dropdown__check" />
               )}
-              <span>{option.label}</span>
+              <span className="composer-dropdown__option-label">{option.label}</span>
             </button>
           ))}
         </div>
@@ -2217,6 +2224,7 @@ export function Composer(props: ComposerProps) {
               id="launchpad-branch"
               compact
               disabled={launchpadSubmitting}
+              kind="branch"
               value={
                 props.launchpad.branchName ??
                 props.directory?.gitStatus?.currentBranch ??
