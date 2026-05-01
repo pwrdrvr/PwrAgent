@@ -58,6 +58,11 @@ The authorized ID variables are comma-separated lists. Bot tokens are redacted
 from runtime logs. Telegram also accepts `TELEGRAM_BOT_TOKEN` and Discord also
 accepts `DISCORD_BOT_TOKEN` as local migration fallbacks.
 
+Discord slash commands are reconciled on adapter startup when an Application ID
+is configured. The reconciler reads existing commands and only creates, patches,
+or deletes the commands whose definitions differ; it does not bulk overwrite
+commands on every startup.
+
 ## Security Model
 
 - Authorization is by immutable platform user ID.
@@ -98,8 +103,8 @@ Telegram:
 
 Discord:
 
-1. In the Discord Developer Portal, confirm the bot has Gateway access and the privileged Message Content Intent enabled.
-2. Send `/threads` from an allowlisted Discord user.
+1. In the Discord Developer Portal, confirm the bot has Gateway access, the privileged Message Content Intent enabled, and the bot was installed with the `applications.commands` scope.
+2. Send `/resume` from an allowlisted Discord user.
 3. Verify a numbered thread picker appears with components.
 4. Choose a thread by component, then repeat by replying `1`.
 5. Send free-form text and verify a PwrAgnt turn starts in the bound thread.

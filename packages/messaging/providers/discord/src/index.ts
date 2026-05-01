@@ -8,6 +8,10 @@ export type {
   DiscordMessage,
   DiscordProviderLogger,
 } from "./discord-adapter.ts";
+export type {
+  DiscordApplicationCommand,
+  DiscordApplicationCommandBody,
+} from "./discord-commands.ts";
 export { DiscordAdapter, createDiscordAdapter } from "./discord-adapter.ts";
 export {
   DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES,

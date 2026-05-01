@@ -14,6 +14,7 @@ import type {
 import { DiscordAdapter } from "@pwragnt/messaging-provider-discord";
 import type {
   DiscordApi,
+  DiscordApplicationCommand,
   DiscordCreateMessageRequest,
   DiscordInteractionResponseRequest,
 } from "@pwragnt/messaging-provider-discord";
@@ -35,6 +36,230 @@ afterEach(async () => {
 });
 
 describe("DiscordAdapter", () => {
+  it("reconciles Discord slash commands without recreating unchanged commands", async () => {
+    const api = createApi({
+      applicationCommands: [
+        createApplicationCommand("cmd-resume", {
+          description: "Choose a PwrAgnt thread to control from this conversation.",
+          name: "resume",
+          options: [
+            {
+              description: "Optional resume flags, such as --projects or --new.",
+              name: "args",
+              type: 3,
+            },
+          ],
+        }),
+        createApplicationCommand("cmd-status", {
+          description: "Show the current PwrAgnt thread binding and controls.",
+          name: "status",
+        }),
+        createApplicationCommand("cmd-detach", {
+          description: "Detach this conversation from its current PwrAgnt thread.",
+          name: "detach",
+        }),
+      ],
+    });
+    const adapter = new DiscordAdapter({
+      api: api as unknown as DiscordApi,
+      config: {
+        applicationId: "app-1",
+        channel: "discord",
+        botToken: "discord-token",
+        authorizedActorIds: ["42"],
+      },
+      gateway: createGateway(),
+    });
+
+    await adapter.start(async () => {});
+
+    expect(api.listApplicationCommands).toHaveBeenCalledWith("app-1");
+    expect(api.createApplicationCommand).not.toHaveBeenCalled();
+    expect(api.updateApplicationCommand).not.toHaveBeenCalled();
+    expect(api.deleteApplicationCommand).not.toHaveBeenCalled();
+  });
+
+  it("patches changed Discord slash commands and creates only missing commands", async () => {
+    const api = createApi({
+      applicationCommands: [
+        createApplicationCommand("cmd-resume", {
+          description: "Old resume description.",
+          name: "resume",
+        }),
+        createApplicationCommand("cmd-status", {
+          description: "Show the current PwrAgnt thread binding and controls.",
+          name: "status",
+        }),
+        createApplicationCommand("cmd-legacy", {
+          description: "Remove me.",
+          name: "legacy",
+        }),
+      ],
+    });
+    const adapter = new DiscordAdapter({
+      api: api as unknown as DiscordApi,
+      config: {
+        applicationId: "app-1",
+        channel: "discord",
+        botToken: "discord-token",
+        authorizedActorIds: ["42"],
+      },
+      gateway: createGateway(),
+    });
+
+    await adapter.start(async () => {});
+
+    expect(api.deleteApplicationCommand).toHaveBeenCalledWith("app-1", "cmd-legacy");
+    expect(api.updateApplicationCommand).toHaveBeenCalledWith(
+      "app-1",
+      "cmd-resume",
+      expect.objectContaining({
+        name: "resume",
+      }),
+    );
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(1);
+    expect(api.createApplicationCommand).toHaveBeenCalledWith(
+      "app-1",
+      expect.objectContaining({
+        name: "detach",
+      }),
+    );
+  });
+
+  it("creates missing Discord slash commands without bulk overwriting", async () => {
+    const api = createApi();
+    const adapter = new DiscordAdapter({
+      api: api as unknown as DiscordApi,
+      config: {
+        applicationId: "app-1",
+        channel: "discord",
+        botToken: "discord-token",
+        authorizedActorIds: ["42"],
+      },
+      gateway: createGateway(),
+    });
+
+    await adapter.start(async () => {});
+
+    expect(api.listApplicationCommands).toHaveBeenCalledWith("app-1");
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(3);
+    expect(api.createApplicationCommand).toHaveBeenCalledWith(
+      "app-1",
+      expect.objectContaining({
+        name: "resume",
+      }),
+    );
+    expect(api.updateApplicationCommand).not.toHaveBeenCalled();
+  });
+
+  it("normalizes Discord slash command interactions", async () => {
+    const events: MessagingInboundEvent[] = [];
+    const api = createApi();
+    const gateway = createGateway();
+    const adapter = new DiscordAdapter({
+      api: api as unknown as DiscordApi,
+      config: {
+        channel: "discord",
+        botToken: "discord-token",
+        authorizedActorIds: ["42"],
+      },
+      gateway,
+      now: () => 1000,
+    });
+
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    await gateway.emit({
+      d: {
+        channel_id: "channel-1",
+        data: {
+          name: "resume",
+          options: [
+            {
+              name: "args",
+              value: "--projects",
+            },
+          ],
+        },
+        guild_id: "guild-1",
+        id: "interaction-command-1",
+        member: {
+          nick: "Ada",
+          user: {
+            id: "42",
+            username: "ada",
+          },
+        },
+        token: "interaction-token",
+        type: 2,
+      },
+      op: 0,
+      s: 1,
+      t: "INTERACTION_CREATE",
+    });
+
+    expect(api.createInteractionResponse).toHaveBeenCalledWith(
+      "interaction-command-1",
+      "interaction-token",
+      {
+        type: 5,
+      },
+    );
+    expect(events.at(-1)).toMatchObject({
+      args: ["--projects"],
+      command: "resume",
+      kind: "command",
+      rawText: "/resume --projects",
+    });
+  });
+
+  it("renders slash command responses through the deferred interaction response", async () => {
+    const harness = await createControllerHarness({
+      applicationId: "app-1",
+    });
+
+    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.gateway.emit({
+      d: {
+        channel_id: "channel-1",
+        data: {
+          name: "resume",
+        },
+        guild_id: "guild-1",
+        id: "interaction-command-1",
+        member: {
+          user: {
+            id: "42",
+            username: "ada",
+          },
+        },
+        token: "interaction-token",
+        type: 2,
+      },
+      op: 0,
+      s: 1,
+      t: "INTERACTION_CREATE",
+    });
+
+    expect(harness.api.createInteractionResponse).toHaveBeenCalledWith(
+      "interaction-command-1",
+      "interaction-token",
+      {
+        type: 5,
+      },
+    );
+    expect(harness.api.createMessage).not.toHaveBeenCalled();
+    expect(harness.api.updateInteractionOriginalResponse).toHaveBeenCalledWith(
+      "app-1",
+      "interaction-token",
+      expect.objectContaining({
+        content: expect.stringContaining("Choose a thread to resume"),
+      }),
+    );
+    expect(harness.api.createMessage).not.toHaveBeenCalled();
+  });
+
   it("normalizes /resume and renders a picker with components", async () => {
     const harness = await createControllerHarness();
 
@@ -673,6 +898,7 @@ describe("DiscordAdapter", () => {
 });
 
 async function createControllerHarness(options: {
+  applicationId?: string;
   navigationSnapshot?: NavigationSnapshot;
 } = {}): Promise<{
   adapter: DiscordAdapter;
@@ -699,6 +925,7 @@ async function createControllerHarness(options: {
   const adapter = new DiscordAdapter({
     api: api as unknown as DiscordApi,
     config: {
+      applicationId: options.applicationId,
       channel: "discord",
       botToken: "discord-token",
       authorizedActorIds: ["42"],
@@ -728,14 +955,34 @@ async function createControllerHarness(options: {
   };
 }
 
-function createApi(): {
+function createApi(options: {
+  applicationCommands?: DiscordApplicationCommand[];
+} = {}): {
+  createApplicationCommand: ReturnType<typeof vi.fn>;
   createInteractionResponse: ReturnType<typeof vi.fn>;
   createMessage: ReturnType<typeof vi.fn>;
+  deleteApplicationCommand: ReturnType<typeof vi.fn>;
+  listApplicationCommands: ReturnType<typeof vi.fn>;
   sendTyping: ReturnType<typeof vi.fn>;
+  updateApplicationCommand: ReturnType<typeof vi.fn>;
+  updateInteractionOriginalResponse: ReturnType<typeof vi.fn>;
   updateMessage: ReturnType<typeof vi.fn>;
 } {
   let messageSequence = 0;
+  let commandSequence = options.applicationCommands?.length ?? 0;
+  let applicationCommands = [...(options.applicationCommands ?? [])];
   return {
+    createApplicationCommand: vi.fn(
+      async (applicationId: string, command: Omit<DiscordApplicationCommand, "id">) => {
+        const created = {
+          ...command,
+          application_id: applicationId,
+          id: `cmd-${++commandSequence}`,
+        } as DiscordApplicationCommand;
+        applicationCommands.push(created);
+        return created;
+      },
+    ),
     createInteractionResponse: vi.fn(
       async (
         _interactionId: string,
@@ -750,7 +997,45 @@ function createApi(): {
         id: `message-${++messageSequence}`,
       }),
     ),
+    deleteApplicationCommand: vi.fn(
+      async (_applicationId: string, commandId: string) => {
+        applicationCommands = applicationCommands.filter(
+          (command) => command.id !== commandId,
+        );
+      },
+    ),
+    listApplicationCommands: vi.fn(
+      async (_applicationId: string) => applicationCommands,
+    ),
     sendTyping: vi.fn(async (_channelId: string) => undefined),
+    updateApplicationCommand: vi.fn(
+      async (
+        applicationId: string,
+        commandId: string,
+        command: Omit<DiscordApplicationCommand, "id">,
+      ) => {
+        const updated = {
+          ...command,
+          application_id: applicationId,
+          id: commandId,
+        } as DiscordApplicationCommand;
+        applicationCommands = applicationCommands.map((live) =>
+          live.id === commandId ? updated : live,
+        );
+        return updated;
+      },
+    ),
+    updateInteractionOriginalResponse: vi.fn(
+      async (
+        _applicationId: string,
+        _interactionToken: string,
+        request: DiscordCreateMessageRequest,
+      ) => ({
+        channel_id: "channel-1",
+        content: request.content,
+        id: `message-${++messageSequence}`,
+      }),
+    ),
     updateMessage: vi.fn(
       async (
         channelId: string,
@@ -762,6 +1047,21 @@ function createApi(): {
         id: messageId,
       }),
     ),
+  };
+}
+
+function createApplicationCommand(
+  id: string,
+  command: Omit<DiscordApplicationCommand, "id" | "type"> & { type?: number },
+): DiscordApplicationCommand {
+  return {
+    contexts: [0, 1, 2],
+    integration_types: [0, 1],
+    type: 1,
+    ...command,
+    application_id: "app-1",
+    id,
+    version: "1",
   };
 }
 

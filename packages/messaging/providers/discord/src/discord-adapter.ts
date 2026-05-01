@@ -3,9 +3,11 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  Partials,
   REST,
   Routes,
   type ButtonInteraction,
+  type ChatInputCommandInteraction,
   type Interaction,
   type Message,
   type User,
@@ -19,6 +21,12 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragnt/messaging-interface";
 import type { DiscordMessagingConfig } from "./discord-config.ts";
+import type {
+  DiscordApplicationCommand,
+  DiscordApplicationCommandApi,
+  DiscordApplicationCommandBody,
+} from "./discord-commands.ts";
+import { reconcileDiscordApplicationCommands } from "./discord-commands.ts";
 import {
   actionsForDiscordIntent,
   buildDiscordComponents,
@@ -40,6 +48,11 @@ type DiscordTypingSignal = {
   interval: ReturnType<typeof setInterval>;
   signalId: number;
   timeout: ReturnType<typeof setTimeout>;
+};
+
+type DiscordInteractionCommandOption = {
+  name: string;
+  value?: string | number | boolean;
 };
 
 export type DiscordProviderLogger = {
@@ -67,7 +80,7 @@ export type DiscordCreateMessageRequest = {
 
 export type DiscordInteractionResponseRequest = {
   data?: DiscordCreateMessageRequest;
-  type: 4 | 6 | 7;
+  type: 4 | 5 | 6 | 7;
 };
 
 export type DiscordMessage = {
@@ -104,6 +117,8 @@ export type DiscordInteractionCreateDispatch = {
   channel_id: string;
   data?: {
     custom_id?: string;
+    name?: string;
+    options?: DiscordInteractionCommandOption[];
   };
   guild_id?: string;
   id: string;
@@ -141,12 +156,17 @@ export type DiscordGatewayConnection = {
   start(): Promise<void>;
 };
 
-export type DiscordApi = {
+export type DiscordApi = DiscordApplicationCommandApi & {
   createInteractionResponse(
     interactionId: string,
     interactionToken: string,
     request: DiscordInteractionResponseRequest,
   ): Promise<void>;
+  updateInteractionOriginalResponse(
+    applicationId: string,
+    interactionToken: string,
+    request: DiscordCreateMessageRequest,
+  ): Promise<DiscordMessage>;
   createMessage(
     channelId: string,
     request: DiscordCreateMessageRequest,
@@ -196,6 +216,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
+    await this.reconcileApplicationCommands();
     this.listener = listener;
     this.unsubscribeGateway = this.gateway.onEvent(async (event) => {
       await this.handleGatewayEvent(event);
@@ -242,6 +263,29 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const chunks = splitDiscordContent(textForDiscordIntent(intent) || " ");
     const componentPayload =
       components ?? (intent.delivery?.replaceMarkup ? [] : undefined);
+
+    if (
+      target.applicationId &&
+      target.interactionToken &&
+      chunks.length === 1 &&
+      !imageUrl
+    ) {
+      const message = await this.api.updateInteractionOriginalResponse(
+        target.applicationId,
+        target.interactionToken,
+        {
+          allowed_mentions: defensiveAllowedMentions(),
+          components: componentPayload,
+          content: chunks[0] ?? " ",
+        },
+      );
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "updated",
+        surface: this.surfaceForMessage(message, target),
+      };
+    }
 
     if (
       intent.delivery?.mode === "update" &&
@@ -368,10 +412,6 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private async handleInteractionCreate(
     interaction: DiscordInteractionCreateDispatch,
   ): Promise<void> {
-    await this.api.createInteractionResponse(interaction.id, interaction.token, {
-      type: 6,
-    });
-
     const listener = this.listener;
     const actor = interaction.member?.user ?? interaction.user;
     if (!listener || !actor) {
@@ -379,6 +419,33 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
 
     const customId = interaction.data?.custom_id ?? "";
+    if (customId) {
+      await this.api.createInteractionResponse(interaction.id, interaction.token, {
+        type: 6,
+      });
+      await this.handleComponentInteraction(interaction, actor, customId);
+      return;
+    }
+
+    const commandName = interaction.data?.name?.toLowerCase();
+    if (commandName) {
+      await this.api.createInteractionResponse(interaction.id, interaction.token, {
+        type: 5,
+      });
+      await this.handleApplicationCommandInteraction(interaction, actor, commandName);
+    }
+  }
+
+  private async handleComponentInteraction(
+    interaction: DiscordInteractionCreateDispatch,
+    actor: DiscordUser,
+    customId: string,
+  ): Promise<void> {
+    const listener = this.listener;
+    if (!listener) {
+      return;
+    }
+
     const binding = this.componentBindings.get(customId);
     await listener({
       id: `discord:interaction:${interaction.id}`,
@@ -405,6 +472,53 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     });
   }
 
+  private async handleApplicationCommandInteraction(
+    interaction: DiscordInteractionCreateDispatch,
+    actor: DiscordUser,
+    commandName: string,
+  ): Promise<void> {
+    const listener = this.listener;
+    if (!listener) {
+      return;
+    }
+
+    const args = commandArgsFromOptions(interaction.data?.options);
+    await listener({
+      id: `discord:command:${interaction.id}`,
+      kind: "command",
+      actor: this.actorFromUser(actor, interaction.member?.nick ?? undefined),
+      args,
+      channel: this.channelFromDiscord(interaction.channel_id, interaction.guild_id),
+      command: commandName,
+      rawText: [`/${commandName}`, ...args].join(" ").trim(),
+      receivedAt: this.now(),
+      routingState: this.routingStateFromDiscord(
+        interaction.channel_id,
+        interaction.guild_id,
+        {
+          interactionToken: interaction.token,
+        },
+      ),
+    });
+  }
+
+  private async reconcileApplicationCommands(): Promise<void> {
+    const applicationId = this.options.config.applicationId;
+    if (!applicationId) {
+      this.options.logger?.warn?.(
+        "discord slash command registration skipped because applicationId is not configured",
+      );
+      return;
+    }
+
+    const result = await reconcileDiscordApplicationCommands({
+      api: this.api,
+      applicationId,
+    });
+
+    this.options.logger?.debug("discord slash commands reconciled", result);
+  }
+
   private createCustomId(
     intent: MessagingSurfaceIntent,
     action: MessagingSurfaceAction,
@@ -426,32 +540,54 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   private resolveTarget(
     intent: MessagingSurfaceIntent,
-  ): { channelId: string; guildId?: string; messageId?: string } | undefined {
+  ):
+    | {
+        applicationId?: string;
+        channelId: string;
+        guildId?: string;
+        interactionToken?: string;
+        messageId?: string;
+      }
+    | undefined {
     const channel = intent.audit?.channel.conversation;
+    const opaque = intent.targetSurface?.state?.opaque;
     if (channel) {
-      const opaque = intent.targetSurface?.state?.opaque;
-      const messageId =
+      const surfaceState =
         opaque && typeof opaque === "object" && !Array.isArray(opaque)
-          ? typeof opaque.messageId === "string"
-            ? opaque.messageId
-            : undefined
+          ? opaque
           : undefined;
       return {
+        applicationId:
+          typeof surfaceState?.applicationId === "string"
+            ? surfaceState.applicationId
+            : undefined,
         channelId: channel.id,
         guildId: channel.parentId,
-        messageId,
+        interactionToken:
+          typeof surfaceState?.interactionToken === "string"
+            ? surfaceState.interactionToken
+            : undefined,
+        messageId:
+          typeof surfaceState?.messageId === "string"
+            ? surfaceState.messageId
+            : undefined,
       };
     }
 
-    const opaque = intent.targetSurface?.state?.opaque;
     if (!opaque || typeof opaque !== "object" || Array.isArray(opaque)) {
       return undefined;
     }
 
     return typeof opaque.channelId === "string"
       ? {
+          applicationId:
+            typeof opaque.applicationId === "string" ? opaque.applicationId : undefined,
           channelId: opaque.channelId,
           guildId: typeof opaque.guildId === "string" ? opaque.guildId : undefined,
+          interactionToken:
+            typeof opaque.interactionToken === "string"
+              ? opaque.interactionToken
+              : undefined,
           messageId: typeof opaque.messageId === "string" ? opaque.messageId : undefined,
         }
       : undefined;
@@ -662,11 +798,16 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private routingStateFromDiscord(
     channelId: string,
     guildId: string | undefined,
+    interaction?: {
+      interactionToken: string;
+    },
   ): MessagingAdapterState {
     return {
       opaque: {
+        applicationId: interaction ? (this.options.config.applicationId ?? null) : null,
         channelId,
         guildId: guildId ?? null,
+        interactionToken: interaction?.interactionToken ?? null,
       },
     };
   }
@@ -703,6 +844,15 @@ class DiscordRestApi implements DiscordApi {
     this.rest = new REST({ version: "10" }).setToken(botToken);
   }
 
+  async createApplicationCommand(
+    applicationId: string,
+    command: DiscordApplicationCommandBody,
+  ): Promise<DiscordApplicationCommand> {
+    return (await this.rest.post(Routes.applicationCommands(applicationId), {
+      body: command,
+    })) as DiscordApplicationCommand;
+  }
+
   async createMessage(
     channelId: string,
     request: DiscordCreateMessageRequest,
@@ -722,10 +872,51 @@ class DiscordRestApi implements DiscordApi {
     });
   }
 
+  async updateInteractionOriginalResponse(
+    applicationId: string,
+    interactionToken: string,
+    request: DiscordCreateMessageRequest,
+  ): Promise<DiscordMessage> {
+    return (await this.rest.patch(
+      `/webhooks/${applicationId}/${interactionToken}/messages/@original`,
+      {
+        body: request,
+      },
+    )) as DiscordMessage;
+  }
+
+  async deleteApplicationCommand(
+    applicationId: string,
+    commandId: string,
+  ): Promise<void> {
+    await this.rest.delete(Routes.applicationCommand(applicationId, commandId));
+  }
+
+  async listApplicationCommands(
+    applicationId: string,
+  ): Promise<DiscordApplicationCommand[]> {
+    return (await this.rest.get(
+      Routes.applicationCommands(applicationId),
+    )) as DiscordApplicationCommand[];
+  }
+
   async sendTyping(channelId: string): Promise<void> {
     await this.rest.post(`/channels/${channelId}/typing`, {
       body: {},
     });
+  }
+
+  async updateApplicationCommand(
+    applicationId: string,
+    commandId: string,
+    command: DiscordApplicationCommandBody,
+  ): Promise<DiscordApplicationCommand> {
+    return (await this.rest.patch(
+      Routes.applicationCommand(applicationId, commandId),
+      {
+        body: command,
+      },
+    )) as DiscordApplicationCommand;
   }
 
   async updateMessage(
@@ -753,6 +944,7 @@ class DiscordJsGatewayConnection implements DiscordGatewayConnection {
         GatewayIntentBits.Guilds,
         GatewayIntentBits.MessageContent,
       ],
+      partials: [Partials.Channel],
     });
     this.registerHandlers();
   }
@@ -828,34 +1020,67 @@ function messageToDispatch(message: Message): DiscordMessageCreateDispatch {
 function interactionToDispatch(
   interaction: Interaction,
 ): DiscordInteractionCreateDispatch | undefined {
-  if (!interaction.isButton()) {
-    return undefined;
+  if (interaction.isButton()) {
+    const buttonInteraction = interaction as ButtonInteraction;
+    return {
+      channel_id: buttonInteraction.channelId,
+      data: {
+        custom_id: buttonInteraction.customId,
+      },
+      guild_id: buttonInteraction.guildId ?? undefined,
+      id: buttonInteraction.id,
+      member: buttonInteraction.inGuild()
+        ? {
+            nick:
+              "nickname" in buttonInteraction.member
+                ? buttonInteraction.member.nickname
+                : null,
+            user: userToDiscordUser(buttonInteraction.user),
+          }
+        : undefined,
+      message: {
+        id: buttonInteraction.message.id,
+      },
+      token: buttonInteraction.token,
+      type: buttonInteraction.type,
+      user: userToDiscordUser(buttonInteraction.user),
+    };
   }
 
-  const buttonInteraction = interaction as ButtonInteraction;
-  return {
-    channel_id: buttonInteraction.channelId,
-    data: {
-      custom_id: buttonInteraction.customId,
-    },
-    guild_id: buttonInteraction.guildId ?? undefined,
-    id: buttonInteraction.id,
-    member: buttonInteraction.inGuild()
-      ? {
-          nick:
-            "nickname" in buttonInteraction.member
-              ? buttonInteraction.member.nickname
-              : null,
-          user: userToDiscordUser(buttonInteraction.user),
-        }
-      : undefined,
-    message: {
-      id: buttonInteraction.message.id,
-    },
-    token: buttonInteraction.token,
-    type: buttonInteraction.type,
-    user: userToDiscordUser(buttonInteraction.user),
-  };
+  if (interaction.isChatInputCommand()) {
+    const commandInteraction = interaction as ChatInputCommandInteraction;
+    return {
+      channel_id: commandInteraction.channelId,
+      data: {
+        name: commandInteraction.commandName,
+        options: commandInteraction.options.data.map((option) => ({
+          name: option.name,
+          value:
+            typeof option.value === "string"
+            || typeof option.value === "number"
+            || typeof option.value === "boolean"
+              ? option.value
+              : undefined,
+        })),
+      },
+      guild_id: commandInteraction.guildId ?? undefined,
+      id: commandInteraction.id,
+      member: commandInteraction.inGuild()
+        ? {
+            nick:
+              "nickname" in commandInteraction.member
+                ? commandInteraction.member.nickname
+                : null,
+            user: userToDiscordUser(commandInteraction.user),
+          }
+        : undefined,
+      token: commandInteraction.token,
+      type: commandInteraction.type,
+      user: userToDiscordUser(commandInteraction.user),
+    };
+  }
+
+  return undefined;
 }
 
 function userToDiscordUser(user: User): DiscordUser {
@@ -870,4 +1095,11 @@ function userToDiscordUser(user: User): DiscordUser {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function commandArgsFromOptions(
+  options: DiscordInteractionCommandOption[] | undefined,
+): string[] {
+  const args = options?.find((option) => option.name === "args")?.value;
+  return typeof args === "string" ? args.split(/\s+/).filter(Boolean) : [];
 }

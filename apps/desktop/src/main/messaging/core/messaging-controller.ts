@@ -1511,6 +1511,17 @@ export class MessagingController {
         now: this.now(),
         threadId: binding?.threadId,
       }),
+      ...(intent.targetSurface
+        ? { targetSurface: intent.targetSurface }
+        : event?.routingState
+          ? {
+              targetSurface: {
+                channel: channel.channel,
+                id: event.id,
+                state: event.routingState,
+              },
+            }
+          : {}),
     };
   }
 
