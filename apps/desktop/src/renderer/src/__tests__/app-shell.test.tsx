@@ -42,6 +42,11 @@ describe("App", () => {
       fetchedAt: 1,
       configPath: "/tmp/pwragnt/config.toml",
       configError: "line 3: expected a key",
+      runtime: {
+        messaging: {
+          disabled: false,
+        },
+      },
       secretStorage: {
         available: true,
         backend: "memory",
@@ -66,7 +71,6 @@ describe("App", () => {
           applicationId: { value: "", source: "default" },
           authorizedUserIds: { value: [], source: "default" },
           authorizedGuilds: { value: [], source: "default" },
-          messageContentIntent: { value: false, source: "default" },
         },
       },
       models: {
@@ -1389,6 +1393,9 @@ describe("App", () => {
         value: "hello new codex thread"
       }
     });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
 
     await waitFor(() => {
@@ -1675,6 +1682,9 @@ describe("App", () => {
       target: {
         value: "Name this thread something funny and spunky. Something about potatoes."
       }
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled();
     });
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
 

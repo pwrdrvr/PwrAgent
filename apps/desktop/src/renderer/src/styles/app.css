@@ -1272,6 +1272,11 @@ textarea {
   background: var(--danger-soft);
 }
 
+.settings-panel--warning {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
 .settings-panel__header {
   display: flex;
   align-items: flex-start;
@@ -1343,6 +1348,14 @@ textarea {
 .settings-empty {
   margin: 0;
   color: var(--danger-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.settings-row__description {
+  margin: 0;
+  padding: 14px 16px;
+  color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.45;
 }

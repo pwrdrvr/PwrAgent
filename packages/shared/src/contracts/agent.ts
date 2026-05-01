@@ -24,6 +24,7 @@ export type StartThreadRequest = {
   sandbox?: string;
   serviceTier?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 };
 
 export type StartThreadResponse = {
@@ -36,6 +37,9 @@ export type StartTurnRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   input: AppServerTurnInputItem[];
+  executionMode?: ThreadExecutionMode;
+  approvalPolicy?: string;
+  sandbox?: string;
   model?: string;
   collaborationMode?: AppServerCollaborationModeRequest;
   serviceTier?: string;
@@ -73,6 +77,18 @@ export type InterruptTurnResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   turnId: string;
+};
+
+export type CompactThreadRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type CompactThreadResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId: string;
+  itemId?: string;
 };
 
 export type SteerTurnRequest = {

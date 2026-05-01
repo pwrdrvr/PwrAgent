@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
   AppServerNotification,
+  AppServerPendingRequestNotification,
   AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadSummary,
@@ -75,12 +76,18 @@ function createOverlayStoreMock(params?: {
       backend: "codex" | "grok";
       threadId: string;
       executionMode: "default" | "full-access";
-    }) => ({
-      backend,
-      threadId,
-      executionMode,
-      extraLinkedDirectories: [],
-    }),
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const next = {
+        ...overlays.get(key),
+        backend,
+        threadId,
+        executionMode,
+        extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     setThreadModelSettings: async (settings: {
       backend: "codex" | "grok";
       threadId: string;
@@ -260,6 +267,9 @@ class MockBackendClient {
   private readonly listeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
   >();
+  private readonly requestListeners = new Set<
+    (request: AppServerPendingRequestNotification) => Promise<unknown> | unknown
+  >();
   lastReadThreadParams?: {
     threadId: string;
     before?: string;
@@ -278,6 +288,9 @@ class MockBackendClient {
     backend?: "codex" | "grok";
     threadId: string;
     input: AppServerTurnInputItem[];
+    executionMode?: "default" | "full-access";
+    approvalPolicy?: string;
+    sandbox?: string;
     model?: string;
     serviceTier?: string;
     reasoningEffort?: string;
@@ -292,6 +305,9 @@ class MockBackendClient {
     threadId: string;
     target: AppServerReviewTarget;
     delivery?: "inline" | "detached";
+  };
+  lastCompactThreadParams?: {
+    threadId: string;
   };
   lastArchiveThreadParams?: {
     threadId: string;
@@ -434,6 +450,15 @@ class MockBackendClient {
     };
   }
 
+  onRequest(
+    listener: (request: AppServerPendingRequestNotification) => Promise<unknown> | unknown
+  ): () => void {
+    this.requestListeners.add(listener);
+    return () => {
+      this.requestListeners.delete(listener);
+    };
+  }
+
   async readThread(_params?: {
     threadId: string;
     before?: string;
@@ -467,6 +492,9 @@ class MockBackendClient {
     backend?: "codex" | "grok";
     threadId: string;
     input: AppServerTurnInputItem[];
+    executionMode?: "default" | "full-access";
+    approvalPolicy?: string;
+    sandbox?: string;
     model?: string;
     serviceTier?: string;
     reasoningEffort?: string;
@@ -524,10 +552,29 @@ class MockBackendClient {
     return { threadId: params.threadId, turnId: params.expectedTurnId };
   }
 
+  async compactThread(params: {
+    threadId: string;
+  }): Promise<{ threadId: string; turnId: string; itemId: string }> {
+    this.lastCompactThreadParams = params;
+    return {
+      threadId: params.threadId,
+      turnId: "compact-turn-1",
+      itemId: "compact-item-1",
+    };
+  }
+
   async emit(notification: AppServerNotification): Promise<void> {
     for (const listener of this.listeners) {
       await listener(notification);
     }
+  }
+
+  async emitRequest(request: AppServerPendingRequestNotification): Promise<unknown> {
+    const listener = this.requestListeners.values().next().value;
+    if (!listener) {
+      throw new Error("No request listener registered");
+    }
+    return await listener(request);
   }
 }
 
@@ -1248,9 +1295,10 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(codexClient.lastStartTurnParams).toEqual({
-      backend: "codex",
       threadId: "thread-modelled",
       input: [{ type: "text", text: "Use this thread's model settings" }],
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
       model: "gpt-5.5",
       serviceTier: "priority",
       reasoningEffort: "high",
@@ -1264,13 +1312,60 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(codexClient.lastStartTurnParams).toEqual({
-      backend: "codex",
       threadId: "thread-plain",
       input: [{ type: "text", text: "Do not inherit another thread's settings" }],
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
       model: "gpt-5.5",
       serviceTier: undefined,
       reasoningEffort: "medium",
       fastMode: undefined,
+    });
+
+    await registry.close();
+  });
+
+  it("applies requested full-access execution settings when starting Codex turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const codexFullAccessClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      executionMode: "default",
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "full-access",
+      input: [{ type: "text", text: "Run npm view dive" }],
+    });
+
+    expect(codexClient.lastStartTurnParams).toBeUndefined();
+    expect(codexFullAccessClient.lastStartTurnParams).toEqual({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Run npm view dive" }],
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      model: "gpt-5.5",
+      serviceTier: undefined,
+      reasoningEffort: "medium",
+      fastMode: undefined,
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      executionMode: "full-access",
     });
 
     await registry.close();
@@ -1751,6 +1846,66 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("emits server request resolution when a pending request is submitted externally", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const request: AppServerPendingRequestNotification = {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "call-1",
+        requestId: "approval-1",
+        command: "npm view dive",
+      },
+    } as AppServerPendingRequestNotification;
+    const responsePromise = codexClient.emitRequest(request);
+    await waitForCondition(() => events.length === 1);
+
+    await registry.submitServerRequest({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "approval-1",
+      response: { decision: "accept" },
+    });
+
+    await expect(responsePromise).resolves.toEqual({ decision: "accept" });
+    expect(events.map((event) => event.notification.method)).toEqual([
+      "item/commandExecution/requestApproval",
+      "serverRequest/resolved",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      backend: "codex",
+      notification: {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: "approval-1",
+        },
+      },
+    });
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("forwards pagination parameters when reading a thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },
@@ -1855,6 +2010,41 @@ describe("DesktopBackendRegistry", () => {
       sandbox: "danger-full-access",
     });
     expect(codexFullAccessClient.lastSetThreadPermissionsParams).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("starts compaction through the current Codex thread owner", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read", "thread/resume", "thread/compact/start"] },
+    });
+    const codexFullAccessClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read", "thread/resume", "thread/compact/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+
+    const response = await registry.compactThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "compact-turn-1",
+      itemId: "compact-item-1",
+    });
+    expect(codexClient.lastCompactThreadParams).toEqual({
+      threadId: "thread-1",
+    });
+    expect(codexFullAccessClient.lastCompactThreadParams).toBeUndefined();
 
     await registry.close();
   });

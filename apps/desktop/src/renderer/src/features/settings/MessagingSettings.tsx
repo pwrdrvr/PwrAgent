@@ -29,9 +29,24 @@ export function MessagingSettings(props: {
 }) {
   const telegram = props.snapshot.messaging.telegram;
   const discord = props.snapshot.messaging.discord;
+  const runtimeMessaging = props.snapshot.runtime.messaging;
 
   return (
     <section className="settings-stack" aria-label="Messaging settings">
+      {runtimeMessaging.disabled ? (
+        <section className="settings-panel settings-panel--warning" role="status">
+          <div className="settings-panel__header">
+            <div>
+              <p className="eyebrow">Runtime Override</p>
+              <h2>Messaging disabled for this app instance</h2>
+            </div>
+          </div>
+          <p className="settings-row__description">
+            {runtimeMessaging.disabledReason
+              ?? "Messaging startup was disabled by a launch override."}
+          </p>
+        </section>
+      ) : null}
       <MessagingGroup title="Telegram">
         <ToggleField
           checked={telegram.enabled.value}
@@ -147,21 +162,6 @@ export function MessagingSettings(props: {
               authorizedGuilds: {
                 ...discord.authorizedGuilds,
                 value: authorizedGuilds,
-              },
-            });
-          }}
-        />
-        <ToggleField
-          checked={discord.messageContentIntent.value}
-          disabled={props.saving}
-          label="Message Content Intent"
-          source={sourceBadge(discord.messageContentIntent)}
-          onChange={(messageContentIntent) => {
-            void props.onSaveDiscord({
-              ...discord,
-              messageContentIntent: {
-                ...discord.messageContentIntent,
-                value: messageContentIntent,
               },
             });
           }}

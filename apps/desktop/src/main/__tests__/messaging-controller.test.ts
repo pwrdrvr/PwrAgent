@@ -1,0 +1,1408 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  AgentEvent,
+  AppServerPendingRequestNotification,
+  ListBackendsResponse,
+  MessagingDeliveryResult,
+  MessagingInboundCallbackEvent,
+  MessagingInboundEvent,
+  MessagingInboundTextEvent,
+  MessagingSurfaceIntent,
+  NavigationSnapshot,
+  StartThreadRequest,
+  StartTurnRequest,
+  SubmitServerRequestRequest,
+} from "@pwragnt/shared";
+import { MessagingController } from "../messaging/core/messaging-controller";
+import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
+import { MessagingStore } from "../messaging/core/messaging-store";
+
+const tempDirs: string[] = [];
+
+async function createStore(): Promise<MessagingStore> {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-controller-"));
+  tempDirs.push(tempDir);
+  return new MessagingStore(path.join(tempDir, "messaging-state.json"));
+}
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirs.splice(0).map(async (tempDir) => {
+      await rm(tempDir, { recursive: true, force: true });
+    }),
+  );
+});
+
+describe("MessagingController", () => {
+  it("presents a channel-neutral thread picker for authorized /resume commands", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "thread_picker",
+      fallbackText: expect.stringContaining("Showing recent PwrAgnt threads."),
+    });
+    expect(JSON.stringify(harness.delivered[0])).not.toMatch(/callback_data|custom_id/);
+    await expect(harness.store.getPendingIntent(harness.delivered[0]!.id, { now: 1000 }))
+      .resolves.toMatchObject({
+        channel: {
+          channel: "telegram",
+        },
+      });
+  });
+
+  it("shows projects from /resume --projects and filters threads after a project click", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --projects"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      fallbackText: expect.stringContaining("Choose a project"),
+      page: {
+        items: [
+          expect.objectContaining({
+            label: "PwrAgnt",
+          }),
+        ],
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragnt",
+          label: "PwrAgnt",
+          path: "/repo/pwragnt",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "thread_picker",
+      fallbackText: expect.stringContaining("PwrAgnt"),
+      page: {
+        items: [
+          expect.objectContaining({
+            id: "thread-1",
+          }),
+        ],
+      },
+    });
+  });
+
+  it("starts a new thread from /resume --new project selection", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragnt",
+          label: "PwrAgnt",
+          path: "/repo/pwragnt",
+        },
+      }),
+    );
+
+    expect(harness.startThread).toHaveBeenCalledWith({
+      backend: "codex",
+      cwd: "/repo/pwragnt",
+      executionMode: "default",
+      fastMode: undefined,
+      model: undefined,
+      reasoningEffort: undefined,
+      serviceTier: undefined,
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "new-thread-1",
+      threadDisplay: {
+        projectLabel: "PwrAgnt",
+      },
+    });
+  });
+
+  it("binds a callback-selected thread to the channel", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      authorizedActorIds: ["user-1"],
+    });
+    expect(harness.delivered.find((intent) => intent.kind === "confirmation")).toMatchObject({
+      kind: "confirmation",
+      title: "Thread bound",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      delivery: {
+        pin: true,
+      },
+      text: expect.stringContaining("Binding: Thread one"),
+    });
+  });
+
+  it("maps text fallback replies against pending picker actions", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+
+    await harness.controller.handleInboundEvent(buildTextEvent("1"));
+
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(harness.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("routes free-form text in a bound conversation to the bound thread", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    await harness.controller.handleInboundEvent(buildTextEvent("please run the tests"));
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: "please run the tests",
+          },
+        ],
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      status: "working",
+    });
+    expect(harness.delivered.find((intent) => intent.kind === "activity")).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "active",
+    });
+  });
+
+  it("signals typing activity from backend turn lifecycle events", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "running",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "active",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: working"),
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: completed"),
+    });
+  });
+
+  it("stops typing when the backend reports idle without a turn completion event", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "thread-1",
+          status: {
+            type: "idle",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: completed"),
+    });
+  });
+
+  it("recreates the pinned status surface for /status commands", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/status").channel,
+    );
+    const deliveredBeforeStatus = harness.delivered.length;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    expect(binding?.statusSurface).toBeDefined();
+    const statusIntents = harness.delivered.slice(deliveredBeforeStatus);
+    expect(statusIntents).toHaveLength(3);
+    expect(statusIntents[0]).toMatchObject({
+      kind: "status",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+        fallback: "fail",
+      },
+      targetSurface: binding?.statusSurface,
+      text: expect.stringContaining("Project: PwrAgnt"),
+    });
+    expect(statusIntents[1]).toMatchObject({
+      kind: "dismiss",
+      delivery: {
+        mode: "dismiss",
+        unpin: true,
+      },
+      targetSurface: binding?.pinnedStatusSurface,
+    });
+    expect(statusIntents[2]).toMatchObject({
+      kind: "status",
+      delivery: {
+        mode: "present",
+        pin: true,
+      },
+      targetSurface: undefined,
+      text: expect.stringContaining("Project: PwrAgnt"),
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.toMatchObject({
+      statusSurface: {
+        id: `surface:${statusIntents[2]?.id}`,
+      },
+    });
+  });
+
+  it("detaches a bound conversation and unpins the status surface", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
+
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "dismiss",
+      delivery: {
+        unpin: true,
+      },
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/detach").channel),
+    ).resolves.toBeUndefined();
+  });
+
+  it("asks unbound conversations to choose a thread before routing text", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildTextEvent("hello"));
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Choose a thread",
+    });
+  });
+
+  it("routes command callbacks from help buttons to command handlers", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "command:resume",
+      }),
+    );
+
+    expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "thread_picker",
+    });
+  });
+
+  it("does not treat legacy /threads as a resume alias", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/threads"));
+
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "PwrAgnt",
+    });
+  });
+
+  it("updates the browse surface and removes actions when cancelling resume", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:cancel",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Resume cancelled",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+      targetSurface: expect.objectContaining({
+        id: expect.stringContaining("surface:"),
+      }),
+    });
+  });
+
+  it("rejects unauthorized actors without revealing thread data", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/resume", {
+        platformUserId: "other-user",
+        username: "Mutable Username",
+      }),
+    );
+
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Not authorized",
+    });
+  });
+
+  it("does not forward inbound media into agent turns", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent(""),
+      id: "event-media",
+      kind: "media",
+      media: {
+        type: "file",
+        name: "voice.m4a",
+      },
+      disposition: "unsupported",
+    });
+
+    expect(harness.startTurn).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.arrayContaining([expect.objectContaining({ type: "file" })]),
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Media is not supported yet",
+    });
+  });
+
+  it("routes completed assistant output to active thread bindings", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [
+              {
+                type: "text",
+                text: "Done.\n\n```ts\nexpect(true).toBe(true)\n```",
+              },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect([...harness.delivered].reverse().find((intent) => intent.kind === "message"))
+      .toMatchObject({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            markdown: "markdown",
+          }),
+        ],
+      });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: completed"),
+    });
+  });
+
+  it("routes completed assistant item text to active thread bindings", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("who are you"));
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "item-1",
+            type: "agentMessage",
+            text: "I am Codex.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      parts: [
+        expect.objectContaining({
+          text: "I am Codex.",
+        }),
+      ],
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildTextEvent("who are you").channel),
+    ).resolves.toMatchObject({
+      activeTurn: {
+        status: "completed",
+      },
+    });
+  });
+
+  it("ignores turn completion events that do not include output text", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+          },
+        },
+      },
+    } as unknown as AgentEvent);
+
+    expect(harness.delivered).toHaveLength(2);
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: completed"),
+    });
+  });
+
+  it("ignores malformed turn completion events without throwing", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await expect(
+      harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+          },
+        },
+      } as unknown as AgentEvent),
+    ).resolves.toBeUndefined();
+
+    expect(harness.delivered).toEqual([]);
+  });
+
+  it("revokes stale bindings when a delivery target no longer exists", async () => {
+    const harness = await createHarness({
+      deliver: async () => ({
+        channel: "discord",
+        deliveredAt: 1000,
+        outcome: "failed",
+        errorMessage: "DiscordAPIError[10003]: Unknown Channel",
+      }),
+    });
+    await harness.store.upsertBinding({
+      id: "binding:discord:channel::discord-channel:codex:thread-1",
+      channel: {
+        channel: "discord",
+        conversation: {
+          id: "discord-channel",
+          kind: "channel",
+        },
+      },
+      backend: "codex",
+      threadId: "thread-1",
+      authorizedActorIds: ["user-1"],
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+          },
+        },
+      },
+    });
+
+    await expect(
+      harness.store.getBinding("binding:discord:channel::discord-channel:codex:thread-1"),
+    ).resolves.toMatchObject({
+      revokedAt: 1000,
+    });
+  });
+
+  it("does not revoke a binding from a failure result for another channel", async () => {
+    const harness = await createHarness({
+      deliver: async () => ({
+        channel: "discord",
+        deliveredAt: 1000,
+        outcome: "failed",
+        errorMessage: "DiscordAPIError[10003]: Unknown Channel",
+      }),
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+          },
+        },
+      },
+    });
+
+    await expect(
+      harness.store.getBinding("binding:telegram:dm::chat-1:codex:thread-1"),
+    ).resolves.not.toMatchObject({
+      revokedAt: expect.any(Number),
+    });
+  });
+
+  it("presents Plan questionnaires as semantic questionnaire intents", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        requestId: "request-1",
+        questions: [
+          {
+            id: "q1",
+            header: "Mode",
+            question: "How should I proceed?",
+            isOther: true,
+            isSecret: false,
+            options: [
+              {
+                label: "Implement (Recommended)",
+                description: "Start coding.",
+              },
+            ],
+          },
+        ],
+      },
+    } satisfies AppServerPendingRequestNotification);
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "questionnaire",
+      requestContext: {
+        requestId: "request-1",
+      },
+      questions: [
+        expect.objectContaining({
+          id: "q1",
+          allowFreeform: true,
+        }),
+      ],
+    });
+  });
+
+  it("submits approval callbacks through the backend bridge", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        prompt: "Run tests?",
+        command: "/bin/zsh -lc 'pnpm test -- messaging-controller'",
+      },
+    });
+
+    expect(harness.delivered.find((intent) => intent.kind === "approval")).toMatchObject({
+      kind: "approval",
+      body: expect.stringContaining("```shell\npnpm test -- messaging-controller\n```"),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("yes for this session"));
+
+    expect(harness.submitServerRequest).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "approval-1",
+      response: {
+        decision: "accept_for_session",
+      },
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: "Approval response sent.",
+    });
+  });
+
+  it("clears approval buttons after approval button callbacks", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        prompt: "Run tests?",
+        command: "/bin/zsh -lc 'pnpm test -- messaging-controller'",
+      },
+    });
+    const approvalIntent = harness.delivered.find((intent) => intent.kind === "approval");
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "approval:accept" }),
+    );
+
+    expect(harness.submitServerRequest).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "approval-1",
+      response: {
+        decision: "accept",
+      },
+    });
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "approval",
+      decisions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+        fallback: "fail",
+      },
+      targetSurface: {
+        id: `surface:${approvalIntent?.id}`,
+      },
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: "Approval response sent.",
+    });
+  });
+
+  it("clears approval buttons after the backend resolves the request elsewhere", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        prompt: "Run tests?",
+        command: "/bin/zsh -lc 'pnpm test -- messaging-controller'",
+      },
+    });
+    const approvalIntent = harness.delivered.find((intent) => intent.kind === "approval");
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: "approval-1",
+        },
+      },
+    });
+
+    expect(harness.submitServerRequest).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "approval",
+      decisions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+        fallback: "fail",
+      },
+      targetSurface: {
+        id: `surface:${approvalIntent?.id}`,
+      },
+    });
+  });
+
+  it("reports expired approval callbacks with retry guidance", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "approval:accept" }),
+    );
+
+    expect(harness.submitServerRequest).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Approval expired",
+      body: expect.stringContaining("Retry the command"),
+    });
+  });
+
+  it("opens a model picker and stores the selected model", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:model" }));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Select Model",
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:set-model",
+          value: {
+            model: "gpt-5.3-codex",
+          },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-model",
+        value: {
+          model: "gpt-5.3-codex",
+        },
+      }),
+    );
+
+    expect(harness.setThreadModelSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        model: "gpt-5.3-codex",
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.toMatchObject({
+      preferences: {
+        model: "gpt-5.3-codex",
+      },
+    });
+  });
+
+  it("opens a reasoning picker and stores the selected effort", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:reasoning" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: "Select Reasoning",
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-reasoning",
+        value: {
+          reasoningEffort: "high",
+        },
+      }),
+    );
+
+    expect(harness.setThreadModelSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        reasoningEffort: "high",
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Reasoning: high"),
+    });
+  });
+
+  it("toggles fast mode and applies it to later free-form turns", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:fast" }));
+    await harness.controller.handleInboundEvent(buildTextEvent("please run tests"));
+
+    expect(harness.setThreadModelSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fastMode: true,
+      }),
+    );
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        fastMode: true,
+      }),
+    );
+  });
+
+  it("toggles permissions mode through the backend bridge", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:permissions" }),
+    );
+
+    expect(harness.setThreadExecutionMode).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "full-access",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Permissions: Full Access"),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("run npm view dive"));
+
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      }),
+    );
+  });
+
+  it("uses live thread permissions instead of stale binding preferences", async () => {
+    const harness = await createHarness();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.executionMode = "default";
+    harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(buildTextEvent("").channel);
+    expect(binding).toBeDefined();
+    await harness.store.upsertBinding({
+      ...binding!,
+      preferences: {
+        executionMode: "full-access",
+        permissionsMode: "full-access",
+        updatedAt: 900,
+      },
+      updatedAt: 900,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Permissions: Default Access"),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("run npm view dive"));
+
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "default",
+      }),
+    );
+  });
+
+  it("stops an active turn through the backend bridge", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:stop" }));
+
+    expect(harness.interruptTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: interrupted"),
+    });
+  });
+
+  it("starts compaction through the backend bridge", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:compact" }),
+    );
+
+    expect(harness.compactThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Turn: working"),
+    });
+  });
+});
+
+async function createHarness(options?: {
+  deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
+}): Promise<{
+  controller: MessagingController;
+  compactThread: ReturnType<typeof vi.fn>;
+  delivered: MessagingSurfaceIntent[];
+  getNavigationSnapshot: ReturnType<typeof vi.fn>;
+  interruptTurn: ReturnType<typeof vi.fn>;
+  listBackends: ReturnType<typeof vi.fn>;
+  setThreadExecutionMode: ReturnType<typeof vi.fn>;
+  setThreadModelSettings: ReturnType<typeof vi.fn>;
+  startThread: ReturnType<typeof vi.fn>;
+  startTurn: ReturnType<typeof vi.fn>;
+  submitServerRequest: ReturnType<typeof vi.fn>;
+  store: MessagingStore;
+}> {
+  const store = await createStore();
+  const delivered: MessagingSurfaceIntent[] = [];
+  const adapter: MessagingAdapter = {
+    deliver: vi.fn(
+      options?.deliver ??
+        (async (intent) => {
+          delivered.push(intent);
+          return {
+            channel: "telegram" as const,
+            deliveredAt: 1000,
+            outcome: intent.kind === "status" && intent.delivery?.pin
+              ? "pinned" as const
+              : "presented" as const,
+            surface: {
+              channel: "telegram" as const,
+              id: `surface:${intent.id}`,
+            },
+          };
+        }),
+    ),
+  };
+  const getNavigationSnapshot = vi.fn(async () => buildNavigationSnapshot());
+  const startThread = vi.fn(async (request: StartThreadRequest) => ({
+    backend: request.backend,
+    threadId: "new-thread-1",
+    executionMode: request.executionMode ?? "default",
+  }));
+  const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+    backend: request.backend,
+    threadId: request.threadId,
+    turnId: "turn-1",
+  }));
+  const compactThread = vi.fn(async (request) => ({
+    ...request,
+    turnId: "compact-turn-1",
+    itemId: "compact-item-1",
+  }));
+  const interruptTurn = vi.fn(async (request) => request);
+  const setThreadExecutionMode = vi.fn(async (request) => request);
+  const setThreadModelSettings = vi.fn(async (request) => request);
+  const listBackends = vi.fn(async (): Promise<ListBackendsResponse> => ({
+    fetchedAt: 1000,
+    backends: [buildBackendSummary()],
+  }));
+  const submitServerRequest = vi.fn(async (request: SubmitServerRequestRequest) => ({
+    backend: request.backend,
+    threadId: request.threadId,
+    turnId: request.turnId,
+    requestId: request.requestId,
+  }));
+  const backend: MessagingBackendBridge = {
+    compactThread,
+    getNavigationSnapshot,
+    interruptTurn,
+    listBackends,
+    setThreadExecutionMode,
+    setThreadModelSettings,
+    startThread,
+    startTurn,
+    submitServerRequest,
+  };
+
+  return {
+    controller: new MessagingController({
+      adapter,
+      authorizedActorIds: ["user-1"],
+      backend,
+      now: () => 1000,
+      store,
+    }),
+    compactThread,
+    delivered,
+    getNavigationSnapshot,
+    interruptTurn,
+    listBackends,
+    setThreadExecutionMode,
+    setThreadModelSettings,
+    startThread,
+    startTurn,
+    submitServerRequest,
+    store,
+  };
+}
+
+async function bindThread(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+): Promise<void> {
+  await harness.controller.handleInboundEvent(
+    buildCallbackEvent({
+      actionId: "bind:codex:thread-1",
+      value: {
+        backend: "codex",
+        threadId: "thread-1",
+      },
+    }),
+  );
+}
+
+function buildBackendSummary(): ListBackendsResponse["backends"][number] {
+  return {
+    kind: "codex",
+    label: "Codex",
+    available: true,
+    methods: [],
+    capabilities: {
+      listThreads: true,
+      createThread: true,
+      resumeThread: true,
+      renameThread: true,
+      readThread: true,
+      startTurn: true,
+      interruptTurn: true,
+      steerTurn: false,
+      transcriptPagination: false,
+      toolUse: true,
+      approvalRequests: true,
+      multiDirectoryThreads: true,
+    },
+    executionModes: [
+      {
+        mode: "default",
+        label: "Default",
+        available: true,
+        isDefault: true,
+      },
+      {
+        mode: "full-access",
+        label: "Full Access",
+        available: true,
+      },
+    ],
+    launchpadOptions: {
+      models: [
+        {
+          id: "gpt-5.3-codex",
+          label: "GPT-5.3 Codex",
+        },
+      ],
+      reasoningEfforts: ["low", "medium", "high"],
+      supportsFastMode: true,
+    },
+  };
+}
+
+function buildNavigationSnapshot(): NavigationSnapshot {
+  return {
+    backend: "all",
+    fetchedAt: 1000,
+    unchanged: false,
+    threads: [
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [
+          {
+            id: "directory:pwragnt",
+            kind: "local",
+            label: "PwrAgnt",
+            path: "/repo/pwragnt",
+          },
+        ],
+        inbox: {
+          inInbox: false,
+        },
+        updatedAt: 1000,
+      },
+    ],
+    inboxThreadKeys: [],
+    directories: [
+      {
+        key: "directory:pwragnt",
+        kind: "directory",
+        label: "PwrAgnt",
+        path: "/repo/pwragnt",
+        threadKeys: ["codex:thread-1"],
+        needsAttentionCount: 0,
+        latestUpdatedAt: 1000,
+      },
+    ],
+    launchpadDefaults: {
+      backend: "codex",
+      executionMode: "default",
+    },
+  };
+}
+
+function buildCommandEvent(
+  rawText: string,
+  actor: { platformUserId: string; username?: string } = { platformUserId: "user-1" },
+): MessagingInboundEvent & { kind: "command" } {
+  const parts = rawText.replace(/^\//, "").split(/\s+/).filter(Boolean);
+  const command = parts[0] ?? "";
+  return {
+    id: "event-command",
+    kind: "command",
+    actor,
+    channel: {
+      channel: "telegram",
+      conversation: {
+        id: "chat-1",
+        kind: "dm",
+      },
+    },
+    command,
+    args: parts.slice(1),
+    rawText,
+    receivedAt: 1000,
+  };
+}
+
+function buildTextEvent(text: string): MessagingInboundTextEvent {
+  return {
+    id: "event-text",
+    kind: "text",
+    actor: {
+      platformUserId: "user-1",
+    },
+    channel: {
+      channel: "telegram",
+      conversation: {
+        id: "chat-1",
+        kind: "dm",
+      },
+    },
+    receivedAt: 1000,
+    text,
+  };
+}
+
+function buildCallbackEvent(params: {
+  actionId: string;
+  value?: MessagingInboundCallbackEvent["value"];
+}): MessagingInboundCallbackEvent {
+  return {
+    id: "event-callback",
+    kind: "callback",
+    actor: {
+      platformUserId: "user-1",
+    },
+    channel: {
+      channel: "telegram",
+      conversation: {
+        id: "chat-1",
+        kind: "dm",
+      },
+    },
+    receivedAt: 1000,
+    interaction: {
+      channel: "telegram",
+      id: params.actionId,
+    },
+    actionId: params.actionId,
+    value: params.value,
+  };
+}

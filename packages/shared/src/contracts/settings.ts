@@ -91,6 +91,12 @@ export type DesktopSettingsSnapshot = {
   fetchedAt: number;
   configPath: string;
   configError?: string;
+  runtime: {
+    messaging: {
+      disabled: boolean;
+      disabledReason?: string;
+    };
+  };
   secretStorage: DesktopSettingsSecretStorageState;
   experimental: {
     chatReplyComposer: DesktopSettingsValue<DesktopChatReplyComposer>;
@@ -108,7 +114,6 @@ export type DesktopSettingsSnapshot = {
       applicationId: DesktopSettingsValue<string>;
       authorizedUserIds: DesktopSettingsValue<string[]>;
       authorizedGuilds: DesktopSettingsValue<string[]>;
-      messageContentIntent: DesktopSettingsValue<boolean>;
     };
   };
   models: {
@@ -138,7 +143,6 @@ export type DesktopSettingsConfigPatch = {
       applicationId?: string;
       authorizedUserIds?: string[];
       authorizedGuilds?: string[];
-      messageContentIntent?: boolean;
     };
   };
   models?: {

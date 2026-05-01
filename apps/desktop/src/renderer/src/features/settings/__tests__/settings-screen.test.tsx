@@ -15,6 +15,11 @@ function createSnapshot(
   return {
     fetchedAt: 1,
     configPath: "/tmp/pwragnt/config.toml",
+    runtime: {
+      messaging: {
+        disabled: false,
+      },
+    },
     secretStorage: {
       available: true,
       backend: "memory",
@@ -39,7 +44,6 @@ function createSnapshot(
         applicationId: { value: "", source: "default" },
         authorizedUserIds: { value: [], source: "default" },
         authorizedGuilds: { value: [], source: "default" },
-        messageContentIntent: { value: false, source: "default" },
       },
     },
     models: {
@@ -176,7 +180,7 @@ describe("SettingsScreen", () => {
     expect(screen.getByRole("heading", { name: "Telegram" })).toBeInTheDocument();
     expect(screen.getByText("Authorized SuperGroups")).toBeInTheDocument();
     expect(screen.getAllByText("unset").length).toBeGreaterThanOrEqual(5);
-    expect(screen.getAllByText("default").length).toBeGreaterThanOrEqual(3);
+    expect(screen.getAllByText("default").length).toBeGreaterThanOrEqual(2);
 
     fireEvent.click(within(sections).getByRole("button", { name: "Models" }));
     expect(screen.getByRole("heading", { name: "Codex" })).toBeInTheDocument();
@@ -213,6 +217,33 @@ describe("SettingsScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
 
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("shows when messaging is disabled by a runtime override", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState(
+          createSnapshot({
+            runtime: {
+              messaging: {
+                disabled: true,
+                disabledReason: "--disable-messaging was provided at startup",
+              },
+            },
+          }),
+        )}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Messaging" }));
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Messaging disabled for this app instance",
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "--disable-messaging was provided at startup",
+    );
   });
 
   it("keeps a secret draft when replacement fails", async () => {

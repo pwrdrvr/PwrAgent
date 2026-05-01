@@ -13,6 +13,7 @@ import {
   writeDesktopSettingsConfig,
   type DesktopSettingsConfig,
 } from "./desktop-config";
+import { resolveRuntimeMessagingOverride } from "../runtime-flags";
 import type { DesktopSecretStore } from "./desktop-secret-store";
 import {
   CHAT_REPLY_COMPOSER_ENV,
@@ -22,7 +23,6 @@ import {
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
-  DISCORD_MESSAGE_CONTENT_INTENT_ENV,
   TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
@@ -38,6 +38,7 @@ import { discoverDesktopApplications } from "./application-discovery";
 type DesktopSettingsServiceOptions = {
   configPath?: string;
   env?: NodeJS.ProcessEnv;
+  argv?: readonly string[];
   secretStore: DesktopSecretStore;
   now?: () => number;
 };
@@ -49,11 +50,13 @@ type ConfigReadResult = {
 
 export class DesktopSettingsService {
   private readonly env: NodeJS.ProcessEnv;
+  private readonly argv: readonly string[];
   private readonly configPath: string;
   private readonly now: () => number;
 
   constructor(private readonly options: DesktopSettingsServiceOptions) {
     this.env = options.env ?? process.env;
+    this.argv = options.argv ?? process.argv;
     this.configPath =
       options.configPath ?? resolveDesktopConfigPath({ env: this.env });
     this.now = options.now ?? Date.now;
@@ -89,11 +92,23 @@ export class DesktopSettingsService {
     const preferredTerminalId = this.resolveConfigString(
       config.applications?.terminal?.preferredId,
     );
+    const messagingOverride = resolveRuntimeMessagingOverride({
+      argv: this.argv,
+      env: this.env,
+    });
 
     return {
       fetchedAt: this.now(),
       configPath: this.configPath,
       configError: error,
+      runtime: {
+        messaging: {
+          disabled: messagingOverride.disabled,
+          ...(messagingOverride.reason
+            ? { disabledReason: messagingOverride.reason }
+            : {}),
+        },
+      },
       secretStorage,
       experimental: {
         chatReplyComposer: this.resolveComposer(
@@ -135,11 +150,6 @@ export class DesktopSettingsService {
           authorizedGuilds: this.resolveList(
             config.messaging?.discord?.authorizedGuilds,
             DISCORD_AUTHORIZED_GUILDS_ENV,
-          ),
-          messageContentIntent: this.resolveBoolean(
-            config.messaging?.discord?.messageContentIntent,
-            false,
-            DISCORD_MESSAGE_CONTENT_INTENT_ENV,
           ),
         },
       },
@@ -193,6 +203,14 @@ export class DesktopSettingsService {
 
   async resolveGrokApiKey(): Promise<string | undefined> {
     return await this.options.secretStore.getSecret("grokApiKey");
+  }
+
+  resolveTelegramBotTokenSync(): string | undefined {
+    return this.resolveSecretSync("telegramBotToken", TELEGRAM_BOT_TOKEN_ENV);
+  }
+
+  resolveDiscordBotTokenSync(): string | undefined {
+    return this.resolveSecretSync("discordBotToken", DISCORD_BOT_TOKEN_ENV);
   }
 
   resolveGrokApiKeySync(): string | undefined {
@@ -346,5 +364,15 @@ export class DesktopSettingsService {
         error: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  private resolveSecretSync(
+    secret: DesktopSettingsSecretName,
+    envKey: string | undefined,
+  ): string | undefined {
+    return (
+      (envKey ? readEnvString(this.env, envKey) : undefined)
+      ?? this.options.secretStore.getSecretSync?.(secret)
+    );
   }
 }

@@ -25,7 +25,6 @@ export type DesktopSettingsConfig = {
       applicationId?: string;
       authorizedUserIds?: string[];
       authorizedGuilds?: string[];
-      messageContentIntent?: boolean;
     };
   };
   models?: {
@@ -212,10 +211,6 @@ export function stringifyDesktopSettingsToml(
           discord.authorizedUserIds,
         ),
         formatOptionalTomlEntry("authorized_guilds", discord.authorizedGuilds),
-        formatOptionalTomlEntry(
-          "message_content_intent",
-          discord.messageContentIntent,
-        ),
       ]
         .filter(Boolean)
         .join("\n"),
@@ -277,7 +272,6 @@ function normalizeDesktopConfig(
         applicationId: readString(discord?.application_id),
         authorizedUserIds: readStringArray(discord?.authorized_user_ids),
         authorizedGuilds: readStringArray(discord?.authorized_guilds),
-        messageContentIntent: readBoolean(discord?.message_content_intent),
       },
     },
     models: {

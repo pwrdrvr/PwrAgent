@@ -11,6 +11,7 @@
     "build": "electron-vite build",
     "codex:generate-protocol": "pnpm --filter @pwragnt/shared codex:generate-app-server-protocol",
     "dev": "electron-vite dev",
+    "dev:no-messaging": "PWRAGNT_DISABLE_MESSAGING=1 electron-vite dev -- --disable-messaging",
     "derive:replay-fixture": "tsx ./scripts/derive-replay-fixture.ts",
     "export:session-capture": "tsx ./scripts/export-session-capture.ts",
     "pretest:e2e": "pnpm build",
@@ -20,6 +21,9 @@
   },
   "dependencies": {
     "@pwragnt/agent-core": "workspace:*",
+    "@pwragnt/messaging-interface": "workspace:*",
+    "@pwragnt/messaging-provider-discord": "workspace:*",
+    "@pwragnt/messaging-provider-telegram": "workspace:*",
     "@pwragnt/shared": "workspace:*",
     "@tiptap/extension-mention": "^3.22.5",
     "@tiptap/react": "^3.22.5",

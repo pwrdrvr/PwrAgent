@@ -7,7 +7,10 @@
     "build": "pnpm --filter @pwragnt/desktop build",
     "codex:generate-app-server-protocol": "pnpm --filter @pwragnt/shared codex:generate-app-server-protocol",
     "dev": "pnpm --filter @pwragnt/desktop dev",
-    "lint": "pnpm typecheck",
+    "dev:no-messaging": "PWRAGNT_DISABLE_MESSAGING=1 pnpm --filter @pwragnt/desktop dev -- --disable-messaging",
+    "dev:op": "node ./scripts/op-run.mjs dev",
+    "lint": "pnpm typecheck && pnpm lint:boundaries",
+    "lint:boundaries": "depcruise --config .dependency-cruiser.cjs apps/desktop/src/main/messaging packages/messaging",
     "test:desktop-e2e": "pnpm --filter @pwragnt/desktop build && pnpm --filter @pwragnt/desktop test:e2e",
     "test": "vitest run --config vitest.workspace.ts",
     "test:watch": "vitest --config vitest.workspace.ts",
@@ -15,6 +18,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
+    "dependency-cruiser": "^17.3.10",
     "jsdom": "^29.0.2",
     "typescript": "^6.0.2",
     "vitest": "^4.1.4"

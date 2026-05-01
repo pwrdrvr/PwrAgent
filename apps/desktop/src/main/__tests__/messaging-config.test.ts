@@ -1,0 +1,167 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  DISCORD_APPLICATION_ID_ENV,
+  DISCORD_AUTHORIZED_USER_IDS_ENV,
+  DISCORD_BOT_TOKEN_ENV,
+  loadDesktopMessagingConfig,
+  loadDesktopMessagingConfigFromSettings,
+  redactDesktopMessagingConfig,
+  TELEGRAM_AUTHORIZED_USER_IDS_ENV,
+  TELEGRAM_BOT_TOKEN_ENV,
+} from "../messaging/messaging-config";
+import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
+import { DesktopSettingsService } from "../settings/desktop-settings-service";
+
+const tempRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+describe("desktop messaging config", () => {
+  it("enables configured channels only when tokens and authorized actors are present", () => {
+    const config = loadDesktopMessagingConfig({
+      [TELEGRAM_BOT_TOKEN_ENV]: " tg-token ",
+      [TELEGRAM_AUTHORIZED_USER_IDS_ENV]: "user-1, user-2, user-1",
+      [DISCORD_BOT_TOKEN_ENV]: "discord-token",
+    });
+
+    expect(config).toEqual({
+      telegram: {
+        channel: "telegram",
+        enabled: true,
+        botToken: "tg-token",
+        authorizedActorIds: ["user-1", "user-2"],
+      },
+    });
+  });
+
+  it("supports legacy bot token aliases for local testing", () => {
+    const config = loadDesktopMessagingConfig({
+      TELEGRAM_BOT_TOKEN: "legacy-tg-token",
+      [TELEGRAM_AUTHORIZED_USER_IDS_ENV]: "42",
+      DISCORD_BOT_TOKEN: "legacy-discord-token",
+      [DISCORD_APPLICATION_ID_ENV]: "discord-app",
+      [DISCORD_AUTHORIZED_USER_IDS_ENV]: "100,200",
+    });
+
+    expect(config).toMatchObject({
+      telegram: {
+        botToken: "legacy-tg-token",
+        authorizedActorIds: ["42"],
+      },
+      discord: {
+        applicationId: "discord-app",
+        botToken: "legacy-discord-token",
+        authorizedActorIds: ["100", "200"],
+      },
+    });
+  });
+
+  it("loads enabled providers from desktop settings and keychain secrets", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[messaging.telegram]",
+        "enabled = true",
+        'authorized_user_ids = ["111111111"]',
+        "",
+        "[messaging.discord]",
+        "enabled = true",
+        'application_id = "discord-app"',
+        'authorized_user_ids = ["222222222"]',
+      ].join("\n"),
+      "utf8",
+    );
+    const secretStore = new MemoryDesktopSecretStore();
+    await secretStore.setSecret("telegramBotToken", "settings-telegram-token");
+    await secretStore.setSecret("discordBotToken", "settings-discord-token");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore,
+    });
+
+    const config = await loadDesktopMessagingConfigFromSettings(service, {});
+
+    expect(config).toEqual({
+      telegram: {
+        channel: "telegram",
+        enabled: true,
+        botToken: "settings-telegram-token",
+        authorizedActorIds: ["111111111"],
+      },
+      discord: {
+        channel: "discord",
+        enabled: true,
+        applicationId: "discord-app",
+        botToken: "settings-discord-token",
+        authorizedActorIds: ["222222222"],
+      },
+    });
+  });
+
+  it("keeps env-only messaging config fallback enabled for tests", async () => {
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const config = await loadDesktopMessagingConfigFromSettings(service, {
+      [TELEGRAM_BOT_TOKEN_ENV]: "env-telegram-token",
+      [TELEGRAM_AUTHORIZED_USER_IDS_ENV]: "42",
+    });
+
+    expect(config.telegram).toMatchObject({
+      botToken: "env-telegram-token",
+      authorizedActorIds: ["42"],
+    });
+  });
+
+  it("redacts bot tokens while preserving useful diagnostics", () => {
+    const redacted = redactDesktopMessagingConfig({
+      telegram: {
+        channel: "telegram",
+        botToken: "secret-token",
+        authorizedActorIds: ["1", "2"],
+      },
+      discord: {
+        channel: "discord",
+        applicationId: "app-id",
+        botToken: "discord-secret",
+        authorizedActorIds: ["3"],
+      },
+    });
+
+    expect(JSON.stringify(redacted)).not.toContain("secret");
+    expect(redacted).toEqual({
+      telegram: {
+        channel: "telegram",
+        enabled: true,
+        botToken: "[REDACTED]",
+        authorizedActorCount: 2,
+      },
+      discord: {
+        channel: "discord",
+        enabled: true,
+        applicationId: "app-id",
+        botToken: "[REDACTED]",
+        authorizedActorCount: 1,
+      },
+    });
+  });
+});
+
+function createTempRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragnt-messaging-config-"));
+  tempRoots.push(root);
+  return root;
+}

@@ -3799,6 +3799,8 @@ export class CodexAppServerClient {
   async startTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
+    approvalPolicy?: string;
+    sandbox?: string;
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
     serviceTier?: string;
@@ -3812,6 +3814,8 @@ export class CodexAppServerClient {
       methods: ["thread/resume"],
       payloads: buildThreadResumePayloads({
         threadId: params.threadId,
+        approvalPolicy: params.approvalPolicy,
+        sandbox: params.sandbox,
         model: params.model,
         serviceTier: params.serviceTier,
         reasoningEffort: params.reasoningEffort,
@@ -4124,6 +4128,40 @@ export class CodexAppServerClient {
         turnId: params.turnId,
       };
     }
+  }
+
+  async compactThread(params: {
+    threadId: string;
+  }): Promise<{ threadId: string; turnId: string; itemId?: string }> {
+    await this.ensureInitialized();
+
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads({
+        threadId: params.threadId,
+      }),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    }).catch(() => undefined);
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/compact/start"],
+      payloads: [
+        {
+          threadId: params.threadId,
+        },
+      ],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    const threadId = extractThreadIdFromValue(result) ?? params.threadId;
+    const turnId = extractTurnIdFromValue(result) ?? `compact:${threadId}`;
+    return {
+      threadId,
+      turnId,
+      itemId: extractStringProperty(result, "itemId", "item_id"),
+    };
   }
 
   async steerTurn(params: {

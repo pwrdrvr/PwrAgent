@@ -37,7 +37,6 @@ describe("DesktopSettingsService", () => {
         "[messaging.discord]",
         'application_id = "123456789012345678"',
         'authorized_guilds = ["guild-one"]',
-        "message_content_intent = true",
         "",
         "[models.codex]",
         'path = "codex-beta"',
@@ -80,7 +79,6 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.messaging.discord.authorizedGuilds.value).toEqual([
       "guild-one",
     ]);
-    expect(snapshot.messaging.discord.messageContentIntent.value).toBe(true);
     expect(snapshot.models.codex.path).toEqual({
       value: "codex-beta",
       source: "config",
@@ -221,6 +219,22 @@ describe("DesktopSettingsService", () => {
       value: [],
       source: "env",
       overriddenByEnv: false,
+    });
+  });
+
+  it("reports process-level messaging disable overrides", async () => {
+    const service = new DesktopSettingsService({
+      argv: ["electron", "--disable-messaging"],
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettings();
+
+    expect(snapshot.runtime.messaging).toEqual({
+      disabled: true,
+      disabledReason: "--disable-messaging was provided at startup",
     });
   });
 
