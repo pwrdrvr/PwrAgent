@@ -250,6 +250,7 @@ async function typeSkillChip(
   await option.focus();
   await expect(option).toBeFocused();
   await app.window.keyboard.press("Enter");
+  await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeFocused();
 }
 
 test("directory launchpad loads skill autocomplete from user and local scope", async () => {
@@ -409,6 +410,212 @@ test("directory launchpad renders Tiptap composer when enabled and keeps skill a
   } finally {
     await app.close();
     await fixture.cleanup();
+  }
+});
+
+test("directory launchpad Tiptap composer selects focused skills as undoable inline chips", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    env: TIPTAP_COMPOSER_ENV,
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "New thread" });
+    await textbox.focus();
+    await app.window.keyboard.type("$front");
+
+    const option = app.window.getByRole("button", { name: /\$frontend-design/i });
+    await option.focus();
+    await expect(option).toBeFocused();
+    await app.window.keyboard.press("Enter");
+
+    await expect(app.window.getByRole("listbox", { name: "Skills" })).toBeHidden();
+    const chip = tiptapInput.locator(".composer-tiptap-input__mention", {
+      hasText: "$frontend-design",
+    });
+    await expect(chip).toBeVisible();
+    await expect(chip).toHaveAttribute(
+      "data-tooltip",
+      /\/Users\/huntharo\/\.codex\/skills\/frontend-design\/SKILL\.md$/,
+    );
+    await expect(tiptapInput).toHaveAttribute("data-value", "");
+
+    await textbox.focus();
+    await app.window.keyboard.press("Backspace");
+    await expect(chip).toBeHidden();
+    await expect(tiptapInput).toHaveAttribute("data-value", "");
+
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+Z" : "Control+Z",
+    );
+    await expect(chip).toBeVisible();
+    await expect(tiptapInput).toHaveAttribute("data-value", "");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad Tiptap composer preserves multiple skill chips across boundary edits", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    env: TIPTAP_COMPOSER_ENV,
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "New thread" });
+    await textbox.focus();
+    await typeSkillChip(app, "$ce:plan", /\$ce:plan/i);
+    await app.window.keyboard.type(" i like cats n dogs - ");
+    await typeSkillChip(app, "$ce:brainstorm", /\$ce:brainstorm/i);
+    await app.window.keyboard.type(" and more");
+
+    const planChip = tiptapInput.locator(".composer-tiptap-input__mention", {
+      hasText: "$ce:plan",
+    });
+    const brainstormChip = tiptapInput.locator(".composer-tiptap-input__mention", {
+      hasText: "$ce:brainstorm",
+    });
+    await expect(planChip).toBeVisible();
+    await expect(brainstormChip).toBeVisible();
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      " i like cats n dogs -  and more",
+    );
+
+    const clickPoint = await tiptapInput.evaluate((element) => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      const textNode = Array.from(
+        {
+          [Symbol.iterator]: function* () {
+            let node = walker.nextNode();
+            while (node) {
+              yield node;
+              node = walker.nextNode();
+            }
+          },
+        } as Iterable<Node>,
+      ).find((node) => node.nodeValue?.includes("i like cats n dogs"));
+      if (!textNode) {
+        throw new Error("Expected text between skill chips");
+      }
+
+      const offset = textNode.nodeValue?.indexOf("cats") ?? -1;
+      if (offset < 0) {
+        throw new Error("Expected target word in text node");
+      }
+
+      const range = document.createRange();
+      range.setStart(textNode, offset);
+      range.setEnd(textNode, offset + 1);
+      const rect = range.getBoundingClientRect();
+      return {
+        x: rect.left + 1,
+        y: rect.top + rect.height / 2,
+      };
+    });
+
+    await app.window.mouse.click(clickPoint.x, clickPoint.y);
+    await app.window.keyboard.type("big ");
+
+    await expect(planChip).toBeVisible();
+    await expect(brainstormChip).toBeVisible();
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      " i like big cats n dogs -  and more",
+    );
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad Tiptap composer select all delete clears chips without renderer crash", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const app = await launchElectronApp({
+    env: TIPTAP_COMPOSER_ENV,
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "New thread" });
+    await textbox.focus();
+    await typeSkillChip(app, "$ce:plan", /\$ce:plan/i);
+    await app.window.keyboard.type(" i like cats n dogs - ");
+    await typeSkillChip(app, "$ce:brainstorm", /\$ce:brainstorm/i);
+    await app.window.keyboard.type(" and more");
+
+    await expect(
+      tiptapInput.locator(".composer-tiptap-input__mention", { hasText: "$ce:plan" }),
+    ).toBeVisible();
+    await expect(
+      tiptapInput.locator(".composer-tiptap-input__mention", {
+        hasText: "$ce:brainstorm",
+      }),
+    ).toBeVisible();
+
+    await textbox.focus();
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await app.window.keyboard.press("Delete");
+
+    await expect(tiptapInput.locator(".composer-tiptap-input__mention")).toHaveCount(0);
+    await expect(tiptapInput).toHaveAttribute("data-value", "");
+    await expect(app.window.locator("body")).not.toContainText("Renderer error");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad Tiptap composer deletes a persisted skill chip with repeated backspace", async () => {
+  const fixture = await createDirectoryLaunchpadSkillsFixture();
+  const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-tiptap-saved-"));
+  await seedPersistedDirectoryLaunchpad({
+    repoDir: fixture.repoDir,
+    stateRoot,
+  });
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+    env: {
+      ...TIPTAP_COMPOSER_ENV,
+      PWRAGNT_STATE_ROOT: stateRoot,
+    },
+  });
+
+  try {
+    await openDirectoryLaunchpad(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "New thread" });
+    const chip = tiptapInput.locator(".composer-tiptap-input__mention", {
+      hasText: "$ce:brainstorm",
+    });
+    await expect(chip).toBeVisible();
+
+    await textbox.focus();
+    await app.window.keyboard.press("Backspace");
+    await app.window.keyboard.press("Backspace");
+
+    await expect(chip).toBeHidden();
+    await expect(tiptapInput).toHaveAttribute("data-value", "");
+    await expect(app.window.locator("body")).not.toContainText("Renderer error");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+    await rm(stateRoot, { recursive: true, force: true });
   }
 });
 

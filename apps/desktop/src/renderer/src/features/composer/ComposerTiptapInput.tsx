@@ -2,6 +2,7 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   type ClipboardEvent,
@@ -41,8 +42,25 @@ const SkillMention = Mention.extend({
     };
   },
 }).configure({
+  deleteTriggerWithBackspace: true,
   HTMLAttributes: {
     class: "thread-row__chip skill-chip composer-tiptap-input__mention",
+  },
+  renderHTML: ({ node }) => {
+    const skill = getSkillSummary(node.attrs);
+    const tooltip = buildSkillTooltip(skill);
+    return [
+      "span",
+      {
+        class: "thread-row__chip skill-chip composer-tiptap-input__mention",
+        "data-type": "mention",
+        "data-composer-skill-token-id": String(node.attrs.id ?? ""),
+        "data-skill-name": skill.name,
+        ...(skill.path ? { "data-skill-path": skill.path } : {}),
+        ...(tooltip ? { "data-tooltip": tooltip } : {}),
+      },
+      `$${skill.name}`,
+    ];
   },
   renderText: ({ node }) => `$${String(node.attrs.name ?? node.attrs.id ?? "")}`,
   suggestion: {
@@ -212,7 +230,7 @@ function getPositionAtDraftIndex(
 
     if (node.isText) {
       const textLength = node.text?.length ?? 0;
-      if (draftIndex <= index + textLength) {
+      if (draftIndex < index + textLength) {
         position = pos + Math.max(0, draftIndex - index);
         found = true;
         return false;
@@ -228,6 +246,15 @@ function getPositionAtDraftIndex(
         return false;
       }
       index += 1;
+      return false;
+    }
+
+    if (node.type.name === "mention") {
+      if (draftIndex <= index) {
+        position = pos + node.nodeSize;
+        found = true;
+        return false;
+      }
       return false;
     }
 
@@ -251,12 +278,34 @@ function getSkillSummary(attrs: Record<string, unknown>): AppServerSkillSummary 
   };
 }
 
+function getContentSignature(params: {
+  skillTokens: ComposerSkillToken[];
+  value: string;
+}): string {
+  return JSON.stringify({
+    value: params.value,
+    tokens: params.skillTokens.map((token) => ({
+      index: token.index,
+      name: token.name,
+      path: token.path,
+    })),
+  });
+}
+
 export const ComposerTiptapInput = forwardRef<
   ComposerRichInputHandle,
   ComposerRichInputProps
 >(function ComposerTiptapInput(props, ref) {
   const propsRef = useRef(props);
   const selectionIndexRef = useRef(props.value.length);
+  const pendingExternalSignatureRef = useRef<string | undefined>(undefined);
+  const pendingSelectionIndexRef = useRef<number | undefined>(undefined);
+  const propsSignature = getContentSignature({
+    value: props.value,
+    skillTokens: props.skillTokens,
+  });
+
+  propsRef.current = props;
   const initialContent = useMemo(
     () => buildTiptapContent(props.value, props.skillTokens),
     []
@@ -299,11 +348,19 @@ export const ComposerTiptapInput = forwardRef<
     extensions: [StarterKit, SkillMention],
     onUpdate: ({ editor: nextEditor }) => {
       const next = readTiptapContent(nextEditor);
+      const pendingSignature = pendingExternalSignatureRef.current;
+      if (
+        pendingSignature &&
+        getContentSignature(next) !== pendingSignature
+      ) {
+        return;
+      }
+      pendingExternalSignatureRef.current = undefined;
       selectionIndexRef.current = getDraftIndexAtPosition(
         nextEditor,
         nextEditor.state.selection.from,
       );
-      props.onChange(next.value, next.skillTokens);
+      propsRef.current.onChange(next.value, next.skillTokens);
     },
     onSelectionUpdate: ({ editor: nextEditor }) => {
       selectionIndexRef.current = getDraftIndexAtPosition(
@@ -313,11 +370,7 @@ export const ComposerTiptapInput = forwardRef<
     },
   });
 
-  useEffect(() => {
-    propsRef.current = props;
-  }, [props]);
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!editor) {
       return;
     }
@@ -350,31 +403,28 @@ export const ComposerTiptapInput = forwardRef<
     }
 
     const current = readTiptapContent(editor);
-    const currentSignature = JSON.stringify({
-      value: current.value,
-      tokens: current.skillTokens.map((token) => ({
-        index: token.index,
-        name: token.name,
-        path: token.path,
-      })),
-    });
-    const nextSignature = JSON.stringify({
-      value: props.value,
-      tokens: props.skillTokens.map((token) => ({
-        index: token.index,
-        name: token.name,
-        path: token.path,
-      })),
-    });
-    if (currentSignature === nextSignature) {
+    const currentSignature = getContentSignature(current);
+    if (currentSignature === propsSignature) {
+      pendingExternalSignatureRef.current = undefined;
       return;
     }
 
+    pendingExternalSignatureRef.current = propsSignature;
     editor.commands.setContent(
       buildTiptapContent(props.value, props.skillTokens),
       { emitUpdate: false },
     );
-  }, [editor, props.skillTokens, props.value]);
+    pendingExternalSignatureRef.current = undefined;
+
+    if (pendingSelectionIndexRef.current !== undefined) {
+      const nextSelectionIndex = pendingSelectionIndexRef.current;
+      pendingSelectionIndexRef.current = undefined;
+      selectionIndexRef.current = nextSelectionIndex;
+      editor.commands.setTextSelection(
+        getPositionAtDraftIndex(editor, nextSelectionIndex),
+      );
+    }
+  }, [editor, props.skillTokens, props.value, propsSignature]);
 
   useEffect(() => {
     if (!editor) {
@@ -393,7 +443,7 @@ export const ComposerTiptapInput = forwardRef<
         const tooltip = buildSkillTooltip(
           getSkillSummary({
             name: node.textContent?.replace(/^\$/, ""),
-            path: attrs["data-path"],
+            path: attrs["data-skill-path"],
           }),
         );
         if (tooltip) {
@@ -407,6 +457,9 @@ export const ComposerTiptapInput = forwardRef<
       editor?.commands.deleteSelection();
     },
     focus: () => {
+      if (editor && getContentSignature(readTiptapContent(editor)) !== propsSignature) {
+        pendingExternalSignatureRef.current = propsSignature;
+      }
       editor?.commands.focus();
     },
     get selectionEnd() {
@@ -417,6 +470,13 @@ export const ComposerTiptapInput = forwardRef<
     },
     setSelectionRange: (start: number) => {
       if (!editor) {
+        return;
+      }
+      const current = readTiptapContent(editor);
+      if (getContentSignature(current) !== propsSignature) {
+        pendingExternalSignatureRef.current = propsSignature;
+        pendingSelectionIndexRef.current = start;
+        selectionIndexRef.current = start;
         return;
       }
       selectionIndexRef.current = start;

@@ -144,6 +144,13 @@ type DeletedSkillTokenHistoryEntry = {
   skillTokens: ComposerSkillToken[];
 };
 
+type PendingProgrammaticComposerChange = {
+  expectedDraft: string;
+  expectedSkillTokensSignature: string;
+  staleDraft: string;
+  staleSkillTokensSignature: string;
+};
+
 const COMPOSER_SKILL_TOKEN_SELECTOR = "[data-composer-skill-token-id]";
 
 type SkillTokenDeletionEvent = {
@@ -489,6 +496,17 @@ function createComposerSkillToken(
   };
 }
 
+function getComposerSkillTokensSignature(skillTokens: ComposerSkillToken[]): string {
+  return JSON.stringify(
+    skillTokens.map((token) => ({
+      id: token.id,
+      index: token.index,
+      name: token.name,
+      path: token.path,
+    })),
+  );
+}
+
 function clampSkillTokenIndex(index: number, draft: string): number {
   return Math.max(0, Math.min(index, draft.length));
 }
@@ -794,6 +812,8 @@ export function Composer(props: ComposerProps) {
   const skillListboxId = useId();
   const slashListboxId = useId();
   const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
+  const pendingProgrammaticComposerChangeRef =
+    useRef<PendingProgrammaticComposerChange | undefined>(undefined);
   const composerScopeKey = props.launchpad
     ? `launchpad:${props.launchpad.directoryKey}`
     : props.thread
@@ -1790,13 +1810,27 @@ export function Composer(props: ComposerProps) {
       createComposerSkillToken(skill, tokenIndex),
     ];
 
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: nextDraft,
+      expectedSkillTokensSignature:
+        getComposerSkillTokensSignature(nextSkillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
     flushSync(() => {
       setSkillTokens(nextSkillTokens);
       setDraft(nextDraft);
       setActiveSkillIndex(0);
     });
-    inputRef.current?.focus();
-    inputRef.current?.setSelectionRange(tokenIndex, tokenIndex);
+    const restoreSelection = (): void => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(tokenIndex, tokenIndex);
+    };
+    if (composerImplementation === "tiptap-chips") {
+      requestAnimationFrame(restoreSelection);
+    } else {
+      restoreSelection();
+    }
   };
 
   const applySlashCommand = (command: SlashCommandSuggestion): void => {
@@ -2597,7 +2631,46 @@ export function Composer(props: ComposerProps) {
     nextDraft: string,
     nextSkillTokens?: ComposerSkillToken[],
   ): void => {
+    const pendingProgrammaticChange =
+      pendingProgrammaticComposerChangeRef.current;
+    if (pendingProgrammaticChange && nextSkillTokens) {
+      const nextSkillTokensSignature =
+        getComposerSkillTokensSignature(nextSkillTokens);
+      if (
+        nextDraft === pendingProgrammaticChange.staleDraft &&
+        nextSkillTokensSignature ===
+          pendingProgrammaticChange.staleSkillTokensSignature
+      ) {
+        return;
+      }
+      pendingProgrammaticComposerChangeRef.current = undefined;
+    }
+
+    const deletedSkillTokenHistoryEntry =
+      composerSupportsSkillTokens &&
+      nextSkillTokens &&
+      nextSkillTokens.length < skillTokens.length
+        ? (() => {
+            const nextTokenIds = new Set(
+              nextSkillTokens.map((token) => token.id),
+            );
+            const deletedToken = skillTokens.find(
+              (token) => !nextTokenIds.has(token.id),
+            );
+            return deletedToken
+              ? {
+                  draft,
+                  selectionStart: deletedToken.index,
+                  skillTokens,
+                }
+              : undefined;
+          })()
+        : undefined;
+
     updateVisibleDraft(nextDraft, nextSkillTokens);
+    if (deletedSkillTokenHistoryEntry) {
+      deletedSkillTokenHistoryRef.current.push(deletedSkillTokenHistoryEntry);
+    }
     if (nextDraft.trim() !== "/review") {
       setReviewConfig(undefined);
     }
@@ -2643,6 +2716,19 @@ export function Composer(props: ComposerProps) {
     }
 
     if (event.key === "Delete" && deleteEditorContent(event, "forward")) {
+      return;
+    }
+
+    handlePlainComposerKeyDown(event);
+  };
+  const handleTiptapComposerKeyDown = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ): void => {
+    if (event.defaultPrevented) {
+      return;
+    }
+
+    if (restoreDeletedSkillToken(event)) {
       return;
     }
 
@@ -2838,7 +2924,7 @@ export function Composer(props: ComposerProps) {
             onDragOver={handleDragOver}
             onDrop={handleDrop}
             onClick={handleComposerClick}
-            onKeyDown={handlePlainComposerKeyDown}
+            onKeyDown={handleTiptapComposerKeyDown}
           />
         ) : (
           <ComposerTextareaInput
