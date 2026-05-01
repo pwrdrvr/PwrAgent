@@ -127,6 +127,48 @@ test("OpenAI new-thread selector uses concrete model and reasoning defaults", as
   }
 });
 
+test("OpenAI new-thread launchpad wins when sticky Grok defaults are unavailable", async () => {
+  const fixture = await createProviderSelectorFixture({
+    backend: "codex",
+    launchpadDefaults: {
+      backend: "grok",
+      executionMode: "default",
+      model: "grok-4.20-reasoning",
+      reasoningEffort: "medium",
+      workMode: "local",
+    },
+  });
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+    env: fixture.env,
+  });
+
+  try {
+    await app.window.getByRole("button", { name: "New thread" }).click();
+    await expect(app.window.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
+
+    await expect(app.window.getByText("Grok", { exact: true })).toHaveCount(0);
+    await expect(app.window.getByText("OpenAI", { exact: true }).first()).toBeVisible();
+
+    const settings = app.window.getByLabel("New thread settings");
+    const providerSelect = settings.getByLabel("Provider");
+    const modelSelect = settings.getByLabel("Model");
+    const prompt = app.window.locator("textarea.composer__input");
+
+    await expect(providerSelect).toHaveAttribute("data-value", "codex");
+    await expect(modelSelect).toHaveAttribute("data-value", "gpt-5.5");
+    await expect(
+      app.window.getByText(
+        "This backend is unavailable right now. Your draft stays here until send is available again."
+      )
+    ).toHaveCount(0);
+    await expect(prompt).toBeEnabled();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
 test("Grok new-thread selector hides reasoning for Grok 4.20 models", async () => {
   const fixture = await createProviderSelectorFixture({
     backend: "grok",
