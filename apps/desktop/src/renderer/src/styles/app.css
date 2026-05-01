@@ -1989,9 +1989,36 @@ textarea {
 }
 
 .transcript-message__heading {
-  font-size: 15px;
   font-weight: 700;
   line-height: 1.4;
+}
+
+.transcript-message__heading:is(h1) {
+  font-size: 1.35em;
+}
+
+.transcript-message__heading:is(h2) {
+  font-size: 1.22em;
+}
+
+.transcript-message__heading:is(h3) {
+  font-size: 1.12em;
+}
+
+.transcript-message__heading:is(h4) {
+  font-size: 1.04em;
+}
+
+.transcript-message__heading:is(h5) {
+  font-size: 0.98em;
+  font-style: italic;
+}
+
+.transcript-message__heading:is(h6) {
+  color: var(--text-secondary);
+  font-size: 0.94em;
+  font-style: italic;
+  font-weight: 650;
 }
 
 .thread-header__summary .transcript-message__heading {
@@ -3712,27 +3739,31 @@ textarea {
 }
 
 .composer-tiptap-input__editor h1 {
-  font-size: 1.25em;
+  font-size: 1.35em;
 }
 
 .composer-tiptap-input__editor h2 {
-  font-size: 1.15em;
+  font-size: 1.22em;
 }
 
 .composer-tiptap-input__editor h3 {
-  font-size: 1.07em;
+  font-size: 1.12em;
 }
 
 .composer-tiptap-input__editor h4 {
-  font-size: 1em;
+  font-size: 1.04em;
 }
 
 .composer-tiptap-input__editor h5 {
-  font-size: 0.94em;
+  font-size: 0.98em;
+  font-style: italic;
 }
 
 .composer-tiptap-input__editor h6 {
-  font-size: 0.9em;
+  color: var(--text-secondary);
+  font-size: 0.94em;
+  font-style: italic;
+  font-weight: 650;
 }
 
 .composer-tiptap-input__editor pre {

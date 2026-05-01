@@ -100,7 +100,7 @@
             "type": "message",
             "id": "message-2",
             "role": "assistant",
-            "text": "The desktop client now renders **markdown** in transcript messages.\n\n- Preserves file links\n- Preserves [external links](https://example.com/transcript)\n- Keeps ![Transcript preview](https://example.com/preview.png) inert"
+            "text": "# Transcript heading 1\n\n## Transcript heading 2\n\n### Transcript heading 3\n\n#### Transcript heading 4\n\n##### Transcript heading 5\n\n###### Transcript heading 6\n\nThe desktop client now renders **markdown** in transcript messages.\n\n- Preserves file links\n- Preserves [external links](https://example.com/transcript)\n- Keeps ![Transcript preview](https://example.com/preview.png) inert"
           }
         ],
         "messages": [
@@ -112,7 +112,7 @@
           {
             "id": "message-2",
             "role": "assistant",
-            "text": "The desktop client now renders **markdown** in transcript messages.\n\n- Preserves file links\n- Preserves [external links](https://example.com/transcript)\n- Keeps ![Transcript preview](https://example.com/preview.png) inert"
+            "text": "# Transcript heading 1\n\n## Transcript heading 2\n\n### Transcript heading 3\n\n#### Transcript heading 4\n\n##### Transcript heading 5\n\n###### Transcript heading 6\n\nThe desktop client now renders **markdown** in transcript messages.\n\n- Preserves file links\n- Preserves [external links](https://example.com/transcript)\n- Keeps ![Transcript preview](https://example.com/preview.png) inert"
           }
         ],
         "lastUserMessage": "Inspect [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md) and open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md).",

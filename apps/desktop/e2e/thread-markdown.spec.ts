@@ -44,6 +44,32 @@ test("renders markdown content in thread summaries and transcript messages", asy
     await expect(
       transcript.getByRole("link", { name: "external links" })
     ).toHaveAttribute("href", "https://example.com/transcript");
+    const headingLocators = [1, 2, 3, 4, 5, 6].map((level) =>
+      transcript.locator(`h${level}.transcript-message__heading`, {
+        hasText: `Transcript heading ${level}`,
+      })
+    );
+    for (const heading of headingLocators) {
+      await expect(heading).toBeVisible();
+    }
+    const headingStyles = await Promise.all(
+      headingLocators.map((heading) =>
+        heading.evaluate((element) => {
+          const styles = getComputedStyle(element);
+          return {
+            fontSize: Number.parseFloat(styles.fontSize),
+            fontStyle: styles.fontStyle,
+          };
+        })
+      )
+    );
+    for (let index = 1; index < headingStyles.length; index += 1) {
+      expect(headingStyles[index - 1].fontSize).toBeGreaterThan(
+        headingStyles[index].fontSize
+      );
+    }
+    expect(headingStyles[4].fontStyle).toBe("italic");
+    expect(headingStyles[5].fontStyle).toBe("italic");
     await expect(transcript.getByText("Preserves file links")).toBeVisible();
     await expect(transcript).toContainText("Keeps");
     await expect(transcript).toContainText("inert");

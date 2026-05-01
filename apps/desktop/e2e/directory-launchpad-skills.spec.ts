@@ -537,14 +537,40 @@ test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", a
 
     const heading3 = tiptapInput.locator("h3", { hasText: "Smaller heading" });
     await expect(heading3).toBeVisible();
-    const headingSizes = await Promise.all([
-      heading2.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
-      heading3.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
-    ]);
-    expect(headingSizes[0]).toBeGreaterThan(headingSizes[1]);
+    await app.window.keyboard.press("Shift+Enter");
+    await app.window.keyboard.type("#### Detail heading");
+    await app.window.keyboard.press("Shift+Enter");
+    await app.window.keyboard.type("##### Fine print heading");
+    await app.window.keyboard.press("Shift+Enter");
+    await app.window.keyboard.type("###### Quiet heading");
+
+    const heading4 = tiptapInput.locator("h4", { hasText: "Detail heading" });
+    const heading5 = tiptapInput.locator("h5", { hasText: "Fine print heading" });
+    const heading6 = tiptapInput.locator("h6", { hasText: "Quiet heading" });
+    await expect(heading4).toBeVisible();
+    await expect(heading5).toBeVisible();
+    await expect(heading6).toBeVisible();
+    const headingStyles = await Promise.all(
+      [heading2, heading3, heading4, heading5, heading6].map((heading) =>
+        heading.evaluate((element) => {
+          const styles = getComputedStyle(element);
+          return {
+            fontSize: Number.parseFloat(styles.fontSize),
+            fontStyle: styles.fontStyle,
+          };
+        })
+      )
+    );
+    for (let index = 1; index < headingStyles.length; index += 1) {
+      expect(headingStyles[index - 1].fontSize).toBeGreaterThan(
+        headingStyles[index].fontSize,
+      );
+    }
+    expect(headingStyles[3].fontStyle).toBe("italic");
+    expect(headingStyles[4].fontStyle).toBe("italic");
     await expect(tiptapInput).toHaveAttribute(
       "data-value",
-      "## Heading\n\nplain text\n\n### Smaller heading",
+      "## Heading\n\nplain text\n\n### Smaller heading\n\n#### Detail heading\n\n##### Fine print heading\n\n###### Quiet heading",
     );
 
     await app.window.keyboard.press(
