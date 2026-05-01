@@ -1684,6 +1684,17 @@ export class DesktopBackendRegistry {
 
     this.pendingServerRequests.delete(key);
     pending.resolve(params.response);
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: params.threadId,
+          turnId: params.turnId,
+          requestId: params.requestId,
+        },
+      },
+    });
 
     return {
       backend: params.backend,

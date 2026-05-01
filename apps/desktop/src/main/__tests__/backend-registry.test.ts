@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
   AppServerNotification,
+  AppServerPendingRequestNotification,
   AppServerSkillSummary,
   AppServerThreadReplay,
   AppServerThreadSummary,
@@ -266,6 +267,9 @@ class MockBackendClient {
   private readonly listeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
   >();
+  private readonly requestListeners = new Set<
+    (request: AppServerPendingRequestNotification) => Promise<unknown> | unknown
+  >();
   lastReadThreadParams?: {
     threadId: string;
     before?: string;
@@ -446,6 +450,15 @@ class MockBackendClient {
     };
   }
 
+  onRequest(
+    listener: (request: AppServerPendingRequestNotification) => Promise<unknown> | unknown
+  ): () => void {
+    this.requestListeners.add(listener);
+    return () => {
+      this.requestListeners.delete(listener);
+    };
+  }
+
   async readThread(_params?: {
     threadId: string;
     before?: string;
@@ -554,6 +567,14 @@ class MockBackendClient {
     for (const listener of this.listeners) {
       await listener(notification);
     }
+  }
+
+  async emitRequest(request: AppServerPendingRequestNotification): Promise<unknown> {
+    const listener = this.requestListeners.values().next().value;
+    if (!listener) {
+      throw new Error("No request listener registered");
+    }
+    return await listener(request);
   }
 }
 
@@ -1734,6 +1755,66 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     ]);
+
+    unsubscribe();
+    await registry.close();
+  });
+
+  it("emits server request resolution when a pending request is submitted externally", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const request: AppServerPendingRequestNotification = {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "call-1",
+        requestId: "approval-1",
+        command: "npm view dive",
+      },
+    } as AppServerPendingRequestNotification;
+    const responsePromise = codexClient.emitRequest(request);
+    await waitForCondition(() => events.length === 1);
+
+    await registry.submitServerRequest({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "approval-1",
+      response: { decision: "accept" },
+    });
+
+    await expect(responsePromise).resolves.toEqual({ decision: "accept" });
+    expect(events.map((event) => event.notification.method)).toEqual([
+      "item/commandExecution/requestApproval",
+      "serverRequest/resolved",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      backend: "codex",
+      notification: {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          requestId: "approval-1",
+        },
+      },
+    });
 
     unsubscribe();
     await registry.close();
