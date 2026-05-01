@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerNotification, AppServerPendingRequestNotification } from "@pwragnt/shared";
 import type { PendingMcpInteractionState } from "../mcp-elicitation";
@@ -2862,6 +2863,119 @@ describe("ThreadView", () => {
       });
     } finally {
       setIntervalSpy.mockRestore();
+    }
+  });
+
+  it("defers completed live transcript publishing outside the render phase", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const onPublished = vi.fn();
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: AppServerNotification;
+        }) => void)
+      | undefined;
+
+    function Harness() {
+      const [entries, setEntries] = useState<any[]>([]);
+
+      return (
+        <ThreadView
+          activeTurnId="turn-1"
+          activeTurnStartedAt={1_000}
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          composerDisabled={false}
+          desktopApi={{
+            onAgentEvent: (callback) => {
+              agentEventHandler = callback as typeof agentEventHandler;
+              return () => undefined;
+            },
+          }}
+          loading={false}
+          loadingMore={false}
+          messageCount={entries.length}
+          selectedThread={{
+            id: "thread-live",
+            title: "Live turn",
+            titleSource: "explicit",
+            source: "codex",
+            updatedAt: Date.now(),
+            linkedDirectories: [],
+            inbox: {
+              inInbox: false,
+            },
+          }}
+          skills={[]}
+          transcriptEntries={entries}
+          clearPendingRequest={() => undefined}
+          onLiveTranscriptEntry={(entry) => {
+            onPublished(entry);
+            setEntries((current) => [...current, entry]);
+          }}
+          onLoadOlder={async () => undefined}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    }
+
+    try {
+      render(<Harness />);
+
+      await act(async () => {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "mcpServer/startupStatus/updated",
+            params: {
+              name: "context7",
+              status: "ready",
+            },
+          },
+        });
+      });
+
+      await act(async () => {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-live",
+              turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                completedAt: 2_000,
+                output: [],
+              },
+            },
+          },
+        });
+      });
+
+      await waitFor(() => {
+        expect(onPublished).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: "live-mcp-protocol-status",
+            turn: expect.objectContaining({
+              id: "turn-1",
+              status: "completed",
+            }),
+          }),
+        );
+      });
+      expect(
+        consoleErrorSpy.mock.calls.some((call) =>
+          call.some(
+            (part) =>
+              typeof part === "string" &&
+              part.includes("Cannot update a component"),
+          ),
+        ),
+      ).toBe(false);
+    } finally {
+      consoleErrorSpy.mockRestore();
     }
   });
 });

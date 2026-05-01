@@ -862,8 +862,10 @@ export function ThreadView(props: ThreadViewProps) {
     };
   }, [props.desktopApi, selectedLaunchpad, selectedThreadKey]);
 
-  const publishLiveTranscriptEntry = useCallback(<T extends AppServerThreadEntry,>(entry: T): T => {
-    props.onLiveTranscriptEntry?.(entry);
+  const deferLiveTranscriptEntry = useCallback(<T extends AppServerThreadEntry,>(entry: T): T => {
+    queueMicrotask(() => {
+      props.onLiveTranscriptEntry?.(entry);
+    });
     return entry;
   }, [props.onLiveTranscriptEntry]);
 
@@ -987,21 +989,21 @@ export function ThreadView(props: ThreadViewProps) {
           setPendingActivityEntry((current) => {
             const next = completeEntryTurn(current);
             if (next) {
-              publishLiveTranscriptEntry(next);
+              deferLiveTranscriptEntry(next);
             }
             return next;
           });
           setPendingProtocolActivityEntry((current) => {
             const next = completeEntryTurn(current);
             if (next) {
-              publishLiveTranscriptEntry(next);
+              deferLiveTranscriptEntry(next);
             }
             return next;
           });
           setPendingPlanEntry((current) => {
             const next = completeEntryTurn(current);
             if (next) {
-              publishLiveTranscriptEntry(next);
+              deferLiveTranscriptEntry(next);
             }
             return next;
           });
@@ -1178,8 +1180,8 @@ export function ThreadView(props: ThreadViewProps) {
     props.activeTurnId,
     props.activeTurnStartedAt,
     props.desktopApi,
+    deferLiveTranscriptEntry,
     liveNotificationTurnId,
-    publishLiveTranscriptEntry,
     selectedThread,
   ]);
 
