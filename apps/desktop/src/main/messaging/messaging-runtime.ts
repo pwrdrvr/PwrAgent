@@ -3,6 +3,7 @@ import type { MessagingStore } from "./core/messaging-store";
 import type { MessagingBackendBridge } from "./core/messaging-adapter";
 import type { AgentEvent, AppServerPendingRequestNotification } from "@pwragnt/shared";
 import type {
+  MessagingChannelKind,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   MessagingSurfaceIntent,
@@ -18,7 +19,8 @@ import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
 import { loadConfiguredMessagingAdapters } from "./provider-loader";
 
 export type DesktopMessagingAdapter = {
-  channel: "telegram" | "discord";
+  authorizedActorIds: readonly string[];
+  channel: MessagingChannelKind;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop?(): Promise<void>;
@@ -60,10 +62,7 @@ export class DesktopMessagingRuntime {
     });
 
     for (const adapter of configuredAdapters) {
-      const authorizedActorIds =
-        adapter.channel === "telegram"
-          ? this.options.config.telegram?.authorizedActorIds ?? []
-          : this.options.config.discord?.authorizedActorIds ?? [];
+      const authorizedActorIds = [...adapter.authorizedActorIds];
       const authorizedActorIdSet = new Set(authorizedActorIds);
       const controller = new MessagingController({
         adapter,

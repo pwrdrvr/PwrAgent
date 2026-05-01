@@ -8,6 +8,7 @@ import type {
   StartTurnRequest,
 } from "@pwragnt/shared";
 import type {
+  MessagingChannelKind,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   MessagingSurfaceIntent,
@@ -60,6 +61,41 @@ describe("DesktopMessagingRuntime", () => {
     });
     expect(adapter.delivered.at(-1)).toMatchObject({
       kind: "thread_picker",
+    });
+  });
+
+  it("uses adapter-supplied authorization without provider-specific runtime config", async () => {
+    const adapter = createAdapter("custom", {
+      authorizedActorIds: ["driver-1"],
+    });
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: bridge,
+      config: {},
+    });
+
+    await runtime.start();
+    await adapter.listener?.({
+      ...buildCommandEvent("/resume"),
+      actor: {
+        platformUserId: "driver-1",
+      },
+      channel: {
+        channel: "custom",
+        conversation: {
+          id: "chat-1",
+          kind: "dm",
+        },
+      },
+    });
+
+    expect(messagingLog.warn).not.toHaveBeenCalled();
+    expect(bridge.getNavigationSnapshot).toHaveBeenCalledWith({
+      backend: "all",
     });
   });
 
@@ -437,7 +473,7 @@ async function createRuntimeHarness(): Promise<{
 }
 
 function createAdapter(
-  channel: "telegram" | "discord",
+  channel: MessagingChannelKind,
   overrides: Partial<DesktopMessagingAdapter> = {},
 ): DesktopMessagingAdapter & {
   delivered: MessagingSurfaceIntent[];
@@ -447,6 +483,7 @@ function createAdapter(
 } {
   const delivered: MessagingSurfaceIntent[] = [];
   const adapter = {
+    authorizedActorIds: ["user-1"],
     channel,
     delivered,
     deliver: vi.fn(async (intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> => {

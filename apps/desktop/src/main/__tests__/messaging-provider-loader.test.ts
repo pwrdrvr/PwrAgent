@@ -138,6 +138,7 @@ function createRegistry(
 
 function createAdapter(channel: "telegram" | "discord"): DesktopMessagingAdapter {
   return {
+    authorizedActorIds: [`${channel}-user`],
     channel,
     deliver: vi.fn(async (intent: MessagingSurfaceIntent) => ({
       channel,

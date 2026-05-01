@@ -163,6 +163,7 @@ type DiscordAdapterOptions = {
 };
 
 export type DiscordProviderAdapter = {
+  authorizedActorIds: readonly string[];
   channel: "discord";
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
@@ -183,6 +184,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   constructor(options: DiscordAdapterOptions) {
     this.options = options;
+  }
+
+  get authorizedActorIds(): readonly string[] {
+    return this.options.config.authorizedActorIds;
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {

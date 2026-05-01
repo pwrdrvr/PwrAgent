@@ -219,6 +219,7 @@ export type TelegramGrammyBotLike = {
 };
 
 export type TelegramProviderAdapter = {
+  authorizedActorIds: readonly string[];
   channel: "telegram";
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
@@ -246,6 +247,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   constructor(options: TelegramAdapter["options"]) {
     this.options = options;
+  }
+
+  get authorizedActorIds(): readonly string[] {
+    return this.options.config.authorizedActorIds;
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
