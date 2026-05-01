@@ -385,10 +385,12 @@ function insertWysiwygLineBreak(editor: TiptapEditor): boolean {
   }
 
   if (editor.isActive("listItem")) {
-    if (editor.chain().splitListItem("listItem").liftListItem("listItem").run()) {
-      return true;
-    }
-    return editor.commands.liftListItem("listItem");
+    return editor.commands.first(({ commands }) => [
+      () => commands.splitListItem("listItem"),
+      () => commands.createParagraphNear(),
+      () => commands.liftEmptyBlock(),
+      () => commands.splitBlock(),
+    ]);
   }
 
   return editor.commands.first(({ commands }) => [
@@ -396,6 +398,10 @@ function insertWysiwygLineBreak(editor: TiptapEditor): boolean {
     () => commands.liftEmptyBlock(),
     () => commands.splitBlock(),
   ]);
+}
+
+function insertWysiwygSoftBreak(editor: TiptapEditor): boolean {
+  return editor.commands.setHardBreak();
 }
 
 function getDraftIndexAtPosition(
@@ -584,11 +590,16 @@ export const ComposerTiptapInput = forwardRef<
           if (
             propsRef.current.markdownConversion &&
             event.key === "Enter" &&
-            event.shiftKey
+            (event.shiftKey || event.altKey)
           ) {
             event.preventDefault();
             const currentEditor = editorRef.current;
-            return currentEditor ? insertWysiwygLineBreak(currentEditor) : false;
+            if (!currentEditor) {
+              return false;
+            }
+            return event.altKey
+              ? insertWysiwygSoftBreak(currentEditor)
+              : insertWysiwygLineBreak(currentEditor);
           }
           propsRef.current.onKeyDown?.(event as unknown as KeyboardEvent<HTMLDivElement>);
           return event.defaultPrevented;

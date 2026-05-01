@@ -586,13 +586,25 @@ test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", a
     await expect(tiptapInput.locator("li", { hasText: "Some item" })).toBeVisible();
 
     await app.window.keyboard.press("Shift+Enter");
-    await app.window.keyboard.type("after list");
+    await app.window.keyboard.type("Second item");
 
-    await expect(tiptapInput.locator("li", { hasText: "after list" })).toHaveCount(0);
-    await expect(tiptapInput.locator("p", { hasText: "after list" })).toBeVisible();
+    await expect(tiptapInput.locator("li")).toHaveCount(2);
+    await expect(tiptapInput.locator("li", { hasText: "Second item" })).toBeVisible();
     await expect(tiptapInput).toHaveAttribute(
       "data-value",
-      "- Some item\n\nafter list",
+      "- Some item\n- Second item",
+    );
+
+    await app.window.keyboard.press("Alt+Enter");
+    await app.window.keyboard.type("continued");
+
+    await expect(tiptapInput.locator("li")).toHaveCount(2);
+    await expect(
+      tiptapInput.locator("li", { hasText: /Second item\s*continued/ }),
+    ).toBeVisible();
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      "- Some item\n- Second item\ncontinued",
     );
   } finally {
     await app.close();
