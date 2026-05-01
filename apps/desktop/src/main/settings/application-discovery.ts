@@ -25,6 +25,7 @@ type KnownApplication = {
   binaryNames?: string[];
   binaryPaths?: string[];
   canOpenWorkspace?: boolean;
+  macOpenStrategy?: "ghostty-applescript";
   terminalWorkingDirectoryArg?: (targetPath: string) => string[];
 };
 
@@ -136,6 +137,7 @@ const TERMINALS: KnownApplication[] = [
       path.join(os.homedir(), "Applications/Ghostty.app/Contents/MacOS/ghostty"),
       ...homebrewBinaryPaths("ghostty"),
     ],
+    macOpenStrategy: "ghostty-applescript",
     terminalWorkingDirectoryArg: (targetPath) => [`--working-directory=${targetPath}`],
   },
   {
@@ -349,6 +351,14 @@ async function openTerminal(
   knownApplication: KnownApplication | undefined,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
+  if (
+    process.platform === "darwin" &&
+    knownApplication?.macOpenStrategy === "ghostty-applescript"
+  ) {
+    await openGhosttyWithAppleScript(targetPath, env);
+    return;
+  }
+
   if (application.executablePath && knownApplication?.terminalWorkingDirectoryArg) {
     await spawnDetached(
       application.executablePath,
@@ -379,6 +389,39 @@ async function openTerminal(
   }
 
   throw new Error(`${application.name} does not have an executable launcher.`);
+}
+
+async function openGhosttyWithAppleScript(
+  targetPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  await execFile("/usr/bin/osascript", buildGhosttyAppleScriptArgs(targetPath), {
+    env,
+    timeout: 10_000,
+  });
+}
+
+export function buildGhosttyAppleScriptArgs(targetPath: string): string[] {
+  return [
+    "-e",
+    'tell application "Ghostty"',
+    "-e",
+    "activate",
+    "-e",
+    "set cfg to new surface configuration",
+    "-e",
+    `set initial working directory of cfg to ${appleScriptString(targetPath)}`,
+    "-e",
+    "set win to new window with configuration cfg",
+    "-e",
+    "activate window win",
+    "-e",
+    "end tell",
+  ];
+}
+
+function appleScriptString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 function macApplicationName(appPath: string): string {
