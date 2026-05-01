@@ -303,7 +303,7 @@ describe("MessagingController", () => {
     });
   });
 
-  it("updates the existing pinned status surface for /status commands", async () => {
+  it("recreates the pinned status surface for /status commands", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
@@ -317,18 +317,47 @@ describe("MessagingController", () => {
     const binding = await harness.store.findActiveBindingForChannel(
       buildCommandEvent("/status").channel,
     );
+    const deliveredBeforeStatus = harness.delivered.length;
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
 
     expect(binding?.statusSurface).toBeDefined();
-    expect(harness.delivered.at(-1)).toMatchObject({
+    const statusIntents = harness.delivered.slice(deliveredBeforeStatus);
+    expect(statusIntents).toHaveLength(3);
+    expect(statusIntents[0]).toMatchObject({
       kind: "status",
+      actions: [],
       delivery: {
         mode: "update",
-        pin: true,
+        replaceMarkup: true,
+        fallback: "fail",
       },
       targetSurface: binding?.statusSurface,
       text: expect.stringContaining("Project: PwrAgnt"),
+    });
+    expect(statusIntents[1]).toMatchObject({
+      kind: "dismiss",
+      delivery: {
+        mode: "dismiss",
+        unpin: true,
+      },
+      targetSurface: binding?.pinnedStatusSurface,
+    });
+    expect(statusIntents[2]).toMatchObject({
+      kind: "status",
+      delivery: {
+        mode: "present",
+        pin: true,
+      },
+      targetSurface: undefined,
+      text: expect.stringContaining("Project: PwrAgnt"),
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.toMatchObject({
+      statusSurface: {
+        id: `surface:${statusIntents[2]?.id}`,
+      },
     });
   });
 

@@ -924,7 +924,7 @@ export class MessagingController {
       return;
     }
 
-    await this.renderBindingStatus(binding, event);
+    await this.recreateBindingStatus(binding, event);
   }
 
   private async handleStatusCallback(
@@ -1308,6 +1308,90 @@ export class MessagingController {
       undefined,
       event,
     );
+  }
+
+  private async recreateBindingStatus(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<MessagingBindingRecord> {
+    const snapshot = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const retiredBinding = await this.retireBindingStatus(binding, event, snapshot);
+    return await this.renderBindingStatus(retiredBinding, event, snapshot);
+  }
+
+  private async retireBindingStatus(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+    navigation: NavigationSnapshot,
+  ): Promise<MessagingBindingRecord> {
+    const statusSurface = binding.statusSurface ?? binding.pinnedStatusSurface;
+    if (!statusSurface) {
+      return binding;
+    }
+
+    try {
+      await this.deliver(
+        {
+          ...buildBindingStatusIntent({
+            id: this.newIntentId("status-retire"),
+            binding,
+            createdAt: this.now(),
+            navigation,
+          }),
+          actions: [],
+          delivery: {
+            mode: "update",
+            replaceMarkup: true,
+            fallback: "fail",
+          },
+          targetSurface: statusSurface,
+        },
+        binding,
+        event,
+      );
+    } catch (error) {
+      this.logger.debug?.("messaging status retirement update failed", {
+        bindingId: binding.id,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: binding.threadId,
+      });
+    }
+
+    if (binding.pinnedStatusSurface) {
+      try {
+        await this.deliver(
+          {
+            id: this.newIntentId("status-unpin"),
+            kind: "dismiss",
+            bindingId: binding.id,
+            createdAt: this.now(),
+            delivery: {
+              mode: "dismiss",
+              unpin: true,
+            },
+            reason: "status_recreated",
+            targetSurface: binding.pinnedStatusSurface,
+          },
+          binding,
+          event,
+        );
+      } catch (error) {
+        this.logger.debug?.("messaging status retirement unpin failed", {
+          bindingId: binding.id,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: binding.threadId,
+        });
+      }
+    }
+
+    return await this.options.store.upsertBinding({
+      ...binding,
+      pinnedStatusSurface: undefined,
+      statusSurface: undefined,
+      updatedAt: this.now(),
+    });
   }
 
   private async renderBindingStatus(
