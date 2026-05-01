@@ -12,6 +12,7 @@ export type DesktopMessagingProviderId = Extract<
 export type DesktopMessagingProviderModule = {
   createAdapter(params: {
     config: DesktopMessagingConfig;
+    logger: typeof messagingLog;
     store: MessagingStore;
   }): DesktopMessagingAdapter | undefined;
 };
@@ -42,6 +43,7 @@ export async function loadConfiguredMessagingAdapters(params: {
       const provider = await loadMessagingProviderModule(providerId, registry);
       const adapter = provider.createAdapter({
         config: params.config,
+        logger: messagingLog,
         store: params.store,
       });
       if (adapter) {
@@ -92,8 +94,10 @@ const defaultMessagingProviderRegistry: DesktopMessagingProviderRegistry = {
     async load() {
       const module = await import("@pwragnt/messaging-provider-discord");
       return {
-        createAdapter({ config }) {
-          return config.discord ? module.createDiscordAdapter(config.discord) : undefined;
+        createAdapter({ config, logger }) {
+          return config.discord
+            ? module.createDiscordAdapter(config.discord, logger)
+            : undefined;
         },
       };
     },
@@ -102,9 +106,9 @@ const defaultMessagingProviderRegistry: DesktopMessagingProviderRegistry = {
     async load() {
       const module = await import("@pwragnt/messaging-provider-telegram");
       return {
-        createAdapter({ config, store }) {
+        createAdapter({ config, logger, store }) {
           return config.telegram
-            ? module.createTelegramAdapter(config.telegram, store)
+            ? module.createTelegramAdapter(config.telegram, store, logger)
             : undefined;
         },
       };

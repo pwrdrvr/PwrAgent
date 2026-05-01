@@ -41,6 +41,11 @@ type DiscordTypingSignal = {
   timeout: ReturnType<typeof setTimeout>;
 };
 
+export type DiscordProviderLogger = {
+  debug(message: string, data?: Record<string, unknown>): void;
+  warn?(message: string, data?: Record<string, unknown>): void;
+};
+
 export type DiscordAllowedMentions = {
   parse: string[];
   replied_user?: boolean;
@@ -152,6 +157,7 @@ type DiscordAdapterOptions = {
   api?: DiscordApi;
   config: DiscordMessagingConfig;
   gateway?: DiscordGatewayConnection;
+  logger?: DiscordProviderLogger;
   now?: () => number;
 };
 
@@ -471,6 +477,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return;
     }
 
+    this.options.logger?.debug("discord typing signal started", {
+      channelId,
+      leaseMs,
+    });
     await this.sendTypingSignal(channelId);
     const interval = setInterval(() => {
       void this.sendTypingSignal(channelId).catch(() => undefined);
@@ -486,8 +496,14 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private stopTypingSignal(channelId: string): void {
     const signal = this.typingSignals.get(channelId);
     if (!signal) {
+      this.options.logger?.debug("discord typing signal stop skipped", {
+        channelId,
+      });
       return;
     }
+    this.options.logger?.debug("discord typing signal stopped", {
+      channelId,
+    });
     clearInterval(signal.interval);
     clearTimeout(signal.timeout);
     this.typingSignals.delete(channelId);
@@ -498,6 +514,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       clearInterval(signal.interval);
       clearTimeout(signal.timeout);
     }
+    if (this.typingSignals.size > 0) {
+      this.options.logger?.debug("discord typing signals stopped", {
+        count: this.typingSignals.size,
+      });
+    }
     this.typingSignals.clear();
   }
 
@@ -506,6 +527,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     if (!signal) {
       return;
     }
+    this.options.logger?.debug("discord typing signal lease refreshed", {
+      channelId,
+      leaseMs,
+    });
     clearTimeout(signal.timeout);
     signal.timeout = this.createTypingSignalTimeout(channelId, leaseMs);
   }
@@ -515,6 +540,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     leaseMs: number,
   ): ReturnType<typeof setTimeout> {
     const timeout = setTimeout(() => {
+      this.options.logger?.debug("discord typing signal expired", {
+        channelId,
+        leaseMs,
+      });
       this.stopTypingSignal(channelId);
     }, leaseMs);
     (timeout as { unref?: () => void }).unref?.();
@@ -578,9 +607,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   }
 }
 
-export function createDiscordAdapter(config: DiscordMessagingConfig): DiscordAdapter {
+export function createDiscordAdapter(
+  config: DiscordMessagingConfig,
+  logger?: DiscordProviderLogger,
+): DiscordAdapter {
   return new DiscordAdapter({
     config,
+    logger,
   });
 }
 

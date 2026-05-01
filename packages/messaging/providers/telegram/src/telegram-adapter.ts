@@ -38,6 +38,11 @@ type TelegramTypingSignal = {
   timeout: ReturnType<typeof setTimeout>;
 };
 
+export type TelegramProviderLogger = {
+  debug(message: string, data?: Record<string, unknown>): void;
+  warn?(message: string, data?: Record<string, unknown>): void;
+};
+
 export type TelegramUser = {
   first_name?: string;
   id: number;
@@ -229,6 +234,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     api?: TelegramBotApi;
     bot?: TelegramBotLike;
     config: TelegramMessagingConfig;
+    logger?: TelegramProviderLogger;
     now?: () => number;
     pollOnStart?: boolean;
     store?: MessagingCallbackHandleStore;
@@ -710,6 +716,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return;
     }
 
+    this.options.logger?.debug("telegram typing signal started", {
+      leaseMs,
+      target: this.redactedTypingTarget(target),
+    });
     await this.sendTypingSignal(target);
     const interval = setInterval(() => {
       void this.sendTypingSignal(target).catch(() => undefined);
@@ -726,8 +736,14 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const key = this.typingSignalKey(target);
     const signal = this.typingSignals.get(key);
     if (!signal) {
+      this.options.logger?.debug("telegram typing signal stop skipped", {
+        target: this.redactedTypingTarget(target),
+      });
       return;
     }
+    this.options.logger?.debug("telegram typing signal stopped", {
+      target: this.redactedTypingTarget(target),
+    });
     clearInterval(signal.interval);
     clearTimeout(signal.timeout);
     this.typingSignals.delete(key);
@@ -737,6 +753,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     for (const signal of this.typingSignals.values()) {
       clearInterval(signal.interval);
       clearTimeout(signal.timeout);
+    }
+    if (this.typingSignals.size > 0) {
+      this.options.logger?.debug("telegram typing signals stopped", {
+        count: this.typingSignals.size,
+      });
     }
     this.typingSignals.clear();
   }
@@ -750,6 +771,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     if (!signal) {
       return;
     }
+    this.options.logger?.debug("telegram typing signal lease refreshed", {
+      leaseMs,
+      target: this.redactedTypingTarget(target),
+    });
     clearTimeout(signal.timeout);
     signal.timeout = this.createTypingSignalTimeout(target, leaseMs);
   }
@@ -759,6 +784,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     leaseMs: number,
   ): ReturnType<typeof setTimeout> {
     const timeout = setTimeout(() => {
+      this.options.logger?.debug("telegram typing signal expired", {
+        leaseMs,
+        target: this.redactedTypingTarget(target),
+      });
       this.stopTypingSignal(target);
     }, leaseMs);
     (timeout as { unref?: () => void }).unref?.();
@@ -775,6 +804,13 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   private typingSignalKey(target: TelegramDeliveryTarget): string {
     return `${target.chatId}:${target.messageThreadId ?? ""}`;
+  }
+
+  private redactedTypingTarget(target: TelegramDeliveryTarget): Record<string, unknown> {
+    return {
+      chatId: String(target.chatId),
+      messageThreadId: target.messageThreadId,
+    };
   }
 
   private channelFromMessage(message: TelegramMessage): MessagingInboundEvent["channel"] {
@@ -883,9 +919,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 export function createTelegramAdapter(
   config: TelegramMessagingConfig,
   store?: MessagingCallbackHandleStore,
+  logger?: TelegramProviderLogger,
 ): TelegramAdapter {
   return new TelegramAdapter({
     config,
+    logger,
     store,
   });
 }

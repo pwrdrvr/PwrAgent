@@ -6,6 +6,7 @@ export type {
   DiscordGatewayListener,
   DiscordInteractionResponseRequest,
   DiscordMessage,
+  DiscordProviderLogger,
 } from "./discord-adapter.ts";
 export { DiscordAdapter, createDiscordAdapter } from "./discord-adapter.ts";
 export {

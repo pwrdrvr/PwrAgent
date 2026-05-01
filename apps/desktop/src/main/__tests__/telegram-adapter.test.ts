@@ -9,6 +9,7 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragnt/messaging-interface";
 import type {
+  AgentEvent,
   NavigationSnapshot,
   StartTurnRequest,
 } from "@pwragnt/shared";
@@ -232,6 +233,81 @@ describe("TelegramAdapter", () => {
       await vi.advanceTimersByTimeAsync(5_000);
 
       expect(api.sendChatAction).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not re-issue Telegram typing after final assistant text and backend noise", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = await createControllerHarness();
+      await harness.store.upsertBinding({
+        id: "binding:telegram:dm:777:codex:thread-1",
+        authorizedActorIds: ["42"],
+        backend: "codex",
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        createdAt: 1000,
+        threadId: "thread-1",
+        updatedAt: 1000,
+      });
+      await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+      await harness.adapter.handleUpdate({
+        update_id: 3,
+        message: {
+          chat: {
+            id: 777,
+            type: "private",
+          },
+          from: {
+            id: 42,
+            is_bot: false,
+          },
+          message_id: 102,
+          text: "who are you",
+        },
+      });
+
+      expect(harness.api.sendChatAction).toHaveBeenCalledTimes(1);
+
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "item-1",
+              type: "agentMessage",
+              text: "I am Codex.",
+            },
+          },
+        },
+      } satisfies AgentEvent);
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "reasoning-1",
+              type: "reasoning",
+            },
+          },
+        },
+      } satisfies AgentEvent);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(harness.api.sendChatAction).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

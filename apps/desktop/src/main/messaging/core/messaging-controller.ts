@@ -30,6 +30,7 @@ import {
   buildStatusIntent,
 } from "./messaging-renderer.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
+import { getMainLogger } from "../../log.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
 import { actionsForIntent } from "./deterministic-interaction-mapper.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
@@ -50,12 +51,18 @@ import {
 const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;
+const messagingControllerLog = getMainLogger("pwragnt:messaging");
+
+type MessagingControllerLogger = {
+  debug?(message: string, data?: Record<string, unknown>): void;
+};
 
 export type MessagingControllerOptions = {
   adapter: MessagingAdapter;
   authorizedActorIds: string[];
   backend: MessagingBackendBridge;
   interactionMapper?: MessagingInteractionMapper;
+  logger?: MessagingControllerLogger;
   now?: () => number;
   pendingIntentTtlMs?: number;
   store: MessagingStore;
@@ -68,6 +75,7 @@ export class MessagingController {
   private readonly pendingIntentTtlMs: number;
   private readonly interactionMapper: MessagingInteractionMapper;
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
+  private readonly logger: MessagingControllerLogger;
 
   constructor(private readonly options: MessagingControllerOptions) {
     this.authorizedActorIds = new Set(options.authorizedActorIds);
@@ -75,6 +83,7 @@ export class MessagingController {
     this.pendingIntentTtlMs =
       options.pendingIntentTtlMs ?? DEFAULT_PENDING_INTENT_TTL_MS;
     this.interactionMapper = options.interactionMapper ?? new DeterministicInteractionMapper();
+    this.logger = options.logger ?? messagingControllerLog;
   }
 
   async handleInboundEvent(event: MessagingInboundEvent): Promise<void> {
@@ -142,6 +151,7 @@ export class MessagingController {
           activeTurn: lifecycle,
           updatedAt: this.now(),
         });
+        this.logBindingTurnStateChange(binding, currentBinding, event.notification.method);
       } else if (isThreadStatusIdleEvent(event) && binding.activeTurn) {
         currentBinding = await this.options.store.upsertBinding({
           ...binding,
@@ -152,6 +162,7 @@ export class MessagingController {
           },
           updatedAt: this.now(),
         });
+        this.logBindingTurnStateChange(binding, currentBinding, event.notification.method);
       }
 
       const assistantText = assistantTextForBackendEvent(event);
@@ -165,7 +176,13 @@ export class MessagingController {
           },
           updatedAt: this.now(),
         });
+        this.logBindingTurnStateChange(
+          binding,
+          currentBinding,
+          event.notification.method,
+        );
         await this.signalTurnActivity(currentBinding, currentBinding.activeTurn!, {
+          reason: "assistant_final",
           force: true,
         });
       }
@@ -175,11 +192,14 @@ export class MessagingController {
 
       if (lifecycle || (isThreadStatusIdleEvent(event) && binding.activeTurn)) {
         await this.signalTurnActivity(currentBinding, currentBinding.activeTurn!, {
+          reason: event.notification.method,
           force: true,
         });
         await this.renderBindingStatus(currentBinding);
       } else if (!assistantText && currentBinding.activeTurn?.status === "working") {
-        await this.signalTurnActivity(currentBinding, currentBinding.activeTurn);
+        await this.signalTurnActivity(currentBinding, currentBinding.activeTurn, {
+          reason: event.notification.method,
+        });
       }
     }
   }
@@ -1308,7 +1328,7 @@ export class MessagingController {
   private async signalTurnActivity(
     binding: MessagingBindingRecord,
     activeTurn: MessagingActiveTurnSummary,
-    options?: { force?: boolean },
+    options?: { force?: boolean; reason?: string },
   ): Promise<void> {
     const state = activeTurn.status === "working" ? "active" : "idle";
     const now = this.now();
@@ -1319,6 +1339,15 @@ export class MessagingController {
       lastSignaledAt !== undefined &&
       now - lastSignaledAt < TYPING_ACTIVITY_REFRESH_MS
     ) {
+      this.logger.debug?.("messaging typing activity suppressed", {
+        bindingId: binding.id,
+        elapsedSinceLastMs: now - lastSignaledAt,
+        reason: options?.reason,
+        state,
+        threadId: binding.threadId,
+        turnId: activeTurn.turnId,
+        turnStatus: activeTurn.status,
+      });
       return;
     }
     if (state === "active") {
@@ -1326,6 +1355,17 @@ export class MessagingController {
     } else {
       this.typingActivityLastSignaledAt.delete(binding.id);
     }
+
+    this.logger.debug?.("messaging typing activity signaled", {
+      bindingId: binding.id,
+      force: Boolean(options?.force),
+      leaseMs: state === "active" ? TYPING_ACTIVITY_LEASE_MS : undefined,
+      reason: options?.reason,
+      state,
+      threadId: binding.threadId,
+      turnId: activeTurn.turnId,
+      turnStatus: activeTurn.status,
+    });
 
     await this.deliver(
       buildActivityIntent({
@@ -1338,6 +1378,32 @@ export class MessagingController {
       }),
       binding,
     );
+  }
+
+  private logBindingTurnStateChange(
+    previous: MessagingBindingRecord,
+    next: MessagingBindingRecord,
+    reason: string,
+  ): void {
+    const previousTurn = previous.activeTurn;
+    const nextTurn = next.activeTurn;
+    if (
+      previousTurn?.turnId === nextTurn?.turnId &&
+      previousTurn?.status === nextTurn?.status
+    ) {
+      return;
+    }
+
+    this.logger.debug?.("messaging binding turn state changed", {
+      backend: next.backend,
+      bindingId: next.id,
+      nextStatus: nextTurn?.status,
+      nextTurnId: nextTurn?.turnId,
+      previousStatus: previousTurn?.status,
+      previousTurnId: previousTurn?.turnId,
+      reason,
+      threadId: next.threadId,
+    });
   }
 
   private async deliverInvalidBrowseSelection(
