@@ -311,12 +311,8 @@ test("directory launchpad can switch from local checkout to a new worktree", asy
 
 test("opening a directory launchpad without edits does not persist a pending draft", async () => {
   const fixture = await createDirectoryLaunchpadFixture();
-  const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-launchpad-state-"));
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
-    env: {
-      PWRAGNT_STATE_ROOT: stateRoot,
-    },
   });
 
   try {
@@ -329,13 +325,15 @@ test("opening a directory launchpad without edits does not persist a pending dra
       app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
     ).toBeVisible();
     const overlay = JSON.parse(
-      await readFile(path.join(stateRoot, "overlay-state.json"), "utf8"),
+      await readFile(
+        path.join(app.homeRoot, ".local", "state", "pwragnt", "overlay-state.json"),
+        "utf8",
+      ),
     );
     expect(overlay.directoryLaunchpads).toEqual({});
   } finally {
     await app.close();
     await fixture.cleanup();
-    await rm(stateRoot, { recursive: true, force: true });
   }
 });
 
