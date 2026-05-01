@@ -1,14 +1,28 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   DISCORD_APPLICATION_ID_ENV,
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_MESSAGE_CONTENT_INTENT_ENV,
   loadDesktopMessagingConfig,
+  loadDesktopMessagingConfigFromSettings,
   redactDesktopMessagingConfig,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
 } from "../messaging/messaging-config";
+import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
+import { DesktopSettingsService } from "../settings/desktop-settings-service";
+
+const tempRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe("desktop messaging config", () => {
   it("enables configured channels only when tokens and authorized actors are present", () => {
@@ -52,6 +66,71 @@ describe("desktop messaging config", () => {
     });
   });
 
+  it("loads enabled providers from desktop settings and keychain secrets", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[messaging.telegram]",
+        "enabled = true",
+        'authorized_user_ids = ["111111111"]',
+        "",
+        "[messaging.discord]",
+        "enabled = true",
+        'application_id = "discord-app"',
+        'authorized_user_ids = ["222222222"]',
+        "message_content_intent = true",
+      ].join("\n"),
+      "utf8",
+    );
+    const secretStore = new MemoryDesktopSecretStore();
+    await secretStore.setSecret("telegramBotToken", "settings-telegram-token");
+    await secretStore.setSecret("discordBotToken", "settings-discord-token");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore,
+    });
+
+    const config = await loadDesktopMessagingConfigFromSettings(service, {});
+
+    expect(config).toEqual({
+      telegram: {
+        channel: "telegram",
+        enabled: true,
+        botToken: "settings-telegram-token",
+        authorizedActorIds: ["111111111"],
+      },
+      discord: {
+        channel: "discord",
+        enabled: true,
+        applicationId: "discord-app",
+        botToken: "settings-discord-token",
+        authorizedActorIds: ["222222222"],
+        messageContentIntent: true,
+      },
+    });
+  });
+
+  it("keeps env-only messaging config fallback enabled for tests", async () => {
+    const service = new DesktopSettingsService({
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const config = await loadDesktopMessagingConfigFromSettings(service, {
+      [TELEGRAM_BOT_TOKEN_ENV]: "env-telegram-token",
+      [TELEGRAM_AUTHORIZED_USER_IDS_ENV]: "42",
+    });
+
+    expect(config.telegram).toMatchObject({
+      botToken: "env-telegram-token",
+      authorizedActorIds: ["42"],
+    });
+  });
+
   it("redacts bot tokens while preserving useful diagnostics", () => {
     const redacted = redactDesktopMessagingConfig({
       telegram: {
@@ -86,3 +165,9 @@ describe("desktop messaging config", () => {
     });
   });
 });
+
+function createTempRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragnt-messaging-config-"));
+  tempRoots.push(root);
+  return root;
+}

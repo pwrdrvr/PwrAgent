@@ -195,6 +195,14 @@ export class DesktopSettingsService {
     return await this.options.secretStore.getSecret("grokApiKey");
   }
 
+  resolveTelegramBotTokenSync(): string | undefined {
+    return this.resolveSecretSync("telegramBotToken", TELEGRAM_BOT_TOKEN_ENV);
+  }
+
+  resolveDiscordBotTokenSync(): string | undefined {
+    return this.resolveSecretSync("discordBotToken", DISCORD_BOT_TOKEN_ENV);
+  }
+
   resolveGrokApiKeySync(): string | undefined {
     return this.options.secretStore.getSecretSync?.("grokApiKey");
   }
@@ -346,5 +354,15 @@ export class DesktopSettingsService {
         error: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  private resolveSecretSync(
+    secret: DesktopSettingsSecretName,
+    envKey: string | undefined,
+  ): string | undefined {
+    return (
+      (envKey ? readEnvString(this.env, envKey) : undefined)
+      ?? this.options.secretStore.getSecretSync?.(secret)
+    );
   }
 }

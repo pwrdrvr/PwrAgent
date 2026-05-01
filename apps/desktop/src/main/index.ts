@@ -28,6 +28,8 @@ import {
   disposeDesktopMessagingRuntime,
   getDesktopMessagingRuntime,
 } from "./messaging/messaging-runtime";
+import { loadDesktopMessagingConfigFromSettings } from "./messaging/messaging-config";
+import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import { createMainWindow } from "./window";
 
 const APP_NAME = "PwrAgnt";
@@ -75,7 +77,9 @@ export function bootstrapApp(): void {
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
     }
-    await getDesktopMessagingRuntime().start();
+    await getDesktopMessagingRuntime(() =>
+      loadDesktopMessagingConfigFromSettings(getDesktopSettingsService()),
+    ).start();
     createMainWindow({
       startupCpuProfiler,
     });

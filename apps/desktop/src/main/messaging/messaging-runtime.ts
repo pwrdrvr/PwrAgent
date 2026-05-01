@@ -31,6 +31,10 @@ export type DesktopMessagingAdapterFactory = (params: {
   store: MessagingStore;
 }) => DesktopMessagingAdapter[] | Promise<DesktopMessagingAdapter[]>;
 
+export type DesktopMessagingConfigLoader = () =>
+  | DesktopMessagingConfig
+  | Promise<DesktopMessagingConfig>;
+
 const messagingLog = getMainLogger("pwragnt:messaging");
 
 export class DesktopMessagingRuntime {
@@ -45,7 +49,7 @@ export class DesktopMessagingRuntime {
       backendBridge: MessagingBackendBridge & {
         onEvent?: (listener: (event: AgentEvent) => void | Promise<void>) => () => void;
       };
-      config: DesktopMessagingConfig;
+      config: DesktopMessagingConfig | DesktopMessagingConfigLoader;
     },
   ) {}
 
@@ -56,8 +60,9 @@ export class DesktopMessagingRuntime {
     this.started = true;
 
     const store = getDesktopMessagingStore();
+    const config = await this.loadConfig();
     const configuredAdapters = await this.options.adapterFactory({
-      config: this.options.config,
+      config,
       store,
     });
 
@@ -126,7 +131,7 @@ export class DesktopMessagingRuntime {
 
     messagingLog.info("messaging runtime started", {
       adapters: this.adapters.map((adapter) => adapter.channel),
-      config: redactDesktopMessagingConfig(this.options.config),
+      config: redactDesktopMessagingConfig(config),
     });
   }
 
@@ -142,16 +147,24 @@ export class DesktopMessagingRuntime {
     this.adapters = [];
     this.controllers = [];
   }
+
+  private async loadConfig(): Promise<DesktopMessagingConfig> {
+    return typeof this.options.config === "function"
+      ? await this.options.config()
+      : this.options.config;
+  }
 }
 
 let runtime: DesktopMessagingRuntime | null = null;
 
-export function getDesktopMessagingRuntime(): DesktopMessagingRuntime {
+export function getDesktopMessagingRuntime(
+  config?: DesktopMessagingConfig | DesktopMessagingConfigLoader,
+): DesktopMessagingRuntime {
   if (!runtime) {
     runtime = new DesktopMessagingRuntime({
       adapterFactory: createConfiguredAdapters,
       backendBridge: new DesktopMessagingBackendBridge(),
-      config: loadDesktopMessagingConfig(),
+      config: config ?? loadDesktopMessagingConfig,
     });
   }
 

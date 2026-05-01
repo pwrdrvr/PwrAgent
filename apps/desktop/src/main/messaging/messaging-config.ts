@@ -1,21 +1,38 @@
 import type { DiscordMessagingConfig } from "@pwragnt/messaging-provider-discord";
 import type { TelegramMessagingConfig } from "@pwragnt/messaging-provider-telegram";
+import type { DesktopSettingsService } from "../settings/desktop-settings-service";
+import {
+  DISCORD_APPLICATION_ID_ENV,
+  DISCORD_AUTHORIZED_USER_IDS_ENV,
+  DISCORD_BOT_TOKEN_ENV,
+  DISCORD_ENABLED_ENV,
+  DISCORD_MESSAGE_CONTENT_INTENT_ENV,
+  TELEGRAM_AUTHORIZED_USER_IDS_ENV,
+  TELEGRAM_BOT_TOKEN_ENV,
+  TELEGRAM_ENABLED_ENV,
+  readEnvBoolean,
+} from "../settings/desktop-settings-env";
 
-export const TELEGRAM_BOT_TOKEN_ENV = "PWRAGNT_MESSAGING_TELEGRAM_BOT_TOKEN";
-export const TELEGRAM_AUTHORIZED_USER_IDS_ENV =
-  "PWRAGNT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS";
-export const DISCORD_BOT_TOKEN_ENV = "PWRAGNT_MESSAGING_DISCORD_BOT_TOKEN";
-export const DISCORD_APPLICATION_ID_ENV =
-  "PWRAGNT_MESSAGING_DISCORD_APPLICATION_ID";
-export const DISCORD_AUTHORIZED_USER_IDS_ENV =
-  "PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS";
-export const DISCORD_MESSAGE_CONTENT_INTENT_ENV =
-  "PWRAGNT_MESSAGING_DISCORD_MESSAGE_CONTENT_INTENT";
+export {
+  DISCORD_APPLICATION_ID_ENV,
+  DISCORD_AUTHORIZED_USER_IDS_ENV,
+  DISCORD_BOT_TOKEN_ENV,
+  DISCORD_ENABLED_ENV,
+  DISCORD_MESSAGE_CONTENT_INTENT_ENV,
+  TELEGRAM_AUTHORIZED_USER_IDS_ENV,
+  TELEGRAM_BOT_TOKEN_ENV,
+  TELEGRAM_ENABLED_ENV,
+};
 
 export type DesktopMessagingConfig = {
   discord?: DiscordMessagingConfig;
   telegram?: TelegramMessagingConfig;
 };
+
+export type DesktopMessagingSettingsSource = Pick<
+  DesktopSettingsService,
+  "readSettings" | "resolveDiscordBotTokenSync" | "resolveTelegramBotTokenSync"
+>;
 
 export function loadDesktopMessagingConfig(
   env: NodeJS.ProcessEnv = process.env,
@@ -47,6 +64,68 @@ export function loadDesktopMessagingConfig(
             messageContentIntent: parseBoolean(
               env[DISCORD_MESSAGE_CONTENT_INTENT_ENV],
             ),
+          },
+        }
+      : {}),
+  };
+}
+
+export async function loadDesktopMessagingConfigFromSettings(
+  settings: DesktopMessagingSettingsSource,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<DesktopMessagingConfig> {
+  const snapshot = await settings.readSettings();
+  const envConfig = loadDesktopMessagingConfig(env);
+  const telegramBotToken =
+    envConfig.telegram?.botToken ?? settings.resolveTelegramBotTokenSync();
+  const discordBotToken =
+    envConfig.discord?.botToken ?? settings.resolveDiscordBotTokenSync();
+  const telegramAuthorizedActorIds =
+    envConfig.telegram?.authorizedActorIds
+    ?? snapshot.messaging.telegram.authorizedUserIds.value;
+  const discordAuthorizedActorIds =
+    envConfig.discord?.authorizedActorIds
+    ?? snapshot.messaging.discord.authorizedUserIds.value;
+
+  return {
+    ...(shouldEnableSettingsChannel(
+      snapshot.messaging.telegram.enabled.value,
+      envConfig.telegram,
+      env,
+      TELEGRAM_ENABLED_ENV,
+    )
+    && telegramBotToken
+    && telegramAuthorizedActorIds.length > 0
+      ? {
+          telegram: {
+            channel: "telegram" as const,
+            enabled: true,
+            botToken: telegramBotToken,
+            authorizedActorIds: telegramAuthorizedActorIds,
+          },
+        }
+      : {}),
+    ...(shouldEnableSettingsChannel(
+      snapshot.messaging.discord.enabled.value,
+      envConfig.discord,
+      env,
+      DISCORD_ENABLED_ENV,
+    )
+    && discordBotToken
+    && discordAuthorizedActorIds.length > 0
+      ? {
+          discord: {
+            channel: "discord" as const,
+            enabled: true,
+            botToken: discordBotToken,
+            applicationId:
+              (envConfig.discord?.applicationId
+                ?? snapshot.messaging.discord.applicationId.value)
+              || undefined,
+            authorizedActorIds: discordAuthorizedActorIds,
+            messageContentIntent:
+              envConfig.discord?.messageContentIntent
+              ?? snapshot.messaging.discord.messageContentIntent.value,
           },
         }
       : {}),
@@ -103,4 +182,18 @@ function parseBoolean(value: string | undefined): boolean | undefined {
   }
 
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function shouldEnableSettingsChannel<TConfig>(
+  settingsEnabled: boolean,
+  envConfig: TConfig | undefined,
+  env: NodeJS.ProcessEnv,
+  enabledEnvKey: string,
+): boolean {
+  const envEnabled = readEnvBoolean(env, enabledEnvKey).value;
+  if (envEnabled !== undefined) {
+    return envEnabled;
+  }
+
+  return settingsEnabled || Boolean(envConfig);
 }
