@@ -293,6 +293,92 @@ describe("Sidebar", () => {
     expect(onOpenLaunchpad).toHaveBeenCalledWith(directories[0], undefined);
   });
 
+  it("does not highlight an opened-only launchpad as a pending draft", () => {
+    const openedOnlyDirectories: NavigationDirectorySummary[] = [
+      {
+        ...directories[0]!,
+        launchpad: {
+          directoryKey: directories[0]!.key,
+          directoryKind: "directory",
+          directoryLabel: "PwrAgnt",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    ];
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={openedOnlyDirectories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Open new thread launchpad for PwrAgnt" }),
+    ).not.toHaveClass("has-draft");
+  });
+
+  it("highlights launchpads with pending prompt data", () => {
+    const pendingDirectories: NavigationDirectorySummary[] = [
+      {
+        ...directories[0]!,
+        launchpad: {
+          directoryKey: directories[0]!.key,
+          directoryKind: "directory",
+          directoryLabel: "PwrAgnt",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Pending work",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      },
+    ];
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={pendingDirectories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Open new thread launchpad for PwrAgnt" }),
+    ).toHaveClass("has-draft");
+  });
+
   it("shows the thinking indicator instead of unread for an active initiated turn", () => {
     render(
       <Sidebar

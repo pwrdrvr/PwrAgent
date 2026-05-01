@@ -671,7 +671,8 @@ type ThreadViewProps = {
         | "directoryPath"
         | "imageAttachments"
       >
-    >
+    >,
+    options?: { stickySettingsChanged?: boolean }
   ) => Promise<void>;
   removeOptimisticMessage: (id: string) => void;
   transcriptViewport?: {

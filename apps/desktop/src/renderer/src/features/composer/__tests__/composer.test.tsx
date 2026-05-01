@@ -1223,7 +1223,8 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
         "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
-        { workMode: "worktree" }
+        { workMode: "worktree" },
+        { stickySettingsChanged: true }
       );
     });
   });

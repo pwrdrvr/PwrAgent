@@ -197,6 +197,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "directoryPath"
     >
   >;
+  stickySettingsChanged?: boolean;
 };
 
 export type UpdateDirectoryLaunchpadResponse = {
@@ -215,6 +216,7 @@ export type ResetDirectoryLaunchpadResponse = {
 
 export type MaterializeDirectoryLaunchpadRequest = {
   directoryKey: string;
+  launchpad?: NavigationLaunchpadDraft;
   input?: AppServerTurnInputItem[];
   collaborationMode?: AppServerCollaborationModeRequest;
   reviewTarget?: AppServerReviewTarget;

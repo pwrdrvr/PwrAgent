@@ -736,7 +736,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   updatingThreadExecutionMode?: ThreadExecutionMode;
   updateDirectoryLaunchpad: (
     directoryKey: string,
-    patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"]
+    patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
+    options?: { stickySettingsChanged?: boolean }
   ) => Promise<void>;
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
@@ -1390,7 +1391,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const updateDirectoryLaunchpad = useCallback(
     async (
       directoryKey: string,
-      patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"]
+      patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
+      options?: { stickySettingsChanged?: boolean }
     ): Promise<void> => {
       if (!desktopApi?.updateDirectoryLaunchpad) {
         setLaunchpadError("Desktop bridge is missing updateDirectoryLaunchpad().");
@@ -1403,6 +1405,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         const response = await desktopApi.updateDirectoryLaunchpad({
           directoryKey,
           patch,
+          stickySettingsChanged: options?.stickySettingsChanged,
         });
         setState((current) => ({
           ...current,
@@ -1489,6 +1492,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       try {
         const response = await desktopApi.materializeDirectoryLaunchpad({
           directoryKey,
+          launchpad,
           input,
           collaborationMode,
           reviewTarget,

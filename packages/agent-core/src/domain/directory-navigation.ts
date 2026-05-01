@@ -116,6 +116,16 @@ function ensureSummary(
   return created;
 }
 
+function hasPersistableLaunchpadState(
+  launchpad: DirectoryLaunchpadOverlayState,
+): boolean {
+  return (
+    launchpad.prompt.trim().length > 0 ||
+    (launchpad.imageAttachments?.length ?? 0) > 0 ||
+    launchpad.settingsTouchedAt !== undefined
+  );
+}
+
 export function buildDirectorySummaries(params: {
   threads: NavigationThreadSummary[];
   launchpadsByKey?: Record<string, DirectoryLaunchpadOverlayState | undefined>;
@@ -174,7 +184,7 @@ export function buildDirectorySummaries(params: {
   }
 
   for (const [directoryKey, launchpad] of Object.entries(params.launchpadsByKey ?? {})) {
-    if (!launchpad) {
+    if (!launchpad || !hasPersistableLaunchpadState(launchpad)) {
       continue;
     }
     const summary = ensureSummary(summaries, {

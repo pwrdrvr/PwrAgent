@@ -600,7 +600,8 @@ type ModelSettings = {
 function isEmptyDirectoryLaunchpadDraft(launchpad: NavigationLaunchpadDraft): boolean {
   return (
     launchpad.prompt.trim().length === 0 &&
-    (launchpad.imageAttachments?.length ?? 0) === 0
+    (launchpad.imageAttachments?.length ?? 0) === 0 &&
+    launchpad.settingsTouchedAt === undefined
   );
 }
 
@@ -1681,9 +1682,8 @@ export class DesktopBackendRegistry {
           branchName: existing.branchName ?? request.currentBranch,
           updatedAt: Date.now(),
         };
-        const persisted = await this.overlayStore.upsertDirectoryLaunchpad(refreshed);
         return {
-          launchpad: persisted,
+          launchpad: refreshed,
           defaults,
         };
       }
@@ -1728,9 +1728,8 @@ export class DesktopBackendRegistry {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    const persisted = await this.overlayStore.upsertDirectoryLaunchpad(launchpad);
     return {
-      launchpad: persisted,
+      launchpad,
       defaults,
     };
   }
@@ -1752,30 +1751,33 @@ export class DesktopBackendRegistry {
       ...current,
       ...request.patch,
       directoryKey: request.directoryKey,
+      settingsTouchedAt: request.stickySettingsChanged
+        ? Date.now()
+        : current.settingsTouchedAt,
       updatedAt: Date.now(),
     };
     const persisted = await this.overlayStore.upsertDirectoryLaunchpad(nextLaunchpad);
 
     const stickyPatch: Partial<NavigationLaunchpadDefaults> = {};
-    if (request.patch.backend) {
+    if (request.stickySettingsChanged && request.patch.backend) {
       stickyPatch.backend = request.patch.backend;
     }
-    if (request.patch.executionMode) {
+    if (request.stickySettingsChanged && request.patch.executionMode) {
       stickyPatch.executionMode = request.patch.executionMode;
     }
-    if ("model" in request.patch) {
+    if (request.stickySettingsChanged && "model" in request.patch) {
       stickyPatch.model = request.patch.model;
     }
-    if ("reasoningEffort" in request.patch) {
+    if (request.stickySettingsChanged && "reasoningEffort" in request.patch) {
       stickyPatch.reasoningEffort = request.patch.reasoningEffort;
     }
-    if ("serviceTier" in request.patch) {
+    if (request.stickySettingsChanged && "serviceTier" in request.patch) {
       stickyPatch.serviceTier = request.patch.serviceTier;
     }
-    if ("fastMode" in request.patch) {
+    if (request.stickySettingsChanged && "fastMode" in request.patch) {
       stickyPatch.fastMode = request.patch.fastMode;
     }
-    if (request.patch.workMode) {
+    if (request.stickySettingsChanged && request.patch.workMode) {
       stickyPatch.workMode = request.patch.workMode;
     }
 
@@ -1805,9 +1807,10 @@ export class DesktopBackendRegistry {
   async materializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
-    const launchpad = await this.overlayStore.getDirectoryLaunchpad({
-      directoryKey: request.directoryKey,
-    });
+    const launchpad =
+      (await this.overlayStore.getDirectoryLaunchpad({
+        directoryKey: request.directoryKey,
+      })) ?? request.launchpad;
     if (!launchpad) {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -303,6 +303,72 @@ test("directory launchpad can switch from local checkout to a new worktree", asy
 
     await expect(workspaceMode).toHaveAttribute("data-value", "worktree");
     await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("opening a directory launchpad without edits does not persist a pending draft", async () => {
+  const fixture = await createDirectoryLaunchpadFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window
+      .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
+    ).toBeVisible();
+    const overlay = JSON.parse(
+      await readFile(
+        path.join(app.homeRoot, ".local", "state", "pwragnt", "overlay-state.json"),
+        "utf8",
+      ),
+    );
+    expect(overlay.directoryLaunchpads).toEqual({});
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad keeps full access as the sticky default after user changes access mode", async () => {
+  const fixture = await createDirectoryLaunchpadFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window
+      .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
+      .click();
+
+    const settings = app.window.getByLabel("New thread settings");
+    const accessMode = settings.getByLabel("Access mode");
+    await expect(accessMode).toHaveAttribute("data-value", "default");
+    await selectComposerOption({
+      select: accessMode,
+      window: app.window,
+      option: "Full Access",
+    });
+    await expect(accessMode).toHaveAttribute("data-value", "full-access");
+
+    await app.window
+      .getByRole("button", { name: "Open new thread launchpad for OtherRepo" })
+      .click();
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "OtherRepo" }),
+    ).toBeVisible();
+    await expect(settings.getByLabel("Access mode")).toHaveAttribute(
+      "data-value",
+      "full-access",
+    );
   } finally {
     await app.close();
     await fixture.cleanup();

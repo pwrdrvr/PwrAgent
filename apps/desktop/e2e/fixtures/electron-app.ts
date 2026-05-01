@@ -9,6 +9,7 @@ const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 
 type LaunchResult = {
   electronApp: ElectronApplication;
+  homeRoot: string;
   window: Page;
   advance: (params?: {
     executionMode?: ThreadExecutionMode;
@@ -45,7 +46,7 @@ export async function launchElectronApp(params: {
     height: number;
   };
 }): Promise<LaunchResult> {
-  const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-desktop-e2e-"));
+  const homeRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-desktop-e2e-home-"));
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) {
@@ -53,9 +54,9 @@ export async function launchElectronApp(params: {
     }
   }
   Object.assign(env, {
+    HOME: homeRoot,
     NODE_ENV: "production",
     PWRAGNT_REPLAY_FIXTURE_PATH: params.fixturePath,
-    PWRAGNT_STATE_ROOT: stateRoot,
   });
   delete env.ELECTRON_RENDERER_URL;
   for (const [key, value] of Object.entries(params.env ?? {})) {
@@ -110,6 +111,7 @@ export async function launchElectronApp(params: {
 
   return {
     electronApp,
+    homeRoot,
     window,
     advance: async (advanceParams) => {
       await electronApp.evaluate(async (_electron, value) => {
@@ -153,7 +155,7 @@ export async function launchElectronApp(params: {
     },
     close: async () => {
       await electronApp.close();
-      await rm(stateRoot, { recursive: true, force: true });
+      await rm(homeRoot, { recursive: true, force: true });
     },
   };
 }
