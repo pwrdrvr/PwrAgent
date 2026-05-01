@@ -222,6 +222,22 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("reports process-level messaging disable overrides", async () => {
+    const service = new DesktopSettingsService({
+      argv: ["electron", "--disable-messaging"],
+      configPath: path.join(createTempRoot(), "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettings();
+
+    expect(snapshot.runtime.messaging).toEqual({
+      disabled: true,
+      disabledReason: "--disable-messaging was provided at startup",
+    });
+  });
+
   it("reports malformed TOML without throwing from readSettings", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

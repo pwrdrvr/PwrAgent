@@ -22,19 +22,21 @@ import {
   disposeSettingsIpcHandlers,
   registerSettingsIpcHandlers,
 } from "./ipc/settings";
-import { initializeMainLogger } from "./log";
+import { getMainLogger, initializeMainLogger } from "./log";
 import { StartupCpuProfiler } from "./diagnostics/startup-cpu-profiler";
 import {
   disposeDesktopMessagingRuntime,
   getDesktopMessagingRuntime,
 } from "./messaging/messaging-runtime";
 import { loadDesktopMessagingConfigFromSettings } from "./messaging/messaging-config";
+import { resolveRuntimeMessagingOverride } from "./runtime-flags";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import { createMainWindow } from "./window";
 
 const APP_NAME = "PwrAgnt";
 const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
+const mainLog = getMainLogger("pwragnt:main");
 
 function installApplicationMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -77,9 +79,16 @@ export function bootstrapApp(): void {
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
     }
-    await getDesktopMessagingRuntime(() =>
-      loadDesktopMessagingConfigFromSettings(getDesktopSettingsService()),
-    ).start();
+    const messagingOverride = resolveRuntimeMessagingOverride();
+    if (messagingOverride.disabled) {
+      mainLog.info("messaging runtime disabled for this app instance", {
+        reason: messagingOverride.reason,
+      });
+    } else {
+      await getDesktopMessagingRuntime(() =>
+        loadDesktopMessagingConfigFromSettings(getDesktopSettingsService()),
+      ).start();
+    }
     createMainWindow({
       startupCpuProfiler,
     });

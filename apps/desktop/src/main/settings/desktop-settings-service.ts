@@ -13,6 +13,7 @@ import {
   writeDesktopSettingsConfig,
   type DesktopSettingsConfig,
 } from "./desktop-config";
+import { resolveRuntimeMessagingOverride } from "../runtime-flags";
 import type { DesktopSecretStore } from "./desktop-secret-store";
 import {
   CHAT_REPLY_COMPOSER_ENV,
@@ -37,6 +38,7 @@ import { discoverDesktopApplications } from "./application-discovery";
 type DesktopSettingsServiceOptions = {
   configPath?: string;
   env?: NodeJS.ProcessEnv;
+  argv?: readonly string[];
   secretStore: DesktopSecretStore;
   now?: () => number;
 };
@@ -48,11 +50,13 @@ type ConfigReadResult = {
 
 export class DesktopSettingsService {
   private readonly env: NodeJS.ProcessEnv;
+  private readonly argv: readonly string[];
   private readonly configPath: string;
   private readonly now: () => number;
 
   constructor(private readonly options: DesktopSettingsServiceOptions) {
     this.env = options.env ?? process.env;
+    this.argv = options.argv ?? process.argv;
     this.configPath =
       options.configPath ?? resolveDesktopConfigPath({ env: this.env });
     this.now = options.now ?? Date.now;
@@ -88,11 +92,23 @@ export class DesktopSettingsService {
     const preferredTerminalId = this.resolveConfigString(
       config.applications?.terminal?.preferredId,
     );
+    const messagingOverride = resolveRuntimeMessagingOverride({
+      argv: this.argv,
+      env: this.env,
+    });
 
     return {
       fetchedAt: this.now(),
       configPath: this.configPath,
       configError: error,
+      runtime: {
+        messaging: {
+          disabled: messagingOverride.disabled,
+          ...(messagingOverride.reason
+            ? { disabledReason: messagingOverride.reason }
+            : {}),
+        },
+      },
       secretStorage,
       experimental: {
         chatReplyComposer: this.resolveComposer(

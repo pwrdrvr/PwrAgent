@@ -42,6 +42,15 @@ For local development, the preferred path is:
 That command reads one 1Password item and maps fields onto the environment
 variables below before launching `pnpm dev`.
 
+To run a second development app instance without connecting any messaging bots,
+use:
+
+- `pnpm dev:no-messaging`
+
+This disables messaging only for that app process. It does not rewrite the
+settings file or remove stored bot credentials. The Settings > Messaging screen
+shows when this runtime override is active.
+
 Default 1Password item:
 
 - Vault: `Private`

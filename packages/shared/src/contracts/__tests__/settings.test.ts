@@ -8,6 +8,11 @@ describe("desktop settings contracts", () => {
     const snapshot: DesktopSettingsSnapshot = {
       fetchedAt: 1,
       configPath: "/tmp/pwragnt/config.toml",
+      runtime: {
+        messaging: {
+          disabled: false,
+        },
+      },
       secretStorage: {
         available: true,
         backend: "safeStorage",

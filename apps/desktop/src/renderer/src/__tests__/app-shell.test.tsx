@@ -42,6 +42,11 @@ describe("App", () => {
       fetchedAt: 1,
       configPath: "/tmp/pwragnt/config.toml",
       configError: "line 3: expected a key",
+      runtime: {
+        messaging: {
+          disabled: false,
+        },
+      },
       secretStorage: {
         available: true,
         backend: "memory",

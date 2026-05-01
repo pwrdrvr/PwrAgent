@@ -91,6 +91,12 @@ export type DesktopSettingsSnapshot = {
   fetchedAt: number;
   configPath: string;
   configError?: string;
+  runtime: {
+    messaging: {
+      disabled: boolean;
+      disabledReason?: string;
+    };
+  };
   secretStorage: DesktopSettingsSecretStorageState;
   experimental: {
     chatReplyComposer: DesktopSettingsValue<DesktopChatReplyComposer>;

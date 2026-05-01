@@ -18,6 +18,7 @@ const disposeRuntimeIdentityIpcHandlersMock = vi.fn();
 const registerSettingsIpcHandlersMock = vi.fn();
 const disposeSettingsIpcHandlersMock = vi.fn();
 const initializeMainLoggerMock = vi.fn();
+const mainLogInfoMock = vi.fn();
 const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
 const setApplicationMenuMock = vi.fn();
@@ -99,6 +100,9 @@ vi.mock("../ipc/settings", () => ({
 
 vi.mock("../log", () => ({
   initializeMainLogger: initializeMainLoggerMock,
+  getMainLogger: vi.fn(() => ({
+    info: mainLogInfoMock,
+  })),
 }));
 
 vi.mock("../messaging/messaging-runtime", () => ({
@@ -138,6 +142,7 @@ describe("bootstrapApp", () => {
     registerSettingsIpcHandlersMock.mockReset();
     disposeSettingsIpcHandlersMock.mockReset();
     initializeMainLoggerMock.mockReset();
+    mainLogInfoMock.mockReset();
     messagingRuntimeStartMock.mockReset();
     messagingRuntimeStartMock.mockResolvedValue();
     disposeDesktopMessagingRuntimeMock.mockReset();
@@ -229,5 +234,24 @@ describe("bootstrapApp", () => {
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips messaging runtime startup when messaging is disabled for the app instance", async () => {
+    vi.stubEnv("PWRAGNT_DISABLE_MESSAGING", "1");
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(messagingRuntimeStartMock).not.toHaveBeenCalled();
+    expect(mainLogInfoMock).toHaveBeenCalledWith(
+      "messaging runtime disabled for this app instance",
+      expect.objectContaining({
+        reason: "PWRAGNT_DISABLE_MESSAGING is enabled",
+      }),
+    );
+    expect(createMainWindowMock).toHaveBeenCalledWith({
+      startupCpuProfiler: startupProfilerInstance,
+    });
   });
 });

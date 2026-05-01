@@ -15,6 +15,11 @@ function createSnapshot(
   return {
     fetchedAt: 1,
     configPath: "/tmp/pwragnt/config.toml",
+    runtime: {
+      messaging: {
+        disabled: false,
+      },
+    },
     secretStorage: {
       available: true,
       backend: "memory",
@@ -212,6 +217,33 @@ describe("SettingsScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
 
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("shows when messaging is disabled by a runtime override", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState(
+          createSnapshot({
+            runtime: {
+              messaging: {
+                disabled: true,
+                disabledReason: "--disable-messaging was provided at startup",
+              },
+            },
+          }),
+        )}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Messaging" }));
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Messaging disabled for this app instance",
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "--disable-messaging was provided at startup",
+    );
   });
 
   it("keeps a secret draft when replacement fails", async () => {
