@@ -520,7 +520,8 @@ test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", a
     await textbox.focus();
     await app.window.keyboard.type("## Heading");
 
-    await expect(tiptapInput.locator("h2", { hasText: "Heading" })).toBeVisible();
+    const heading2 = tiptapInput.locator("h2", { hasText: "Heading" });
+    await expect(heading2).toBeVisible();
     await expect(tiptapInput).toHaveAttribute("data-value", "## Heading");
     await app.window.keyboard.press("Shift+Enter");
     await app.window.keyboard.type("plain text");
@@ -529,6 +530,21 @@ test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", a
     await expect(tiptapInput).toHaveAttribute(
       "data-value",
       "## Heading\n\nplain text",
+    );
+
+    await app.window.keyboard.press("Shift+Enter");
+    await app.window.keyboard.type("### Smaller heading");
+
+    const heading3 = tiptapInput.locator("h3", { hasText: "Smaller heading" });
+    await expect(heading3).toBeVisible();
+    const headingSizes = await Promise.all([
+      heading2.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
+      heading3.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
+    ]);
+    expect(headingSizes[0]).toBeGreaterThan(headingSizes[1]);
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      "## Heading\n\nplain text\n\n### Smaller heading",
     );
 
     await app.window.keyboard.press(

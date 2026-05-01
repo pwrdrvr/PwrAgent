@@ -3707,9 +3707,32 @@ textarea {
 .composer-tiptap-input__editor h6 {
   margin: 0;
   color: var(--text-primary);
-  font-size: inherit;
   font-weight: 700;
   line-height: inherit;
+}
+
+.composer-tiptap-input__editor h1 {
+  font-size: 1.25em;
+}
+
+.composer-tiptap-input__editor h2 {
+  font-size: 1.15em;
+}
+
+.composer-tiptap-input__editor h3 {
+  font-size: 1.07em;
+}
+
+.composer-tiptap-input__editor h4 {
+  font-size: 1em;
+}
+
+.composer-tiptap-input__editor h5 {
+  font-size: 0.94em;
+}
+
+.composer-tiptap-input__editor h6 {
+  font-size: 0.9em;
 }
 
 .composer-tiptap-input__editor pre {
