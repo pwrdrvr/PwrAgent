@@ -3753,8 +3753,12 @@ textarea {
   z-index: 30;
   bottom: calc(100% + 8px);
   left: 0;
-  min-width: max(100%, 220px);
+  min-width: max(100%, 260px);
+  max-width: min(420px, calc(100vw - 32px));
+  max-height: min(420px, calc(100dvh - 128px));
   padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
@@ -3763,17 +3767,18 @@ textarea {
 
 .composer-dropdown__option {
   width: 100%;
-  min-height: 34px;
+  min-height: 40px;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text-primary);
   font: inherit;
   font-size: 14px;
+  line-height: 1.35;
   text-align: left;
 }
 
@@ -3792,7 +3797,22 @@ textarea {
   width: 14px;
   flex: 0 0 14px;
   color: var(--accent-bright);
+  line-height: 1.35;
   text-align: center;
+}
+
+.composer-dropdown__option-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.composer-dropdown--branch .composer-dropdown__menu {
+  min-width: max(100%, 340px);
+}
+
+.composer-dropdown--branch .composer-dropdown__option-label,
+.composer-dropdown--branch .composer-dropdown__label {
+  font-family: var(--font-mono);
 }
 
 .composer-dropdown__separator {
