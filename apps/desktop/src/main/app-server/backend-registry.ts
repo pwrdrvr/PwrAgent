@@ -1683,7 +1683,7 @@ export class DesktopBackendRegistry {
           updatedAt: Date.now(),
         };
         return {
-          launchpad: refreshed,
+          launchpad: await this.overlayStore.upsertDirectoryLaunchpad(refreshed),
           defaults,
         };
       }
@@ -1729,7 +1729,7 @@ export class DesktopBackendRegistry {
       updatedAt: Date.now(),
     };
     return {
-      launchpad,
+      launchpad: await this.overlayStore.upsertDirectoryLaunchpad(launchpad),
       defaults,
     };
   }

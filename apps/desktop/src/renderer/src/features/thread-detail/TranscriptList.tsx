@@ -139,6 +139,12 @@ function insertPendingEntry(
     return;
   }
 
+  const existingIndex = entries.findIndex((entry) => entry.id === pendingEntry.id);
+  if (existingIndex >= 0) {
+    entries[existingIndex] = pendingEntry;
+    return;
+  }
+
   const pendingTurnId = pendingEntry.turn?.id;
   if (!pendingTurnId || isAssistantFinalMessage(pendingEntry)) {
     entries.push(pendingEntry);

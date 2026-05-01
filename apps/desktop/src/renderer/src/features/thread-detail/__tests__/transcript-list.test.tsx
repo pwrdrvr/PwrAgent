@@ -879,6 +879,50 @@ describe("TranscriptList", () => {
     expect(workGroup).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("replaces a persisted entry when pending protocol activity has the same id", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "activity",
+            id: "live-mcp-protocol-status",
+            summary: "MCP server starting",
+            status: "in_progress",
+            details: [
+              {
+                id: "mcp-status-context7",
+                kind: "command",
+                label: "MCP context7 starting",
+                status: "in_progress"
+              }
+            ]
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingProtocolActivityEntry={{
+          type: "activity",
+          id: "live-mcp-protocol-status",
+          summary: "MCP server ready",
+          status: "completed",
+          details: [
+            {
+              id: "mcp-status-context7",
+              kind: "command",
+              label: "MCP context7 ready",
+              status: "completed"
+            }
+          ]
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getAllByRole("button", { name: /MCP server ready/i })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /MCP server starting/i })).not.toBeInTheDocument();
+  });
+
   it("keeps a pending tool below the earlier pending assistant message that started first", () => {
     render(
       <TranscriptList
