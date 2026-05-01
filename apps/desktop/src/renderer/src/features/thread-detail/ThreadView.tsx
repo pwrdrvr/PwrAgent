@@ -848,15 +848,11 @@ export function ThreadView(props: ThreadViewProps) {
     }
 
     void checkSelectedThreadBranchDrift("focus");
-    const intervalId = window.setInterval(() => {
-      void checkSelectedThreadBranchDrift("focus");
-    }, 30_000);
     const unsubscribeFocus = props.desktopApi?.onWindowFocus?.(() => {
       void checkSelectedThreadBranchDrift("focus");
     });
 
     return () => {
-      window.clearInterval(intervalId);
       unsubscribeFocus?.();
     };
   }, [props.desktopApi, selectedLaunchpad, selectedThreadKey]);
