@@ -38,6 +38,7 @@ type DiscordComponentBinding = {
 
 type DiscordTypingSignal = {
   interval: ReturnType<typeof setInterval>;
+  signalId: number;
   timeout: ReturnType<typeof setTimeout>;
 };
 
@@ -176,6 +177,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private defaultGateway?: DiscordGatewayConnection;
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private readonly options: DiscordAdapterOptions;
+  private typingSignalSequence = 0;
   private typingSignals = new Map<string, DiscordTypingSignal>();
   private unsubscribeGateway?: () => void;
 
@@ -477,36 +479,51 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return;
     }
 
-    this.options.logger?.debug("discord typing signal started", {
-      channelId,
-      leaseMs,
-    });
-    await this.sendTypingSignal(channelId);
+    const signalId = ++this.typingSignalSequence;
+    const timeout = this.createTypingSignalTimeout(channelId, leaseMs, signalId);
     const interval = setInterval(() => {
-      void this.sendTypingSignal(channelId).catch(() => undefined);
+      const current = this.typingSignals.get(channelId);
+      if (!current || current.signalId !== signalId) {
+        return;
+      }
+      void this.sendTypingSignal(channelId, signalId, "interval").catch((error) => {
+        this.options.logger?.warn?.(
+          `discord typing request failed signal=${signalId} source=interval channel=${channelId} error=${errorMessage(error)}`,
+        );
+      });
     }, DISCORD_TYPING_SIGNAL_INTERVAL_MS);
     (interval as { unref?: () => void }).unref?.();
-    const timeout = this.createTypingSignalTimeout(channelId, leaseMs);
     this.typingSignals.set(channelId, {
       interval,
+      signalId,
       timeout,
     });
+    this.options.logger?.debug(
+      `discord typing started signal=${signalId} leaseMs=${leaseMs} channel=${channelId}`,
+    );
+
+    try {
+      await this.sendTypingSignal(channelId, signalId, "start");
+    } catch (error) {
+      this.stopTypingSignal(channelId, "start_failed");
+      throw error;
+    }
   }
 
-  private stopTypingSignal(channelId: string): void {
+  private stopTypingSignal(channelId: string, reason = "idle"): void {
     const signal = this.typingSignals.get(channelId);
     if (!signal) {
-      this.options.logger?.debug("discord typing signal stop skipped", {
-        channelId,
-      });
+      this.options.logger?.debug(
+        `discord typing stop skipped reason=${reason} channel=${channelId}`,
+      );
       return;
     }
-    this.options.logger?.debug("discord typing signal stopped", {
-      channelId,
-    });
     clearInterval(signal.interval);
     clearTimeout(signal.timeout);
     this.typingSignals.delete(channelId);
+    this.options.logger?.debug(
+      `discord typing stopped signal=${signal.signalId} reason=${reason} channel=${channelId}`,
+    );
   }
 
   private stopTypingSignals(): void {
@@ -527,31 +544,47 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     if (!signal) {
       return;
     }
-    this.options.logger?.debug("discord typing signal lease refreshed", {
-      channelId,
-      leaseMs,
-    });
     clearTimeout(signal.timeout);
-    signal.timeout = this.createTypingSignalTimeout(channelId, leaseMs);
+    signal.timeout = this.createTypingSignalTimeout(channelId, leaseMs, signal.signalId);
+    this.options.logger?.debug(
+      `discord typing lease refreshed signal=${signal.signalId} leaseMs=${leaseMs} channel=${channelId}`,
+    );
   }
 
   private createTypingSignalTimeout(
     channelId: string,
     leaseMs: number,
+    signalId: number,
   ): ReturnType<typeof setTimeout> {
     const timeout = setTimeout(() => {
-      this.options.logger?.debug("discord typing signal expired", {
-        channelId,
-        leaseMs,
-      });
-      this.stopTypingSignal(channelId);
+      const current = this.typingSignals.get(channelId);
+      if (!current || current.signalId !== signalId) {
+        this.options.logger?.debug(
+          `discord typing expiry skipped signal=${signalId} leaseMs=${leaseMs} channel=${channelId}`,
+        );
+        return;
+      }
+      this.options.logger?.debug(
+        `discord typing expired signal=${signalId} leaseMs=${leaseMs} channel=${channelId}`,
+      );
+      this.stopTypingSignal(channelId, "lease_expired");
     }, leaseMs);
     (timeout as { unref?: () => void }).unref?.();
     return timeout;
   }
 
-  private async sendTypingSignal(channelId: string): Promise<void> {
+  private async sendTypingSignal(
+    channelId: string,
+    signalId: number,
+    source: "interval" | "start",
+  ): Promise<void> {
+    this.options.logger?.debug(
+      `discord typing request signal=${signalId} source=${source} channel=${channelId}`,
+    );
     await this.api.sendTyping(channelId);
+    this.options.logger?.debug(
+      `discord typing ok signal=${signalId} source=${source} channel=${channelId}`,
+    );
   }
 
   private channelFromDiscord(
@@ -777,4 +810,8 @@ function userToDiscordUser(user: User): DiscordUser {
     id: user.id,
     username: user.username,
   };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

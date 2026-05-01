@@ -530,6 +530,9 @@ export class MessagingController {
       return;
     }
     this.deliveredAssistantMessageKeys.add(key);
+    this.logger.debug?.(
+      `messaging assistant deliver thread=${binding.threadId} binding=${binding.id} chars=${text.length} preview="${compactLogPreview(text)}"`,
+    );
 
     await this.deliver(
       {
@@ -1339,15 +1342,11 @@ export class MessagingController {
       lastSignaledAt !== undefined &&
       now - lastSignaledAt < TYPING_ACTIVITY_REFRESH_MS
     ) {
-      this.logger.debug?.("messaging typing activity suppressed", {
-        bindingId: binding.id,
-        elapsedSinceLastMs: now - lastSignaledAt,
-        reason: options?.reason,
-        state,
-        threadId: binding.threadId,
-        turnId: activeTurn.turnId,
-        turnStatus: activeTurn.status,
-      });
+      if (options?.reason !== "item/agentMessage/delta") {
+        this.logger.debug?.(
+          `messaging typing suppressed state=${state} reason=${options?.reason ?? "unknown"} elapsedMs=${now - lastSignaledAt} thread=${binding.threadId} turn=${activeTurn.turnId} binding=${binding.id}`,
+        );
+      }
       return;
     }
     if (state === "active") {
@@ -1356,16 +1355,9 @@ export class MessagingController {
       this.typingActivityLastSignaledAt.delete(binding.id);
     }
 
-    this.logger.debug?.("messaging typing activity signaled", {
-      bindingId: binding.id,
-      force: Boolean(options?.force),
-      leaseMs: state === "active" ? TYPING_ACTIVITY_LEASE_MS : undefined,
-      reason: options?.reason,
-      state,
-      threadId: binding.threadId,
-      turnId: activeTurn.turnId,
-      turnStatus: activeTurn.status,
-    });
+    this.logger.debug?.(
+      `messaging typing signaled state=${state} reason=${options?.reason ?? "unknown"} force=${Boolean(options?.force)} leaseMs=${state === "active" ? TYPING_ACTIVITY_LEASE_MS : "none"} status=${activeTurn.status} thread=${binding.threadId} turn=${activeTurn.turnId} binding=${binding.id}`,
+    );
 
     await this.deliver(
       buildActivityIntent({
@@ -1394,16 +1386,9 @@ export class MessagingController {
       return;
     }
 
-    this.logger.debug?.("messaging binding turn state changed", {
-      backend: next.backend,
-      bindingId: next.id,
-      nextStatus: nextTurn?.status,
-      nextTurnId: nextTurn?.turnId,
-      previousStatus: previousTurn?.status,
-      previousTurnId: previousTurn?.turnId,
-      reason,
-      threadId: next.threadId,
-    });
+    this.logger.debug?.(
+      `messaging turn state changed reason=${reason} backend=${next.backend} thread=${next.threadId} binding=${next.id} previous=${previousTurn?.status ?? "none"}:${previousTurn?.turnId ?? "none"} next=${nextTurn?.status ?? "none"}:${nextTurn?.turnId ?? "none"}`,
+    );
   }
 
   private async deliverInvalidBrowseSelection(
@@ -1593,6 +1578,12 @@ function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
   }
 
   return undefined;
+}
+
+function compactLogPreview(text: string, limit = 96): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  const preview = compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
+  return preview.replace(/["\\]/g, "\\$&");
 }
 
 function assistantMessageDeliveryKey(event: AgentEvent, text: string): string {

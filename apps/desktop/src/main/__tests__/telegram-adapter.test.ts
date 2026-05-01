@@ -238,6 +238,66 @@ describe("TelegramAdapter", () => {
     }
   });
 
+  it("cancels a Telegram typing start that is still waiting on sendChatAction", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createApi();
+      const pendingTyping = deferred<boolean>();
+      api.sendChatAction.mockImplementationOnce(
+        async (_request: TelegramSendChatActionRequest) => await pendingTyping.promise,
+      );
+      const adapter = new TelegramAdapter({
+        api: api as unknown as TelegramBotApi,
+        config: {
+          channel: "telegram",
+          botToken: "12345:test-token",
+          authorizedActorIds: ["42"],
+        },
+        now: () => 1000,
+      });
+      const audit = {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram" as const,
+          conversation: {
+            id: "777",
+            kind: "dm" as const,
+          },
+        },
+        occurredAt: 1000,
+      };
+
+      const activeDelivery = adapter.deliver({
+        id: "activity-1",
+        kind: "activity",
+        activity: "typing",
+        createdAt: 1000,
+        leaseMs: 1000,
+        state: "active",
+        audit,
+      });
+      await Promise.resolve();
+
+      await adapter.deliver({
+        id: "activity-2",
+        kind: "activity",
+        activity: "typing",
+        createdAt: 1000,
+        state: "idle",
+        audit,
+      });
+      pendingTyping.resolve(true);
+      await activeDelivery;
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(api.sendChatAction).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not re-issue Telegram typing after final assistant text and backend noise", async () => {
     vi.useFakeTimers();
     try {
@@ -1099,6 +1159,24 @@ function createApi(): {
     })),
     setMyCommands: vi.fn(async () => true),
     unpinChatMessage: vi.fn(async (_request: TelegramUnpinChatMessageRequest) => true),
+  };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  reject: (error: unknown) => void;
+  resolve: (value: T) => void;
+} {
+  let reject!: (error: unknown) => void;
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return {
+    promise,
+    reject,
+    resolve,
   };
 }
 

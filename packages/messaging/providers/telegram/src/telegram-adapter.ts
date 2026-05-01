@@ -35,6 +35,7 @@ type TelegramDeliveryTarget = {
 
 type TelegramTypingSignal = {
   interval: ReturnType<typeof setInterval>;
+  signalId: number;
   timeout: ReturnType<typeof setTimeout>;
 };
 
@@ -240,6 +241,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     store?: MessagingCallbackHandleStore;
   };
   private startPromise?: Promise<void>;
+  private typingSignalSequence = 0;
   private typingSignals = new Map<string, TelegramTypingSignal>();
 
   constructor(options: TelegramAdapter["options"]) {
@@ -339,6 +341,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const image = this.firstImageUrl(intent);
     const sentMessages: TelegramSentMessage[] = [];
     let outcome: MessagingDeliveryResult["outcome"] = "presented";
+    this.options.logger?.debug(
+      `telegram deliver begin kind=${intent.kind} mode=${intent.delivery?.mode ?? "new"} target=${this.compactTypingTarget(target)} chars=${text.length} actions=${actions.length} image=${Boolean(image)} preview="${compactPreview(text)}"`,
+    );
 
     if (
       intent.delivery?.mode === "update" &&
@@ -417,6 +422,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       }
     }
 
+    this.options.logger?.debug(
+      `telegram deliver done kind=${intent.kind} outcome=${outcome} target=${this.compactTypingTarget(target)} messages=${sentMessages.length} lastMessage=${lastMessage?.message_id ?? "none"}`,
+    );
+
     return {
       channel: this.channel,
       deliveredAt: this.now(),
@@ -458,6 +467,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
 
     if (message.pinned_message || this.isOwnBotUser(message.from)) {
+      this.options.logger?.debug(
+        `telegram inbound ignored update=${updateId} message=${message.message_id} reason=${message.pinned_message ? "pin" : "own_bot"} chat=${message.chat.id}`,
+      );
       return;
     }
 
@@ -487,6 +499,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
 
     const commandMatch = /^\/([A-Za-z0-9_]+)(?:@\S+)?(?:\s+(.*))?$/.exec(message.text);
+    this.options.logger?.debug(
+      `telegram inbound ${commandMatch ? "command" : "text"} update=${updateId} message=${message.message_id} chat=${message.chat.id} actor=${message.from.id} chars=${message.text.length} preview="${compactPreview(message.text)}"`,
+    );
     await listener({
       id: `telegram:update:${updateId}:message:${message.message_id}`,
       kind: commandMatch ? "command" : "text",
@@ -533,6 +548,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
             now: this.now(),
           })
         : undefined;
+    this.options.logger?.debug(
+      `telegram inbound callback update=${updateId} callback=${callbackQuery.id} chat=${message.chat.id} actor=${callbackQuery.from.id} action=${binding?.actionId ?? persistedBinding?.actionId ?? "unresolved"}`,
+    );
     await listener({
       id: `telegram:update:${updateId}:callback:${callbackQuery.id}`,
       kind: "callback",
@@ -710,43 +728,62 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     target: TelegramDeliveryTarget,
     leaseMs = TELEGRAM_DEFAULT_TYPING_SIGNAL_LEASE_MS,
   ): Promise<void> {
-    const existing = this.typingSignals.get(this.typingSignalKey(target));
+    const key = this.typingSignalKey(target);
+    const existing = this.typingSignals.get(key);
     if (existing) {
       this.refreshTypingSignalLease(target, leaseMs);
       return;
     }
 
-    this.options.logger?.debug("telegram typing signal started", {
-      leaseMs,
-      target: this.redactedTypingTarget(target),
-    });
-    await this.sendTypingSignal(target);
+    const signalId = ++this.typingSignalSequence;
+    const timeout = this.createTypingSignalTimeout(target, leaseMs, signalId);
     const interval = setInterval(() => {
-      void this.sendTypingSignal(target).catch(() => undefined);
+      const current = this.typingSignals.get(key);
+      if (!current || current.signalId !== signalId) {
+        return;
+      }
+      void this.sendTypingSignal(target, signalId, "interval").catch((error) => {
+        this.options.logger?.warn?.(
+          `telegram sendChatAction typing failed signal=${signalId} source=interval target=${this.compactTypingTarget(target)} error=${errorMessage(error)}`,
+        );
+      });
     }, TELEGRAM_TYPING_SIGNAL_INTERVAL_MS);
     (interval as { unref?: () => void }).unref?.();
-    const timeout = this.createTypingSignalTimeout(target, leaseMs);
-    this.typingSignals.set(this.typingSignalKey(target), {
+    this.typingSignals.set(key, {
       interval,
+      signalId,
       timeout,
     });
+    this.options.logger?.debug(
+      `telegram typing started signal=${signalId} leaseMs=${leaseMs} target=${this.compactTypingTarget(target)}`,
+    );
+
+    try {
+      await this.sendTypingSignal(target, signalId, "start");
+    } catch (error) {
+      this.stopTypingSignal(target, "start_failed");
+      throw error;
+    }
   }
 
-  private stopTypingSignal(target: TelegramDeliveryTarget): void {
+  private stopTypingSignal(
+    target: TelegramDeliveryTarget,
+    reason = "idle",
+  ): void {
     const key = this.typingSignalKey(target);
     const signal = this.typingSignals.get(key);
     if (!signal) {
-      this.options.logger?.debug("telegram typing signal stop skipped", {
-        target: this.redactedTypingTarget(target),
-      });
+      this.options.logger?.debug(
+        `telegram typing stop skipped reason=${reason} target=${this.compactTypingTarget(target)}`,
+      );
       return;
     }
-    this.options.logger?.debug("telegram typing signal stopped", {
-      target: this.redactedTypingTarget(target),
-    });
     clearInterval(signal.interval);
     clearTimeout(signal.timeout);
     this.typingSignals.delete(key);
+    this.options.logger?.debug(
+      `telegram typing stopped signal=${signal.signalId} reason=${reason} target=${this.compactTypingTarget(target)}`,
+    );
   }
 
   private stopTypingSignals(): void {
@@ -771,46 +808,61 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     if (!signal) {
       return;
     }
-    this.options.logger?.debug("telegram typing signal lease refreshed", {
-      leaseMs,
-      target: this.redactedTypingTarget(target),
-    });
     clearTimeout(signal.timeout);
-    signal.timeout = this.createTypingSignalTimeout(target, leaseMs);
+    signal.timeout = this.createTypingSignalTimeout(target, leaseMs, signal.signalId);
+    this.options.logger?.debug(
+      `telegram typing lease refreshed signal=${signal.signalId} leaseMs=${leaseMs} target=${this.compactTypingTarget(target)}`,
+    );
   }
 
   private createTypingSignalTimeout(
     target: TelegramDeliveryTarget,
     leaseMs: number,
+    signalId: number,
   ): ReturnType<typeof setTimeout> {
     const timeout = setTimeout(() => {
-      this.options.logger?.debug("telegram typing signal expired", {
-        leaseMs,
-        target: this.redactedTypingTarget(target),
-      });
-      this.stopTypingSignal(target);
+      const current = this.typingSignals.get(this.typingSignalKey(target));
+      if (!current || current.signalId !== signalId) {
+        this.options.logger?.debug(
+          `telegram typing expiry skipped signal=${signalId} leaseMs=${leaseMs} target=${this.compactTypingTarget(target)}`,
+        );
+        return;
+      }
+      this.options.logger?.debug(
+        `telegram typing expired signal=${signalId} leaseMs=${leaseMs} target=${this.compactTypingTarget(target)}`,
+      );
+      this.stopTypingSignal(target, "lease_expired");
     }, leaseMs);
     (timeout as { unref?: () => void }).unref?.();
     return timeout;
   }
 
-  private async sendTypingSignal(target: TelegramDeliveryTarget): Promise<void> {
+  private async sendTypingSignal(
+    target: TelegramDeliveryTarget,
+    signalId: number,
+    source: "interval" | "start",
+  ): Promise<void> {
+    this.options.logger?.debug(
+      `telegram sendChatAction typing request signal=${signalId} source=${source} target=${this.compactTypingTarget(target)}`,
+    );
     await this.bot.api.sendChatAction({
       action: "typing",
       chat_id: target.chatId,
       message_thread_id: target.messageThreadId,
     });
+    this.options.logger?.debug(
+      `telegram sendChatAction typing ok signal=${signalId} source=${source} target=${this.compactTypingTarget(target)}`,
+    );
   }
 
   private typingSignalKey(target: TelegramDeliveryTarget): string {
     return `${target.chatId}:${target.messageThreadId ?? ""}`;
   }
 
-  private redactedTypingTarget(target: TelegramDeliveryTarget): Record<string, unknown> {
-    return {
-      chatId: String(target.chatId),
-      messageThreadId: target.messageThreadId,
-    };
+  private compactTypingTarget(target: TelegramDeliveryTarget): string {
+    return target.messageThreadId
+      ? `${target.chatId}/${target.messageThreadId}`
+      : String(target.chatId);
   }
 
   private channelFromMessage(message: TelegramMessage): MessagingInboundEvent["channel"] {
@@ -993,4 +1045,14 @@ function coerceTelegramSentMessage(
 function parseTelegramIdentifier(value: string): number | string {
   const numeric = Number(value);
   return Number.isSafeInteger(numeric) && String(numeric) === value ? numeric : value;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function compactPreview(text: string, limit = 96): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  const preview = compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
+  return preview.replace(/["\\]/g, "\\$&");
 }
