@@ -2796,4 +2796,72 @@ describe("ThreadView", () => {
     });
     expect(refreshNavigation).toHaveBeenCalled();
   });
+
+  it("checks branch drift on selection and focus without background polling", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    const checkThreadBranchDrift = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-branch",
+      checkedAt: Date.now(),
+      expectedBranch: "feature/old",
+      observedBranch: "feature/old",
+      drifted: false,
+    }));
+    let focusCallback: (() => void) | undefined;
+
+    try {
+      render(
+        <ThreadView
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          composerDisabled={false}
+          desktopApi={{
+            checkThreadBranchDrift,
+            onWindowFocus: (callback) => {
+              focusCallback = callback;
+              return () => {
+                focusCallback = undefined;
+              };
+            },
+          }}
+          loading={false}
+          loadingMore={false}
+          messageCount={1}
+          selectedThread={{
+            id: "thread-branch",
+            title: "Branch drift",
+            titleSource: "explicit",
+            source: "codex",
+            gitBranch: "feature/old",
+            observedGitBranch: "feature/old",
+            updatedAt: Date.now(),
+            linkedDirectories: [],
+            inbox: {
+              inInbox: false,
+            },
+          }}
+          skills={[]}
+          transcriptEntries={[]}
+          clearPendingRequest={() => undefined}
+          onLoadOlder={async () => undefined}
+          removeOptimisticMessage={(_id) => undefined}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(checkThreadBranchDrift).toHaveBeenCalledTimes(1);
+      });
+      expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 30_000);
+
+      await act(async () => {
+        focusCallback?.();
+      });
+
+      await waitFor(() => {
+        expect(checkThreadBranchDrift).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
 });
