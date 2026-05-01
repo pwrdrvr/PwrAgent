@@ -150,7 +150,14 @@ function readTiptapContent(editor: NonNullable<ReturnType<typeof useEditor>>): {
   let value = "";
   const skillTokens: ComposerSkillToken[] = [];
 
-  editor.state.doc.descendants((node) => {
+  editor.state.doc.descendants((node, _pos, parent, index) => {
+    if (node.type.name === "paragraph" && parent?.type.name === "doc") {
+      if (index > 0) {
+        value += "\n";
+      }
+      return true;
+    }
+
     if (node.isText) {
       value += node.text ?? "";
       return false;
