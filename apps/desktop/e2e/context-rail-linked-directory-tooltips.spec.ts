@@ -23,18 +23,18 @@ test("shows linked directory path tooltips in the context rail", async () => {
       name: "Thread context",
     });
 
-    await contextRail.getByLabel("Path for PwrAgnt", { exact: true }).hover();
+    await contextRail.getByLabel("Path for PwrAgnt", { exact: true }).focus();
     await expectVisibleTooltip(app.window, "/repo/PwrAgnt");
 
     await contextRail
       .getByRole("button", { name: "Copy path for PwrAgnt", exact: true })
-      .hover();
+      .focus();
     await expectVisibleTooltip(
       app.window,
       "/repo/PwrAgnt\nClick to copy to clipboard"
     );
 
-    await contextRail.getByLabel("Path for worktree PwrAgnt", { exact: true }).hover();
+    await contextRail.getByLabel("Path for worktree PwrAgnt", { exact: true }).focus();
     await expectVisibleTooltip(
       app.window,
       "/repo/PwrAgnt/.worktrees/feature-context-tooltips"
@@ -42,18 +42,18 @@ test("shows linked directory path tooltips in the context rail", async () => {
 
     await contextRail
       .getByRole("button", { name: "Copy path for worktree PwrAgnt", exact: true })
-      .hover();
+      .focus();
     await expectVisibleTooltip(
       app.window,
       "/repo/PwrAgnt/.worktrees/feature-context-tooltips\nClick to copy to clipboard"
     );
 
-    await contextRail.getByLabel("Path for local LocalCheckout", { exact: true }).hover();
+    await contextRail.getByLabel("Path for local LocalCheckout", { exact: true }).focus();
     await expectVisibleTooltip(app.window, "/repo/PwrAgnt");
 
     await contextRail
       .getByRole("button", { name: "Copy path for local LocalCheckout", exact: true })
-      .hover();
+      .focus();
     await expectVisibleTooltip(
       app.window,
       "/repo/PwrAgnt\nClick to copy to clipboard"
