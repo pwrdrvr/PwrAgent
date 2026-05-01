@@ -81,7 +81,8 @@ type ComposerProps = {
         | "directoryPath"
         | "imageAttachments"
       >
-    >
+    >,
+    options?: { stickySettingsChanged?: boolean }
   ) => Promise<void>;
   removeOptimisticMessage?: (id: string) => void;
   setExecutionModeError?: string;
@@ -1510,7 +1511,9 @@ export function Composer(props: ComposerProps) {
     }
 
     setSendError(undefined);
-    void props.onUpdateLaunchpad(props.launchpad.directoryKey, patch);
+    void props.onUpdateLaunchpad(props.launchpad.directoryKey, patch, {
+      stickySettingsChanged: true,
+    });
   };
 
   const handleThreadModelSettingsPatch = (

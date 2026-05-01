@@ -94,6 +94,59 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("ignores opened-only launchpads with no pending data or touched settings", () => {
+    const directories = buildDirectorySummaries({
+      threads: [],
+      launchpadsByKey: {
+        "directory:/Users/huntharo/pwrdrvr/PwrAgnt": {
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgnt",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      },
+    });
+
+    expect(directories).toEqual([]);
+  });
+
+  it("keeps launchpads with user-touched settings even when the prompt is empty", () => {
+    const directories = buildDirectorySummaries({
+      threads: [],
+      launchpadsByKey: {
+        "directory:/Users/huntharo/pwrdrvr/PwrAgnt": {
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgnt",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          backend: "codex",
+          executionMode: "full-access",
+          prompt: "",
+          settingsTouchedAt: 2_000,
+          workMode: "local",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      },
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+        launchpad: expect.objectContaining({
+          executionMode: "full-access",
+          settingsTouchedAt: 2_000,
+        }),
+      }),
+    ]);
+  });
+
   it("keeps same-named Codex worktrees as separate directory rows", () => {
     const directories = buildDirectorySummaries({
       threads: [

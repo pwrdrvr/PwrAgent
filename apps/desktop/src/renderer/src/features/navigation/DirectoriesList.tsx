@@ -28,6 +28,19 @@ function buildLaunchpadSelectionKey(directoryKey: string): string {
   return `launchpad:${directoryKey}`;
 }
 
+function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolean {
+  const launchpad = directory.launchpad;
+  if (!launchpad) {
+    return false;
+  }
+
+  return (
+    launchpad.prompt.trim().length > 0 ||
+    (launchpad.imageAttachments?.length ?? 0) > 0 ||
+    launchpad.settingsTouchedAt !== undefined
+  );
+}
+
 export function DirectoriesList(props: DirectoriesListProps) {
   const [expandedByKey, setExpandedByKey] = useState<Record<string, boolean>>({});
   const threadsByKey = useMemo(
@@ -128,7 +141,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               <button
                 aria-label={`Open new thread launchpad for ${directory.label}`}
                 className={`directory-row__launchpad-button${
-                  directory.launchpad ? " has-draft" : ""
+                  hasPendingLaunchpadState(directory) ? " has-draft" : ""
                 }`}
                 type="button"
                 onClick={() => {

@@ -191,8 +191,18 @@ export function buildNavigationSnapshotHash(params: {
             backend: directory.launchpad.backend,
             executionMode: directory.launchpad.executionMode,
             prompt: directory.launchpad.prompt,
+            imageAttachments: (directory.launchpad.imageAttachments ?? []).map((attachment) => ({
+              id: attachment.id,
+              height: attachment.height ?? null,
+              name: attachment.name,
+              size: attachment.size,
+              type: attachment.type,
+              url: attachment.url,
+              width: attachment.width ?? null,
+            })),
             workMode: directory.launchpad.workMode,
             branchName: directory.launchpad.branchName ?? null,
+            settingsTouchedAt: directory.launchpad.settingsTouchedAt ?? null,
             updatedAt: directory.launchpad.updatedAt,
           }
         : null,

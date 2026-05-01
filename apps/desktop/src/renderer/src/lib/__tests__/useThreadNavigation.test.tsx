@@ -651,8 +651,12 @@ describe("useThreadNavigation", () => {
 
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
       directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+      launchpad: expect.objectContaining({
+        directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+      }),
       input: undefined,
       collaborationMode: undefined,
+      reviewTarget: undefined,
     });
     expect(result.current.selectedThread?.id).toBe("thread-new");
     expect(result.current.selectedThread?.gitBranch).toBe("HEAD");

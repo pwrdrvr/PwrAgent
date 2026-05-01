@@ -849,6 +849,7 @@ describe("DesktopBackendRegistry", () => {
     const updated = await registry.updateDirectoryLaunchpad({
       directoryKey: "directory:/repo-a",
       patch: { workMode: "worktree" },
+      stickySettingsChanged: true,
     });
     const next = await registry.ensureDirectoryLaunchpad({
       directoryKey: "directory:/repo-b",
@@ -887,6 +888,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.updateDirectoryLaunchpad({
       directoryKey: "directory:/repo-b",
       patch: { workMode: "worktree" },
+      stickySettingsChanged: true,
     });
 
     const reopened = await registry.ensureDirectoryLaunchpad({
@@ -921,6 +923,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.updateDirectoryLaunchpad({
       directoryKey: "directory:/repo-a",
       patch: { workMode: "worktree" },
+      stickySettingsChanged: true,
     });
 
     const workspace = await registry.ensureDirectoryLaunchpad({
@@ -935,6 +938,70 @@ describe("DesktopBackendRegistry", () => {
     expect(workspace.launchpad.directoryLabel).toBe("Workspaces");
     expect(workspace.launchpad.workMode).toBe("local");
     expect(workspace.launchpad.branchName).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("does not persist a directory launchpad just from opening it", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    const opened = await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+
+    expect(opened.launchpad.prompt).toBe("");
+    await expect(
+      overlayStore.getDirectoryLaunchpad({ directoryKey: "directory:/repo-a" }),
+    ).resolves.toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("does not rewrite sticky defaults when only pending prompt data is saved", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        launchpadDefaults: {
+          backend: "codex",
+          executionMode: "full-access",
+          workMode: "local",
+        },
+      }),
+    });
+
+    const updated = await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: {
+        prompt: "Draft work",
+        executionMode: "default",
+      },
+    });
+
+    expect(updated.launchpad.executionMode).toBe("default");
+    expect(updated.defaults.executionMode).toBe("full-access");
 
     await registry.close();
   });

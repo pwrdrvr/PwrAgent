@@ -248,6 +248,10 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
               typeof launchpadRecord.fastMode === "boolean"
                 ? launchpadRecord.fastMode
                 : undefined,
+            settingsTouchedAt:
+              typeof launchpadRecord.settingsTouchedAt === "number"
+                ? launchpadRecord.settingsTouchedAt
+                : undefined,
             createdAt:
               typeof launchpadRecord.createdAt === "number"
                 ? launchpadRecord.createdAt

@@ -983,6 +983,9 @@ describe("App", () => {
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
         directoryKey: "workspace:new-thread",
+        launchpad: expect.objectContaining({
+          directoryKey: "workspace:new-thread",
+        }),
         input: [
           {
             type: "text",
@@ -1381,6 +1384,9 @@ describe("App", () => {
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
         directoryKey: "workspace:new-thread",
+        launchpad: expect.objectContaining({
+          directoryKey: "workspace:new-thread",
+        }),
         input: [{ type: "text", text: "hello new codex thread" }]
       });
     });
@@ -1665,6 +1671,9 @@ describe("App", () => {
     await waitFor(() => {
       expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
         directoryKey: "workspace:new-thread",
+        launchpad: expect.objectContaining({
+          directoryKey: "workspace:new-thread",
+        }),
         input: [
           {
             type: "text",
