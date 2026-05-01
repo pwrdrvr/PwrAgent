@@ -20,6 +20,15 @@ Telegram registers these commands at startup with `setMyCommands`. Telegram
 clients can cache command menus, so if old OpenClaw commands still appear,
 restart or reopen the bot menu after starting PwrAgnt.
 
+## Button Layout
+
+Interactive actions can carry generic layout hints. Shared workflow code may
+request an automatic column count, explicit rows/columns, row breaks before or
+after an action, or a full-width action. Providers translate those hints into
+the closest native layout they support: Telegram inline keyboards can honor
+explicit row groupings, and Discord components use action rows with provider
+limits.
+
 ## Configuration
 
 Messaging is disabled unless a channel has both credentials and authorized actor

@@ -57,6 +57,64 @@ describe("discord formatting", () => {
     );
   });
 
+  it("honors channel-neutral button row hints", () => {
+    const components = buildDiscordComponents(
+      [
+        {
+          id: "thread-1",
+          label: "1. Thread",
+          style: "primary",
+        },
+        {
+          id: "thread-2",
+          label: "2. Thread",
+          style: "primary",
+        },
+        {
+          id: "next",
+          label: "Next",
+          layout: { rowBreakBefore: true },
+          style: "navigation",
+        },
+        {
+          id: "projects",
+          label: "Projects",
+          layout: { rowBreakBefore: true },
+          style: "navigation",
+        },
+        {
+          id: "cancel",
+          label: "Cancel",
+          style: "secondary",
+        },
+      ],
+      (action) => `dc:${action.id}`,
+    );
+
+    expect(components?.map((row) => row.components.map((button) => button.label))).toEqual([
+      ["1. Thread", "2. Thread"],
+      ["Next"],
+      ["Projects", "Cancel"],
+    ]);
+  });
+
+  it("honors channel-neutral automatic column hints", () => {
+    const components = buildDiscordComponents(
+      [
+        { id: "one", label: "One" },
+        { id: "two", label: "Two" },
+        { id: "three", label: "Three" },
+      ],
+      (action) => `dc:${action.id}`,
+      { columns: 2 },
+    );
+
+    expect(components?.map((row) => row.components.map((button) => button.label))).toEqual([
+      ["One", "Two"],
+      ["Three"],
+    ]);
+  });
+
   it("preserves approval markdown code blocks", () => {
     const rendered = textForDiscordIntent({
       id: "approval-1",

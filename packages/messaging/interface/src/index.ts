@@ -168,19 +168,164 @@ export type MessagingActionStyle =
   | "danger"
   | "navigation";
 
+export type MessagingActionLayoutHint = {
+  /**
+   * Absolute row placement for providers with button rows. Actions with the same
+   * row share a row when the provider supports it.
+   */
+  row?: number;
+  /**
+   * Optional ordering within an explicit row.
+   */
+  column?: number;
+  /**
+   * Start a new provider row before this action when rows are supported.
+   */
+  rowBreakBefore?: boolean;
+  /**
+   * Start a new provider row after this action when rows are supported.
+   */
+  rowBreakAfter?: boolean;
+  /**
+   * Prefer this action on a row by itself.
+   */
+  width?: "auto" | "full";
+};
+
 export type MessagingSurfaceAction = {
   id: string;
   label: string;
   description?: string;
   style?: MessagingActionStyle;
+  layout?: MessagingActionLayoutHint;
   value?: MessagingJsonValue;
   disabled?: boolean;
   fallbackText?: string;
 };
 
+export function layoutMessagingActionRows<T>(
+  items: Array<{
+    action: MessagingSurfaceAction;
+    component: T;
+  }>,
+  options: {
+    defaultColumns?: number;
+    maxColumns: number;
+    maxRows?: number;
+  },
+): T[][] {
+  const maxColumns = Math.max(1, Math.floor(options.maxColumns));
+  const explicitRows = new Map<
+    number,
+    Array<{
+      action: MessagingSurfaceAction;
+      component: T;
+      index: number;
+    }>
+  >();
+  const automaticItems: Array<{
+    action: MessagingSurfaceAction;
+    component: T;
+  }> = [];
+
+  items.forEach((item, index) => {
+    const row = item.action.layout?.row;
+    if (typeof row === "number" && Number.isInteger(row) && row >= 0) {
+      const entries = explicitRows.get(row) ?? [];
+      entries.push({ ...item, index });
+      explicitRows.set(row, entries);
+      return;
+    }
+    automaticItems.push(item);
+  });
+
+  const rows: T[][] = [];
+  for (const row of [...explicitRows.keys()].sort((left, right) => left - right)) {
+    const components = explicitRows
+      .get(row)!
+      .sort((left, right) => {
+        const leftColumn = left.action.layout?.column;
+        const rightColumn = right.action.layout?.column;
+        if (typeof leftColumn === "number" && typeof rightColumn === "number") {
+          return leftColumn - rightColumn;
+        }
+        if (typeof leftColumn === "number") {
+          return -1;
+        }
+        if (typeof rightColumn === "number") {
+          return 1;
+        }
+        return left.index - right.index;
+      })
+      .map((item) => item.component);
+    rows.push(...chunkRow(components, maxColumns));
+  }
+
+  rows.push(...layoutAutomaticActionRows(automaticItems, {
+    defaultColumns: options.defaultColumns,
+    maxColumns,
+  }));
+
+  return typeof options.maxRows === "number" ? rows.slice(0, options.maxRows) : rows;
+}
+
 export type MessagingChoice = MessagingSurfaceAction & {
   recommended?: boolean;
 };
+
+function layoutAutomaticActionRows<T>(
+  items: Array<{
+    action: MessagingSurfaceAction;
+    component: T;
+  }>,
+  options: {
+    defaultColumns?: number;
+    maxColumns: number;
+  },
+): T[][] {
+  const defaultColumns = Math.max(
+    1,
+    Math.min(options.maxColumns, Math.floor(options.defaultColumns ?? options.maxColumns)),
+  );
+  const rows: T[][] = [];
+  let currentRow: T[] = [];
+
+  const flush = (): void => {
+    if (currentRow.length === 0) {
+      return;
+    }
+    rows.push(currentRow);
+    currentRow = [];
+  };
+
+  for (const item of items) {
+    const fullWidth = item.action.layout?.width === "full";
+    if (item.action.layout?.rowBreakBefore || fullWidth) {
+      flush();
+    }
+
+    currentRow.push(item.component);
+
+    if (
+      fullWidth
+      || item.action.layout?.rowBreakAfter
+      || currentRow.length >= defaultColumns
+    ) {
+      flush();
+    }
+  }
+
+  flush();
+  return rows.flatMap((row) => chunkRow(row, options.maxColumns));
+}
+
+function chunkRow<T>(row: T[], maxColumns: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < row.length; index += maxColumns) {
+    chunks.push(row.slice(index, index + maxColumns));
+  }
+  return chunks;
+}
 
 export type MessagingPickerPage<TItem> = {
   items: TItem[];
@@ -216,9 +361,18 @@ export type MessagingSurfaceDeliveryPolicy = {
   fallback?: "present_new" | "fail";
 };
 
+export type MessagingActionLayoutPolicy = {
+  /**
+   * Preferred automatic column count for actions without explicit row placement.
+   * Providers may clamp or ignore this based on native limits.
+   */
+  columns?: number;
+};
+
 export type MessagingBaseSurfaceIntent = {
   id: string;
   kind: MessagingSurfaceIntentKind;
+  actionLayout?: MessagingActionLayoutPolicy;
   audit?: MessagingAuditContext;
   bindingId?: string;
   createdAt: number;

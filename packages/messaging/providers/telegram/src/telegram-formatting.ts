@@ -1,9 +1,11 @@
 import type {
+  MessagingActionLayoutPolicy,
   MessagingContentPart,
   MessagingMarkdownPolicy,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragnt/messaging-interface";
+import { layoutMessagingActionRows } from "@pwragnt/messaging-interface";
 
 export const TELEGRAM_CALLBACK_DATA_LIMIT_BYTES = 64;
 export const TELEGRAM_MESSAGE_TEXT_LIMIT = 4096;
@@ -138,20 +140,27 @@ export function actionsForTelegramIntent(
 export function buildTelegramKeyboard(
   actions: MessagingSurfaceAction[],
   createCallbackData: (action: MessagingSurfaceAction) => string,
+  layout?: MessagingActionLayoutPolicy,
 ): TelegramInlineKeyboardMarkup | undefined {
-  const buttons = actions
+  const items = actions
     .filter((action) => !action.disabled)
     .map((action) => ({
-      text: action.label,
-      callback_data: createCallbackData(action),
+      action,
+      component: {
+        text: action.label,
+        callback_data: createCallbackData(action),
+      },
     }));
 
-  if (buttons.length === 0) {
+  if (items.length === 0) {
     return undefined;
   }
 
   return {
-    inline_keyboard: buttons.map((button) => [button]),
+    inline_keyboard: layoutMessagingActionRows(items, {
+      defaultColumns: layout?.columns ?? 1,
+      maxColumns: 8,
+    }),
   };
 }
 

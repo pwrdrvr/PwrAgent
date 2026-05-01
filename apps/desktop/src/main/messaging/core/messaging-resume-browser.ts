@@ -335,8 +335,26 @@ function navigationActions(
   totalPages: number,
 ): MessagingSurfaceAction[] {
   const actions: MessagingSurfaceAction[] = [];
-  if (pageIndex > 0) {
+  let navigationRowStarted = false;
+  let footerRowStarted = false;
+  const addNavigationAction = (
+    action: Omit<MessagingSurfaceAction, "layout">,
+  ): void => {
     actions.push({
+      ...action,
+      ...(navigationRowStarted ? {} : { layout: { rowBreakBefore: true } }),
+    });
+    navigationRowStarted = true;
+  };
+  const addFooterAction = (action: Omit<MessagingSurfaceAction, "layout">): void => {
+    actions.push({
+      ...action,
+      ...(footerRowStarted ? {} : { layout: { rowBreakBefore: true } }),
+    });
+    footerRowStarted = true;
+  };
+  if (pageIndex > 0) {
+    addNavigationAction({
       id: "browse:page:prev",
       label: "Previous",
       style: "navigation",
@@ -344,7 +362,7 @@ function navigationActions(
     });
   }
   if (pageIndex < totalPages - 1) {
-    actions.push({
+    addNavigationAction({
       id: "browse:page:next",
       label: "Next",
       style: "navigation",
@@ -352,14 +370,14 @@ function navigationActions(
     });
   }
   if (session.mode !== "projects" && session.mode !== "new_project") {
-    actions.push({
+    addFooterAction({
       id: "browse:mode:projects",
       label: "Projects",
       style: "navigation",
       fallbackText: "projects",
     });
   } else if (session.launchAction === "resume_thread") {
-    actions.push({
+    addFooterAction({
       id: "browse:mode:recents",
       label: "Recent Threads",
       style: "navigation",
@@ -367,14 +385,14 @@ function navigationActions(
     });
   }
   if (session.launchAction !== "start_new_thread") {
-    actions.push({
+    addFooterAction({
       id: "browse:mode:new",
       label: "New",
       style: "secondary",
       fallbackText: "new",
     });
   }
-  actions.push({
+  addFooterAction({
     id: "browse:cancel",
     label: "Cancel",
     style: "secondary",

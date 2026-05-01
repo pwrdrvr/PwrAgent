@@ -258,6 +258,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const components = buildDiscordComponents(
       actionsForDiscordIntent(intent),
       (action) => this.createCustomId(intent, action),
+      intent.actionLayout,
     );
     const imageUrl = this.firstImageUrl(intent);
     const chunks = splitDiscordContent(textForDiscordIntent(intent) || " ");

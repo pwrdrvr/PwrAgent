@@ -1,8 +1,10 @@
 import type {
+  MessagingActionLayoutPolicy,
   MessagingContentPart,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragnt/messaging-interface";
+import { layoutMessagingActionRows } from "@pwragnt/messaging-interface";
 
 export const DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES = 100;
 export const DISCORD_MESSAGE_CONTENT_LIMIT = 2000;
@@ -126,30 +128,33 @@ export function actionsForDiscordIntent(
 export function buildDiscordComponents(
   actions: MessagingSurfaceAction[],
   createCustomId: (action: MessagingSurfaceAction) => string,
+  layout?: MessagingActionLayoutPolicy,
 ): DiscordActionRowComponent[] | undefined {
-  const buttons = actions
+  const items = actions
     .filter((action) => !action.disabled)
     .slice(0, 25)
     .map((action) => ({
-      custom_id: createCustomId(action),
-      label: action.label.slice(0, 80),
-      style: styleForAction(action),
-      type: 2 as const,
+      action,
+      component: {
+        custom_id: createCustomId(action),
+        label: action.label.slice(0, 80),
+        style: styleForAction(action),
+        type: 2 as const,
+      },
     }));
 
-  if (buttons.length === 0) {
+  if (items.length === 0) {
     return undefined;
   }
 
-  const rows: DiscordActionRowComponent[] = [];
-  for (let index = 0; index < buttons.length; index += 5) {
-    rows.push({
-      components: buttons.slice(index, index + 5),
-      type: 1,
-    });
-  }
-
-  return rows;
+  return layoutMessagingActionRows(items, {
+    defaultColumns: layout?.columns,
+    maxColumns: 5,
+    maxRows: 5,
+  }).map((components) => ({
+    components,
+    type: 1,
+  }));
 }
 
 function renderContentPart(part: MessagingContentPart): string {

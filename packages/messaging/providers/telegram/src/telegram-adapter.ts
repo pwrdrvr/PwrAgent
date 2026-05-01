@@ -9,6 +9,7 @@ import type {
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragnt/messaging-interface";
+import { layoutMessagingActionRows } from "@pwragnt/messaging-interface";
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
   actionsForTelegramIntent,
@@ -573,21 +574,27 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     intent: MessagingSurfaceIntent,
     actions: MessagingSurfaceAction[],
   ): Promise<TelegramInlineKeyboardMarkup | undefined> {
-    const buttons = await Promise.all(
+    const items = await Promise.all(
       actions
         .filter((action) => !action.disabled)
         .map(async (action) => ({
-          text: action.label,
-          callback_data: await this.createCallbackData(intent, action),
+          action,
+          component: {
+            text: action.label,
+            callback_data: await this.createCallbackData(intent, action),
+          },
         })),
     );
 
-    if (buttons.length === 0) {
+    if (items.length === 0) {
       return undefined;
     }
 
     return {
-      inline_keyboard: buttons.map((button) => [button]),
+      inline_keyboard: layoutMessagingActionRows(items, {
+        defaultColumns: intent.actionLayout?.columns ?? 1,
+        maxColumns: 8,
+      }),
     };
   }
 

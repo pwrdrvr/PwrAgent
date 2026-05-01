@@ -299,6 +299,11 @@ describe("DiscordAdapter", () => {
               expect.objectContaining({
                 label: "2. Thread two",
               }),
+            ],
+            type: 1,
+          },
+          {
+            components: [
               expect.objectContaining({
                 label: "Projects",
               }),

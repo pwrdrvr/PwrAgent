@@ -3,6 +3,7 @@ import {
   MESSAGING_DELIVERY_OUTCOMES,
   MESSAGING_INBOUND_EVENT_KINDS,
   MESSAGING_SURFACE_INTENT_KINDS,
+  layoutMessagingActionRows,
   type MessagingApprovalIntent,
   type MessagingBindingRecord,
   type MessagingBrowseSessionRecord,
@@ -49,6 +50,9 @@ describe("messaging surface contract", () => {
       kind: "thread_picker",
       bindingId: "binding-1",
       createdAt: 1000,
+      actionLayout: {
+        columns: 2,
+      },
       fallbackText: "Reply with a number, Next, Back, or Cancel.",
       prompt: "Choose a thread.",
       navigation: {
@@ -90,6 +94,38 @@ describe("messaging surface contract", () => {
     } satisfies MessagingThreadPickerIntent;
 
     expect(JSON.stringify(intent)).not.toMatch(/telegram|discord|callback_data|custom_id/);
+  });
+
+  it("lays out actions with channel-neutral row hints", () => {
+    const rows = layoutMessagingActionRows(
+      [
+        {
+          action: { id: "1", label: "One" },
+          component: "one",
+        },
+        {
+          action: { id: "2", label: "Two" },
+          component: "two",
+        },
+        {
+          action: {
+            id: "next",
+            label: "Next",
+            layout: { rowBreakBefore: true },
+          },
+          component: "next",
+        },
+        {
+          action: { id: "cancel", label: "Cancel" },
+          component: "cancel",
+        },
+      ],
+      {
+        maxColumns: 5,
+      },
+    );
+
+    expect(rows).toEqual([["one", "two"], ["next", "cancel"]]);
   });
 
   it("describes mixed markdown and image message parts", () => {

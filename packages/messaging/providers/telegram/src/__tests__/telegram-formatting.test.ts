@@ -63,6 +63,51 @@ describe("telegram formatting", () => {
     );
   });
 
+  it("honors explicit channel-neutral button rows", () => {
+    const keyboard = buildTelegramKeyboard(
+      [
+        {
+          id: "one",
+          label: "One",
+          layout: { row: 0, column: 0 },
+        },
+        {
+          id: "two",
+          label: "Two",
+          layout: { row: 0, column: 1 },
+        },
+        {
+          id: "three",
+          label: "Three",
+          layout: { row: 1, column: 0 },
+        },
+      ],
+      (action) => `tg:${action.id}`,
+    );
+
+    expect(keyboard?.inline_keyboard.map((row) => row.map((button) => button.text))).toEqual([
+      ["One", "Two"],
+      ["Three"],
+    ]);
+  });
+
+  it("honors channel-neutral automatic column hints", () => {
+    const keyboard = buildTelegramKeyboard(
+      [
+        { id: "one", label: "One" },
+        { id: "two", label: "Two" },
+        { id: "three", label: "Three" },
+      ],
+      (action) => `tg:${action.id}`,
+      { columns: 2 },
+    );
+
+    expect(keyboard?.inline_keyboard.map((row) => row.map((button) => button.text))).toEqual([
+      ["One", "Two"],
+      ["Three"],
+    ]);
+  });
+
   it("escapes plain text without introducing formatting", () => {
     expect(escapeTelegramHtml("a < b && b > c")).toBe(
       "a &lt; b &amp;&amp; b &gt; c",
