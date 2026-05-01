@@ -81,6 +81,75 @@ function backendSummary(
 }
 
 describe("Composer", () => {
+  it("opens the current workspace in discovered applications", async () => {
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+
+    render(
+      <Composer
+        applications={{
+          editors: [
+            {
+              id: "vscode",
+              kind: "editor",
+              name: "VS Code",
+              source: "application",
+              appPath: "/Applications/Visual Studio Code.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [
+            {
+              id: "ghostty",
+              kind: "terminal",
+              name: "Ghostty",
+              source: "application",
+              appPath: "/Applications/Ghostty.app",
+              canOpenWorkspace: true,
+            },
+          ],
+        }}
+        backends={[backendSummary("codex")]}
+        desktopApi={{ openApplication }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Application launch",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              kind: "local",
+              label: "PwrAgnt",
+              path: "/repo/PwrAgnt",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "VS Code" }));
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenCalledWith({
+        applicationId: "vscode",
+        kind: "editor",
+        targetPath: "/repo/PwrAgnt",
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Ghostty" }));
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenCalledWith({
+        applicationId: "ghostty",
+        kind: "terminal",
+        targetPath: "/repo/PwrAgnt",
+      });
+    });
+  });
+
   it("shows an orange moon for reported context window usage", () => {
     render(
       <Composer

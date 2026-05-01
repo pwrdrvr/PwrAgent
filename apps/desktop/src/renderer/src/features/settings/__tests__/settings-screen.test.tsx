@@ -70,6 +70,30 @@ function createSnapshot(
         apiKey: { configured: false, source: "unset", writable: true },
       },
     },
+    applications: {
+      editors: [
+        {
+          id: "vscode",
+          kind: "editor",
+          name: "VS Code",
+          source: "application",
+          appPath: "/Applications/Visual Studio Code.app",
+          iconDataUrl: "data:image/png;base64,editor",
+          canOpenWorkspace: true,
+        },
+      ],
+      terminals: [
+        {
+          id: "ghostty",
+          kind: "terminal",
+          name: "Ghostty",
+          source: "application",
+          appPath: "/Applications/Ghostty.app",
+          iconDataUrl: "data:image/png;base64,terminal",
+          canOpenWorkspace: true,
+        },
+      ],
+    },
     ...overrides,
   };
 }
@@ -133,6 +157,14 @@ describe("SettingsScreen", () => {
         },
       });
     });
+
+    fireEvent.click(within(sections).getByRole("button", { name: "Applications" }));
+    expect(screen.getByRole("heading", { name: "Editor" })).toBeInTheDocument();
+    expect(screen.getByText("VS Code")).toBeInTheDocument();
+    expect(screen.getByText("/Applications/Visual Studio Code.app")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Terminal" })).toBeInTheDocument();
+    expect(screen.getByText("Ghostty")).toBeInTheDocument();
+    expect(screen.getByText("/Applications/Ghostty.app")).toBeInTheDocument();
   });
 
   it("returns to the previous app surface", () => {

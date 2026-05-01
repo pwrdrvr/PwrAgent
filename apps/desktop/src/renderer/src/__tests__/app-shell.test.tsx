@@ -81,6 +81,10 @@ describe("App", () => {
           apiKey: { configured: false, source: "unset", writable: true },
         },
       },
+      applications: {
+        editors: [],
+        terminals: [],
+      },
     } satisfies DesktopSettingsSnapshot;
 
     Object.defineProperty(window, "pwragnt", {

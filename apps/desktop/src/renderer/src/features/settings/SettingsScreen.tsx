@@ -6,14 +6,16 @@ import type { DesktopSettingsState } from "./useDesktopSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
 import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
+import { ApplicationsSettings } from "./ApplicationsSettings";
 import { useState } from "react";
 
-type SettingsSection = "experimental" | "messaging" | "models";
+type SettingsSection = "experimental" | "messaging" | "models" | "applications";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "experimental", label: "Experimental" },
   { id: "messaging", label: "Messaging" },
   { id: "models", label: "Models" },
+  { id: "applications", label: "Applications" },
 ];
 
 export function SettingsScreen(props: {
@@ -160,6 +162,10 @@ function SettingsSectionBody(props: {
         }}
       />
     );
+  }
+
+  if (props.section === "applications") {
+    return <ApplicationsSettings snapshot={props.snapshot} />;
   }
 
   return (

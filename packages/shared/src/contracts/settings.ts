@@ -64,6 +64,26 @@ export type DesktopCodexDiscoverySnapshot = {
   error?: string;
 };
 
+export type DesktopApplicationKind = "editor" | "terminal";
+
+export type DesktopApplicationSource = "application" | "path";
+
+export type DesktopApplicationDiscoveryCandidate = {
+  id: string;
+  kind: DesktopApplicationKind;
+  name: string;
+  source: DesktopApplicationSource;
+  appPath?: string;
+  executablePath?: string;
+  iconDataUrl?: string;
+  canOpenWorkspace: boolean;
+};
+
+export type DesktopApplicationsSnapshot = {
+  editors: DesktopApplicationDiscoveryCandidate[];
+  terminals: DesktopApplicationDiscoveryCandidate[];
+};
+
 export type DesktopSettingsSnapshot = {
   fetchedAt: number;
   configPath: string;
@@ -97,6 +117,7 @@ export type DesktopSettingsSnapshot = {
       apiKey: DesktopSettingsSecretState;
     };
   };
+  applications: DesktopApplicationsSnapshot;
 };
 
 export type DesktopSettingsConfigPatch = {
@@ -147,6 +168,16 @@ export type RefreshDesktopCodexDiscoveryRequest = Record<string, never>;
 
 export type DesktopSettingsWriteResponse = {
   snapshot: DesktopSettingsSnapshot;
+};
+
+export type OpenDesktopApplicationRequest = {
+  applicationId: string;
+  kind: DesktopApplicationKind;
+  targetPath: string;
+};
+
+export type OpenDesktopApplicationResponse = {
+  opened: true;
 };
 
 export function isDesktopChatReplyComposer(

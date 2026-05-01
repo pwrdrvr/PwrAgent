@@ -65,6 +65,10 @@ describe("desktop settings contracts", () => {
           },
         },
       },
+      applications: {
+        editors: [],
+        terminals: [],
+      },
     };
 
     const encoded = JSON.stringify(snapshot);

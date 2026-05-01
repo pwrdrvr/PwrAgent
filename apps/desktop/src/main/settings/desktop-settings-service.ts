@@ -33,6 +33,7 @@ import {
   readEnvString,
 } from "./desktop-settings-env";
 import { discoverCodexCommands } from "./codex-discovery";
+import { discoverDesktopApplications } from "./application-discovery";
 
 type DesktopSettingsServiceOptions = {
   configPath?: string;
@@ -81,6 +82,7 @@ export class DesktopSettingsService {
       configuredCommand: config.models?.codex?.path,
       env: this.env,
     });
+    const applications = await discoverDesktopApplications({ env: this.env });
 
     return {
       fetchedAt: this.now(),
@@ -144,6 +146,7 @@ export class DesktopSettingsService {
           apiKey: grokApiKey,
         },
       },
+      applications,
     };
   }
 

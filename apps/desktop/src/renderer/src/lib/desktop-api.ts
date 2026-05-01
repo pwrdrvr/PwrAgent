@@ -61,6 +61,8 @@ import type {
   SubmitServerRequestResponse,
   ClearDesktopSettingsSecretRequest,
   DesktopSettingsWriteResponse,
+  OpenDesktopApplicationRequest,
+  OpenDesktopApplicationResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
@@ -153,6 +155,9 @@ export type DesktopApi = {
   refreshCodexDiscovery?: (
     request?: RefreshDesktopCodexDiscoveryRequest
   ) => Promise<ReadDesktopSettingsResponse>;
+  openApplication?: (
+    request: OpenDesktopApplicationRequest
+  ) => Promise<OpenDesktopApplicationResponse>;
   listThreads?: (
     request?: AppServerListThreadsRequest
   ) => Promise<AppServerListThreadsResponse>;
