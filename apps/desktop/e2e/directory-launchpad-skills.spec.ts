@@ -522,6 +522,14 @@ test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", a
 
     await expect(tiptapInput.locator("h2", { hasText: "Heading" })).toBeVisible();
     await expect(tiptapInput).toHaveAttribute("data-value", "## Heading");
+    await app.window.keyboard.press("Shift+Enter");
+    await app.window.keyboard.type("plain text");
+    await expect(tiptapInput.locator("h2", { hasText: "plain text" })).toHaveCount(0);
+    await expect(tiptapInput.locator("p", { hasText: "plain text" })).toBeVisible();
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      "## Heading\n\nplain text",
+    );
 
     await app.window.keyboard.press(
       process.platform === "darwin" ? "Meta+A" : "Control+A",
@@ -554,6 +562,21 @@ test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", a
       tiptapInput.locator(".composer-tiptap-input__mention", { hasText: "$ce:plan" }),
     ).toBeVisible();
     await expect(tiptapInput).toHaveAttribute("data-value", "Before  after");
+
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await app.window.keyboard.press("Delete");
+    await app.window.keyboard.type("Cats");
+    await app.window.keyboard.press("Shift+Enter");
+    await app.window.keyboard.press("Shift+Enter");
+    await app.window.keyboard.type("## Later");
+
+    await expect(tiptapInput.locator("h2", { hasText: "Later" })).toBeVisible();
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      "Cats\n\n\n\n## Later",
+    );
   } finally {
     await app.close();
     await fixture.cleanup();

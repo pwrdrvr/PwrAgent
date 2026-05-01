@@ -379,6 +379,18 @@ function readTiptapContent(
     : readTiptapTextContent(editor);
 }
 
+function insertWysiwygLineBreak(editor: TiptapEditor): boolean {
+  if (editor.state.selection.$from.parent.type.name === "codeBlock") {
+    return editor.commands.newlineInCode();
+  }
+
+  return editor.commands.first(({ commands }) => [
+    () => commands.createParagraphNear(),
+    () => commands.liftEmptyBlock(),
+    () => commands.splitBlock(),
+  ]);
+}
+
 function getDraftIndexAtPosition(
   editor: NonNullable<ReturnType<typeof useEditor>>,
   position: number,
@@ -504,6 +516,7 @@ export const ComposerTiptapInput = forwardRef<
   ComposerTiptapInputProps
 >(function ComposerTiptapInput(props, ref) {
   const propsRef = useRef(props);
+  const editorRef = useRef<TiptapEditor | null>(null);
   const selectionIndexRef = useRef(props.value.length);
   const pendingExternalSignatureRef = useRef<string | undefined>(undefined);
   const pendingSelectionIndexRef = useRef<number | undefined>(undefined);
@@ -564,12 +577,11 @@ export const ComposerTiptapInput = forwardRef<
           if (
             propsRef.current.markdownConversion &&
             event.key === "Enter" &&
-            event.shiftKey &&
-            view.state.selection.$from.parent.type.name === "codeBlock"
+            event.shiftKey
           ) {
             event.preventDefault();
-            view.dispatch(view.state.tr.insertText("\n"));
-            return true;
+            const currentEditor = editorRef.current;
+            return currentEditor ? insertWysiwygLineBreak(currentEditor) : false;
           }
           propsRef.current.onKeyDown?.(event as unknown as KeyboardEvent<HTMLDivElement>);
           return event.defaultPrevented;
@@ -606,6 +618,7 @@ export const ComposerTiptapInput = forwardRef<
       );
     },
   });
+  editorRef.current = editor;
 
   useLayoutEffect(() => {
     if (!editor) {
