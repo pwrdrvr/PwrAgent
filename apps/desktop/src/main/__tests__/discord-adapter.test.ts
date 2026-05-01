@@ -102,6 +102,154 @@ describe("DiscordAdapter", () => {
     expect(secondCustomId).not.toBe(customId);
   });
 
+  it("rewrites the Discord picker message when navigating pages", async () => {
+    const harness = await createControllerHarness({
+      navigationSnapshot: buildNavigationSnapshot(10),
+    });
+
+    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.gateway.emit({
+      d: {
+        author: {
+          id: "42",
+          username: "ada",
+        },
+        channel_id: "channel-1",
+        content: "/resume",
+        guild_id: "guild-1",
+        id: "message-1",
+      },
+      op: 0,
+      s: 1,
+      t: "MESSAGE_CREATE",
+    });
+
+    const firstRequest = harness.api.createMessage.mock.calls.at(-1)?.[1] as
+      | DiscordCreateMessageRequest
+      | undefined;
+    const nextCustomId = firstRequest?.components
+      ?.flatMap((row) => row.components)
+      .find((component) => component.label === "Next")?.custom_id;
+
+    expect(nextCustomId).toMatch(/^dc:/);
+
+    await harness.gateway.emit({
+      d: {
+        channel_id: "channel-1",
+        data: {
+          custom_id: nextCustomId,
+        },
+        guild_id: "guild-1",
+        id: "interaction-1",
+        member: {
+          user: {
+            id: "42",
+            username: "ada",
+          },
+        },
+        message: {
+          id: "message-1",
+        },
+        token: "interaction-token",
+        type: 3,
+      },
+      op: 0,
+      s: 2,
+      t: "INTERACTION_CREATE",
+    });
+
+    expect(harness.api.createMessage).toHaveBeenCalledTimes(1);
+    expect(harness.api.updateMessage).toHaveBeenCalledWith(
+      "channel-1",
+      "message-1",
+      expect.objectContaining({
+        content: expect.stringContaining("Page 2/2"),
+      }),
+    );
+    const updateRequest = harness.api.updateMessage.mock.calls.at(-1)?.[2] as
+      | DiscordCreateMessageRequest
+      | undefined;
+    expect(updateRequest?.content).toContain("Choose a thread to resume");
+    expect(updateRequest?.content).not.toContain("9. Thread 9");
+    expect(
+      updateRequest?.components
+        ?.flatMap((row) => row.components)
+        .map((component) => component.label),
+    ).toEqual([
+      "9. Thread 9",
+      "10. Thread 10",
+      "Previous",
+      "Projects",
+      "New",
+      "Cancel",
+    ]);
+  });
+
+  it("removes Discord picker buttons when cancelling", async () => {
+    const harness = await createControllerHarness({
+      navigationSnapshot: buildNavigationSnapshot(10),
+    });
+
+    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.gateway.emit({
+      d: {
+        author: {
+          id: "42",
+          username: "ada",
+        },
+        channel_id: "channel-1",
+        content: "/resume",
+        guild_id: "guild-1",
+        id: "message-1",
+      },
+      op: 0,
+      s: 1,
+      t: "MESSAGE_CREATE",
+    });
+
+    const firstRequest = harness.api.createMessage.mock.calls.at(-1)?.[1] as
+      | DiscordCreateMessageRequest
+      | undefined;
+    const cancelCustomId = firstRequest?.components
+      ?.flatMap((row) => row.components)
+      .find((component) => component.label === "Cancel")?.custom_id;
+
+    await harness.gateway.emit({
+      d: {
+        channel_id: "channel-1",
+        data: {
+          custom_id: cancelCustomId,
+        },
+        guild_id: "guild-1",
+        id: "interaction-1",
+        member: {
+          user: {
+            id: "42",
+            username: "ada",
+          },
+        },
+        message: {
+          id: "message-1",
+        },
+        token: "interaction-token",
+        type: 3,
+      },
+      op: 0,
+      s: 2,
+      t: "INTERACTION_CREATE",
+    });
+
+    expect(harness.api.createMessage).toHaveBeenCalledTimes(1);
+    expect(harness.api.updateMessage).toHaveBeenCalledWith(
+      "channel-1",
+      "message-1",
+      expect.objectContaining({
+        components: [],
+        content: "Resume cancelled\n\nNo thread binding changed.",
+      }),
+    );
+  });
+
   it("signals typing activity without rendering a visible Discord message", async () => {
     const api = createApi();
     const adapter = new DiscordAdapter({
@@ -524,7 +672,9 @@ describe("DiscordAdapter", () => {
   });
 });
 
-async function createControllerHarness(): Promise<{
+async function createControllerHarness(options: {
+  navigationSnapshot?: NavigationSnapshot;
+} = {}): Promise<{
   adapter: DiscordAdapter;
   api: ReturnType<typeof createApi>;
   controller: MessagingController;
@@ -538,7 +688,9 @@ async function createControllerHarness(): Promise<{
   const store = new MessagingStore(path.join(tempDir, "messaging-state.json"));
   const api = createApi();
   const gateway = createGateway();
-  const getNavigationSnapshot = vi.fn(async () => buildNavigationSnapshot());
+  const getNavigationSnapshot = vi.fn(
+    async () => options.navigationSnapshot ?? buildNavigationSnapshot(),
+  );
   const startTurn = vi.fn(async (request: StartTurnRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -580,7 +732,9 @@ function createApi(): {
   createInteractionResponse: ReturnType<typeof vi.fn>;
   createMessage: ReturnType<typeof vi.fn>;
   sendTyping: ReturnType<typeof vi.fn>;
+  updateMessage: ReturnType<typeof vi.fn>;
 } {
+  let messageSequence = 0;
   return {
     createInteractionResponse: vi.fn(
       async (
@@ -593,10 +747,21 @@ function createApi(): {
       async (channelId: string, request: DiscordCreateMessageRequest) => ({
         channel_id: channelId,
         content: request.content,
-        id: `message-${Math.random()}`,
+        id: `message-${++messageSequence}`,
       }),
     ),
     sendTyping: vi.fn(async (_channelId: string) => undefined),
+    updateMessage: vi.fn(
+      async (
+        channelId: string,
+        messageId: string,
+        request: DiscordCreateMessageRequest,
+      ) => ({
+        channel_id: channelId,
+        content: request.content,
+        id: messageId,
+      }),
+    ),
   };
 }
 
@@ -619,7 +784,7 @@ function createGateway(): DiscordGatewayConnection & {
   };
 }
 
-function buildNavigationSnapshot(): NavigationSnapshot {
+function buildNavigationSnapshot(threadCount = 2): NavigationSnapshot {
   return {
     backend: "all",
     directories: [],
@@ -629,28 +794,21 @@ function buildNavigationSnapshot(): NavigationSnapshot {
       backend: "codex",
       executionMode: "default",
     },
-    threads: [
-      {
-        id: "thread-1",
-        inbox: {
-          inInbox: false,
-        },
-        linkedDirectories: [],
-        source: "codex",
-        title: "Thread one",
-        titleSource: "explicit",
+    threads: Array.from({ length: threadCount }, (_, index) => ({
+      id: `thread-${index + 1}`,
+      inbox: {
+        inInbox: false,
       },
-      {
-        id: "thread-2",
-        inbox: {
-          inInbox: false,
-        },
-        linkedDirectories: [],
-        source: "codex",
-        title: "Thread two",
-        titleSource: "explicit",
-      },
-    ],
+      linkedDirectories: [],
+      source: "codex",
+      title:
+        index === 0
+          ? "Thread one"
+          : index === 1
+            ? "Thread two"
+            : `Thread ${index + 1}`,
+      titleSource: "explicit",
+    })),
     unchanged: false,
   };
 }

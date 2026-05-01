@@ -152,6 +152,11 @@ export type DiscordApi = {
     request: DiscordCreateMessageRequest,
   ): Promise<DiscordMessage>;
   sendTyping(channelId: string): Promise<void>;
+  updateMessage(
+    channelId: string,
+    messageId: string,
+    request: DiscordCreateMessageRequest,
+  ): Promise<DiscordMessage>;
 };
 
 type DiscordAdapterOptions = {
@@ -235,6 +240,34 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     );
     const imageUrl = this.firstImageUrl(intent);
     const chunks = splitDiscordContent(textForDiscordIntent(intent) || " ");
+    const componentPayload =
+      components ?? (intent.delivery?.replaceMarkup ? [] : undefined);
+
+    if (
+      intent.delivery?.mode === "update" &&
+      target.messageId &&
+      chunks.length === 1 &&
+      !imageUrl
+    ) {
+      try {
+        const message = await this.api.updateMessage(target.channelId, target.messageId, {
+          allowed_mentions: defensiveAllowedMentions(),
+          components: componentPayload,
+          content: chunks[0] ?? " ",
+        });
+        return {
+          channel: this.channel,
+          deliveredAt: this.now(),
+          outcome: "updated",
+          surface: this.surfaceForMessage(message, target),
+        };
+      } catch (error) {
+        if (intent.delivery.fallback !== "present_new") {
+          throw error;
+        }
+      }
+    }
+
     const messages: DiscordMessage[] = [];
 
     for (const [index, chunk] of chunks.entries()) {
@@ -260,20 +293,8 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     return {
       channel: this.channel,
       deliveredAt: this.now(),
-      outcome: "presented",
-      surface: lastMessage
-        ? {
-            channel: this.channel,
-            id: lastMessage.id,
-            state: {
-              opaque: {
-                channelId: target.channelId,
-                guildId: target.guildId ?? null,
-                messageId: lastMessage.id,
-              },
-            },
-          }
-        : undefined,
+      outcome: intent.delivery?.mode === "update" ? "presented_new" : "presented",
+      surface: lastMessage ? this.surfaceForMessage(lastMessage, target) : undefined,
     };
   }
 
@@ -405,12 +426,20 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   private resolveTarget(
     intent: MessagingSurfaceIntent,
-  ): { channelId: string; guildId?: string } | undefined {
+  ): { channelId: string; guildId?: string; messageId?: string } | undefined {
     const channel = intent.audit?.channel.conversation;
     if (channel) {
+      const opaque = intent.targetSurface?.state?.opaque;
+      const messageId =
+        opaque && typeof opaque === "object" && !Array.isArray(opaque)
+          ? typeof opaque.messageId === "string"
+            ? opaque.messageId
+            : undefined
+          : undefined;
       return {
         channelId: channel.id,
         guildId: channel.parentId,
+        messageId,
       };
     }
 
@@ -423,8 +452,26 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       ? {
           channelId: opaque.channelId,
           guildId: typeof opaque.guildId === "string" ? opaque.guildId : undefined,
+          messageId: typeof opaque.messageId === "string" ? opaque.messageId : undefined,
         }
       : undefined;
+  }
+
+  private surfaceForMessage(
+    message: DiscordMessage,
+    target: { channelId: string; guildId?: string },
+  ): MessagingDeliveryResult["surface"] {
+    return {
+      channel: this.channel,
+      id: message.id,
+      state: {
+        opaque: {
+          channelId: target.channelId,
+          guildId: target.guildId ?? null,
+          messageId: message.id,
+        },
+      },
+    };
   }
 
   private firstImageUrl(intent: MessagingSurfaceIntent): string | undefined {
@@ -437,7 +484,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   private async deliverActivity(
     intent: Extract<MessagingSurfaceIntent, { kind: "activity" }>,
-    target: { channelId: string; guildId?: string },
+    target: { channelId: string; guildId?: string; messageId?: string },
   ): Promise<MessagingDeliveryResult> {
     if (intent.activity !== "typing") {
       return {
@@ -679,6 +726,16 @@ class DiscordRestApi implements DiscordApi {
     await this.rest.post(`/channels/${channelId}/typing`, {
       body: {},
     });
+  }
+
+  async updateMessage(
+    channelId: string,
+    messageId: string,
+    request: DiscordCreateMessageRequest,
+  ): Promise<DiscordMessage> {
+    return (await this.rest.patch(Routes.channelMessage(channelId, messageId), {
+      body: request,
+    })) as DiscordMessage;
   }
 }
 
