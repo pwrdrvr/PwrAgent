@@ -384,6 +384,13 @@ function insertWysiwygLineBreak(editor: TiptapEditor): boolean {
     return editor.commands.newlineInCode();
   }
 
+  if (editor.isActive("listItem")) {
+    if (editor.chain().splitListItem("listItem").liftListItem("listItem").run()) {
+      return true;
+    }
+    return editor.commands.liftListItem("listItem");
+  }
+
   return editor.commands.first(({ commands }) => [
     () => commands.createParagraphNear(),
     () => commands.liftEmptyBlock(),

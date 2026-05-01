@@ -577,6 +577,23 @@ test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", a
       "data-value",
       "Cats\n\n\n\n## Later",
     );
+
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await app.window.keyboard.press("Delete");
+    await app.window.keyboard.type("- Some item");
+    await expect(tiptapInput.locator("li", { hasText: "Some item" })).toBeVisible();
+
+    await app.window.keyboard.press("Shift+Enter");
+    await app.window.keyboard.type("after list");
+
+    await expect(tiptapInput.locator("li", { hasText: "after list" })).toHaveCount(0);
+    await expect(tiptapInput.locator("p", { hasText: "after list" })).toBeVisible();
+    await expect(tiptapInput).toHaveAttribute(
+      "data-value",
+      "- Some item\n\nafter list",
+    );
   } finally {
     await app.close();
     await fixture.cleanup();
