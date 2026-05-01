@@ -932,6 +932,42 @@ describe("MessagingController", () => {
     );
   });
 
+  it("uses live thread permissions instead of stale binding preferences", async () => {
+    const harness = await createHarness();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.executionMode = "default";
+    harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(buildTextEvent("").channel);
+    expect(binding).toBeDefined();
+    await harness.store.upsertBinding({
+      ...binding!,
+      preferences: {
+        executionMode: "full-access",
+        permissionsMode: "full-access",
+        updatedAt: 900,
+      },
+      updatedAt: 900,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Permissions: Default Access"),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("run npm view dive"));
+
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "default",
+      }),
+    );
+  });
+
   it("stops an active turn through the backend bridge", async () => {
     const harness = await createHarness();
     await bindThread(harness);

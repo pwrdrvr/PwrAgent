@@ -86,6 +86,44 @@ describe("buildBindingStatusIntent", () => {
       id: "42",
     });
   });
+
+  it("renders live thread permissions ahead of stale binding preferences", () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.executionMode = "default";
+    const intent = buildBindingStatusIntent({
+      id: "status-3",
+      createdAt: 1000,
+      binding: {
+        id: "binding-1",
+        authorizedActorIds: ["user-1"],
+        backend: "codex",
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "chat-1",
+            kind: "dm",
+          },
+        },
+        createdAt: 1000,
+        preferences: {
+          executionMode: "full-access",
+          permissionsMode: "full-access",
+          updatedAt: 900,
+        },
+        threadId: "thread-1",
+        updatedAt: 1000,
+      } satisfies MessagingBindingRecord,
+      navigation,
+    });
+
+    expect(intent.text).toContain("Permissions: Default Access");
+    expect(intent.actions).toContainEqual(
+      expect.objectContaining({
+        id: "status:permissions",
+        label: "Permissions: Default",
+      }),
+    );
+  });
 });
 
 function buildNavigationSnapshot(): NavigationSnapshot {

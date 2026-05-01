@@ -20,17 +20,17 @@ export function buildBindingStatusIntent(params: {
     display?.projectLabel ?? thread?.linkedDirectories[0]?.label ?? unavailable();
   const directoryPath =
     display?.directoryPath ?? thread?.linkedDirectories[0]?.path ?? unavailable();
-  const model = preferences?.model ?? thread?.model ?? defaults?.model ?? unavailable();
+  const model = thread?.model ?? preferences?.model ?? defaults?.model ?? unavailable();
   const reasoning =
-    preferences?.reasoningEffort ??
     thread?.reasoningEffort ??
+    preferences?.reasoningEffort ??
     defaults?.reasoningEffort ??
     unavailable();
-  const fastMode = preferences?.fastMode ?? defaults?.fastMode;
+  const fastMode = thread?.fastMode ?? preferences?.fastMode ?? defaults?.fastMode;
   const permissionsMode =
+    thread?.executionMode ??
     preferences?.permissionsMode ??
     (preferences?.executionMode === "full-access" ? "full-access" : undefined) ??
-    (thread?.executionMode === "full-access" ? "full-access" : undefined) ??
     (defaults?.executionMode === "full-access" ? "full-access" : "default");
   const activeTurn = params.binding.activeTurn;
 

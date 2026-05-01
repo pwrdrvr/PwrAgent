@@ -17,6 +17,7 @@ import type {
   MessagingPendingIntentRecord,
   MessagingSurfaceIntent,
   NavigationSnapshot,
+  NavigationThreadSummary,
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragnt/shared";
@@ -56,11 +57,43 @@ const messagingControllerLog = getMainLogger("pwragnt:messaging");
 
 function executionModeForBinding(
   binding: MessagingBindingRecord,
+  navigation?: NavigationSnapshot,
 ): ThreadExecutionMode | undefined {
+  const thread = findThreadForBinding(navigation, binding);
   return (
+    thread?.executionMode ??
     binding.preferences?.executionMode ??
     (binding.preferences?.permissionsMode === "full-access" ? "full-access" : undefined) ??
     (binding.preferences?.permissionsMode === "default" ? "default" : undefined)
+  );
+}
+
+function turnSettingsForBinding(
+  binding: MessagingBindingRecord,
+  navigation?: NavigationSnapshot,
+): {
+  executionMode?: ThreadExecutionMode;
+  fastMode?: boolean;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+} {
+  const thread = findThreadForBinding(navigation, binding);
+  return {
+    executionMode: executionModeForBinding(binding, navigation),
+    fastMode: thread?.fastMode ?? binding.preferences?.fastMode,
+    model: thread?.model ?? binding.preferences?.model,
+    reasoningEffort: thread?.reasoningEffort ?? binding.preferences?.reasoningEffort,
+    serviceTier: thread?.serviceTier ?? binding.preferences?.serviceTier,
+  };
+}
+
+function findThreadForBinding(
+  navigation: NavigationSnapshot | undefined,
+  binding: MessagingBindingRecord,
+): NavigationThreadSummary | undefined {
+  return navigation?.threads.find(
+    (thread) => thread.source === binding.backend && thread.id === binding.threadId,
   );
 }
 
@@ -385,6 +418,10 @@ export class MessagingController {
       return;
     }
 
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const turnSettings = turnSettingsForBinding(binding, navigation);
     const started = await this.options.backend.startTurn({
       backend: binding.backend,
       threadId: binding.threadId,
@@ -394,11 +431,7 @@ export class MessagingController {
           text: event.text,
         },
       ],
-      executionMode: executionModeForBinding(binding),
-      fastMode: binding.preferences?.fastMode,
-      model: binding.preferences?.model,
-      reasoningEffort: binding.preferences?.reasoningEffort,
-      serviceTier: binding.preferences?.serviceTier,
+      ...turnSettings,
     });
     const updatedBinding = await this.options.store.upsertBinding({
       ...binding,
@@ -413,7 +446,7 @@ export class MessagingController {
     await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!, {
       force: true,
     });
-    await this.renderBindingStatus(updatedBinding);
+    await this.renderBindingStatus(updatedBinding, undefined, navigation);
   }
 
   private async handleCallback(event: MessagingInboundCallbackEvent): Promise<void> {
@@ -910,7 +943,7 @@ export class MessagingController {
       }),
       updatedBinding,
     );
-    await this.renderBindingStatus(updatedBinding, event, navigation);
+    await this.renderBindingStatus(updatedBinding, event);
   }
 
   private async applyBrowseBindingMetadata(
@@ -1165,8 +1198,11 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    const nextMode =
-      binding.preferences?.permissionsMode === "full-access" ? "default" : "full-access";
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const currentMode = executionModeForBinding(binding, navigation) ?? "default";
+    const nextMode = currentMode === "full-access" ? "default" : "full-access";
     const executionMode = nextMode;
     await this.options.backend.setThreadExecutionMode?.({
       backend: binding.backend,
