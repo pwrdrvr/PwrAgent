@@ -131,7 +131,6 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
     const selectedRow = app.window.locator(".thread-row.is-selected").first();
     const primaryButton = app.window.locator(".button--primary").first();
     const composerInput = app.window.getByLabel("Reply");
-    const composerInputSurface = app.window.getByTestId("composer-rich-input");
     const sendButton = app.window.getByRole("button", { name: "Send" });
 
     await expect(shell).toHaveCSS("background-color", "rgb(0, 0, 0)");
@@ -168,7 +167,7 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
     });
 
     await assertTangerineFocusRing(activeLens);
-    await assertTangerineFocusRing(composerInputSurface, composerInput);
+    await assertTangerineFocusRing(composerInput);
     await composerInput.fill("Focus ring check");
     await expect(sendButton).toBeEnabled();
     await assertTangerineFocusRing(sendButton);
