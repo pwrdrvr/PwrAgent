@@ -283,6 +283,11 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
   };
+  lastSteerTurnParams?: {
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    expectedTurnId: string;
+  };
   lastStartReviewParams?: {
     threadId: string;
     target: AppServerReviewTarget;
@@ -318,6 +323,7 @@ class MockBackendClient {
   };
   listThreadsCallCount = 0;
   listModelsCallCount = 0;
+  steerTurnCallCount = 0;
   lastListThreadsParams?: {
     filter?: string;
   };
@@ -345,6 +351,7 @@ class MockBackendClient {
       modelListErrors?: Error[];
       account?: BackendAccountSummary;
       rateLimits?: BackendRateLimitSummary[];
+      steerTurnError?: Error;
       setThreadPermissionsError?: Error;
     }
   ) {}
@@ -501,6 +508,20 @@ class MockBackendClient {
 
   async interruptTurn(): Promise<{ threadId: string; turnId: string }> {
     return { threadId: "thread-1", turnId: "turn-1" };
+  }
+
+  async steerTurn(params: {
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    expectedTurnId: string;
+  }): Promise<{ threadId: string; turnId: string }> {
+    this.steerTurnCallCount += 1;
+    this.lastSteerTurnParams = params;
+    if (this.options.steerTurnError) {
+      throw this.options.steerTurnError;
+    }
+
+    return { threadId: params.threadId, turnId: params.expectedTurnId };
   }
 
   async emit(notification: AppServerNotification): Promise<void> {
@@ -1223,6 +1244,47 @@ describe("DesktopBackendRegistry", () => {
       threadId: "thread-title",
       name: "Leopard tea button",
     });
+
+    await registry.close();
+  });
+
+  it("steers Codex turns through the active execution mode for the thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+      steerTurnError: new Error("json-rpc error (-32600): no active turn to steer"),
+    });
+    const codexFullAccessClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+      steerTurnError: new Error(
+        "json-rpc error (-32600): expected active turn id `turn-0` but found `turn-1`",
+      ),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock({ executionMode: "full-access" }),
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Start active work" }],
+    });
+
+    await expect(
+      registry.steerTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        expectedTurnId: "turn-0",
+        input: [{ type: "text", text: "Course correct" }],
+      }),
+    ).rejects.toThrow("expected active turn id `turn-0` but found `turn-1`");
+
+    expect(codexFullAccessClient.steerTurnCallCount).toBe(1);
+    expect(codexClient.steerTurnCallCount).toBe(0);
 
     await registry.close();
   });

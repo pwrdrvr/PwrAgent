@@ -773,6 +773,230 @@ describe("Composer", () => {
     expect(screen.getByText("steer failed")).toBeInTheDocument();
   });
 
+  it("sends a pending steer as the next turn when Codex reports no active turn", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const steerTurn = vi.fn(async () => {
+      throw new Error("json-rpc error (-32600): no active turn to steer");
+    });
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-2",
+    }));
+    const onActiveTurnIdChange = vi.fn();
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex", {
+              models: [
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  current: true,
+                  supportsReasoning: true,
+                  supportsSteering: true,
+                },
+              ],
+            }),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn,
+          steerTurn,
+        }}
+        disabled={false}
+        onActiveTurnIdChange={onActiveTurnIdChange}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Recovered stale steer",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Send after stale steer" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter", metaKey: true });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            item: {
+              type: "tool_call",
+              output: "ready",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(steerTurn).toHaveBeenCalledTimes(1);
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "thread-1",
+          input: [{ type: "text", text: "Send after stale steer" }],
+        }),
+      );
+    });
+    expect(onActiveTurnIdChange).toHaveBeenCalledWith(undefined);
+    expect(screen.queryByText("Pending steer")).not.toBeInTheDocument();
+    expect(screen.queryByText("no active turn to steer")).not.toBeInTheDocument();
+  });
+
+  it("queues a stale pending steer behind the active turn Codex reports", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const steerTurn = vi.fn(async () => {
+      throw new Error(
+        "json-rpc error (-32600): expected active turn id `turn-1` but found `turn-2`",
+      );
+    });
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-3",
+    }));
+    const onActiveTurnIdChange = vi.fn();
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex", {
+              models: [
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  current: true,
+                  supportsReasoning: true,
+                  supportsSteering: true,
+                },
+              ],
+            }),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn,
+          steerTurn,
+        }}
+        disabled={false}
+        onActiveTurnIdChange={onActiveTurnIdChange}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Queued stale steer",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Queue after the real active turn" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter", metaKey: true });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            item: {
+              type: "tool_call",
+              output: "ready",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(steerTurn).toHaveBeenCalledTimes(1);
+      expect(onActiveTurnIdChange).toHaveBeenCalledWith("turn-2");
+    });
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(screen.getByText("Queued next")).toBeInTheDocument();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            turn: {
+              id: "turn-2",
+              status: "completed",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "thread-1",
+          input: [{ type: "text", text: "Queue after the real active turn" }],
+        }),
+      );
+    });
+  });
+
   it("restores a pending steer to the draft when turn completion leaves an existing queue", async () => {
     let agentEventHandler:
       | ((event: {
