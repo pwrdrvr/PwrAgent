@@ -63,12 +63,14 @@ describe("App", () => {
         toolUpdateMode: { value: "show_some", source: "default" },
         telegram: {
           enabled: { value: false, source: "default" },
+          streamingResponses: { value: false, source: "default" },
           botToken: { configured: false, source: "unset", writable: true },
           authorizedUserIds: { value: [], source: "default" },
           authorizedSupergroups: { value: [], source: "default" },
         },
         discord: {
           enabled: { value: false, source: "default" },
+          streamingResponses: { value: false, source: "default" },
           botToken: { configured: false, source: "unset", writable: true },
           applicationId: { value: "", source: "default" },
           authorizedUserIds: { value: [], source: "default" },

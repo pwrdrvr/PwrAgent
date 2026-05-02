@@ -35,10 +35,12 @@ describe("DesktopSettingsService", () => {
         "",
         "[messaging.telegram]",
         "enabled = true",
+        "streaming_responses = true",
         'authorized_user_ids = ["111111111", "222222222"]',
         "authorized_supergroups = []",
         "",
         "[messaging.discord]",
+        "streaming_responses = true",
         'application_id = "123456789012345678"',
         'authorized_guilds = ["guild-one"]',
         "",
@@ -80,6 +82,10 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "config",
     });
+    expect(snapshot.messaging.telegram.streamingResponses).toEqual({
+      value: true,
+      source: "config",
+    });
     expect(snapshot.messaging.telegram.authorizedUserIds.value).toEqual([
       "111111111",
       "222222222",
@@ -88,6 +94,10 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.messaging.discord.applicationId.value).toBe(
       "123456789012345678",
     );
+    expect(snapshot.messaging.discord.streamingResponses).toEqual({
+      value: true,
+      source: "config",
+    });
     expect(snapshot.messaging.discord.authorizedGuilds.value).toEqual([
       "guild-one",
     ]);
@@ -210,6 +220,7 @@ describe("DesktopSettingsService", () => {
         PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "custom-widget-chips",
         PWRAGNT_MESSAGING_INPUT_DEBOUNCE_MS: "250",
         PWRAGNT_MESSAGING_TELEGRAM_ENABLED: "true",
+        PWRAGNT_MESSAGING_TELEGRAM_STREAMING_RESPONSES: "true",
         PWRAGNT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS: "222222222,333333333",
         PWRAGNT_CODEX_COMMAND: "codex-env",
         XAI_API_KEY: "xai-env",
@@ -231,6 +242,11 @@ describe("DesktopSettingsService", () => {
     });
     expect(snapshot.messaging.inputDebounceMs).toMatchObject({
       value: 250,
+      source: "env",
+      overriddenByEnv: false,
+    });
+    expect(snapshot.messaging.telegram.streamingResponses).toMatchObject({
+      value: true,
       source: "env",
       overriddenByEnv: false,
     });
@@ -269,6 +285,7 @@ describe("DesktopSettingsService", () => {
         toolUpdateMode: "show_less",
         telegram: {
           enabled: true,
+          streamingResponses: true,
           authorizedUserIds: ["111111111"],
           authorizedSupergroups: [],
         },
@@ -293,6 +310,7 @@ describe("DesktopSettingsService", () => {
     expect(contents).toContain("[messaging]");
     expect(contents).toContain("input_debounce_ms = 1250");
     expect(contents).toContain('tool_update_mode = "show_less"');
+    expect(contents).toContain("streaming_responses = true");
     expect(contents).toContain('authorized_user_ids = ["111111111"]');
     expect(contents).toContain("[applications.terminal]");
     expect(contents).toContain('preferred_id = "ghostty"');

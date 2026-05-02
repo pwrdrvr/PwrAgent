@@ -28,6 +28,7 @@ import {
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
+  DISCORD_STREAMING_RESPONSES_ENV,
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
@@ -36,6 +37,7 @@ import {
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
+  TELEGRAM_STREAMING_RESPONSES_ENV,
   WORKTREE_STORAGE_ENV,
   readEnvBoolean,
   readEnvComposer,
@@ -166,6 +168,11 @@ export class DesktopSettingsService {
             false,
             TELEGRAM_ENABLED_ENV,
           ),
+          streamingResponses: this.resolveBoolean(
+            config.messaging?.telegram?.streamingResponses,
+            false,
+            TELEGRAM_STREAMING_RESPONSES_ENV,
+          ),
           botToken: telegramBotToken,
           authorizedUserIds: this.resolveList(
             config.messaging?.telegram?.authorizedUserIds,
@@ -181,6 +188,11 @@ export class DesktopSettingsService {
             config.messaging?.discord?.enabled,
             false,
             DISCORD_ENABLED_ENV,
+          ),
+          streamingResponses: this.resolveBoolean(
+            config.messaging?.discord?.streamingResponses,
+            false,
+            DISCORD_STREAMING_RESPONSES_ENV,
           ),
           botToken: discordBotToken,
           applicationId: this.resolveString(

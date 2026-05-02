@@ -97,6 +97,21 @@ export function MessagingSettings(props: {
           onClearSecret={props.onClearSecret}
           onReplaceSecret={props.onReplaceSecret}
         />
+        <ToggleField
+          checked={telegram.streamingResponses.value}
+          disabled={props.saving}
+          label="Streaming Responses"
+          source={sourceBadge(telegram.streamingResponses)}
+          onChange={(streamingResponses) => {
+            void props.onSaveTelegram({
+              ...telegram,
+              streamingResponses: {
+                ...telegram.streamingResponses,
+                value: streamingResponses,
+              },
+            });
+          }}
+        />
         <ListField
           disabled={props.saving}
           label="Authorized User IDs"
@@ -149,6 +164,21 @@ export function MessagingSettings(props: {
           state={discord.botToken}
           onClearSecret={props.onClearSecret}
           onReplaceSecret={props.onReplaceSecret}
+        />
+        <ToggleField
+          checked={discord.streamingResponses.value}
+          disabled={props.saving}
+          label="Streaming Responses"
+          source={sourceBadge(discord.streamingResponses)}
+          onChange={(streamingResponses) => {
+            void props.onSaveDiscord({
+              ...discord,
+              streamingResponses: {
+                ...discord.streamingResponses,
+                value: streamingResponses,
+              },
+            });
+          }}
         />
         <TextField
           disabled={props.saving}
@@ -272,6 +302,7 @@ function ToggleField(props: {
         <span className="settings-source">{props.source}</span>
       </span>
       <input
+        aria-label={props.label}
         checked={props.checked}
         disabled={props.disabled}
         type="checkbox"

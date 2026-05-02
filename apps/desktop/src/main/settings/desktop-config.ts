@@ -30,11 +30,13 @@ export type DesktopSettingsConfig = {
     };
     telegram?: {
       enabled?: boolean;
+      streamingResponses?: boolean;
       authorizedUserIds?: string[];
       authorizedSupergroups?: string[];
     };
     discord?: {
       enabled?: boolean;
+      streamingResponses?: boolean;
       applicationId?: string;
       authorizedUserIds?: string[];
       authorizedGuilds?: string[];
@@ -250,6 +252,10 @@ export function stringifyDesktopSettingsToml(
         "[messaging.telegram]",
         formatOptionalTomlEntry("enabled", telegram.enabled),
         formatOptionalTomlEntry(
+          "streaming_responses",
+          telegram.streamingResponses,
+        ),
+        formatOptionalTomlEntry(
           "authorized_user_ids",
           telegram.authorizedUserIds,
         ),
@@ -269,6 +275,10 @@ export function stringifyDesktopSettingsToml(
       [
         "[messaging.discord]",
         formatOptionalTomlEntry("enabled", discord.enabled),
+        formatOptionalTomlEntry(
+          "streaming_responses",
+          discord.streamingResponses,
+        ),
         formatOptionalTomlEntry("application_id", discord.applicationId),
         formatOptionalTomlEntry(
           "authorized_user_ids",
@@ -347,11 +357,13 @@ function normalizeDesktopConfig(
       },
       telegram: {
         enabled: readBoolean(telegram?.enabled),
+        streamingResponses: readBoolean(telegram?.streaming_responses),
         authorizedUserIds: readStringArray(telegram?.authorized_user_ids),
         authorizedSupergroups: readStringArray(telegram?.authorized_supergroups),
       },
       discord: {
         enabled: readBoolean(discord?.enabled),
+        streamingResponses: readBoolean(discord?.streaming_responses),
         applicationId: readString(discord?.application_id),
         authorizedUserIds: readStringArray(discord?.authorized_user_ids),
         authorizedGuilds: readStringArray(discord?.authorized_guilds),

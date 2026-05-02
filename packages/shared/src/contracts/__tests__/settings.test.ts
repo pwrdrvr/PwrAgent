@@ -40,6 +40,7 @@ describe("desktop settings contracts", () => {
         },
         telegram: {
           enabled: { value: true, source: "config" },
+          streamingResponses: { value: true, source: "config" },
           botToken: {
             configured: true,
             source: "keychain",
@@ -56,6 +57,7 @@ describe("desktop settings contracts", () => {
         },
         discord: {
           enabled: { value: false, source: "default" },
+          streamingResponses: { value: false, source: "default" },
           botToken: {
             configured: true,
             source: "env",

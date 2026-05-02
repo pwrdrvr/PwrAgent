@@ -4,4 +4,5 @@ export type DiscordMessagingConfig = {
   botToken: string;
   channel: "discord";
   enabled?: boolean;
+  streamingResponses?: boolean;
 };

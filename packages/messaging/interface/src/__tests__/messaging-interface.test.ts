@@ -69,5 +69,6 @@ describe("messaging interface package", () => {
       },
     ]);
     expect(MESSAGING_SURFACE_INTENT_KINDS).toContain("message");
+    expect(MESSAGING_SURFACE_INTENT_KINDS).toContain("stream_update");
   });
 });

@@ -8,6 +8,7 @@ import {
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
+  DISCORD_STREAMING_RESPONSES_ENV,
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
@@ -15,6 +16,7 @@ import {
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
+  TELEGRAM_STREAMING_RESPONSES_ENV,
   readEnvBoolean,
   readEnvInteger,
   readEnvMessagingImageProfile,
@@ -25,6 +27,7 @@ export {
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
+  DISCORD_STREAMING_RESPONSES_ENV,
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
@@ -32,6 +35,7 @@ export {
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
+  TELEGRAM_STREAMING_RESPONSES_ENV,
 };
 
 export type DesktopMessagingConfig = {
@@ -66,6 +70,10 @@ export function loadDesktopMessagingConfig(
             channel: "telegram" as const,
             enabled: true,
             botToken: telegramBotToken,
+            streamingResponses: readEnvBoolean(
+              env,
+              TELEGRAM_STREAMING_RESPONSES_ENV,
+            ).value ?? false,
             authorizedActorIds: telegramAuthorizedActorIds,
           },
         }
@@ -77,6 +85,10 @@ export function loadDesktopMessagingConfig(
             enabled: true,
             botToken: discordBotToken,
             applicationId: readEnv(env, DISCORD_APPLICATION_ID_ENV),
+            streamingResponses: readEnvBoolean(
+              env,
+              DISCORD_STREAMING_RESPONSES_ENV,
+            ).value ?? false,
             authorizedActorIds: discordAuthorizedActorIds,
           },
         }
@@ -123,6 +135,7 @@ export async function loadDesktopMessagingConfigFromSettings(
             channel: "telegram" as const,
             enabled: true,
             botToken: telegramBotToken,
+            streamingResponses: snapshot.messaging.telegram.streamingResponses.value,
             authorizedActorIds: telegramAuthorizedActorIds,
           },
         }
@@ -144,6 +157,7 @@ export async function loadDesktopMessagingConfigFromSettings(
               (envConfig.discord?.applicationId
                 ?? snapshot.messaging.discord.applicationId.value)
               || undefined,
+            streamingResponses: snapshot.messaging.discord.streamingResponses.value,
             authorizedActorIds: discordAuthorizedActorIds,
           },
         }
@@ -160,6 +174,7 @@ export function redactDesktopMessagingConfig(
           channel: config.telegram.channel,
           enabled: config.telegram.enabled !== false,
           botToken: "[REDACTED]",
+          streamingResponses: config.telegram.streamingResponses ?? false,
           authorizedActorCount: config.telegram.authorizedActorIds.length,
         }
       : undefined,
@@ -171,6 +186,7 @@ export function redactDesktopMessagingConfig(
           enabled: config.discord.enabled !== false,
           applicationId: config.discord.applicationId,
           botToken: "[REDACTED]",
+          streamingResponses: config.discord.streamingResponses ?? false,
           authorizedActorCount: config.discord.authorizedActorIds.length,
         }
       : undefined,
