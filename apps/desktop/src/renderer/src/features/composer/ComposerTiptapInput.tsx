@@ -14,7 +14,7 @@ import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import type { AppServerSkillSummary } from "@pwragnt/shared";
-import { buildSkillTooltip } from "../../lib/skill-mentions";
+import { buildSkillTooltip, findSkillTrigger } from "../../lib/skill-mentions";
 import type {
   ComposerRichInputHandle,
   ComposerRichInputProps,
@@ -42,18 +42,30 @@ const SkillMention = Mention.extend({
     return {
       id: {
         default: null,
+        parseHTML: (element) =>
+          element.getAttribute("data-composer-skill-token-id") ??
+          element.getAttribute("data-id"),
       },
       name: {
         default: null,
+        parseHTML: (element) =>
+          element.getAttribute("data-skill-name") ??
+          element.getAttribute("data-label") ??
+          element.textContent?.replace(/^\$/, "") ??
+          null,
       },
       path: {
         default: null,
+        parseHTML: (element) => element.getAttribute("data-skill-path"),
       },
       description: {
         default: null,
+        parseHTML: (element) => element.getAttribute("data-skill-description"),
       },
       shortDescription: {
         default: null,
+        parseHTML: (element) =>
+          element.getAttribute("data-skill-short-description"),
       },
     };
   },
@@ -71,8 +83,16 @@ const SkillMention = Mention.extend({
         class: "thread-row__chip skill-chip composer-tiptap-input__mention",
         "data-type": "mention",
         "data-composer-skill-token-id": String(node.attrs.id ?? ""),
+        "data-id": String(node.attrs.id ?? ""),
+        "data-label": skill.name,
         "data-skill-name": skill.name,
         ...(skill.path ? { "data-skill-path": skill.path } : {}),
+        ...(skill.description
+          ? { "data-skill-description": skill.description }
+          : {}),
+        ...(skill.shortDescription
+          ? { "data-skill-short-description": skill.shortDescription }
+          : {}),
         ...(tooltip ? { "data-tooltip": tooltip } : {}),
       },
       `$${skill.name}`,
@@ -404,16 +424,58 @@ function insertWysiwygSoftBreak(editor: TiptapEditor): boolean {
   return editor.commands.setHardBreak();
 }
 
+function getCodeBlockMarkdownParts(node: ProseMirrorNode): {
+  contentLength: number;
+  prefixLength: number;
+  totalLength: number;
+} {
+  const language = typeof node.attrs.language === "string" ? node.attrs.language : "";
+  const prefixLength = `\`\`\`${language}\n`.length;
+  const contentLength = node.textContent.length;
+  const suffixLength = "\n```".length;
+  return {
+    contentLength,
+    prefixLength,
+    totalLength: prefixLength + contentLength + suffixLength,
+  };
+}
+
 function getDraftIndexAtPosition(
   editor: NonNullable<ReturnType<typeof useEditor>>,
   position: number,
+  mode: TiptapReadMode,
 ): number {
   let index = 0;
   let found = false;
 
-  editor.state.doc.descendants((node, pos) => {
+  editor.state.doc.descendants((node, pos, parent, childIndex) => {
     if (found) {
       return false;
+    }
+
+    if (parent?.type.name === "doc") {
+      if (position <= pos) {
+        found = true;
+        return false;
+      }
+      if (childIndex > 0) {
+        index += mode === "markdown" ? 2 : 1;
+      }
+      if (mode === "markdown" && node.type.name === "codeBlock") {
+        const codeBlock = getCodeBlockMarkdownParts(node);
+        const nodeEnd = pos + node.nodeSize;
+        if (position >= nodeEnd) {
+          index += codeBlock.totalLength;
+          return false;
+        }
+        index += codeBlock.prefixLength;
+        return true;
+      }
+      if (position <= pos + 1) {
+        found = true;
+        return false;
+      }
+      return true;
     }
 
     if (node.isText) {
@@ -450,19 +512,50 @@ function getDraftIndexAtPosition(
 function getPositionAtDraftIndex(
   editor: NonNullable<ReturnType<typeof useEditor>>,
   draftIndex: number,
+  mode: TiptapReadMode,
 ): number {
   let index = 0;
   let position = editor.state.doc.content.size;
   let found = false;
 
-  editor.state.doc.descendants((node, pos) => {
+  editor.state.doc.descendants((node, pos, parent, childIndex) => {
     if (found) {
       return false;
     }
 
+    if (parent?.type.name === "doc") {
+      if (childIndex > 0) {
+        const separatorLength = mode === "markdown" ? 2 : 1;
+        if (draftIndex < index + separatorLength) {
+          position = pos + 1;
+          found = true;
+          return false;
+        }
+        index += separatorLength;
+      }
+      if (mode === "markdown" && node.type.name === "codeBlock") {
+        const codeBlock = getCodeBlockMarkdownParts(node);
+        if (draftIndex <= index + codeBlock.totalLength) {
+          const codeContentIndex = draftIndex - index - codeBlock.prefixLength;
+          if (codeContentIndex <= 0) {
+            position = pos + 1;
+          } else if (codeContentIndex <= codeBlock.contentLength) {
+            position = pos + 1 + codeContentIndex;
+          } else {
+            position = pos + node.nodeSize;
+          }
+          found = true;
+          return false;
+        }
+        index += codeBlock.totalLength;
+        return false;
+      }
+      return true;
+    }
+
     if (node.isText) {
       const textLength = node.text?.length ?? 0;
-      if (draftIndex < index + textLength) {
+      if (draftIndex <= index + textLength) {
         position = pos + Math.max(0, draftIndex - index);
         found = true;
         return false;
@@ -510,6 +603,16 @@ function getSkillSummary(attrs: Record<string, unknown>): AppServerSkillSummary 
   };
 }
 
+function getSkillMentionAttrs(skill: ComposerSkillToken): Record<string, unknown> {
+  return {
+    id: skill.id,
+    name: skill.name,
+    path: skill.path ?? null,
+    description: skill.description ?? null,
+    shortDescription: skill.shortDescription ?? null,
+  };
+}
+
 function getContentSignature(params: {
   skillTokens: ComposerSkillToken[];
   value: string;
@@ -522,6 +625,66 @@ function getContentSignature(params: {
       path: token.path,
     })),
   });
+}
+
+function applyExternalSkillInsertion(params: {
+  current: TiptapReadState;
+  editor: TiptapEditor;
+  nextSkillTokens: ComposerSkillToken[];
+  nextValue: string;
+  readMode: TiptapReadMode;
+  selectionIndex: number;
+}): boolean {
+  if (params.nextSkillTokens.length !== params.current.skillTokens.length + 1) {
+    return false;
+  }
+
+  const currentTokenIds = new Set(
+    params.current.skillTokens.map((token) => token.id),
+  );
+  const insertedSkill = params.nextSkillTokens.find(
+    (token) => !currentTokenIds.has(token.id),
+  );
+  if (!insertedSkill) {
+    return false;
+  }
+
+  const trigger =
+    findSkillTrigger(params.current.value, params.selectionIndex) ??
+    findSkillTrigger(params.current.value, params.current.value.length);
+  if (!trigger || trigger.start !== insertedSkill.index) {
+    return false;
+  }
+
+  const before = params.current.value.slice(0, trigger.start);
+  const after = params.current.value.slice(trigger.end);
+  const insertedSpace = after.length > 0 && !/^\s/.test(after);
+  const expectedValue = `${before}${insertedSpace ? " " : ""}${after}`;
+  if (params.nextValue !== expectedValue) {
+    return false;
+  }
+
+  const from = getPositionAtDraftIndex(
+    params.editor,
+    trigger.start,
+    params.readMode,
+  );
+  const to = getPositionAtDraftIndex(params.editor, trigger.end, params.readMode);
+  const insertedContent: JSONContent[] = [
+    {
+      type: "mention",
+      attrs: getSkillMentionAttrs(insertedSkill),
+    },
+  ];
+  if (insertedSpace) {
+    insertedContent.push({ type: "text", text: " " });
+  }
+
+  return params.editor.commands.insertContentAt(
+    { from, to },
+    insertedContent,
+    { updateSelection: true },
+  );
 }
 
 export const ComposerTiptapInput = forwardRef<
@@ -626,6 +789,7 @@ export const ComposerTiptapInput = forwardRef<
       selectionIndexRef.current = getDraftIndexAtPosition(
         nextEditor,
         nextEditor.state.selection.from,
+        readMode,
       );
       propsRef.current.onChange(next.value, next.skillTokens);
     },
@@ -633,6 +797,7 @@ export const ComposerTiptapInput = forwardRef<
       selectionIndexRef.current = getDraftIndexAtPosition(
         nextEditor,
         nextEditor.state.selection.from,
+        readMode,
       );
     },
   });
@@ -678,6 +843,21 @@ export const ComposerTiptapInput = forwardRef<
     }
 
     pendingExternalSignatureRef.current = propsSignature;
+    if (
+      applyExternalSkillInsertion({
+        current,
+        editor,
+        nextSkillTokens: props.skillTokens,
+        nextValue: props.value,
+        readMode,
+        selectionIndex: selectionIndexRef.current,
+      })
+    ) {
+      pendingSelectionIndexRef.current = undefined;
+      return;
+    }
+
+    pendingExternalSignatureRef.current = propsSignature;
     editor.commands.setContent(
       buildTiptapContent(props.value, props.skillTokens),
       { emitUpdate: false },
@@ -689,7 +869,7 @@ export const ComposerTiptapInput = forwardRef<
       pendingSelectionIndexRef.current = undefined;
       selectionIndexRef.current = nextSelectionIndex;
       editor.commands.setTextSelection(
-        getPositionAtDraftIndex(editor, nextSelectionIndex),
+        getPositionAtDraftIndex(editor, nextSelectionIndex, readMode),
       );
     }
   }, [editor, props.skillTokens, props.value, propsSignature, readMode]);
@@ -751,7 +931,7 @@ export const ComposerTiptapInput = forwardRef<
         return;
       }
       selectionIndexRef.current = start;
-      editor.commands.setTextSelection(getPositionAtDraftIndex(editor, start));
+      editor.commands.setTextSelection(getPositionAtDraftIndex(editor, start, readMode));
     },
   }));
 

@@ -1,0 +1,198 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "skill-autocomplete-interactions",
+    "threadId": "thread-skill-autocomplete"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list",
+          "turn/start"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-skill-autocomplete",
+          "title": "Skill autocomplete replay",
+          "titleSource": "explicit",
+          "summary": "Thread reply composer autocomplete regression coverage",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "pwragnt-fixture",
+              "label": "PwrAgnt",
+              "path": "/Users/huntharo/github/PwrAgnt",
+              "kind": "local"
+            }
+          ],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000000000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Check the desktop composer autocomplete behavior."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "Ready to exercise the thread reply composer."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Check the desktop composer autocomplete behavior."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "Ready to exercise the thread reply composer."
+          }
+        ],
+        "lastUserMessage": "Check the desktop composer autocomplete behavior.",
+        "lastAssistantMessage": "Ready to exercise the thread reply composer.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "skills-list-1",
+      "kind": "response",
+      "method": "skills/list",
+      "result": [
+        {
+          "cwd": "/Users/huntharo/github/PwrAgnt",
+          "skills": [
+            {
+              "name": "adversarial-document-reviewer",
+              "description": "Conditional document-review persona, selected when the document has >5 requirements or implementation units.",
+              "path": "/Users/huntharo/.codex/skills/adversarial-document-reviewer/SKILL.md",
+              "enabled": true,
+              "scope": "user"
+            },
+            {
+              "name": "ce:brainstorm",
+              "description": "Explore requirements and approaches through collaborative dialogue before writing a right-sized requirements document and planning implementation.",
+              "path": "/Users/huntharo/.codex/skills/ce-brainstorm/SKILL.md",
+              "enabled": true,
+              "scope": "user"
+            },
+            {
+              "name": "ce:compound",
+              "description": "Document a recently solved problem to compound your team's knowledge.",
+              "path": "/Users/huntharo/.codex/skills/ce-compound/SKILL.md",
+              "enabled": true,
+              "scope": "user"
+            },
+            {
+              "name": "ce:plan",
+              "description": "Transform feature descriptions or requirements into structured implementation plans.",
+              "path": "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+              "enabled": true,
+              "scope": "user"
+            },
+            {
+              "name": "zz-scroll-skill-01",
+              "description": "Generated skill 01 for autocomplete paging coverage.",
+              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-01/SKILL.md",
+              "enabled": true,
+              "scope": "user"
+            },
+            {
+              "name": "zz-scroll-skill-02",
+              "description": "Generated skill 02 for autocomplete paging coverage.",
+              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-02/SKILL.md",
+              "enabled": true,
+              "scope": "user"
+            },
+            {
+              "name": "zz-scroll-skill-03",
+              "description": "Generated skill 03 for autocomplete paging coverage.",
+              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-03/SKILL.md",
+              "enabled": true,
+              "scope": "user"
+            },
+            {
+              "name": "zz-scroll-skill-04",
+              "description": "Generated skill 04 for autocomplete paging coverage.",
+              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-04/SKILL.md",
+              "enabled": true,
+              "scope": "user"
+            },
+            {
+              "name": "zz-scroll-skill-05",
+              "description": "Generated skill 05 for autocomplete paging coverage.",
+              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-05/SKILL.md",
+              "enabled": true,
+              "scope": "user"
+            },
+            {
+              "name": "zz-scroll-skill-06",
+              "description": "Generated skill 06 for autocomplete paging coverage.",
+              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-06/SKILL.md",
+              "enabled": true,
+              "scope": "user"
+            },
+            {
+              "name": "zz-scroll-skill-07",
+              "description": "Generated skill 07 for autocomplete paging coverage.",
+              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-07/SKILL.md",
+              "enabled": true,
+              "scope": "user"
+            },
+            {
+              "name": "zz-scroll-skill-08",
+              "description": "Generated skill 08 for autocomplete paging coverage.",
+              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-08/SKILL.md",
+              "enabled": true,
+              "scope": "user"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "turn-start-1",
+      "kind": "response",
+      "method": "turn/start",
+      "result": {
+        "threadId": "thread-skill-autocomplete",
+        "turnId": "turn-skill-autocomplete"
+      }
+    }
+  ]
+}

@@ -80,6 +80,68 @@ function backendSummary(
   };
 }
 
+const reportedSkillAutocompleteDraftPrefix =
+  "Oh shoot... I was wrong about this I think. I thought the desktop app didn't show the tool use but I was looking at a version of the desktop app that didn't start the turn. I just now looked at the instance that started the turn and it does indeed have the tool use notifications.\n\n\n\nLet's use ";
+
+const autocompleteRegressionSkills = [
+  {
+    name: "adversarial-document-reviewer",
+    description:
+      "Conditional document-review persona, selected when the document has >5 requirements or implementation units, makes significant architectural decisions.",
+    path: "/Users/huntharo/.codex/skills/adversarial-document-reviewer/SKILL.md",
+    enabled: true,
+  },
+  {
+    name: "ce:brainstorm",
+    description:
+      "Explore requirements and approaches through collaborative dialogue before writing a right-sized requirements document and planning implementation.",
+    path: "/Users/huntharo/.codex/skills/ce-brainstorm/SKILL.md",
+    enabled: true,
+  },
+  {
+    name: "ce:compound",
+    description: "Document a recently solved problem to compound your team's knowledge.",
+    path: "/Users/huntharo/.codex/skills/ce-compound/SKILL.md",
+    enabled: true,
+  },
+  {
+    name: "ce:plan",
+    description: "Transform feature descriptions or requirements into structured implementation plans.",
+    path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+    enabled: true,
+  },
+];
+
+function renderComposerWithRegressionSkills(
+  startTurn = vi.fn(async () => ({
+    backend: "codex" as const,
+    threadId: "thread-1",
+    turnId: "turn-1",
+  })),
+): { startTurn: typeof startTurn } {
+  render(
+    <Composer
+      composerImplementation="custom-widget-chips"
+      desktopApi={{
+        onAgentEvent: () => () => undefined,
+        startTurn,
+      }}
+      disabled={false}
+      skills={autocompleteRegressionSkills}
+      thread={{
+        id: "thread-1",
+        title: "Build Codex client",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      }}
+    />
+  );
+
+  return { startTurn };
+}
+
 describe("Composer", () => {
   it("opens the current workspace in discovered applications", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
@@ -2296,6 +2358,75 @@ describe("Composer", () => {
     expect(options.slice(2).join(" ")).toContain("$adversarial-document-reviewer");
   });
 
+  it("filters skill autocomplete from the reported multi-line draft body", () => {
+    renderComposerWithRegressionSkills();
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, {
+      target: { value: `${reportedSkillAutocompleteDraftPrefix}$ce` },
+    });
+
+    expect(screen.getByRole("listbox", { name: "Skills" })).toBeInTheDocument();
+
+    fireEvent.change(input, {
+      target: { value: `${reportedSkillAutocompleteDraftPrefix}$ce:p` },
+    });
+
+    let options = within(screen.getByRole("listbox", { name: "Skills" }))
+      .getAllByRole("button")
+      .map((option) => option.textContent ?? "");
+
+    expect(options[0]).toContain("$ce:plan");
+    expect(options[0]).not.toContain("$ce:brainstorm");
+
+    fireEvent.change(input, {
+      target: { value: `${reportedSkillAutocompleteDraftPrefix}$ce:plan` },
+    });
+
+    options = within(screen.getByRole("listbox", { name: "Skills" }))
+      .getAllByRole("button")
+      .map((option) => option.textContent ?? "");
+
+    expect(options[0]).toContain("$ce:plan");
+    expect(options[0]).not.toContain("$ce:brainstorm");
+  });
+
+  it("commits a skill in the reported multi-line draft without leftover text or extra blank lines", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    renderComposerWithRegressionSkills(startTurn);
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, {
+      target: { value: `${reportedSkillAutocompleteDraftPrefix}$ce:plan` },
+    });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const richInput = screen.getByTestId("composer-rich-input");
+    expect(within(richInput).getByText("$ce:plan")).toBeInTheDocument();
+    expect(input).toHaveValue(reportedSkillAutocompleteDraftPrefix);
+    expect(richInput).toHaveTextContent("Let's use");
+    expect(richInput).not.toHaveTextContent("Let's use $ce:plan plan");
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: `${reportedSkillAutocompleteDraftPrefix}[$ce:plan](/Users/huntharo/.codex/skills/ce-plan/SKILL.md)`.trim(),
+          },
+        ],
+      });
+    });
+  });
+
   it("renders selected skill chips without leaving raw mention text", async () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
@@ -2760,6 +2891,65 @@ describe("Composer", () => {
     expect(within(screen.getByTestId("composer-rich-input")).getByText("$ce:plan")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toHaveValue("");
     expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
+  });
+
+  it("moves skill autocomplete by a page with PageDown and PageUp", () => {
+    render(
+      <Composer
+        composerImplementation="custom-widget-chips"
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        skills={Array.from({ length: 12 }, (_, index) => {
+          const suffix = String(index + 1).padStart(2, "0");
+          return {
+            name: `ce:test-${suffix}`,
+            description: `Generated test skill ${suffix}`,
+            path: `/Users/huntharo/.codex/skills/ce-test-${suffix}/SKILL.md`,
+            enabled: true,
+          };
+        })}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const input = screen.getByLabelText("Reply");
+    fireEvent.change(input, { target: { value: "$ce" } });
+
+    const listbox = screen.getByRole("listbox", { name: "Skills" });
+    const getActiveOptionIndex = (): number =>
+      within(listbox)
+        .getAllByRole("button")
+        .findIndex((option) => option.getAttribute("aria-selected") === "true");
+
+    expect(getActiveOptionIndex()).toBe(0);
+
+    fireEvent.keyDown(input, { key: "PageDown" });
+    expect(getActiveOptionIndex()).toBeGreaterThan(1);
+
+    fireEvent.keyDown(input, { key: "PageUp" });
+    expect(getActiveOptionIndex()).toBe(0);
+
+    fireEvent.keyDown(input, { key: "PageUp" });
+    expect(getActiveOptionIndex()).toBe(0);
+
+    for (let index = 0; index < 4; index += 1) {
+      fireEvent.keyDown(input, { key: "PageDown" });
+    }
+    expect(getActiveOptionIndex()).toBe(11);
   });
 
   it("dismisses skill autocomplete when Escape is pressed from a focused option", () => {
