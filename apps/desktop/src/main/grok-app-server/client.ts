@@ -812,13 +812,13 @@ export class GrokAppServerClient {
   async listThreads(params?: {
     archived?: boolean;
     filter?: string;
-  }): Promise<AppServerThreadSummary[]> {
+  }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
     const result = await this.request("thread/list", {
       archived: params?.archived === true,
       filter: params?.filter,
-    });
+    }, diagnostics);
     return await Promise.all(
       extractThreadSummaryList(result).map(async (thread) => {
         const normalized = normalizeThreadSummary(thread);

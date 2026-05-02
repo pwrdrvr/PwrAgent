@@ -227,7 +227,11 @@ describe("app server ipc", () => {
       {} satisfies GetNavigationSnapshotRequest,
     );
 
-    expect(listThreads).toHaveBeenCalledWith({ backend: undefined, filter: undefined });
+    expect(listThreads).toHaveBeenCalledWith({
+      backend: undefined,
+      callerReason: "navigation-snapshot",
+      filter: undefined,
+    });
     expect(reconcileNavigationSnapshot).toHaveBeenCalledWith({
       backend: "all",
       fetchedAt: expect.any(Number),

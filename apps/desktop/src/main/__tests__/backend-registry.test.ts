@@ -344,6 +344,10 @@ class MockBackendClient {
     callerReason?: string;
     ownerId?: string;
   };
+  lastListThreadsDiagnostics?: {
+    callerReason?: string;
+    ownerId?: string;
+  };
   lastListThreadsParams?: {
     filter?: string;
   };
@@ -391,8 +395,9 @@ class MockBackendClient {
   async listThreads(params?: {
     archived?: boolean;
     filter?: string;
-  }): Promise<AppServerThreadSummary[]> {
+  }, diagnostics?: { callerReason?: string; ownerId?: string }): Promise<AppServerThreadSummary[]> {
     this.listThreadsCallCount += 1;
+    this.lastListThreadsDiagnostics = diagnostics;
     this.lastListThreadsParams = params;
     return this.options.threads ?? [];
   }
@@ -936,6 +941,73 @@ describe("DesktopBackendRegistry", () => {
     expect(grokClient.lastListModelsDiagnostics).toMatchObject({
       callerReason: "thread-start-defaults",
     });
+
+    await registry.close();
+  });
+
+  it("coalesces repeated Grok thread list requests in the startup refresh window", async () => {
+    const grokClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Grok App Server", version: "1.0.0" },
+        methods: ["thread/list"],
+      },
+      threads: [
+        {
+          id: "thread-grok",
+          title: "Grok thread",
+          titleSource: "explicit",
+          source: "grok",
+          linkedDirectories: [],
+        },
+      ],
+    });
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({}),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.listThreads({
+      callerReason: "navigation-snapshot",
+    });
+    await registry.listThreads({
+      backend: "grok",
+      callerReason: "branch-drift",
+    });
+
+    expect(codexClient.listThreadsCallCount).toBe(1);
+    expect(grokClient.listThreadsCallCount).toBe(1);
+    expect(grokClient.lastListThreadsDiagnostics).toMatchObject({
+      callerReason: "navigation-snapshot",
+    });
+    expect(grokClient.lastListThreadsDiagnostics?.ownerId).toMatch(
+      /^backend-thread-list-cache-/,
+    );
+
+    await registry.close();
+  });
+
+  it("invalidates cached backend thread lists after starting a thread", async () => {
+    const grokClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Grok App Server", version: "1.0.0" },
+        methods: ["thread/list", "thread/start"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      codexFullAccessClient: new MockBackendClient({}),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.listThreads({ backend: "grok" });
+    await registry.startThread({ backend: "grok" });
+    await registry.listThreads({ backend: "grok" });
+
+    expect(grokClient.listThreadsCallCount).toBe(2);
 
     await registry.close();
   });

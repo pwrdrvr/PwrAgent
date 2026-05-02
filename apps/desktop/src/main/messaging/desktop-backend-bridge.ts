@@ -37,6 +37,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     const backend = request.backend ?? "all";
     const threads = await this.registry.listThreads({
       backend: backend === "all" ? undefined : backend,
+      callerReason: "messaging-navigation-snapshot",
       filter: request.filter,
     });
     const snapshot = await getDesktopOverlayStore().reconcileNavigationSnapshot({
