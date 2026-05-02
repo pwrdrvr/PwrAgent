@@ -3,6 +3,8 @@ import { Bot } from "grammy";
 import type {
   MessagingAdapterState,
   MessagingCallbackHandleStore,
+  MessagingConversationTitleUpdateRequest,
+  MessagingConversationTitleUpdateResult,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   MessagingJsonValue,
@@ -125,6 +127,12 @@ export type TelegramEditMessageTextRequest = TelegramSendMessageRequest & {
   message_id: number;
 };
 
+export type TelegramEditForumTopicRequest = {
+  chat_id: number | string;
+  message_thread_id: number;
+  name: string;
+};
+
 export type TelegramSendPhotoRequest = {
   caption?: string;
   chat_id: number | string;
@@ -162,6 +170,7 @@ export type TelegramBotApi = {
     text?: string;
   }): Promise<boolean>;
   deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
+  editForumTopic(request: TelegramEditForumTopicRequest): Promise<boolean>;
   editMessageText(request: TelegramEditMessageTextRequest): Promise<TelegramSentMessage>;
   getWebhookInfo(): Promise<{ url: string }>;
   pinChatMessage(request: TelegramPinChatMessageRequest): Promise<boolean>;
@@ -190,6 +199,14 @@ export type TelegramGrammyBotLike = {
       other?: { text?: string },
     ): Promise<boolean>;
     deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
+    editForumTopic(
+      chatId: number | string,
+      messageThreadId: number,
+      other?: Omit<
+        TelegramEditForumTopicRequest,
+        "chat_id" | "message_thread_id"
+      >,
+    ): Promise<boolean>;
     editMessageText(
       chatId: number | string,
       messageId: number,
@@ -236,6 +253,9 @@ export type TelegramProviderAdapter = {
   authorizedActorIds: readonly string[];
   channel: "telegram";
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  setConversationTitle(
+    request: MessagingConversationTitleUpdateRequest,
+  ): Promise<MessagingConversationTitleUpdateResult>;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop?(): Promise<void>;
 };
@@ -455,6 +475,54 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           }
         : undefined,
     };
+  }
+
+  async setConversationTitle(
+    request: MessagingConversationTitleUpdateRequest,
+  ): Promise<MessagingConversationTitleUpdateResult> {
+    const title = sanitizeTelegramTopicName(request.title);
+    const conversation = request.channel.conversation;
+    const target =
+      this.telegramStateFromChannel(conversation) ??
+      this.telegramStateFromSurface(request.routingState);
+
+    if (conversation.kind !== "topic" || !target?.messageThreadId) {
+      return {
+        channel: this.channel,
+        conversation,
+        errorMessage: "Telegram name sync is only available inside forum topics.",
+        outcome: "unsupported",
+        title,
+        updatedAt: this.now(),
+      };
+    }
+
+    try {
+      await this.bot.api.editForumTopic({
+        chat_id: target.chatId,
+        message_thread_id: target.messageThreadId,
+        name: title,
+      });
+      return {
+        channel: this.channel,
+        conversation: {
+          ...conversation,
+          title,
+        },
+        outcome: "updated",
+        title,
+        updatedAt: this.now(),
+      };
+    } catch (error) {
+      return {
+        channel: this.channel,
+        conversation,
+        errorMessage: errorMessage(error),
+        outcome: "failed",
+        title,
+        updatedAt: this.now(),
+      };
+    }
   }
 
   async handleUpdate(update: TelegramUpdate): Promise<void> {
@@ -1006,6 +1074,14 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
           text: params.text,
         }),
       deleteWebhook: async (params) => await bot.api.deleteWebhook(params),
+      editForumTopic: async (request) =>
+        await bot.api.editForumTopic(
+          request.chat_id,
+          request.message_thread_id,
+          {
+            name: request.name,
+          },
+        ),
       editMessageText: async (request) => {
         const { chat_id, message_id, text, ...other } = request;
         return coerceTelegramSentMessage(
@@ -1063,6 +1139,11 @@ function coerceTelegramSentMessage(
 function parseTelegramIdentifier(value: string): number | string {
   const numeric = Number(value);
   return Number.isSafeInteger(numeric) && String(numeric) === value ? numeric : value;
+}
+
+function sanitizeTelegramTopicName(title: string): string {
+  const normalized = title.replace(/\s+/g, " ").trim();
+  return Array.from(normalized || "PwrAgnt thread").slice(0, 128).join("");
 }
 
 function errorMessage(error: unknown): string {

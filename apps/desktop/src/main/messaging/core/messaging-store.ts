@@ -422,8 +422,9 @@ export function buildMessagingConversationKey(channel: MessagingChannelRef): str
 }
 
 function sanitizeBinding(binding: MessagingBindingRecord): MessagingBindingRecord {
+  const { activeTurn: _activeTurn, threadDisplay: _threadDisplay, ...rest } = binding;
   return {
-    ...binding,
+    ...rest,
     authorizedActorIds: [...new Set(binding.authorizedActorIds)],
     pinnedStatusSurface: sanitizeSurfaceRef(binding.pinnedStatusSurface),
     routingState: sanitizeAdapterState(binding.routingState),

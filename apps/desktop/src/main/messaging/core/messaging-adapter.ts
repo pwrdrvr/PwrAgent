@@ -9,6 +9,10 @@ import type {
   ListBackendsResponse,
   MessagingDeliveryResult,
   MessagingInboundEvent,
+  MessagingActorIdentity,
+  MessagingAdapterState,
+  MessagingChannelRef,
+  MessagingChannelKind,
   NavigationSnapshot,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
@@ -23,8 +27,27 @@ import type {
   SubmitServerRequestResponse,
 } from "@pwragnt/shared";
 
+export type MessagingConversationTitleUpdateRequest = {
+  actor?: MessagingActorIdentity;
+  channel: MessagingChannelRef;
+  routingState?: MessagingAdapterState;
+  title: string;
+};
+
+export type MessagingConversationTitleUpdateResult = {
+  channel: MessagingChannelKind;
+  conversation: MessagingChannelRef["conversation"];
+  errorMessage?: string;
+  outcome: "updated" | "unsupported" | "failed";
+  title: string;
+  updatedAt: number;
+};
+
 export type MessagingAdapter = {
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  setConversationTitle?(
+    request: MessagingConversationTitleUpdateRequest,
+  ): Promise<MessagingConversationTitleUpdateResult>;
 };
 
 export type MessagingBackendBridge = {

@@ -16,6 +16,7 @@ import type {
 import { TelegramAdapter } from "@pwragnt/messaging-provider-telegram";
 import type {
   TelegramBotApi,
+  TelegramEditForumTopicRequest,
   TelegramEditMessageTextRequest,
   TelegramPinChatMessageRequest,
   TelegramSendChatActionRequest,
@@ -171,6 +172,57 @@ describe("TelegramAdapter", () => {
       }),
     );
     expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("renames Telegram forum topics without allowing plain chat renames", async () => {
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+      },
+      now: () => 1000,
+    });
+
+    await expect(
+      adapter.setConversationTitle({
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "9",
+            kind: "topic",
+            parentId: "777",
+          },
+        },
+        title: "Thread one",
+      }),
+    ).resolves.toMatchObject({
+      outcome: "updated",
+      title: "Thread one",
+    });
+    expect(api.editForumTopic).toHaveBeenCalledWith({
+      chat_id: 777,
+      message_thread_id: 9,
+      name: "Thread one",
+    });
+
+    await expect(
+      adapter.setConversationTitle({
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "channel",
+          },
+        },
+        title: "Thread one",
+      }),
+    ).resolves.toMatchObject({
+      outcome: "unsupported",
+    });
+    expect(api.editForumTopic).toHaveBeenCalledTimes(1);
   });
 
   it("expires Telegram typing activity when no idle signal arrives", async () => {
@@ -1215,6 +1267,7 @@ async function createControllerHarness(): Promise<{
 function createApi(): {
   answerCallbackQuery: ReturnType<typeof vi.fn>;
   deleteWebhook: ReturnType<typeof vi.fn>;
+  editForumTopic: ReturnType<typeof vi.fn>;
   editMessageText: ReturnType<typeof vi.fn>;
   getWebhookInfo: ReturnType<typeof vi.fn>;
   pinChatMessage: ReturnType<typeof vi.fn>;
@@ -1227,6 +1280,7 @@ function createApi(): {
   return {
     answerCallbackQuery: vi.fn(async () => true),
     deleteWebhook: vi.fn(async () => true),
+    editForumTopic: vi.fn(async (_request: TelegramEditForumTopicRequest) => true),
     editMessageText: vi.fn(async (request: TelegramEditMessageTextRequest) => ({
       chat: {
         id: Number(request.chat_id),

@@ -2,37 +2,39 @@ import type {
   MessagingBindingRecord,
   MessagingSingleSelectIntent,
   MessagingStatusIntent,
-  NavigationSnapshot,
-  NavigationThreadSummary,
 } from "@pwragnt/shared";
+import type { MessagingResolvedThreadState } from "./messaging-thread-state.js";
 
 export function buildBindingStatusIntent(params: {
   binding: MessagingBindingRecord;
   createdAt: number;
   id: string;
-  navigation?: NavigationSnapshot;
+  threadState: MessagingResolvedThreadState;
 }): MessagingStatusIntent {
-  const thread = findThread(params.navigation, params.binding);
-  const display = params.binding.threadDisplay;
   const preferences = params.binding.preferences;
-  const defaults = params.navigation?.launchpadDefaults;
-  const projectLabel =
-    display?.projectLabel ?? thread?.linkedDirectories[0]?.label ?? unavailable();
-  const directoryPath =
-    display?.directoryPath ?? thread?.linkedDirectories[0]?.path ?? unavailable();
-  const model = thread?.model ?? preferences?.model ?? defaults?.model ?? unavailable();
+  const projectLabel = params.threadState.projectLabel ?? unavailable();
+  const directoryPath = params.threadState.directoryPath ?? unavailable();
+  const defaults = params.threadState.launchpadDefaults;
+  const model =
+    params.threadState.model ??
+    preferences?.model ??
+    defaults?.model ??
+    unavailable();
   const reasoning =
-    thread?.reasoningEffort ??
+    params.threadState.reasoningEffort ??
     preferences?.reasoningEffort ??
     defaults?.reasoningEffort ??
     unavailable();
-  const fastMode = thread?.fastMode ?? preferences?.fastMode ?? defaults?.fastMode;
+  const fastMode =
+    params.threadState.fastMode ?? preferences?.fastMode ?? defaults?.fastMode;
   const permissionsMode =
-    thread?.executionMode ??
+    params.threadState.executionMode ??
     preferences?.permissionsMode ??
     (preferences?.executionMode === "full-access" ? "full-access" : undefined) ??
-    (defaults?.executionMode === "full-access" ? "full-access" : "default");
-  const activeTurn = params.binding.activeTurn;
+    defaults?.executionMode ??
+    "default";
+  const activeTurn = params.threadState.activeTurn;
+  const branch = formatBranch(params.threadState);
 
   return {
     id: params.id,
@@ -45,12 +47,14 @@ export function buildBindingStatusIntent(params: {
       pin: true,
     },
     targetSurface: params.binding.statusSurface,
-    status: statusForBinding(params.binding),
+    status: statusForThreadState(params.threadState),
     text: [
-      `Binding: ${display?.threadTitle ?? thread?.title ?? params.binding.threadId} (${params.binding.backend})`,
+      `Binding: ${params.threadState.title ?? params.binding.threadId} (${params.binding.backend})`,
       `Project: ${projectLabel}`,
       `Directory: ${directoryPath}`,
-      display?.worktreePath ? `Worktree: ${display.worktreePath}` : undefined,
+      params.threadState.worktreePath ? `Worktree: ${params.threadState.worktreePath}` : undefined,
+      `Branch: ${branch ?? unavailable()}`,
+      params.threadState.missing ? "Thread state: unavailable" : undefined,
       `Model: ${model}`,
       `Reasoning: ${reasoning}`,
       `Fast mode: ${fastMode === undefined ? unavailable() : fastMode ? "on" : "off"}`,
@@ -97,6 +101,12 @@ export function buildBindingStatusIntent(params: {
         label: "Compact",
         style: "secondary",
         fallbackText: "compact",
+      },
+      {
+        id: "status:sync-name",
+        label: "Sync name",
+        style: "secondary",
+        fallbackText: "sync name",
       },
       {
         id: "status:stop",
@@ -196,19 +206,10 @@ export function buildStatusReasoningPickerIntent(params: {
   };
 }
 
-function findThread(
-  navigation: NavigationSnapshot | undefined,
-  binding: MessagingBindingRecord,
-): NavigationThreadSummary | undefined {
-  return navigation?.threads.find(
-    (thread) => thread.source === binding.backend && thread.id === binding.threadId,
-  );
-}
-
-function statusForBinding(
-  binding: MessagingBindingRecord,
+function statusForThreadState(
+  threadState: MessagingResolvedThreadState,
 ): MessagingStatusIntent["status"] {
-  switch (binding.activeTurn?.status) {
+  switch (threadState.activeTurn?.status) {
     case "working":
       return "working";
     case "waiting":
@@ -220,6 +221,20 @@ function statusForBinding(
     case undefined:
       return "idle";
   }
+}
+
+function formatBranch(threadState: MessagingResolvedThreadState): string | undefined {
+  if (!threadState.gitBranch && !threadState.observedGitBranch) {
+    return undefined;
+  }
+  if (
+    threadState.gitBranch &&
+    threadState.observedGitBranch &&
+    threadState.gitBranch !== threadState.observedGitBranch
+  ) {
+    return `${threadState.gitBranch} (now ${threadState.observedGitBranch})`;
+  }
+  return threadState.gitBranch ?? threadState.observedGitBranch;
 }
 
 function unavailable(): string {

@@ -35,6 +35,11 @@ describe("adaptGrammyBot", () => {
       parse_mode: "HTML",
       text: "Binding active",
     });
+    await bot.api.editForumTopic({
+      chat_id: 42,
+      message_thread_id: 9,
+      name: "Thread one",
+    });
     await bot.api.sendPhoto({
       caption: "image",
       chat_id: 42,
@@ -81,6 +86,13 @@ describe("adaptGrammyBot", () => {
         parse_mode: "HTML",
       },
     );
+    expect(grammyBot.api.editForumTopic).toHaveBeenCalledWith(
+      42,
+      9,
+      {
+        name: "Thread one",
+      },
+    );
     expect(grammyBot.api.sendPhoto).toHaveBeenCalledWith(
       42,
       "https://example.com/image.png",
@@ -105,6 +117,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
   api: {
     answerCallbackQuery: ReturnType<typeof vi.fn>;
     deleteWebhook: ReturnType<typeof vi.fn>;
+    editForumTopic: ReturnType<typeof vi.fn>;
     editMessageText: ReturnType<typeof vi.fn>;
     getWebhookInfo: ReturnType<typeof vi.fn>;
     pinChatMessage: ReturnType<typeof vi.fn>;
@@ -119,6 +132,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
     api: {
       answerCallbackQuery: vi.fn(async () => true),
       deleteWebhook: vi.fn(async () => true),
+      editForumTopic: vi.fn(async () => true),
       editMessageText: vi.fn(
         async (
           chatId: number | string,

@@ -22,6 +22,7 @@ import type {
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragnt/shared";
+import { buildThreadIdentityKey } from "@pwragnt/shared";
 import { MessagingStore, buildMessagingConversationKey } from "./messaging-store.js";
 import type { MessagingAdapter, MessagingBackendBridge } from "./messaging-adapter.js";
 import {
@@ -50,6 +51,7 @@ import {
   buildStatusModelPickerIntent,
   buildStatusReasoningPickerIntent,
 } from "./messaging-status-card.js";
+import { resolveMessagingThreadState } from "./messaging-thread-state.js";
 
 const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
@@ -120,6 +122,7 @@ export class MessagingController {
   private readonly now: () => number;
   private readonly pendingIntentTtlMs: number;
   private readonly interactionMapper: MessagingInteractionMapper;
+  private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly logger: MessagingControllerLogger;
 
@@ -196,60 +199,65 @@ export class MessagingController {
     );
     const lifecycle = turnLifecycleForBackendEvent(event, this.now());
     for (const binding of bindings) {
-      let currentBinding = binding;
+      let activeTurn = this.getActiveTurn(binding);
       if (lifecycle) {
-        currentBinding = await this.options.store.upsertBinding({
-          ...binding,
-          activeTurn: lifecycle,
+        const previousTurn = activeTurn;
+        activeTurn = lifecycle;
+        this.setActiveTurn(binding, activeTurn);
+        this.logBindingTurnStateChange(
+          binding,
+          previousTurn,
+          activeTurn,
+          event.notification.method,
+        );
+      } else if (isThreadStatusIdleEvent(event) && activeTurn) {
+        const previousTurn = activeTurn;
+        activeTurn = {
+          ...activeTurn,
+          status: "completed",
           updatedAt: this.now(),
-        });
-        this.logBindingTurnStateChange(binding, currentBinding, event.notification.method);
-      } else if (isThreadStatusIdleEvent(event) && binding.activeTurn) {
-        currentBinding = await this.options.store.upsertBinding({
-          ...binding,
-          activeTurn: {
-            ...binding.activeTurn,
-            status: "completed",
-            updatedAt: this.now(),
-          },
-          updatedAt: this.now(),
-        });
-        this.logBindingTurnStateChange(binding, currentBinding, event.notification.method);
+        };
+        this.setActiveTurn(binding, activeTurn);
+        this.logBindingTurnStateChange(
+          binding,
+          previousTurn,
+          activeTurn,
+          event.notification.method,
+        );
       }
 
       const assistantText = assistantTextForBackendEvent(event);
-      if (assistantText && !lifecycle && currentBinding.activeTurn?.status === "working") {
-        currentBinding = await this.options.store.upsertBinding({
-          ...currentBinding,
-          activeTurn: {
-            ...currentBinding.activeTurn,
-            status: "completed",
-            updatedAt: this.now(),
-          },
+      if (assistantText && !lifecycle && activeTurn?.status === "working") {
+        const previousTurn = activeTurn;
+        activeTurn = {
+          ...activeTurn,
+          status: "completed",
           updatedAt: this.now(),
-        });
+        };
+        this.setActiveTurn(binding, activeTurn);
         this.logBindingTurnStateChange(
           binding,
-          currentBinding,
+          previousTurn,
+          activeTurn,
           event.notification.method,
         );
-        await this.signalTurnActivity(currentBinding, currentBinding.activeTurn!, {
+        await this.signalTurnActivity(binding, activeTurn, {
           reason: "assistant_final",
           force: true,
         });
       }
       if (assistantText) {
-        await this.deliverAssistantMessage(assistantText, event, currentBinding);
+        await this.deliverAssistantMessage(assistantText, event, binding);
       }
 
-      if (lifecycle || (isThreadStatusIdleEvent(event) && binding.activeTurn)) {
-        await this.signalTurnActivity(currentBinding, currentBinding.activeTurn!, {
+      if (lifecycle || (isThreadStatusIdleEvent(event) && activeTurn)) {
+        await this.signalTurnActivity(binding, activeTurn!, {
           reason: event.notification.method,
           force: true,
         });
-        await this.renderBindingStatus(currentBinding);
-      } else if (!assistantText && currentBinding.activeTurn?.status === "working") {
-        await this.signalTurnActivity(currentBinding, currentBinding.activeTurn, {
+        await this.renderBindingStatus(binding);
+      } else if (!assistantText && activeTurn?.status === "working") {
+        await this.signalTurnActivity(binding, activeTurn, {
           reason: event.notification.method,
         });
       }
@@ -300,19 +308,16 @@ export class MessagingController {
         });
       }
       if (request.params.turnId) {
-        const updatedBinding = await this.options.store.upsertBinding({
-          ...binding,
-          activeTurn: {
-            turnId: request.params.turnId,
-            status: "waiting",
-            updatedAt: this.now(),
-          },
+        const activeTurn: MessagingActiveTurnSummary = {
+          turnId: request.params.turnId,
+          status: "waiting",
           updatedAt: this.now(),
-        });
-        await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!, {
+        };
+        this.setActiveTurn(binding, activeTurn);
+        await this.signalTurnActivity(binding, activeTurn, {
           force: true,
         });
-        await this.renderBindingStatus(updatedBinding);
+        await this.renderBindingStatus(binding);
       }
     }
   }
@@ -443,20 +448,17 @@ export class MessagingController {
       ],
       ...turnSettings,
     });
-    const updatedBinding = await this.options.store.upsertBinding({
-      ...binding,
-      activeTurn: {
-        turnId: started.turnId,
-        status: "working",
-        startedAt: this.now(),
-        updatedAt: this.now(),
-      },
+    const activeTurn: MessagingActiveTurnSummary = {
+      turnId: started.turnId,
+      status: "working",
+      startedAt: this.now(),
       updatedAt: this.now(),
-    });
-    await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!, {
+    };
+    this.setActiveTurn(binding, activeTurn);
+    await this.signalTurnActivity(binding, activeTurn, {
       force: true,
     });
-    await this.renderBindingStatus(updatedBinding, undefined, navigation);
+    await this.renderBindingStatus(binding, undefined, navigation);
   }
 
   private async handleCallback(event: MessagingInboundCallbackEvent): Promise<void> {
@@ -863,12 +865,9 @@ export class MessagingController {
         return;
       }
       const binding = await this.bindChannelToThread(event, target);
-      const updatedBinding = await this.applyBrowseBindingMetadata(
-        binding,
-        session,
-        navigation,
-        target,
-      );
+      const updatedBinding = session.preferences
+        ? await this.updateBindingPreferences(binding, session.preferences)
+        : binding;
       await this.options.store.deleteBrowseSession(session.id);
       await this.deliver(
         buildConfirmationIntent({
@@ -958,15 +957,9 @@ export class MessagingController {
       backend: started.backend,
       threadId: started.threadId,
     });
-    const updatedBinding = await this.options.store.upsertBinding({
-      ...binding,
-      preferences,
-      threadDisplay: {
-        directoryPath: directory?.path ?? project.path,
-        projectLabel: directory?.label ?? project.label,
-      },
-      updatedAt: this.now(),
-    });
+    const updatedBinding = preferences
+      ? await this.updateBindingPreferences(binding, preferences)
+      : binding;
     await this.options.store.deleteBrowseSession(session.id);
     await this.deliver(
       buildConfirmationIntent({
@@ -979,32 +972,6 @@ export class MessagingController {
       updatedBinding,
     );
     await this.renderBindingStatus(updatedBinding, event);
-  }
-
-  private async applyBrowseBindingMetadata(
-    binding: MessagingBindingRecord,
-    session: MessagingBrowseSessionRecord,
-    navigation: Awaited<ReturnType<MessagingBackendBridge["getNavigationSnapshot"]>>,
-    target: { backend: AppServerBackendKind; threadId: ThreadIdentifier },
-  ): Promise<MessagingBindingRecord> {
-    const thread = navigation.threads.find(
-      (candidate) => candidate.source === target.backend && candidate.id === target.threadId,
-    );
-    const directory = session.selectedProject
-      ? directoryForProjectSelection(navigation, session.selectedProject)
-      : undefined;
-    return await this.options.store.upsertBinding({
-      ...binding,
-      preferences: session.preferences,
-      threadDisplay: {
-        directoryPath: directory?.path ?? thread?.linkedDirectories[0]?.path,
-        projectLabel: directory?.label ?? thread?.linkedDirectories[0]?.label,
-        threadTitle: thread?.title,
-        worktreePath: thread?.linkedDirectories.find((item) => item.kind === "worktree")
-          ?.worktreePath,
-      },
-      updatedAt: this.now(),
-    });
   }
 
   private async presentStatus(event: MessagingInboundEvent): Promise<void> {
@@ -1093,6 +1060,10 @@ export class MessagingController {
     }
     if (actionId === "status:compact") {
       await this.compactThread(binding, event);
+      return;
+    }
+    if (actionId === "status:sync-name") {
+      await this.syncConversationName(binding, event);
       return;
     }
 
@@ -1255,7 +1226,7 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    const activeTurn = binding.activeTurn;
+    const activeTurn = this.getActiveTurn(binding);
     if (!activeTurn || !["working", "waiting"].includes(activeTurn.status)) {
       await this.renderBindingStatus(binding, event);
       return;
@@ -1265,19 +1236,16 @@ export class MessagingController {
       threadId: binding.threadId,
       turnId: activeTurn.turnId,
     });
-    const updatedBinding = await this.options.store.upsertBinding({
-      ...binding,
-      activeTurn: {
-        ...activeTurn,
-        status: "interrupted",
-        updatedAt: this.now(),
-      },
+    const interruptedTurn: MessagingActiveTurnSummary = {
+      ...activeTurn,
+      status: "interrupted",
       updatedAt: this.now(),
-    });
-    await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!, {
+    };
+    this.setActiveTurn(binding, interruptedTurn);
+    await this.signalTurnActivity(binding, interruptedTurn, {
       force: true,
     });
-    await this.renderBindingStatus(updatedBinding, event);
+    await this.renderBindingStatus(binding, event);
   }
 
   private async compactThread(
@@ -1303,20 +1271,107 @@ export class MessagingController {
       backend: binding.backend,
       threadId: binding.threadId,
     });
+    const activeTurn: MessagingActiveTurnSummary = {
+      turnId: compacted.turnId,
+      status: "working",
+      startedAt: this.now(),
+      updatedAt: this.now(),
+    };
+    this.setActiveTurn(binding, activeTurn);
+    await this.signalTurnActivity(binding, activeTurn, {
+      force: true,
+    });
+    await this.renderBindingStatus(binding, event);
+  }
+
+  private async syncConversationName(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    if (!this.options.adapter.setConversationTitle) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-sync-name-unavailable"),
+          createdAt: this.now(),
+          title: "Name sync unavailable",
+          body: "This messaging provider does not support syncing the conversation name.",
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return;
+    }
+
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const threadState = resolveMessagingThreadState({
+      activeTurn: this.getActiveTurn(binding),
+      binding,
+      navigation,
+    });
+    const threadTitle = normalizeConversationTitle(threadState.title);
+    if (!threadTitle) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-sync-name-missing-title"),
+          createdAt: this.now(),
+          title: "Name sync unavailable",
+          body: "This thread does not have a Codex thread name to sync yet.",
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return;
+    }
+
+    const result = await this.options.adapter.setConversationTitle({
+      actor: event.actor,
+      channel: binding.channel,
+      routingState: event.routingState ?? binding.routingState,
+      title: threadTitle,
+    });
+    if (result.outcome !== "updated") {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-sync-name-failed"),
+          createdAt: this.now(),
+          title: "Name sync unavailable",
+          body:
+            result.errorMessage ??
+            `This ${conversationKindLabel(binding.channel.conversation.kind)} cannot be renamed from messaging.`,
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return;
+    }
+
     const updatedBinding = await this.options.store.upsertBinding({
       ...binding,
-      activeTurn: {
-        turnId: compacted.turnId,
-        status: "working",
-        startedAt: this.now(),
-        updatedAt: this.now(),
+      channel: {
+        ...binding.channel,
+        conversation: {
+          ...binding.channel.conversation,
+          title: result.title,
+        },
       },
       updatedAt: this.now(),
     });
-    await this.signalTurnActivity(updatedBinding, updatedBinding.activeTurn!, {
-      force: true,
-    });
-    await this.renderBindingStatus(updatedBinding, event);
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("status-sync-name-confirmed"),
+        createdAt: this.now(),
+        title: "Name synced",
+        body: `Set this ${conversationKindLabel(binding.channel.conversation.kind)} name to "${result.title}".`,
+      }),
+      updatedBinding,
+      event,
+    );
+    await this.renderBindingStatus(updatedBinding, event, navigation);
   }
 
   private async updateBindingPreferences(
@@ -1374,11 +1429,12 @@ export class MessagingController {
     }
 
     const statusSurface = binding.pinnedStatusSurface ?? binding.statusSurface;
-    if (binding.activeTurn) {
+    const activeTurn = this.getActiveTurn(binding);
+    if (activeTurn) {
       await this.signalTurnActivity(
         binding,
         {
-          ...binding.activeTurn,
+          ...activeTurn,
           status: "interrupted",
           updatedAt: this.now(),
         },
@@ -1448,7 +1504,11 @@ export class MessagingController {
             id: this.newIntentId("status-retire"),
             binding,
             createdAt: this.now(),
-            navigation,
+            threadState: resolveMessagingThreadState({
+              activeTurn: this.getActiveTurn(binding),
+              binding,
+              navigation,
+            }),
           }),
           actions: [],
           delivery: {
@@ -1518,7 +1578,11 @@ export class MessagingController {
       id: this.newIntentId("status"),
       binding,
       createdAt: this.now(),
-      navigation: snapshot,
+      threadState: resolveMessagingThreadState({
+        activeTurn: this.getActiveTurn(binding),
+        binding,
+        navigation: snapshot,
+      }),
     });
     const result = await this.deliver(intent, binding, event);
     if (!result.surface) {
@@ -1534,6 +1598,23 @@ export class MessagingController {
       statusSurface: result.surface,
       updatedAt: this.now(),
     });
+  }
+
+  private getActiveTurn(
+    binding: MessagingBindingRecord,
+  ): MessagingActiveTurnSummary | undefined {
+    return this.activeTurnsByThreadKey.get(this.threadKeyForBinding(binding));
+  }
+
+  private setActiveTurn(
+    binding: MessagingBindingRecord,
+    activeTurn: MessagingActiveTurnSummary,
+  ): void {
+    this.activeTurnsByThreadKey.set(this.threadKeyForBinding(binding), activeTurn);
+  }
+
+  private threadKeyForBinding(binding: MessagingBindingRecord): string {
+    return buildThreadIdentityKey(binding.backend, binding.threadId);
   }
 
   private async signalTurnActivity(
@@ -1581,12 +1662,11 @@ export class MessagingController {
   }
 
   private logBindingTurnStateChange(
-    previous: MessagingBindingRecord,
-    next: MessagingBindingRecord,
+    binding: MessagingBindingRecord,
+    previousTurn: MessagingActiveTurnSummary | undefined,
+    nextTurn: MessagingActiveTurnSummary | undefined,
     reason: string,
   ): void {
-    const previousTurn = previous.activeTurn;
-    const nextTurn = next.activeTurn;
     if (
       previousTurn?.turnId === nextTurn?.turnId &&
       previousTurn?.status === nextTurn?.status
@@ -1595,7 +1675,7 @@ export class MessagingController {
     }
 
     this.logger.debug?.(
-      `messaging turn state changed reason=${reason} backend=${next.backend} thread=${next.threadId} binding=${next.id} previous=${previousTurn?.status ?? "none"}:${previousTurn?.turnId ?? "none"} next=${nextTurn?.status ?? "none"}:${nextTurn?.turnId ?? "none"}`,
+      `messaging turn state changed reason=${reason} backend=${binding.backend} thread=${binding.threadId} binding=${binding.id} previous=${previousTurn?.status ?? "none"}:${previousTurn?.turnId ?? "none"} next=${nextTurn?.status ?? "none"}:${nextTurn?.turnId ?? "none"}`,
     );
   }
 
@@ -1785,6 +1865,24 @@ function readBrowseAction(event: MessagingInboundCallbackEvent): string | undefi
 function readStatusAction(event: MessagingInboundCallbackEvent): string | undefined {
   const actionId = event.actionId ?? event.interaction.id;
   return actionId.startsWith("status:") ? actionId : undefined;
+}
+
+function normalizeConversationTitle(title: string | undefined): string | undefined {
+  const normalized = title?.replace(/\s+/g, " ").trim();
+  return normalized || undefined;
+}
+
+function conversationKindLabel(kind: MessagingBindingRecord["channel"]["conversation"]["kind"]): string {
+  switch (kind) {
+    case "topic":
+      return "topic";
+    case "thread":
+      return "thread";
+    case "channel":
+      return "channel";
+    case "dm":
+      return "conversation";
+  }
 }
 
 function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefined {

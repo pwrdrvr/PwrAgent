@@ -126,10 +126,11 @@ describe("MessagingController", () => {
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "new-thread-1",
-      threadDisplay: {
-        projectLabel: "PwrAgnt",
-      },
     });
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    expect(binding).not.toHaveProperty("threadDisplay");
   });
 
   it("binds a callback-selected thread to the channel", async () => {
@@ -586,13 +587,10 @@ describe("MessagingController", () => {
         }),
       ],
     });
-    await expect(
-      harness.store.findActiveBindingForChannel(buildTextEvent("who are you").channel),
-    ).resolves.toMatchObject({
-      activeTurn: {
-        status: "completed",
-      },
-    });
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildTextEvent("who are you").channel,
+    );
+    expect(binding).not.toHaveProperty("activeTurn");
   });
 
   it("ignores turn completion events that do not include output text", async () => {
@@ -1131,10 +1129,70 @@ describe("MessagingController", () => {
       text: expect.stringContaining("Turn: working"),
     });
   });
+
+  it("syncs the platform conversation name from the bound thread title", async () => {
+    const setConversationTitle = vi.fn(
+      async (
+        request: Parameters<NonNullable<MessagingAdapter["setConversationTitle"]>>[0],
+      ) => ({
+      channel: "telegram" as const,
+      conversation: {
+        ...request.channel.conversation,
+        title: request.title,
+      },
+      outcome: "updated" as const,
+      title: request.title,
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({ setConversationTitle });
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.title = "Renamed in Desktop";
+    harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:sync-name",
+        routingState: {
+          opaque: {
+            chatId: 777,
+            messageThreadId: 9,
+          },
+        },
+      }),
+    );
+
+    expect(setConversationTitle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "chat-1",
+          }),
+        }),
+        routingState: {
+          opaque: {
+            chatId: 777,
+            messageThreadId: 9,
+          },
+        },
+        title: "Renamed in Desktop",
+      }),
+    );
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "confirmation",
+      title: "Name synced",
+      body: expect.stringContaining('Renamed in Desktop'),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Binding: Renamed in Desktop"),
+    });
+  });
 });
 
 async function createHarness(options?: {
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
+  setConversationTitle?: MessagingAdapter["setConversationTitle"];
 }): Promise<{
   controller: MessagingController;
   compactThread: ReturnType<typeof vi.fn>;
@@ -1169,6 +1227,9 @@ async function createHarness(options?: {
           };
         }),
     ),
+    ...(options?.setConversationTitle
+      ? { setConversationTitle: options.setConversationTitle }
+      : {}),
   };
   const getNavigationSnapshot = vi.fn(async () => buildNavigationSnapshot());
   const startThread = vi.fn(async (request: StartThreadRequest) => ({
@@ -1382,6 +1443,7 @@ function buildTextEvent(text: string): MessagingInboundTextEvent {
 
 function buildCallbackEvent(params: {
   actionId: string;
+  routingState?: MessagingInboundCallbackEvent["routingState"];
   value?: MessagingInboundCallbackEvent["value"];
 }): MessagingInboundCallbackEvent {
   return {
@@ -1398,6 +1460,7 @@ function buildCallbackEvent(params: {
       },
     },
     receivedAt: 1000,
+    routingState: params.routingState,
     interaction: {
       channel: "telegram",
       id: params.actionId,

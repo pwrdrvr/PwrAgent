@@ -969,6 +969,7 @@ function createApi(options: {
   deleteApplicationCommand: ReturnType<typeof vi.fn>;
   listApplicationCommands: ReturnType<typeof vi.fn>;
   sendTyping: ReturnType<typeof vi.fn>;
+  updateChannelName: ReturnType<typeof vi.fn>;
   updateApplicationCommand: ReturnType<typeof vi.fn>;
   updateInteractionOriginalResponse: ReturnType<typeof vi.fn>;
   updateMessage: ReturnType<typeof vi.fn>;
@@ -1013,6 +1014,9 @@ function createApi(options: {
       async (_applicationId: string) => applicationCommands,
     ),
     sendTyping: vi.fn(async (_channelId: string) => undefined),
+    updateChannelName: vi.fn(
+      async (_channelId: string, _request: { name: string }) => undefined,
+    ),
     updateApplicationCommand: vi.fn(
       async (
         applicationId: string,

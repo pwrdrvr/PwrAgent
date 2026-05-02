@@ -348,6 +348,22 @@ export type MessagingDeliveryResult = {
   deliveredAt: number;
 };
 
+export type MessagingConversationTitleUpdateRequest = {
+  actor?: MessagingActorIdentity;
+  channel: MessagingChannelRef;
+  routingState?: MessagingAdapterState;
+  title: string;
+};
+
+export type MessagingConversationTitleUpdateResult = {
+  channel: MessagingChannelKind;
+  conversation: MessagingConversationRef;
+  errorMessage?: string;
+  outcome: "updated" | "unsupported" | "failed";
+  title: string;
+  updatedAt: number;
+};
+
 export type MessagingInboundBaseEvent = {
   id: string;
   kind: MessagingInboundEventKind;
@@ -414,6 +430,10 @@ export type MessagingActiveTurnSummary = {
 };
 
 export type MessagingThreadDisplaySummary = {
+  /**
+   * Deprecated migration fallback only. Current thread display facts must be
+   * resolved from the desktop navigation/backend state before rendering.
+   */
   directoryPath?: string;
   projectLabel?: string;
   threadTitle?: string;
@@ -427,6 +447,10 @@ export type MessagingBindingRecord = {
   threadId: ThreadIdentifier;
   authorizedActorIds: string[];
   routingState?: MessagingAdapterState;
+  /**
+   * Deprecated migration fallback only. Current turn activity is desktop runtime
+   * state and must be resolved before rendering or acting.
+   */
   activeTurn?: MessagingActiveTurnSummary;
   createdAt: number;
   updatedAt: number;

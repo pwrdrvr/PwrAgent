@@ -190,6 +190,64 @@ describe("MessagingStore", () => {
     });
   });
 
+  it("drops deprecated cached thread display and active turn data from bindings", async () => {
+    const { filePath, store } = await createStore();
+    await store.upsertBinding(
+      buildBinding({
+        activeTurn: {
+          status: "working",
+          turnId: "turn-1",
+          updatedAt: 1000,
+        },
+        threadDisplay: {
+          directoryPath: "/old/path",
+          projectLabel: "Old Project",
+          threadTitle: "Old cached title",
+          worktreePath: "/old/worktree",
+        },
+      }),
+    );
+
+    await expect(store.getBinding("binding-1")).resolves.toEqual(
+      expect.not.objectContaining({
+        activeTurn: expect.anything(),
+        threadDisplay: expect.anything(),
+      }),
+    );
+
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        version: 2,
+        browseSessions: {},
+        bindings: {
+          "binding-1": buildBinding({
+            activeTurn: {
+              status: "working",
+              turnId: "turn-1",
+              updatedAt: 1000,
+            },
+            threadDisplay: {
+              threadTitle: "Old cached title",
+            },
+          }),
+        },
+        callbackHandles: {},
+        pendingIntents: {},
+        deliveries: {},
+      }),
+      "utf8",
+    );
+
+    const reloaded = new MessagingStore(filePath);
+    await expect(reloaded.getBinding("binding-1")).resolves.toEqual(
+      expect.not.objectContaining({
+        activeTurn: expect.anything(),
+        threadDisplay: expect.anything(),
+      }),
+    );
+  });
+
   it("finds active bindings by stable channel conversation and ignores revoked records", async () => {
     const { store } = await createStore();
     await store.upsertBinding(buildBinding());
