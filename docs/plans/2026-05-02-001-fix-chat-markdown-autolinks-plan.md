@@ -1,7 +1,7 @@
 ---
 title: fix: Make transcript and composer hyperlinks safer
 type: fix
-status: active
+status: completed
 date: 2026-05-02
 origin: docs/brainstorms/2026-04-17-thread-detail-markdown-rendering-requirements.md
 deepened: 2026-05-02
@@ -118,7 +118,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Make `ThreadMarkdown` reject implicit bare autolinks**
+- [x] **Unit 1: Make `ThreadMarkdown` reject implicit bare autolinks**
 
 **Goal:** Prevent GFM autolink literals from converting repo-relative paths and bare `.md` domain-looking text into clickable links, while preserving explicit safe links and skill chips.
 
@@ -159,7 +159,7 @@ flowchart TB
 **Verification:**
 - The thread-detail markdown tests prove only intentional links are clickable, and the transcript-list regression covers the user-visible chat path.
 
-- [ ] **Unit 2: Guard external URL opening in the Electron main process**
+- [x] **Unit 2: Guard external URL opening in the Electron main process**
 
 **Goal:** Ensure renderer-created windows cannot pass arbitrary or malformed URLs to `shell.openExternal`.
 
@@ -193,7 +193,7 @@ flowchart TB
 **Verification:**
 - Main-process tests prove `shell.openExternal` is only called for explicitly allowed URLs and never for unsupported protocols.
 
-- [ ] **Unit 3: Make Tiptap composer links intentional and exitable**
+- [x] **Unit 3: Make Tiptap composer links intentional and exitable**
 
 **Goal:** Prevent the WYSIWYG markdown composer from auto-linking bare paths and stop link marks from sticking when the user types spaces or text after an existing hyperlink.
 
@@ -231,7 +231,7 @@ flowchart TB
 **Verification:**
 - Composer tests reproduce the reported "can't get off the end of a hyperlink" behavior and prove it is fixed for the Tiptap WYSIWYG markdown composer.
 
-- [ ] **Unit 4: Keep messaging adapter link behavior explicit**
+- [x] **Unit 4: Keep messaging adapter link behavior explicit**
 
 **Goal:** Confirm PwrAgnt messaging adapters do not add their own optimistic linkification for bare paths, and document the boundary where Telegram/Discord clients may still autolink plain text.
 

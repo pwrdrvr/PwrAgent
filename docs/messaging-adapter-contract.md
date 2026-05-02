@@ -55,10 +55,17 @@ Adapters own platform limits and degradation:
 - chunk long messages according to platform limits
 - preserve inline code and fenced code when supported
 - escape or neutralize markdown dialect hazards
+- keep scheme-less paths and domain-like text as text, not PwrAgnt-generated
+  HTTP links or platform anchor markup
 - avoid broad mentions by default
 - render buttons/components/selects when available
 - include text fallback for every interactive surface
 - post a fresh message when update or dismiss is unsupported
+
+Adapters may render explicit links only when the source intent carries explicit
+link syntax or a future structured link part. Platform clients may still apply
+native autolinking to plain text; neutralize that only with a provider-specific
+policy and tests for the concrete platform behavior.
 
 Telegram currently uses Bot API long polling, HTML-safe text, inline keyboards,
 and `sendPhoto` for image URLs. Discord uses Gateway events, REST message

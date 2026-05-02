@@ -26,6 +26,7 @@ const rendererMonitorStartMock = vi.fn();
 const rendererMonitorStopMock = vi.fn();
 const mainMonitorStartMock = vi.fn();
 const mainMonitorStopMock = vi.fn();
+const shellOpenExternalMock = vi.fn();
 const RendererHeapMonitorMock = vi.fn(function RendererHeapMonitor(this: unknown) {
   return {
     start: rendererMonitorStartMock,
@@ -133,7 +134,7 @@ vi.mock("electron", () => ({
     getVersion: vi.fn(() => "0.1.0")
   },
   shell: {
-    openExternal: vi.fn()
+    openExternal: shellOpenExternalMock
   }
 }));
 
@@ -164,6 +165,7 @@ describe("createMainWindow", () => {
     rendererMonitorStopMock.mockReset();
     mainMonitorStartMock.mockReset();
     mainMonitorStopMock.mockReset();
+    shellOpenExternalMock.mockReset();
     RendererHeapMonitorMock.mockClear();
     MainProcessHeapMonitorMock.mockClear();
     windowEventHandlers.clear();
@@ -195,6 +197,62 @@ describe("createMainWindow", () => {
     );
     expect(browserWindowState.show).toHaveBeenCalledTimes(1);
     expect(browserWindowState.setWindowOpenHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("only opens safe external URLs requested by the renderer", async () => {
+    const { createMainWindow } = await import("../window");
+    createMainWindow();
+
+    const openHandler = browserWindowState.setWindowOpenHandler?.mock.calls[0]?.[0];
+    expect(openHandler).toBeDefined();
+
+    expect(openHandler({ url: "https://github.com/pwrdrvr/PwrAgnt" })).toEqual({
+      action: "deny",
+    });
+    expect(openHandler({ url: "mailto:team@example.com" })).toEqual({
+      action: "deny",
+    });
+    expect(openHandler({ url: "file:///tmp/example.md" })).toEqual({
+      action: "deny",
+    });
+    expect(openHandler({ url: "http://localhost:5173/status" })).toEqual({
+      action: "deny",
+    });
+    expect(openHandler({ url: "http://127.0.0.1:5173/status" })).toEqual({
+      action: "deny",
+    });
+
+    expect(shellOpenExternalMock).toHaveBeenCalledTimes(5);
+    expect(shellOpenExternalMock).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgnt"
+    );
+    expect(shellOpenExternalMock).toHaveBeenCalledWith("mailto:team@example.com");
+    expect(shellOpenExternalMock).toHaveBeenCalledWith("file:///tmp/example.md");
+    expect(shellOpenExternalMock).toHaveBeenCalledWith(
+      "http://localhost:5173/status"
+    );
+    expect(shellOpenExternalMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:5173/status"
+    );
+  });
+
+  it("blocks unsafe external URLs requested by the renderer", async () => {
+    const { createMainWindow } = await import("../window");
+    createMainWindow();
+
+    const openHandler = browserWindowState.setWindowOpenHandler?.mock.calls[0]?.[0];
+    expect(openHandler).toBeDefined();
+
+    expect(openHandler({ url: "http://example.com" })).toEqual({ action: "deny" });
+    expect(openHandler({ url: "javascript:alert(1)" })).toEqual({ action: "deny" });
+    expect(openHandler({ url: "pwragnt-test://payload" })).toEqual({
+      action: "deny",
+    });
+    expect(openHandler({ url: "docs/plans/example.md" })).toEqual({
+      action: "deny",
+    });
+
+    expect(shellOpenExternalMock).not.toHaveBeenCalled();
   });
 
   it("falls back to the built renderer index in packaged mode", async () => {

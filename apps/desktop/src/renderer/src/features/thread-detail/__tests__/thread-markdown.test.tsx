@@ -62,6 +62,44 @@ describe("ThreadMarkdown", () => {
     });
   });
 
+  it("keeps bare repo paths and domain-like markdown filenames as plain text", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={
+          "Open docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md then notes.md and www.example.com."
+        }
+      />
+    );
+
+    expect(container).toHaveTextContent(
+      "docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md"
+    );
+    expect(container).toHaveTextContent("notes.md");
+    expect(container).toHaveTextContent("www.example.com");
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("keeps explicit safe links clickable and rejects unsafe protocols", () => {
+    render(
+      <ThreadMarkdown
+        text={
+          "[Docs](https://example.com/docs) [Local](http://localhost:5173/status) [Plain HTTP](http://example.com) [Bad](javascript:alert(1))"
+        }
+      />
+    );
+
+    expect(screen.getByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://example.com/docs"
+    );
+    expect(screen.getByRole("link", { name: "Local" })).toHaveAttribute(
+      "href",
+      "http://localhost:5173/status"
+    );
+    expect(screen.queryByRole("link", { name: "Plain HTTP" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Bad" })).not.toBeInTheDocument();
+  });
+
   it("renders skill links as chips", () => {
     render(
       <ThreadMarkdown

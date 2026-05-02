@@ -9,11 +9,43 @@ import {
 } from "../discord-formatting.ts";
 
 describe("discord formatting", () => {
+  it("keeps bare repo plan paths as plain content instead of explicit links", () => {
+    const planPath =
+      "docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md";
+    const rendered = textForDiscordIntent({
+      id: "message-1",
+      kind: "message",
+      createdAt: 1000,
+      role: "assistant",
+      parts: [
+        {
+          type: "text",
+          text: `Use ${planPath} for the fix.`,
+          markdown: "markdown",
+        },
+      ],
+    });
+
+    expect(rendered).toContain(planPath);
+    expect(rendered).not.toContain(`[${planPath}]`);
+    expect(rendered).not.toContain(`http://${planPath}`);
+    expect(rendered).not.toContain(`https://${planPath}`);
+  });
+
   it("preserves markdown while neutralizing broad mentions", () => {
     expect(
       sanitizeDiscordContent("Run `pnpm test`\n```ts\nexpect(true)\n```\n@everyone <@123> <@&456>"),
     ).toBe(
       "Run `pnpm test`\n```ts\nexpect(true)\n```\n@ everyone @user:123 @role:456",
+    );
+  });
+
+  it("keeps mention neutralization separate from bare path text", () => {
+    const planPath =
+      "docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md";
+
+    expect(sanitizeDiscordContent(`@everyone use ${planPath}`)).toBe(
+      `@ everyone use ${planPath}`,
     );
   });
 

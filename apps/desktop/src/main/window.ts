@@ -35,6 +35,37 @@ export function getRendererEntry(): { kind: "url" | "file"; value: string } {
   };
 }
 
+export function isSafeExternalOpenUrl(url: string): boolean {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+
+  if (
+    parsed.protocol === "https:" ||
+    parsed.protocol === "mailto:" ||
+    parsed.protocol === "file:"
+  ) {
+    return true;
+  }
+
+  return parsed.protocol === "http:" && isLoopbackHost(parsed.hostname);
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+
+  return (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1"
+  );
+}
+
 function resolveRepoRoot(): string {
   return resolve(app.getAppPath(), "../..");
 }
@@ -202,7 +233,12 @@ export function createMainWindow(options?: {
   }
 
   webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    if (isSafeExternalOpenUrl(url)) {
+      void shell.openExternal(url);
+    } else {
+      mainLog.warn("blocked renderer external URL open");
+    }
+
     return { action: "deny" };
   });
 

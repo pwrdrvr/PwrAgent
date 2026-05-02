@@ -294,6 +294,36 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("does not turn pasted plan paths into transcript links", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Use docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md for the fix.",
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        pagination={{
+          supportsPagination: false,
+          hasPreviousPage: false,
+        }}
+        threadId="thread-1"
+        onLoadOlder={vi.fn(async () => undefined)}
+      />
+    );
+
+    expect(
+      screen.getByText(
+        "Use docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md for the fix."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
   it("renders inline image previews and opens them on demand", () => {
     const onOpenImage = vi.fn();
     const dataUrl = "data:image/png;base64,aGVsbG8=";
