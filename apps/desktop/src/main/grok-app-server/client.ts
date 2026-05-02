@@ -27,7 +27,10 @@ import type {
   BackendModelOption,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
-import type { JsonRpcObserver } from "../codex-app-server/json-rpc";
+import type {
+  JsonRpcObserver,
+  JsonRpcObserverDiagnostics,
+} from "../codex-app-server/json-rpc";
 import { summarizeToolActivityItems } from "../app-server/thread-activity";
 import { getMainLogger } from "../log";
 import {
@@ -853,10 +856,12 @@ export class GrokAppServerClient {
     return extractSkillsList(result);
   }
 
-  async listModels(): Promise<BackendModelOption[]> {
+  async listModels(
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<BackendModelOption[]> {
     await this.ensureInitialized();
 
-    const result = await this.request("model/list", {});
+    const result = await this.request("model/list", {}, diagnostics);
     return extractModelOptions(result);
   }
 
@@ -1160,12 +1165,17 @@ export class GrokAppServerClient {
     });
   }
 
-  private async request(method: string, params?: unknown): Promise<unknown> {
+  private async request(
+    method: string,
+    params?: unknown,
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<unknown> {
     const id = `rpc-${++this.requestCounter}`;
     const server = this.getServer();
 
     await this.observe({
       direction: "outbound",
+      diagnostics,
       envelope: {
         jsonrpc: "2.0",
         id,
@@ -1178,6 +1188,7 @@ export class GrokAppServerClient {
       const result = await server.request(method, params);
       await this.observe({
         direction: "inbound",
+        diagnostics,
         envelope: {
           jsonrpc: "2.0",
           id,
@@ -1188,6 +1199,7 @@ export class GrokAppServerClient {
     } catch (error) {
       await this.observe({
         direction: "inbound",
+        diagnostics,
         envelope: {
           jsonrpc: "2.0",
           id,
@@ -1217,6 +1229,7 @@ export class GrokAppServerClient {
 
   private async observe(params: {
     direction: "inbound" | "outbound";
+    diagnostics?: JsonRpcObserverDiagnostics;
     envelope: {
       jsonrpc: "2.0";
       id?: string;
@@ -1238,6 +1251,7 @@ export class GrokAppServerClient {
         direction: params.direction,
         raw: JSON.stringify(params.envelope),
         envelope: params.envelope,
+        diagnostics: params.diagnostics,
       });
     } catch (error) {
       grokClientLog.error("observer failed", {

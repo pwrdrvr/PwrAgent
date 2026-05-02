@@ -64,6 +64,7 @@ import {
   JsonRpcConnection,
   type JsonRpcId,
   type JsonRpcObserver,
+  type JsonRpcObserverDiagnostics,
 } from "./json-rpc";
 import {
   createThreadDirectoryEnricher,
@@ -3204,6 +3205,7 @@ function buildThreadReadPayload(params: {
 
 async function requestWithFallbacks(params: {
   client: JsonRpcConnection;
+  diagnostics?: JsonRpcObserverDiagnostics;
   methods: Array<CodexClientRequestMethod | (string & {})>;
   payloads: unknown[];
   timeoutMs: number;
@@ -3213,7 +3215,12 @@ async function requestWithFallbacks(params: {
   for (const method of params.methods) {
     for (const payload of params.payloads) {
       try {
-        return await params.client.request(method, payload, params.timeoutMs);
+        return await params.client.request(
+          method,
+          payload,
+          params.timeoutMs,
+          params.diagnostics,
+        );
       } catch (error) {
         lastError = error;
         if (!isMethodUnavailableError(error, method)) {
@@ -3688,12 +3695,15 @@ export class CodexAppServerClient {
     return extractSkillCatalog(result);
   }
 
-  async listModels(): Promise<BackendModelOption[]> {
+  async listModels(
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<BackendModelOption[]> {
     await this.ensureInitialized();
 
     const payload: CodexModelListParams = {};
     const result = await requestWithFallbacks({
       client: this.connection,
+      diagnostics,
       methods: ["model/list"],
       payloads: [payload],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS

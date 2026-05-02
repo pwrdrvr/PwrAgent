@@ -75,6 +75,10 @@ export function createProtocolLogObserver(
     options.streamLogIntervalMs ?? STREAM_LOG_INTERVAL_MS;
   const deltaBuffers = new Map<string, DeltaBuffer>();
   const requestMethodsById = new Map<string, string>();
+  const requestDiagnosticsById = new Map<
+    string,
+    NonNullable<JsonRpcObserverEvent["diagnostics"]>
+  >();
 
   function logDeltaBuffer(
     key: string,
@@ -132,6 +136,8 @@ export function createProtocolLogObserver(
       const kind = classifyEnvelope(envelope);
       const method =
         envelope.method ?? (id ? requestMethodsById.get(id) : undefined) ?? "response";
+      const diagnostics =
+        event.diagnostics ?? (id ? requestDiagnosticsById.get(id) : undefined);
       const delta = pickRawString(params, "delta");
       const deltaKey = delta
         ? buildDeltaKey({
@@ -170,17 +176,22 @@ export function createProtocolLogObserver(
       flushDeltaBuffersFor(envelope);
       if (kind === "request" && id && envelope.method) {
         requestMethodsById.set(id, envelope.method);
+        if (event.diagnostics) {
+          requestDiagnosticsById.set(id, event.diagnostics);
+        }
       }
       const paramKeys = Object.keys(params ?? {});
       logger.info(
         "message",
         compactFields({
           backend: options.backend,
+          callerReason: diagnostics?.callerReason,
           direction: compactDirection(event.direction),
           id,
           itemId: pickString(params, "itemId") ?? pickString(item, "id"),
           kind,
           method,
+          ownerId: diagnostics?.ownerId,
           paramKeys: paramKeys.length > 0 ? paramKeys : undefined,
           turnId: pickString(params, "turnId"),
           threadId: pickString(params, "threadId"),
@@ -188,6 +199,7 @@ export function createProtocolLogObserver(
       );
       if (kind === "response" && id) {
         requestMethodsById.delete(id);
+        requestDiagnosticsById.delete(id);
       }
     },
   };

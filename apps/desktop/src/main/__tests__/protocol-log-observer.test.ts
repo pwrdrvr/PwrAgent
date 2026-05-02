@@ -8,10 +8,12 @@ import {
 function createEvent(
   envelope: JsonRpcObserverEvent["envelope"],
   direction: JsonRpcObserverEvent["direction"] = "inbound",
+  diagnostics?: JsonRpcObserverEvent["diagnostics"],
 ): JsonRpcObserverEvent {
   return {
     direction,
     envelope,
+    diagnostics,
     raw: JSON.stringify(envelope),
   };
 }
@@ -43,6 +45,56 @@ describe("protocol log observer", () => {
       paramKeys: ["turnId", "threadId"],
       turnId: "turn-1",
       threadId: "thread-1",
+    });
+  });
+
+  it("includes caller diagnostics on requests and attributed responses", () => {
+    const info = vi.fn();
+    const observer = createProtocolLogObserver({
+      backend: "grok",
+      logger: { info },
+    });
+
+    observer.onMessage(
+      createEvent(
+        {
+          id: "rpc-1",
+          jsonrpc: "2.0",
+          method: "model/list",
+          params: {},
+        },
+        "outbound",
+        {
+          callerReason: "backend-summary",
+          ownerId: "model-catalog-1",
+        },
+      ),
+    );
+    observer.onMessage(
+      createEvent({
+        id: "rpc-1",
+        jsonrpc: "2.0",
+        result: { data: [] },
+      }),
+    );
+
+    expect(info).toHaveBeenNthCalledWith(1, "message", {
+      backend: "grok",
+      callerReason: "backend-summary",
+      direction: "out",
+      id: "rpc-1",
+      kind: "request",
+      method: "model/list",
+      ownerId: "model-catalog-1",
+    });
+    expect(info).toHaveBeenNthCalledWith(2, "message", {
+      backend: "grok",
+      callerReason: "backend-summary",
+      direction: "in",
+      id: "rpc-1",
+      kind: "response",
+      method: "model/list",
+      ownerId: "model-catalog-1",
     });
   });
 

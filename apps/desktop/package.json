@@ -7,6 +7,7 @@
   "main": "out/main/index.js",
   "scripts": {
     "analyze:codex-thread-protocol": "tsx ./scripts/analyze-codex-thread-protocol.ts",
+    "analyze:protocol-capture": "tsx ./scripts/analyze-protocol-capture.ts",
     "analyze:startup-cpu-profile": "tsx ./scripts/analyze-startup-cpu-profile.ts",
     "build": "electron-vite build",
     "codex:generate-protocol": "pnpm --filter @pwragnt/shared codex:generate-app-server-protocol",

@@ -46,6 +46,12 @@ export type JsonRpcObserverEvent = {
   direction: "inbound" | "outbound";
   raw: string;
   envelope: JsonRpcEnvelope;
+  diagnostics?: JsonRpcObserverDiagnostics;
+};
+
+export type JsonRpcObserverDiagnostics = {
+  callerReason?: string;
+  ownerId?: string;
 };
 
 export interface JsonRpcObserver {
@@ -123,7 +129,8 @@ export class JsonRpcConnection {
   async request(
     method: string,
     params?: unknown,
-    timeoutMs?: number
+    timeoutMs?: number,
+    diagnostics?: JsonRpcObserverDiagnostics,
   ): Promise<unknown> {
     const id = `rpc-${++this.requestCounter}`;
     const requestPromise = new Promise<unknown>((resolve, reject) => {
@@ -139,7 +146,7 @@ export class JsonRpcConnection {
       id,
       method,
       params: params ?? {}
-    });
+    }, diagnostics);
 
     return await requestPromise;
   }
@@ -212,12 +219,16 @@ export class JsonRpcConnection {
     }
   }
 
-  private async sendEnvelope(envelope: JsonRpcEnvelope): Promise<void> {
+  private async sendEnvelope(
+    envelope: JsonRpcEnvelope,
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<void> {
     const raw = JSON.stringify(envelope);
     await this.notifyObserver({
       direction: "outbound",
       raw,
-      envelope
+      envelope,
+      diagnostics,
     });
     this.transport.send(raw);
   }
