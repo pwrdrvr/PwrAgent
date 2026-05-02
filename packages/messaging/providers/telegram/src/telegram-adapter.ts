@@ -67,7 +67,20 @@ export type TelegramMessage = {
     file_name?: string;
     mime_type?: string;
   };
+  forum_topic_closed?: Record<string, never>;
+  forum_topic_created?: {
+    icon_color?: number;
+    icon_custom_emoji_id?: string;
+    name: string;
+  };
+  forum_topic_edited?: {
+    icon_custom_emoji_id?: string;
+    name?: string;
+  };
+  forum_topic_reopened?: Record<string, never>;
   from?: TelegramUser;
+  general_forum_topic_hidden?: Record<string, never>;
+  general_forum_topic_unhidden?: Record<string, never>;
   message_id: number;
   message_thread_id?: number;
   photo?: Array<{
@@ -464,9 +477,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return;
     }
 
-    if (message.pinned_message || this.isOwnBotUser(message.from)) {
+    const serviceMessageReason = telegramServiceMessageReason(message);
+    if (serviceMessageReason || this.isOwnBotUser(message.from)) {
       this.options.logger?.debug(
-        `telegram inbound ignored update=${updateId} message=${message.message_id} reason=${message.pinned_message ? "pin" : "own_bot"} chat=${message.chat.id}`,
+        `telegram inbound ignored update=${updateId} message=${message.message_id} reason=${serviceMessageReason ?? "own_bot"} chat=${message.chat.id}`,
       );
       return;
     }
@@ -1059,4 +1073,29 @@ function compactPreview(text: string, limit = 96): string {
   const compact = text.replace(/\s+/g, " ").trim();
   const preview = compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
   return preview.replace(/["\\]/g, "\\$&");
+}
+
+function telegramServiceMessageReason(message: TelegramMessage): string | undefined {
+  if (message.pinned_message) {
+    return "pin";
+  }
+  if (message.forum_topic_created) {
+    return "forum_topic_created";
+  }
+  if (message.forum_topic_edited) {
+    return "forum_topic_edited";
+  }
+  if (message.forum_topic_closed) {
+    return "forum_topic_closed";
+  }
+  if (message.forum_topic_reopened) {
+    return "forum_topic_reopened";
+  }
+  if (message.general_forum_topic_hidden) {
+    return "general_forum_topic_hidden";
+  }
+  if (message.general_forum_topic_unhidden) {
+    return "general_forum_topic_unhidden";
+  }
+  return undefined;
 }
