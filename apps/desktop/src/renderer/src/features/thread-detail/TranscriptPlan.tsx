@@ -1,7 +1,13 @@
-import type { AppServerThreadPlanEntry } from "@pwragnt/shared";
+import type {
+  AppServerThreadPlanEntry,
+  DesktopApplicationsSnapshot,
+} from "@pwragnt/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 
 type TranscriptPlanProps = {
+  applications?: DesktopApplicationsSnapshot;
+  desktopApi?: Pick<DesktopApi, "openApplication">;
   entry: AppServerThreadPlanEntry;
 };
 
@@ -67,7 +73,9 @@ export function TranscriptPlan(props: TranscriptPlanProps) {
 
       {props.entry.markdown ? (
         <ThreadMarkdown
+          applications={props.applications}
           className="transcript-plan__markdown"
+          desktopApi={props.desktopApi}
           text={props.entry.markdown}
         />
       ) : null}

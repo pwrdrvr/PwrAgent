@@ -239,6 +239,61 @@ describe("TranscriptList", () => {
     ).toHaveClass("transcript-message--user");
   });
 
+  it("opens transcript file links in the configured editor", async () => {
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+
+    render(
+      <TranscriptList
+        applications={{
+          editors: [
+            {
+              id: "vscode",
+              kind: "editor",
+              name: "VS Code",
+              source: "application",
+              appPath: "/Applications/Visual Studio Code.app",
+              canOpenWorkspace: true,
+            },
+            {
+              id: "zed",
+              kind: "editor",
+              name: "Zed",
+              source: "application",
+              appPath: "/Applications/Zed.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+          preferredEditorId: { value: "zed", source: "config" },
+          preferredTerminalId: { value: "", source: "default" },
+        }}
+        desktopApi={{ openApplication }}
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "assistant",
+            text: "I updated [AGENTS.md](/repo/PwrAgnt/AGENTS.md:17).",
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
+
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenCalledWith({
+        applicationId: "zed",
+        kind: "editor",
+        targetPath: "/repo/PwrAgnt/AGENTS.md",
+      });
+    });
+  });
+
   it("renders inline image previews and opens them on demand", () => {
     const onOpenImage = vi.fn();
     const dataUrl = "data:image/png;base64,aGVsbG8=";

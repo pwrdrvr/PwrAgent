@@ -1456,6 +1456,8 @@ export function ThreadView(props: ThreadViewProps) {
               entries={props.transcriptEntries}
               activeTurnId={props.activeTurnId}
               activeTurnStartedAt={props.activeTurnStartedAt}
+              applications={props.applications}
+              desktopApi={props.desktopApi}
               error={props.transcriptError}
               loading={props.loading}
               loadingMore={props.loadingMore}

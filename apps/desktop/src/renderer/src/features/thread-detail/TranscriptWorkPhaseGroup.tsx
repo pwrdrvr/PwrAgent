@@ -3,14 +3,18 @@ import type {
   AppServerSkillSummary,
   AppServerThreadEntry,
   AppServerThreadImagePart,
+  DesktopApplicationsSnapshot,
 } from "@pwragnt/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptActivity } from "./TranscriptActivity";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
 import { TranscriptReview } from "./TranscriptReview";
 
 type TranscriptWorkPhaseGroupProps = {
+  applications?: DesktopApplicationsSnapshot;
   collapsible: boolean;
+  desktopApi?: Pick<DesktopApi, "openApplication">;
   entries: AppServerThreadEntry[];
   expanded: boolean;
   label: string;
@@ -29,7 +33,15 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
       className="transcript-work-phase-group__content"
       hidden={props.collapsible && !props.expanded}
     >
-      {props.entries.map((entry) => renderEntry(entry, props.skills, props.onOpenImage))}
+      {props.entries.map((entry) =>
+        renderEntry({
+          applications: props.applications,
+          desktopApi: props.desktopApi,
+          entry,
+          onOpenImage: props.onOpenImage,
+          skills: props.skills,
+        })
+      )}
     </div>
   );
 
@@ -58,23 +70,38 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
 
 TranscriptWorkPhaseGroup.displayName = "TranscriptWorkPhaseGroup";
 
-function renderEntry(
-  entry: AppServerThreadEntry,
-  skills: AppServerSkillSummary[],
-  onOpenImage?: (image: AppServerThreadImagePart) => void
-) {
+function renderEntry(params: {
+  applications?: DesktopApplicationsSnapshot;
+  desktopApi?: Pick<DesktopApi, "openApplication">;
+  entry: AppServerThreadEntry;
+  skills: AppServerSkillSummary[];
+  onOpenImage?: (image: AppServerThreadImagePart) => void;
+}) {
+  const entry = params.entry;
   return entry.type === "activity" ? (
     <TranscriptActivity key={entry.id} entry={entry} />
   ) : entry.type === "plan" ? (
-    <TranscriptPlan key={entry.id} entry={entry} />
+    <TranscriptPlan
+      key={entry.id}
+      applications={params.applications}
+      desktopApi={params.desktopApi}
+      entry={entry}
+    />
   ) : entry.type === "review" ? (
-    <TranscriptReview key={entry.id} entry={entry} />
+    <TranscriptReview
+      key={entry.id}
+      applications={params.applications}
+      desktopApi={params.desktopApi}
+      entry={entry}
+    />
   ) : (
     <TranscriptMessage
       key={entry.id}
+      applications={params.applications}
+      desktopApi={params.desktopApi}
       message={entry}
-      skills={skills}
-      onOpenImage={onOpenImage}
+      skills={params.skills}
+      onOpenImage={params.onOpenImage}
     />
   );
 }

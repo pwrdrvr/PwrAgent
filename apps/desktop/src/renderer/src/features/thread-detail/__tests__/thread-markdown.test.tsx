@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
 describe("ThreadMarkdown", () => {
@@ -16,6 +16,50 @@ describe("ThreadMarkdown", () => {
       "href",
       "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md"
     );
+  });
+
+  it("opens local file links in the configured editor", async () => {
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+
+    render(
+      <ThreadMarkdown
+        applications={{
+          editors: [
+            {
+              id: "vscode",
+              kind: "editor",
+              name: "VS Code",
+              source: "application",
+              appPath: "/Applications/Visual Studio Code.app",
+              canOpenWorkspace: true,
+            },
+            {
+              id: "zed",
+              kind: "editor",
+              name: "Zed",
+              source: "application",
+              appPath: "/Applications/Zed.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+          preferredEditorId: { value: "zed", source: "config" },
+          preferredTerminalId: { value: "", source: "default" },
+        }}
+        desktopApi={{ openApplication }}
+        text={"I updated [AGENTS.md](/repo/PwrAgnt/AGENTS.md:17)."}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
+
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenCalledWith({
+        applicationId: "zed",
+        kind: "editor",
+        targetPath: "/repo/PwrAgnt/AGENTS.md",
+      });
+    });
   });
 
   it("renders skill links as chips", () => {
