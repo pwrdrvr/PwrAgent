@@ -744,6 +744,7 @@ export class GrokAppServerClient {
   private requestCounter = 0;
   private server: GrokServerLike | null;
   private initialized = false;
+  private initializePromise?: Promise<void>;
   private initializeResult: InitializeResult | null = null;
   private readonly notificationListeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
@@ -776,6 +777,7 @@ export class GrokAppServerClient {
     this.unsubscribeRequest?.();
     this.unsubscribeRequest = undefined;
     this.initialized = false;
+    this.initializePromise = undefined;
     this.initializeResult = null;
   }
 
@@ -1034,15 +1036,22 @@ export class GrokAppServerClient {
       return;
     }
 
-    const result = await this.request("initialize", {
-      protocolVersion: DEFAULT_PROTOCOL_VERSION,
-      clientInfo: { name: "pwragnt-desktop", version: "0.1.0" },
-      capabilities: { experimentalApi: true },
+    this.initializePromise ??= (async () => {
+      const result = await this.request("initialize", {
+        protocolVersion: DEFAULT_PROTOCOL_VERSION,
+        clientInfo: { name: "pwragnt-desktop", version: "0.1.0" },
+        capabilities: { experimentalApi: true },
+      });
+
+      this.initializeResult = (result ?? {}) as InitializeResult;
+      this.initialized = true;
+      await this.notify("initialized", {});
+    })().catch((error) => {
+      this.initializePromise = undefined;
+      throw error;
     });
 
-    this.initializeResult = (result ?? {}) as InitializeResult;
-    await this.notify("initialized", {});
-    this.initialized = true;
+    await this.initializePromise;
   }
 
   private getServer(): GrokServerLike {
