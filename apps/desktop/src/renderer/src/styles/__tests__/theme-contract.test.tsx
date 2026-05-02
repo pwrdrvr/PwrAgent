@@ -153,6 +153,15 @@ describe("Tangerine Terminal theme contract", () => {
     expect(compactTitleRule).not.toContain("line-height: 1;");
   });
 
+  it("keeps composer autocomplete visually separated from transcript surfaces", () => {
+    const autocompleteRule = extractRuleBody(css, ".composer__autocomplete");
+
+    expect(autocompleteRule).toContain("border: 1px solid var(--border-strong);");
+    expect(autocompleteRule).toContain("background: var(--bg-panel-elevated);");
+    expect(autocompleteRule).toContain("inset 0 0 0 1px rgba(247, 243, 235, 0.06)");
+    expect(autocompleteRule).not.toContain("background: rgba(10, 10, 10, 0.98);");
+  });
+
   it("keeps thinking scanner variants on one shared visible sweep", () => {
     expect(css).toContain("--thinking-scanner-progress: 0;");
     expect(css).toContain("--thinking-scanner-full-offset: 0px;");

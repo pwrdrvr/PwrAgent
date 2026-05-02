@@ -807,6 +807,7 @@ function ComposerApplicationButton(props: {
 export function Composer(props: ComposerProps) {
   const inputRef = useRef<ComposerRichInputHandle>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
+  const autocompleteListRef = useRef<HTMLDivElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const skillListboxId = useId();
@@ -2574,27 +2575,53 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
+    const updateActiveAutocompleteIndex = (
+      updater: (current: number) => number,
+    ): void => {
+      if (autocompleteKind === "skills") {
+        setActiveSkillIndex(updater);
+      } else {
+        setActiveSlashIndex(updater);
+      }
+    };
+
+    const getAutocompletePageStep = (): number => {
+      const list = autocompleteListRef.current;
+      const option = autocompleteOptionRefs.current.find(Boolean);
+      const optionHeight = option?.getBoundingClientRect().height ?? 0;
+      if (list && optionHeight > 0) {
+        return Math.max(1, Math.floor(list.clientHeight / optionHeight));
+      }
+      return Math.max(1, Math.min(6, autocompleteLength - 1));
+    };
+
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      if (autocompleteKind === "skills") {
-        setActiveSkillIndex((current) =>
-          Math.min(current + 1, autocompleteLength - 1)
-        );
-      } else {
-        setActiveSlashIndex((current) =>
-          Math.min(current + 1, autocompleteLength - 1)
-        );
-      }
+      updateActiveAutocompleteIndex((current) =>
+        Math.min(current + 1, autocompleteLength - 1)
+      );
       return;
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      if (autocompleteKind === "skills") {
-        setActiveSkillIndex((current) => Math.max(current - 1, 0));
-      } else {
-        setActiveSlashIndex((current) => Math.max(current - 1, 0));
-      }
+      updateActiveAutocompleteIndex((current) => Math.max(current - 1, 0));
+      return;
+    }
+
+    if (event.key === "PageDown") {
+      event.preventDefault();
+      const pageStep = getAutocompletePageStep();
+      updateActiveAutocompleteIndex((current) =>
+        Math.min(current + pageStep, autocompleteLength - 1)
+      );
+      return;
+    }
+
+    if (event.key === "PageUp") {
+      event.preventDefault();
+      const pageStep = getAutocompletePageStep();
+      updateActiveAutocompleteIndex((current) => Math.max(current - pageStep, 0));
       return;
     }
 
@@ -2954,6 +2981,7 @@ export function Composer(props: ComposerProps) {
         {displayedAutocompleteKind === "skills" ? (
           <div
             className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+            ref={autocompleteListRef}
             role="listbox"
             aria-label="Skills"
             id={skillListboxId}
@@ -2998,6 +3026,7 @@ export function Composer(props: ComposerProps) {
         ) : displayedAutocompleteKind === "slash" ? (
           <div
             className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+            ref={autocompleteListRef}
             role="listbox"
             aria-label="Commands"
             id={slashListboxId}

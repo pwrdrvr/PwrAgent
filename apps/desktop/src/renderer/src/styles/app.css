@@ -4377,8 +4377,10 @@ textarea {
   padding: 8px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
-  background: rgba(10, 10, 10, 0.98);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.34);
+  background: var(--bg-panel-elevated);
+  box-shadow:
+    inset 0 0 0 1px rgba(247, 243, 235, 0.06),
+    0 18px 48px rgba(0, 0, 0, 0.52);
   scrollbar-color: var(--border-strong) transparent;
   scrollbar-width: thin;
 }
