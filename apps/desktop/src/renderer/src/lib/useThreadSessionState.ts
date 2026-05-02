@@ -388,7 +388,8 @@ function findUniqueTranscriptOrderSource(
 
 function carryForwardTranscriptEntryOrder(
   response: AppServerReadThreadResponse,
-  sources: AppServerThreadEntry[]
+  sources: AppServerThreadEntry[],
+  liveSources: AppServerThreadEntry[] = []
 ): AppServerReadThreadResponse {
   if (sources.length === 0) {
     return response;
@@ -408,7 +409,14 @@ function carryForwardTranscriptEntryOrder(
     };
   });
 
-  const durableDiffSources = sources.filter(isDurableDiffActivity);
+  const freshCurrentTurnId = latestTranscriptTurnId(response.replay.entries);
+  const durableDiffSources = (
+    freshCurrentTurnId ? sources : liveSources
+  ).filter(
+    (source): source is AppServerThreadActivityEntry =>
+      isDurableDiffActivity(source) &&
+      (!freshCurrentTurnId || source.turn?.id === freshCurrentTurnId)
+  );
   const currentDurableDiffTurnId = durableDiffSources
     .map((source) => source.turn?.id)
     .findLast((turnId): turnId is string => Boolean(turnId));
@@ -446,6 +454,17 @@ function carryForwardTranscriptEntryOrder(
       entries,
     },
   };
+}
+
+function latestTranscriptTurnId(entries: AppServerThreadEntry[]): string | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const turnId = entries[index]?.turn?.id;
+    if (turnId) {
+      return turnId;
+    }
+  }
+
+  return undefined;
 }
 
 function isDurableDiffActivity(
@@ -1642,11 +1661,15 @@ export function useThreadSessionState(params: {
         }
 
         updateSession(targetThreadKey, (current) => {
-          const orderedResponse = carryForwardTranscriptEntryOrder(response, [
-            ...(current.response?.replay.entries ?? []),
+          const liveTranscriptSources = [
             ...current.optimisticEntries,
             ...(current.pendingAssistantMessage ? [current.pendingAssistantMessage] : []),
-          ]);
+          ];
+          const orderedResponse = carryForwardTranscriptEntryOrder(
+            response,
+            [...(current.response?.replay.entries ?? []), ...liveTranscriptSources],
+            liveTranscriptSources
+          );
           const hydratedCompletedTurn = didHydrateCompletedTurn(
             current.response,
             orderedResponse

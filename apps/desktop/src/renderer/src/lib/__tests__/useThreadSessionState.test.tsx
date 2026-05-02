@@ -1314,6 +1314,11 @@ describe("useThreadSessionState", () => {
       status: "completed" as const,
       durationMs: 80_000,
     };
+    const nextTurn = {
+      id: "turn-next",
+      status: "completed" as const,
+      durationMs: 90_000,
+    };
     const previousDiff = "diff --git a/old.ts b/old.ts\n--- a/old.ts\n+++ b/old.ts";
     const currentDiff = "diff --git a/current.ts b/current.ts\n--- a/current.ts\n+++ b/current.ts";
     const previousDiffActivity = diffActivity({
@@ -1372,6 +1377,36 @@ describe("useThreadSessionState", () => {
             hasPreviousPage: false,
           },
         },
+      }))
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: "assistant-final-next",
+              role: "assistant" as const,
+              phase: "final" as const,
+              text: "Next turn is complete.",
+              createdAt: 3_000,
+              turn: nextTurn,
+            },
+          ],
+          messages: [
+            {
+              id: "assistant-final-next",
+              role: "assistant" as const,
+              text: "Next turn is complete.",
+              createdAt: 3_000,
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
       }));
 
     const desktopApi: DesktopApi = {
@@ -1419,6 +1454,17 @@ describe("useThreadSessionState", () => {
       expect(transcriptLabels(result.current.entries)).toEqual([
         "message:Current turn is complete.",
         "activity:Edited 6 files, +58, -46",
+      ]);
+    });
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 3_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Next turn is complete.",
       ]);
     });
   });
