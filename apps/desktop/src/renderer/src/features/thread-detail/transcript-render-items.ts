@@ -88,46 +88,27 @@ function buildActiveWorkGroups(
     return [];
   }
 
-  const groups: RenderGroup[] = [];
-  let currentEntries: AppServerThreadEntry[] = [];
-
-  const flushCurrent = (): void => {
-    if (!hasConcreteWork(currentEntries)) {
-      currentEntries = [];
-      return;
+  const activeEntries: AppServerThreadEntry[] = [];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry.turn?.id !== activeTurnId || !isConcreteWorkEntry(entry)) {
+      break;
     }
+    activeEntries.unshift(entry);
+  }
 
-    groups.push({
+  if (!hasConcreteWork(activeEntries)) {
+    return [];
+  }
+
+  return [
+    {
       collapsible: false,
-      entries: currentEntries,
-      id: `work:${activeTurnId}:${currentEntries[0]?.id ?? groups.length}:active`,
+      entries: activeEntries,
+      id: `work:${activeTurnId}:active`,
       label: `Working for ${formatElapsedMs(elapsedMs)}`,
-    });
-    currentEntries = [];
-  };
-
-  for (const entry of entries) {
-    const canJoinGroup = entry.turn?.id === activeTurnId && isConcreteWorkEntry(entry);
-    if (!canJoinGroup) {
-      flushCurrent();
-      continue;
-    }
-
-    currentEntries.push(entry);
-  }
-
-  flushCurrent();
-
-  if (groups.length === 1) {
-    return [
-      {
-        ...groups[0],
-        id: `work:${activeTurnId}:active`,
-      },
-    ];
-  }
-
-  return groups;
+    },
+  ];
 }
 
 function buildCompletedGroups(

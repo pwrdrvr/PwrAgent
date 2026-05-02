@@ -291,7 +291,7 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
-  it("does not move later active work above intervening transcript entries", () => {
+  it("only shows the active elapsed label for bottom-contiguous work", () => {
     const turn = {
       id: "turn-1",
       status: "in_progress" as const,
@@ -320,21 +320,42 @@ describe("buildTranscriptRenderItems", () => {
     });
 
     expect(items).toEqual([
-      {
-        type: "workPhaseGroup",
-        id: "work:turn-1:tool-1:active",
-        collapsible: false,
-        entries: [firstActivity],
-        label: "Working for 1m 01s",
-      },
+      { type: "entry", entry: firstActivity },
       { type: "entry", entry: answer },
       {
         type: "workPhaseGroup",
-        id: "work:turn-1:tool-2:active",
+        id: "work:turn-1:active",
         collapsible: false,
         entries: [secondActivity],
         label: "Working for 1m 01s",
       },
+    ]);
+  });
+
+  it("does not show an active elapsed label when active work is no longer at the bottom", () => {
+    const turn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 1_000,
+    };
+    const activity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Read one file",
+      details: [],
+      turn,
+    };
+    const answer = commentary("c1", "Interim update.", turn);
+
+    const items = buildTranscriptRenderItems({
+      entries: [activity, answer],
+      activeTurnId: "turn-1",
+      now: 62_000,
+    });
+
+    expect(items).toEqual([
+      { type: "entry", entry: activity },
+      { type: "entry", entry: answer },
     ]);
   });
 

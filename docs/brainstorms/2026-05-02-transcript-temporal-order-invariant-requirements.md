@@ -88,6 +88,9 @@ except for explicitly older history loaded above the viewport.
 - R23. End-of-turn transcript state should expose a durable modified/added/
   deleted file summary with inline diff access, so the user can inspect the
   final changes without relying on transient live protocol updates.
+- R24. An active turn may render at most one live elapsed-time indicator such as
+  `Working for ...` in the transcript; older active work groups must not each
+  keep their own updating timer.
 
 **Testing Gates**
 - R13. Unit tests must fail when any visible transcript item has an ordering key
@@ -129,6 +132,8 @@ except for explicitly older history loaded above the viewport.
 - Edited-file and changed-file diff entries remain visible after live updates,
   hydration catch-up, and later refreshes that omit the diff from the backend
   response.
+- Active turns do not leak multiple simultaneous `Working for ...` indicators
+  when assistant text and tool activity are interleaved.
 
 ## Why We Got This Wrong
 

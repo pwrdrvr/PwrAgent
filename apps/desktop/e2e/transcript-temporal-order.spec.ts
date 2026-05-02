@@ -44,11 +44,10 @@ test("transcript preserves temporal order across live activity and hydration", a
     assertOrdered(transcriptText, [
       "Show the temporal transcript order.",
       "The code already logs explicit turn completion.",
-      "Working for",
       "I am going to close that gap in renderBindingStatus.",
-      "Working for",
       "I added the controller hook that reconciles navigation state.",
     ]);
+    expect(countOccurrences(transcriptText, "Working for")).toBeLessThanOrEqual(1);
 
     await app.advance({ stepId: "turn-completed-1" });
 
@@ -92,4 +91,8 @@ function assertOrdered(text: string, labels: string[]): void {
     );
     previousIndex = nextIndex;
   }
+}
+
+function countOccurrences(text: string, label: string): number {
+  return text.split(label).length - 1;
 }
