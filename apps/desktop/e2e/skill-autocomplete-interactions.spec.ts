@@ -11,6 +11,9 @@ const fixturePath = path.resolve(
 const customWidgetComposerEnv = {
   PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "custom-widget-chips",
 };
+const tiptapWysiwygComposerEnv = {
+  PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-wysiwyg-markdown-chips",
+};
 const reportedDraftPrefix =
   "Oh shoot... I was wrong about this I think. I thought the desktop app didn't show the tool use but I was looking at a version of the desktop app that didn't start the turn. I just now looked at the instance that started the turn and it does indeed have the tool use notifications.\n\n\n\nLet's use ";
 
@@ -52,6 +55,70 @@ async function seedComposerDraft(input: Locator, value: string): Promise<void> {
   }, value);
   await input.focus();
 }
+
+test("thread reply Tiptap skill autocomplete filters and commits the reported multi-line draft", async () => {
+  const app = await launchElectronApp({
+    env: tiptapWysiwygComposerEnv,
+    fixturePath,
+    windowSize: {
+      width: 1180,
+      height: 760,
+    },
+  });
+
+  try {
+    await openSkillAutocompleteThread(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "Reply" });
+    await textbox.fill(reportedDraftPrefix);
+    await textbox.focus();
+    await app.window.keyboard.press("End");
+    const seededDraft = await tiptapInput.getAttribute("data-value");
+    expect(seededDraft).toMatch(/Let's use $/);
+
+    await app.window.keyboard.type("$ce");
+    await expect(app.window.getByRole("listbox", { name: "Skills" })).toBeVisible();
+
+    await app.window.keyboard.type(":p");
+    let firstOption = app.window
+      .getByRole("listbox", { name: "Skills" })
+      .getByRole("button")
+      .first();
+    await expect(firstOption).toContainText("$ce:plan");
+
+    await app.window.keyboard.type("lan");
+    firstOption = app.window
+      .getByRole("listbox", { name: "Skills" })
+      .getByRole("button")
+      .first();
+    await expect(firstOption).toContainText("$ce:plan");
+
+    await app.window.keyboard.press("Enter");
+
+    await expect(app.window.getByRole("listbox", { name: "Skills" })).toBeHidden();
+    await expect(
+      tiptapInput.locator(".composer-tiptap-input__mention", { hasText: "$ce:plan" }),
+    ).toBeVisible();
+    await expect(tiptapInput).toHaveAttribute("data-value", seededDraft ?? "");
+    await expect(tiptapInput).not.toContainText("$ce:plan plan");
+
+    await app.window.getByRole("button", { name: "Send" }).click();
+    await expect
+      .poll(async () => await app.getLastStartTurn())
+      .toMatchObject({
+        threadId: "thread-skill-autocomplete",
+        input: [
+          {
+            type: "text",
+            text: `${seededDraft ?? ""}[$ce:plan](/Users/huntharo/.codex/skills/ce-plan/SKILL.md)`.trim(),
+          },
+        ],
+      });
+  } finally {
+    await app.close();
+  }
+});
 
 test("thread reply skill autocomplete filters and commits the reported multi-line draft", async () => {
   const app = await launchElectronApp({

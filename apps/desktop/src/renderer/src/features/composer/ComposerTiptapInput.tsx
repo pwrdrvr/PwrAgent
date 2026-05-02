@@ -407,13 +407,29 @@ function insertWysiwygSoftBreak(editor: TiptapEditor): boolean {
 function getDraftIndexAtPosition(
   editor: NonNullable<ReturnType<typeof useEditor>>,
   position: number,
+  mode: TiptapReadMode,
 ): number {
   let index = 0;
   let found = false;
 
-  editor.state.doc.descendants((node, pos) => {
+  editor.state.doc.descendants((node, pos, parent, childIndex) => {
     if (found) {
       return false;
+    }
+
+    if (parent?.type.name === "doc") {
+      if (position <= pos) {
+        found = true;
+        return false;
+      }
+      if (childIndex > 0) {
+        index += mode === "markdown" ? 2 : 1;
+      }
+      if (position <= pos + 1) {
+        found = true;
+        return false;
+      }
+      return true;
     }
 
     if (node.isText) {
@@ -450,14 +466,28 @@ function getDraftIndexAtPosition(
 function getPositionAtDraftIndex(
   editor: NonNullable<ReturnType<typeof useEditor>>,
   draftIndex: number,
+  mode: TiptapReadMode,
 ): number {
   let index = 0;
   let position = editor.state.doc.content.size;
   let found = false;
 
-  editor.state.doc.descendants((node, pos) => {
+  editor.state.doc.descendants((node, pos, parent, childIndex) => {
     if (found) {
       return false;
+    }
+
+    if (parent?.type.name === "doc") {
+      if (childIndex > 0) {
+        const separatorLength = mode === "markdown" ? 2 : 1;
+        if (draftIndex < index + separatorLength) {
+          position = pos + 1;
+          found = true;
+          return false;
+        }
+        index += separatorLength;
+      }
+      return true;
     }
 
     if (node.isText) {
@@ -626,6 +656,7 @@ export const ComposerTiptapInput = forwardRef<
       selectionIndexRef.current = getDraftIndexAtPosition(
         nextEditor,
         nextEditor.state.selection.from,
+        readMode,
       );
       propsRef.current.onChange(next.value, next.skillTokens);
     },
@@ -633,6 +664,7 @@ export const ComposerTiptapInput = forwardRef<
       selectionIndexRef.current = getDraftIndexAtPosition(
         nextEditor,
         nextEditor.state.selection.from,
+        readMode,
       );
     },
   });
@@ -689,7 +721,7 @@ export const ComposerTiptapInput = forwardRef<
       pendingSelectionIndexRef.current = undefined;
       selectionIndexRef.current = nextSelectionIndex;
       editor.commands.setTextSelection(
-        getPositionAtDraftIndex(editor, nextSelectionIndex),
+        getPositionAtDraftIndex(editor, nextSelectionIndex, readMode),
       );
     }
   }, [editor, props.skillTokens, props.value, propsSignature, readMode]);
@@ -751,7 +783,7 @@ export const ComposerTiptapInput = forwardRef<
         return;
       }
       selectionIndexRef.current = start;
-      editor.commands.setTextSelection(getPositionAtDraftIndex(editor, start));
+      editor.commands.setTextSelection(getPositionAtDraftIndex(editor, start, readMode));
     },
   }));
 
