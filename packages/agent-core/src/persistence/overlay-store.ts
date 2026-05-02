@@ -365,8 +365,21 @@ export class OverlayStore {
         executionMode: "default",
         extraLinkedDirectories: [],
       };
+      const previousObservedBranch = current.observedGitBranch?.trim();
+      const nextObservedBranch = params.branch?.trim();
+      const legacyHandoffExpectedBranch =
+        !current.gitBranch?.trim() &&
+        previousObservedBranch &&
+        nextObservedBranch &&
+        previousObservedBranch !== nextObservedBranch &&
+        hasHandoffWorkspace(current.extraLinkedDirectories)
+          ? previousObservedBranch
+          : undefined;
       const nextState: ThreadOverlayState = {
         ...current,
+        gitBranch: current.gitBranch?.trim()
+          ? current.gitBranch
+          : legacyHandoffExpectedBranch,
         observedGitBranch: params.branch,
       };
       data.threads[threadKey] = nextState;
@@ -516,4 +529,10 @@ export class OverlayStore {
     await writeFile(tempPath, JSON.stringify(data, null, 2), "utf8");
     await rename(tempPath, this.filePath);
   }
+}
+
+function hasHandoffWorkspace(
+  directories: ThreadOverlayState["extraLinkedDirectories"] = [],
+): boolean {
+  return directories.some((directory) => directory.id.startsWith("pwragnt-handoff:"));
 }

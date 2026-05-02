@@ -157,6 +157,47 @@ describe("OverlayStore", () => {
     });
   });
 
+  it("promotes legacy observed handoff branch metadata before recording checkout drift", async () => {
+    const store = await createStore();
+
+    await store.addLinkedDirectory({
+      backend: "codex",
+      threadId: "thread-1",
+      directory: {
+        id: "pwragnt-handoff:codex:thread-1",
+        kind: "worktree",
+        label: "repo",
+        path: "/repo",
+        worktreePath: "/repo/.worktrees/repo-feature",
+      },
+    });
+    await store.setThreadObservedBranch({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feature/expected",
+    });
+
+    await expect(
+      store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      gitBranch: undefined,
+      observedGitBranch: "feature/expected",
+    });
+
+    await store.setThreadObservedBranch({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feature/current",
+    });
+
+    await expect(
+      store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      gitBranch: "feature/expected",
+      observedGitBranch: "feature/current",
+    });
+  });
+
   it("stores worktree snapshot metadata by backend-qualified thread", async () => {
     const store = await createStore();
 

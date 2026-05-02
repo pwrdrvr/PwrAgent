@@ -201,6 +201,48 @@ describe("refresh reconciliation", () => {
     );
   });
 
+  it("keeps legacy handoff expected branch stable after observing checkout drift", async () => {
+    const store = await createStore();
+
+    await store.addLinkedDirectory({
+      backend: "codex",
+      threadId: "thread-1",
+      directory: {
+        id: "pwragnt-handoff:codex:thread-1",
+        kind: "worktree",
+        label: "PwrAgnt",
+        path: "/repo",
+        worktreePath: "/repo/.worktrees/pwragnt-feature",
+      },
+    });
+    await store.setThreadObservedBranch({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feat/thread-workspace-handoff-plan",
+    });
+    await store.setThreadObservedBranch({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "fix/context-rail-slide-reflow",
+    });
+
+    const snapshot = await store.reconcileNavigationSnapshot({
+      backend: "codex",
+      fetchedAt: 1000,
+      threads: [
+        buildThread({
+          gitBranch: "feat/thread-workspace-handoff-plan",
+          observedGitBranch: "fix/context-rail-slide-reflow",
+        }),
+      ],
+    });
+
+    expect(snapshot.threads[0]?.gitBranch).toBe("feat/thread-workspace-handoff-plan");
+    expect(snapshot.threads[0]?.observedGitBranch).toBe(
+      "fix/context-rail-slide-reflow",
+    );
+  });
+
   it("tracks mixed-backend threads with duplicate ids independently in aggregate snapshots", async () => {
     const store = await createStore();
 
