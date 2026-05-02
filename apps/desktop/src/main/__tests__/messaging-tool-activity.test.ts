@@ -27,6 +27,122 @@ describe("messaging tool activity", () => {
     expect(formatToolActivityLine(activity!)).toBe("npm view dive (1.2s)");
   });
 
+  it("keeps Codex command action summaries stable", () => {
+    const activity = summarizeToolActivityFromBackendEvent(
+      buildCompletedItem({
+        id: "codex-read-1",
+        type: "commandExecution",
+        command: "cat docs/messaging-platform-integration.md",
+        commandActions: [
+          {
+            type: "read",
+            path: "docs/messaging-platform-integration.md",
+          },
+        ],
+      }),
+    );
+
+    expect(activity).toMatchObject({
+      kind: "search",
+      title: "Read messaging-platform-integration.md",
+    });
+  });
+
+  it("summarizes Grok read_file dynamic tools with path context", () => {
+    const activity = summarizeToolActivityFromBackendEvent(
+      buildCompletedItem({
+        id: "grok-read-1",
+        type: "dynamicToolCall",
+        toolName: "read_file",
+        arguments: {
+          path: "docs/messaging-adapter-contract.md",
+        },
+      }),
+    );
+
+    expect(activity).toMatchObject({
+      id: "grok-read-1",
+      kind: "tool",
+      status: "completed",
+      title: "Read messaging-adapter-contract.md",
+    });
+  });
+
+  it("summarizes Grok list_files dynamic tools with path context", () => {
+    const activity = summarizeToolActivityFromBackendEvent(
+      buildCompletedItem({
+        id: "grok-list-1",
+        type: "dynamicToolCall",
+        toolName: "list_files",
+        arguments: JSON.stringify({
+          path: "packages/messaging",
+        }),
+      }),
+    );
+
+    expect(activity).toMatchObject({
+      title: "Listed messaging",
+    });
+  });
+
+  it("summarizes Grok search_code dynamic tools with safe context", () => {
+    const withPath = summarizeToolActivityFromBackendEvent(
+      buildCompletedItem({
+        id: "grok-search-1",
+        type: "dynamicToolCall",
+        toolName: "search_code",
+        arguments: {
+          path: "apps/desktop/src/main/messaging",
+          query: "stream_update",
+        },
+      }),
+    );
+    const withQuery = summarizeToolActivityFromBackendEvent(
+      buildCompletedItem({
+        id: "grok-search-2",
+        type: "dynamicToolCall",
+        toolName: "search_code",
+        arguments: {
+          query: "token=abc123",
+        },
+      }),
+    );
+
+    expect(withPath?.title).toBe("Searched messaging");
+    expect(withQuery?.title).toBe("Searched code: token=[redacted]");
+    expect(withQuery?.title).not.toContain("abc123");
+  });
+
+  it("summarizes command-like Grok dynamic tools through safe command titles", () => {
+    const activity = summarizeToolActivityFromBackendEvent(
+      buildCompletedItem({
+        id: "grok-command-1",
+        type: "dynamicToolCall",
+        toolName: "exec_command",
+        arguments: {
+          cmd: "/bin/zsh -lc 'git status --short'",
+        },
+      }),
+    );
+
+    expect(activity).toMatchObject({
+      title: "git status --short",
+    });
+  });
+
+  it("keeps Grok dynamic tool fallbacks readable without empty titles", () => {
+    const activity = summarizeToolActivityFromBackendEvent(
+      buildCompletedItem({
+        id: "grok-read-2",
+        type: "dynamicToolCall",
+        toolName: "read_file",
+        arguments: {},
+      }),
+    );
+
+    expect(activity?.title).toBe("Read file");
+  });
+
   it("marks failed tools without including raw output", () => {
     const activity = summarizeToolActivityFromBackendEvent(
       buildCompletedItem({

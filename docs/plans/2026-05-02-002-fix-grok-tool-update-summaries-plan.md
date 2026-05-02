@@ -1,7 +1,7 @@
 ---
 title: fix: Improve Grok tool update summaries
 type: fix
-status: active
+status: completed
 date: 2026-05-02
 origin: docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md
 ---
@@ -122,7 +122,7 @@ instead of useful.
 
 ## Implementation Units
 
-- [ ] **Unit 1: Improve Grok dynamic tool titles**
+- [x] **Unit 1: Improve Grok dynamic tool titles**
 
 **Goal:** Make Grok-generated tool updates useful by extracting safe path/query
 context from `dynamicToolCall` items.
@@ -173,7 +173,7 @@ context from `dynamicToolCall` items.
 - Grok-like dynamic tool events no longer render as repeated `read file` or
   `search code` when safe path/query context exists.
 
-- [ ] **Unit 2: Document the Grok summary guardrail**
+- [x] **Unit 2: Document the Grok summary guardrail**
 
 **Goal:** Capture why this plan only improves Grok title quality and does not
 change batching semantics.

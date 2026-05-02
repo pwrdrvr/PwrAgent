@@ -235,11 +235,102 @@ function dynamicToolTitle(item: Record<string, unknown>): string {
     readString(item, "tool_name") ??
     readString(item, "name") ??
     "Used tool";
-  if (name === "exec_command") {
-    const args = readToolArguments(item);
-    return safeCommandTitle(readString(args ?? {}, "cmd") ?? readString(args ?? {}, "command"));
+  const normalizedName = normalizeToolName(name);
+  const args = readToolArguments(item);
+
+  if (isCommandLikeDynamicTool(normalizedName)) {
+    return safeCommandTitle(
+      readFirstString(args, ["cmd", "command", "shellCommand"]),
+    );
+  }
+
+  if (isReadFileDynamicTool(normalizedName)) {
+    const basename = readDynamicPathBasename(args);
+    return basename ? `Read ${basename}` : "Read file";
+  }
+
+  if (isListFilesDynamicTool(normalizedName)) {
+    const basename = readDynamicPathBasename(args);
+    return basename ? `Listed ${basename}` : "Listed files";
+  }
+
+  if (isSearchCodeDynamicTool(normalizedName)) {
+    const basename = readDynamicPathBasename(args);
+    if (basename) {
+      return `Searched ${basename}`;
+    }
+
+    const query = readSafeDynamicText(args, ["query", "pattern", "search", "term"]);
+    return query ? truncateTitle(`Searched code: ${query}`) : "Searched code";
   }
   return truncateTitle(name.replace(/_/g, " "));
+}
+
+function isCommandLikeDynamicTool(normalizedName: string): boolean {
+  return ["execcommand", "shellcommand", "runcommand", "bash"].includes(normalizedName);
+}
+
+function isReadFileDynamicTool(normalizedName: string): boolean {
+  return ["read", "readfile", "readfiles"].includes(normalizedName);
+}
+
+function isListFilesDynamicTool(normalizedName: string): boolean {
+  return ["list", "listfile", "listfiles", "ls"].includes(normalizedName);
+}
+
+function isSearchCodeDynamicTool(normalizedName: string): boolean {
+  return [
+    "grep",
+    "search",
+    "searchcode",
+    "codesearch",
+    "findinfiles",
+  ].includes(normalizedName);
+}
+
+function readDynamicPathBasename(
+  args: Record<string, unknown> | undefined,
+): string | undefined {
+  const value = readFirstString(args, [
+    "path",
+    "file",
+    "filePath",
+    "filepath",
+    "directory",
+    "dir",
+    "cwd",
+  ]);
+  if (!value) {
+    return undefined;
+  }
+
+  const basename = path.basename(value) || value;
+  return redactTitleText(basename);
+}
+
+function readSafeDynamicText(
+  args: Record<string, unknown> | undefined,
+  keys: string[],
+): string | undefined {
+  const value = readFirstString(args, keys);
+  return value ? redactTitleText(value) : undefined;
+}
+
+function readFirstString(
+  item: Record<string, unknown> | undefined,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = item ? readString(item, key) : undefined;
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function normalizeToolName(value: string): string {
+  return value.replace(/[-_\s]/g, "").toLowerCase();
 }
 
 function readToolArgument(
@@ -268,11 +359,16 @@ function safeCommandTitle(command: string | undefined): string {
   const stripped = command
     .replace(/^\/bin\/[a-z]+ -lc /, "")
     .replace(/^['"]|['"]$/g, "");
-  const redacted = stripped
-    .replace(SECRET_FRAGMENT_PATTERN, "$1[redacted]")
-    .replace(ASSIGNMENT_SECRET_PATTERN, "$1[redacted]");
-  const collapsed = redacted.replace(/\s+/g, " ").trim();
+  const collapsed = redactTitleText(stripped);
   return collapsed ? truncateTitle(collapsed) : "Ran command";
+}
+
+function redactTitleText(value: string): string {
+  return value
+    .replace(SECRET_FRAGMENT_PATTERN, "$1[redacted]")
+    .replace(ASSIGNMENT_SECRET_PATTERN, "$1[redacted]")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function normalizeToolStatus(

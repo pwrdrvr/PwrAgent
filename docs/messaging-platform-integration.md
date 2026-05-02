@@ -46,6 +46,11 @@ tool activity with title-only text such as command names, MCP tool names, web
 searches, and edited file names. Raw command output, diffs, and tool arguments
 that look secret are intentionally excluded.
 
+Generated update quality depends on backend tool metadata. Codex
+`commandActions` and Grok `dynamicToolCall` path/query arguments are normalized
+into concise labels such as `Read <file>`, `Listed <directory>`, and
+`Searched <directory>` without forwarding raw argument objects.
+
 The app-level default lives in Settings > Messaging as `Tool usage
 notifications`. Existing configs default to `Show Some`. A bound conversation
 can override the default from its status card with the `Tools: <mode>` action,

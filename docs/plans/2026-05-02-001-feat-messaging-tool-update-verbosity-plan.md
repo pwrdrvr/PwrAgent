@@ -14,6 +14,8 @@ Add channel-neutral messaging controls for agent tool-use updates so Telegram, D
 
 Tool updates are code-generated messaging messages, not assistant-authored responses. They summarize completed tool activity such as shell commands, MCP tool calls, web searches, dynamic tools, file reads, and file writes. The desktop transcript can still show live tool notifications independently; this plan only governs what the messaging integration forwards to remote chat surfaces.
 
+Follow-up: `docs/plans/2026-05-02-002-fix-grok-tool-update-summaries-plan.md` tightens Grok `dynamicToolCall` summaries after live Telegram testing showed the batching policy worked well for Codex but Grok needed better path/query title extraction.
+
 ## Problem Frame
 
 The messaging integration currently forwards assistant text, typing activity, status-card updates, approvals, and questionnaires, but it does not intentionally forward tool-use notifications. When a turn performs many small reads or shell commands, forwarding every notification to chat would be noisy. Suppressing all of them would make remote use feel opaque, especially from mobile or voice-driven contexts where the user cannot see the desktop transcript.
