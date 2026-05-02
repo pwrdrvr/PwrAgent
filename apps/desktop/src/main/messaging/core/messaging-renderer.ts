@@ -6,9 +6,14 @@ import type {
   MessagingQuestionnaireIntent,
   MessagingStatusIntent,
   MessagingSurfaceAction,
+  MessagingMessageIntent,
   MessagingThreadPickerIntent,
   NavigationSnapshot,
 } from "@pwragnt/shared";
+import {
+  formatToolActivityLine,
+  type MessagingToolActivity,
+} from "./messaging-tool-activity.js";
 export { buildApprovalIntent } from "./messaging-approval-renderer.js";
 
 export function buildActivityIntent(params: {
@@ -72,6 +77,54 @@ export function buildStatusIntent(params: {
     createdAt: params.createdAt,
     status: params.status,
     text: params.text,
+  };
+}
+
+export function buildToolUpdateMessageIntent(params: {
+  activity: MessagingToolActivity;
+  bindingId: string;
+  createdAt: number;
+  id: string;
+}): MessagingMessageIntent {
+  return {
+    id: params.id,
+    kind: "message",
+    bindingId: params.bindingId,
+    createdAt: params.createdAt,
+    role: "system",
+    parts: [
+      {
+        type: "text",
+        text: `Tool update: ${formatToolActivityLine(params.activity)}`,
+        markdown: "light",
+      },
+    ],
+  };
+}
+
+export function buildToolUpdateBatchMessageIntent(params: {
+  activities: MessagingToolActivity[];
+  bindingId: string;
+  createdAt: number;
+  id: string;
+}): MessagingMessageIntent {
+  const count = params.activities.length;
+  return {
+    id: params.id,
+    kind: "message",
+    bindingId: params.bindingId,
+    createdAt: params.createdAt,
+    role: "system",
+    parts: [
+      {
+        type: "text",
+        text: [
+          `Tool updates: ran ${count} tool${count === 1 ? "" : "s"}`,
+          ...params.activities.map((activity) => `- ${formatToolActivityLine(activity)}`),
+        ].join("\n"),
+        markdown: "light",
+      },
+    ],
   };
 }
 
