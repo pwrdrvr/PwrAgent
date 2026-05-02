@@ -91,6 +91,12 @@ except for explicitly older history loaded above the viewport.
 - R24. An active turn may render at most one live elapsed-time indicator such as
   `Working for ...` in the transcript; older active work groups must not each
   keep their own updating timer.
+- R25. Durable edited-file diff carry-forward is scoped to the current/latest
+  turn only; preserving current turn diffs must not resurrect edited-file
+  summaries from older turns at the bottom of the chat.
+- R26. Edited-file and changed-file diff activities should render as top-level
+  transcript items with file counts and line-change summaries visible without
+  first expanding a generic work group such as `More work`.
 
 **Testing Gates**
 - R13. Unit tests must fail when any visible transcript item has an ordering key
@@ -134,6 +140,8 @@ except for explicitly older history loaded above the viewport.
   response.
 - Active turns do not leak multiple simultaneous `Working for ...` indicators
   when assistant text and tool activity are interleaved.
+- The bottom of the transcript shows only the current turn's edited-file diff
+  summary, and that summary is directly visible at the top level.
 
 ## Why We Got This Wrong
 

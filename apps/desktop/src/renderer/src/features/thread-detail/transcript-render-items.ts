@@ -266,7 +266,11 @@ function isWorkPhaseEntry(
   | AppServerThreadMessageEntry
   | AppServerThreadActivityEntry
   | AppServerThreadPlanEntry {
-  if (entry.type === "activity" || entry.type === "plan") {
+  if (entry.type === "activity") {
+    return !isFileDiffActivity(entry);
+  }
+
+  if (entry.type === "plan") {
     return true;
   }
 
@@ -280,7 +284,14 @@ function hasConcreteWork(entries: AppServerThreadEntry[]): boolean {
 function isConcreteWorkEntry(
   entry: AppServerThreadEntry
 ): entry is AppServerThreadActivityEntry | AppServerThreadPlanEntry {
-  return entry.type === "activity" || entry.type === "plan";
+  return (
+    entry.type === "plan" ||
+    (entry.type === "activity" && !isFileDiffActivity(entry))
+  );
+}
+
+function isFileDiffActivity(entry: AppServerThreadActivityEntry): boolean {
+  return entry.details.some((detail) => Boolean(detail.fileDiff?.diff));
 }
 
 function readCompletedTurn(

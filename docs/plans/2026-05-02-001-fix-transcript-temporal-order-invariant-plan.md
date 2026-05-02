@@ -45,6 +45,7 @@ That split means no layer could guarantee the visible transcript stayed in canon
 | R18-R20 diagnostics and protocol order reporting | Unit 6 |
 | R21-R23 durable edited-file diff retention and final change summary | Unit 2, Unit 4, follow-up test |
 | R24 single active elapsed indicator | Unit 3, follow-up test |
+| R25-R26 current-turn top-level edited-file summaries | Unit 3, Unit 4, follow-up test |
 
 ## Scope Boundaries
 

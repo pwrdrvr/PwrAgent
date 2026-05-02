@@ -451,6 +451,53 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it("renders edited-file diffs as top-level activity instead of nested work", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const firstActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Used 2 tools",
+      details: [],
+      turn,
+    };
+    const answer = final("f1", "Final answer.", turn);
+    const diffActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "diff-1",
+      summary: "Edited 2 files, +12, -3",
+      details: [
+        {
+          id: "diff-detail-1",
+          kind: "write",
+          label: "Update TranscriptList.tsx",
+          fileDiff: {
+            kind: "update",
+            additions: 12,
+            removals: 3,
+            diff: "diff --git a/TranscriptList.tsx b/TranscriptList.tsx",
+          },
+        },
+      ],
+      turn,
+    };
+
+    const items = buildTranscriptRenderItems({
+      entries: [firstActivity, answer, diffActivity],
+    });
+
+    expect(items).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:tool-1:complete",
+        collapsible: true,
+        entries: [firstActivity],
+        label: "Worked for 1m 10s",
+      },
+      { type: "entry", entry: answer },
+      { type: "entry", entry: diffActivity },
+    ]);
+  });
+
   it("only collapses consecutive commentary in the fallback path", () => {
     const first = commentary("c1", "First scan.");
     const answer = final("f1", "Interim answer.");

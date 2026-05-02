@@ -39,6 +39,34 @@ function transcriptLabels(entries: AppServerThreadEntry[]): string[] {
   );
 }
 
+function diffActivity(params: {
+  diff: string;
+  id: string;
+  summary: string;
+  turn: AppServerThreadActivityEntry["turn"];
+}): AppServerThreadActivityEntry {
+  return {
+    type: "activity",
+    id: params.id,
+    summary: params.summary,
+    createdAt: Date.now(),
+    details: [
+      {
+        id: `${params.id}-detail`,
+        kind: "write",
+        label: "Update current.ts",
+        fileDiff: {
+          kind: "update",
+          diff: params.diff,
+          additions: 1,
+          removals: 1,
+        },
+      },
+    ],
+    turn: params.turn,
+  };
+}
+
 describe("useThreadSessionState", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -1271,6 +1299,126 @@ describe("useThreadSessionState", () => {
         entry.type === "activity" && entry.summary === "Edited 1 file, +1, -2"
     );
     expect(editedActivity?.details[0]?.fileDiff?.diff).toBe(liveDiff);
+  });
+
+  it("only carries forward edited file diffs for the current turn", async () => {
+    let now = 50_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    const previousTurn = {
+      id: "turn-previous",
+      status: "completed" as const,
+      durationMs: 70_000,
+    };
+    const currentTurn = {
+      id: "turn-current",
+      status: "completed" as const,
+      durationMs: 80_000,
+    };
+    const previousDiff = "diff --git a/old.ts b/old.ts\n--- a/old.ts\n+++ b/old.ts";
+    const currentDiff = "diff --git a/current.ts b/current.ts\n--- a/current.ts\n+++ b/current.ts";
+    const previousDiffActivity = diffActivity({
+      id: "previous-diff",
+      summary: "Edited 5 files, +204, -2",
+      diff: previousDiff,
+      turn: previousTurn,
+    });
+    const currentDiffActivity = diffActivity({
+      id: "current-diff",
+      summary: "Edited 6 files, +58, -46",
+      diff: currentDiff,
+      turn: currentTurn,
+    });
+    const readThread = vi
+      .fn()
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [previousDiffActivity],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }))
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: "assistant-final-current",
+              role: "assistant" as const,
+              phase: "final" as const,
+              text: "Current turn is complete.",
+              createdAt: 2_000,
+              turn: currentTurn,
+            },
+          ],
+          messages: [
+            {
+              id: "assistant-final-current",
+              role: "assistant" as const,
+              text: "Current turn is complete.",
+              createdAt: 2_000,
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }));
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+    });
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Edited 5 files, +204, -2",
+    ]);
+
+    act(() => {
+      result.current.upsertLiveTranscriptEntry(currentDiffActivity);
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Edited 5 files, +204, -2",
+      "activity:Edited 6 files, +58, -46",
+    ]);
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Current turn is complete.",
+        "activity:Edited 6 files, +58, -46",
+      ]);
+    });
   });
 
   it("preserves session-owned live activity across thread switches and hydration", async () => {

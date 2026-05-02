@@ -408,8 +408,18 @@ function carryForwardTranscriptEntryOrder(
     };
   });
 
-  for (const source of sources) {
-    if (!isDurableDiffActivity(source)) {
+  const durableDiffSources = sources.filter(isDurableDiffActivity);
+  const currentDurableDiffTurnId = durableDiffSources
+    .map((source) => source.turn?.id)
+    .findLast((turnId): turnId is string => Boolean(turnId));
+  const latestDurableDiffSource = durableDiffSources.at(-1);
+
+  for (const source of durableDiffSources) {
+    if (currentDurableDiffTurnId) {
+      if (source.turn?.id !== currentDurableDiffTurnId) {
+        continue;
+      }
+    } else if (source !== latestDurableDiffSource) {
       continue;
     }
 
