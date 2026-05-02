@@ -319,6 +319,98 @@ function activityEntriesMatch(
   );
 }
 
+function transcriptEntriesMatch(
+  candidate: AppServerThreadEntry,
+  existingEntry: AppServerThreadEntry
+): boolean {
+  if (candidate.id === existingEntry.id) {
+    return true;
+  }
+
+  if (candidate.type !== existingEntry.type) {
+    return false;
+  }
+
+  if (candidate.type === "message" && existingEntry.type === "message") {
+    return messageMatchesOptimisticEntry(
+      {
+        id: candidate.id,
+        role: candidate.role,
+        text: candidate.text,
+        parts: candidate.parts,
+        createdAt: candidate.createdAt,
+      },
+      existingEntry
+    );
+  }
+
+  if (candidate.type === "activity" && existingEntry.type === "activity") {
+    return activityEntriesMatch(candidate, existingEntry);
+  }
+
+  if (candidate.type === "review" && existingEntry.type === "review") {
+    return reviewEntriesMatch(candidate, existingEntry);
+  }
+
+  return false;
+}
+
+function findUniqueTranscriptOrderSource(
+  entry: AppServerThreadEntry,
+  sources: AppServerThreadEntry[]
+): AppServerThreadEntry | undefined {
+  const exactMatches = sources.filter(
+    (source) => source.id === entry.id && typeof source.createdAt === "number"
+  );
+  if (exactMatches.length > 0) {
+    return exactMatches[0];
+  }
+
+  const logicalMatches = sources.filter(
+    (source) =>
+      typeof source.createdAt === "number" &&
+      source.id !== entry.id &&
+      transcriptEntriesMatch(entry, source)
+  );
+
+  return logicalMatches.length === 1 ? logicalMatches[0] : undefined;
+}
+
+function carryForwardTranscriptEntryOrder(
+  response: AppServerReadThreadResponse,
+  sources: AppServerThreadEntry[]
+): AppServerReadThreadResponse {
+  if (sources.length === 0) {
+    return response;
+  }
+
+  let changed = false;
+  const entries = response.replay.entries.map((entry) => {
+    const source = findUniqueTranscriptOrderSource(entry, sources);
+    if (!source || source.createdAt === entry.createdAt) {
+      return entry;
+    }
+
+    changed = true;
+    return {
+      ...entry,
+      createdAt: source.createdAt,
+    };
+  });
+
+  if (!changed) {
+    return response;
+  }
+
+  return {
+    ...response,
+    replay: {
+      ...response.replay,
+      entries,
+    },
+  };
+}
+
 function reviewEntriesMatch(
   candidate: AppServerThreadReviewEntry,
   optimisticEntry: AppServerThreadReviewEntry
@@ -1504,7 +1596,15 @@ export function useThreadSessionState(params: {
         }
 
         updateSession(targetThreadKey, (current) => {
-          const hydratedCompletedTurn = didHydrateCompletedTurn(current.response, response);
+          const orderedResponse = carryForwardTranscriptEntryOrder(response, [
+            ...(current.response?.replay.entries ?? []),
+            ...current.optimisticEntries,
+            ...(current.pendingAssistantMessage ? [current.pendingAssistantMessage] : []),
+          ]);
+          const hydratedCompletedTurn = didHydrateCompletedTurn(
+            current.response,
+            orderedResponse
+          );
           const needsHydrationAfterCompletion =
             current.needsHydrationAfterCompletion && !hydratedCompletedTurn;
           const completionHydrationRetries = needsHydrationAfterCompletion
@@ -1520,7 +1620,7 @@ export function useThreadSessionState(params: {
             logStaleThinkingState({
               current,
               reasons: thinkingReasons,
-              response,
+              response: orderedResponse,
               targetThreadKey,
             });
           }
@@ -1544,14 +1644,17 @@ export function useThreadSessionState(params: {
             loading: false,
             completionHydrationRetries,
             needsHydrationAfterCompletion,
-            optimisticEntries: pruneOptimisticEntries(current.optimisticEntries, response),
+            optimisticEntries: pruneOptimisticEntries(
+              current.optimisticEntries,
+              orderedResponse
+            ),
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
               : current.pendingAssistantMessage,
             pendingStatusText: shouldClearStaleThinking
               ? undefined
               : current.pendingStatusText,
-            response,
+            response: orderedResponse,
           };
         });
       } catch (error) {

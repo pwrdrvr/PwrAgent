@@ -194,7 +194,7 @@ flowchart TB
   U3 --> U6
 ```
 
-- [ ] **Unit 1: Characterize the failure and order contract**
+- [x] **Unit 1: Characterize the failure and order contract**
 
 **Goal:** Add focused tests that describe the invariant before changing core behavior.
 
@@ -232,7 +232,7 @@ flowchart TB
 - The tests describe the May 2 failure class without relying on brittle full snapshots.
 - The tests prove timestamp equality is not enough to reorder visible transcript entries.
 
-- [ ] **Unit 2: Introduce a canonical transcript order ledger**
+- [x] **Unit 2: Introduce a canonical transcript order ledger**
 
 **Goal:** Make `useThreadSessionState.ts` produce one ordered transcript entry list for both live and hydrated data.
 
@@ -276,7 +276,7 @@ flowchart TB
 - `mergeTranscriptEntries` or its replacement sorts by canonical order, not by incidental branch order.
 - Hydration can update content and completion metadata without moving an entry above an earlier visible item.
 
-- [ ] **Unit 3: Make work grouping strictly adjacency-preserving**
+- [x] **Unit 3: Make work grouping strictly adjacency-preserving**
 
 **Goal:** Ensure render grouping cannot violate transcript order.
 

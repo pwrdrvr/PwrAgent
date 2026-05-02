@@ -145,11 +145,12 @@ describe("buildTranscriptRenderItems", () => {
     });
 
     expect(items).toEqual([
+      { type: "entry", entry: first },
       {
         type: "workPhaseGroup",
         id: "work:turn-1:active",
         collapsible: false,
-        entries: [first, activity],
+        entries: [activity],
         label: "Working for 1m 01s",
       },
     ]);
@@ -286,6 +287,53 @@ describe("buildTranscriptRenderItems", () => {
         collapsible: true,
         entries: [secondActivity],
         label: "More work",
+      },
+    ]);
+  });
+
+  it("does not move later active work above intervening transcript entries", () => {
+    const turn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 1_000,
+    };
+    const firstActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Read one file",
+      details: [],
+      turn,
+    };
+    const answer = commentary("c1", "Interim update.", turn);
+    const secondActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-2",
+      summary: "Read another file",
+      details: [],
+      turn,
+    };
+
+    const items = buildTranscriptRenderItems({
+      entries: [firstActivity, answer, secondActivity],
+      activeTurnId: "turn-1",
+      now: 62_000,
+    });
+
+    expect(items).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:tool-1:active",
+        collapsible: false,
+        entries: [firstActivity],
+        label: "Working for 1m 01s",
+      },
+      { type: "entry", entry: answer },
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:tool-2:active",
+        collapsible: false,
+        entries: [secondActivity],
+        label: "Working for 1m 01s",
       },
     ]);
   });

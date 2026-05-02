@@ -1,6 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { AppServerThreadActivityEntry } from "@pwragnt/shared";
+import type {
+  AppServerThreadActivityEntry,
+  AppServerThreadEntry,
+} from "@pwragnt/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -24,6 +27,16 @@ function buildThread(params: {
     },
     updatedAt: params.updatedAt,
   };
+}
+
+function transcriptLabels(entries: AppServerThreadEntry[]): string[] {
+  return entries.map((entry) =>
+    entry.type === "message" && "text" in entry
+      ? `message:${entry.text}`
+      : entry.type === "activity" && "summary" in entry
+        ? `activity:${entry.summary}`
+        : entry.type
+  );
 }
 
 describe("useThreadSessionState", () => {
@@ -848,6 +861,255 @@ describe("useThreadSessionState", () => {
         .filter((entry) => entry.type === "message")
         .map((entry) => entry.phase)
     ).toEqual(["commentary", "commentary", "final"]);
+  });
+
+  it("keeps live activity between assistant messages after coarse hydration", async () => {
+    let now = 30_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const completedTurn = {
+      id: "turn-1",
+      status: "completed" as const,
+      durationMs: 70_000,
+    };
+    const readThread = vi
+      .fn()
+      .mockImplementationOnce(
+        async ({
+          backend,
+          threadId,
+        }: {
+          backend?: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [],
+            messages: [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        })
+      )
+      .mockImplementationOnce(
+        async ({
+          backend,
+          threadId,
+        }: {
+          backend?: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [
+              {
+                type: "message" as const,
+                id: "message-1",
+                role: "assistant" as const,
+                phase: "commentary" as const,
+                text: "First commentary.",
+                createdAt: 1_000,
+                turn: completedTurn,
+              },
+              {
+                type: "message" as const,
+                id: "message-2",
+                role: "assistant" as const,
+                phase: "commentary" as const,
+                text: "Second commentary.",
+                createdAt: 1_000,
+                turn: completedTurn,
+              },
+              {
+                type: "message" as const,
+                id: "turn-1:assistant",
+                role: "assistant" as const,
+                phase: "final" as const,
+                text: "Final answer.",
+                createdAt: 1_000,
+                turn: completedTurn,
+              },
+            ],
+            messages: [
+              {
+                id: "message-1",
+                role: "assistant" as const,
+                text: "First commentary.",
+                createdAt: 1_000,
+              },
+              {
+                id: "message-2",
+                role: "assistant" as const,
+                text: "Second commentary.",
+                createdAt: 1_000,
+              },
+              {
+                id: "turn-1:assistant",
+                role: "assistant" as const,
+                text: "Final answer.",
+                createdAt: 1_000,
+              },
+            ],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        })
+      );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: {
+              id: "turn-1",
+              status: "inProgress",
+              startedAt: 1_000,
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-1",
+            delta: "First commentary.",
+            phase: "commentary",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "read-1",
+              type: "commandExecution",
+              command: "sed -n '1,40p' src/one.ts",
+              commandActions: [{ type: "read", path: "src/one.ts" }],
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-2",
+            delta: "Second commentary.",
+            phase: "commentary",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "read-2",
+              type: "commandExecution",
+              command: "rg -n transcript src",
+              commandActions: [{ type: "search", path: "src" }],
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              durationMs: 70_000,
+              output: [{ type: "text", text: "Final answer." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:First commentary.",
+      "activity:Explored 1 item",
+      "message:Second commentary.",
+      "activity:Explored 1 item",
+      "message:Final answer.",
+    ]);
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:First commentary.",
+        "activity:Explored 1 item",
+        "message:Second commentary.",
+        "activity:Explored 1 item",
+        "message:Final answer.",
+      ]);
+    });
   });
 
   it("preserves session-owned live activity across thread switches and hydration", async () => {

@@ -36,15 +36,13 @@ export function buildTranscriptRenderItems(params: {
 
   if (activeTurnId) {
     const groups = buildCompletedGroups(params.entries, activeTurnId);
-    const activeGroup = buildActiveWorkGroup(
+    const activeGroups = buildActiveWorkGroups(
       params.entries,
       activeTurnId,
       params.now,
       params.activeTurnStartedAt
     );
-    if (activeGroup) {
-      groups.push(activeGroup);
-    }
+    groups.push(...activeGroups);
     if (groups.length > 0) {
       return renderWithGroups(params.entries, groups);
     }
@@ -72,20 +70,13 @@ type RenderGroup = {
   label: string;
 };
 
-function buildActiveWorkGroup(
+function buildActiveWorkGroups(
   entries: AppServerThreadEntry[],
   activeTurnId: string,
   now = Date.now(),
   activeTurnStartedAt?: number
-): RenderGroup | undefined {
-  const turnEntries = entries.filter(
-    (entry) => entry.turn?.id === activeTurnId && isWorkPhaseEntry(entry)
-  );
-  if (!hasConcreteWork(turnEntries)) {
-    return undefined;
-  }
-
-  const turn = turnEntries.find((entry) => entry.turn)?.turn;
+): RenderGroup[] {
+  const turn = entries.find((entry) => entry.turn?.id === activeTurnId)?.turn;
   const startedAtCandidates = [activeTurnStartedAt, turn?.startedAt].filter(
     (value): value is number => typeof value === "number"
   );
@@ -94,15 +85,49 @@ function buildActiveWorkGroup(
   const elapsedMs =
     typeof startedAt === "number" ? Math.max(now - startedAt, 0) : undefined;
   if (typeof elapsedMs !== "number" || elapsedMs <= 60_000) {
-    return undefined;
+    return [];
   }
 
-  return {
-    collapsible: false,
-    entries: turnEntries,
-    id: `work:${activeTurnId}:active`,
-    label: `Working for ${formatElapsedMs(elapsedMs)}`,
+  const groups: RenderGroup[] = [];
+  let currentEntries: AppServerThreadEntry[] = [];
+
+  const flushCurrent = (): void => {
+    if (!hasConcreteWork(currentEntries)) {
+      currentEntries = [];
+      return;
+    }
+
+    groups.push({
+      collapsible: false,
+      entries: currentEntries,
+      id: `work:${activeTurnId}:${currentEntries[0]?.id ?? groups.length}:active`,
+      label: `Working for ${formatElapsedMs(elapsedMs)}`,
+    });
+    currentEntries = [];
   };
+
+  for (const entry of entries) {
+    const canJoinGroup = entry.turn?.id === activeTurnId && isConcreteWorkEntry(entry);
+    if (!canJoinGroup) {
+      flushCurrent();
+      continue;
+    }
+
+    currentEntries.push(entry);
+  }
+
+  flushCurrent();
+
+  if (groups.length === 1) {
+    return [
+      {
+        ...groups[0],
+        id: `work:${activeTurnId}:active`,
+      },
+    ];
+  }
+
+  return groups;
 }
 
 function buildCompletedGroups(
@@ -268,7 +293,13 @@ function isWorkPhaseEntry(
 }
 
 function hasConcreteWork(entries: AppServerThreadEntry[]): boolean {
-  return entries.some((entry) => entry.type === "activity" || entry.type === "plan");
+  return entries.some(isConcreteWorkEntry);
+}
+
+function isConcreteWorkEntry(
+  entry: AppServerThreadEntry
+): entry is AppServerThreadActivityEntry | AppServerThreadPlanEntry {
+  return entry.type === "activity" || entry.type === "plan";
 }
 
 function readCompletedTurn(
