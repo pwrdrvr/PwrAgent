@@ -2412,6 +2412,155 @@ describe("Composer", () => {
     });
   });
 
+  it("does not restore a submitted launchpad draft when materialization unmounts before local clear", async () => {
+    const draftStore = createComposerDraftStore();
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    let unmountComposer: () => void = () => undefined;
+    const onMaterializeLaunchpad = vi.fn(async () => {
+      unmountComposer();
+    });
+
+    const { unmount } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        draftStore={draftStore}
+        launchpad={launchpad}
+        onMaterializeLaunchpad={onMaterializeLaunchpad}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+    unmountComposer = unmount;
+
+    fireEvent.change(screen.getByLabelText("New thread"), {
+      target: { value: "Submitted launchpad should not come back" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+
+    await waitFor(() => {
+      expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        [{ type: "text", text: "Submitted launchpad should not come back" }],
+        undefined
+      );
+    });
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        draftStore={draftStore}
+        launchpad={launchpad}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByLabelText("New thread")).toHaveValue("");
+  });
+
+  it("does not restore a submitted launchpad review draft when materialization unmounts before local clear", async () => {
+    const draftStore = createComposerDraftStore();
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    let unmountComposer: () => void = () => undefined;
+    const onMaterializeLaunchpad = vi.fn(async () => {
+      unmountComposer();
+    });
+
+    const { unmount } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        draftStore={draftStore}
+        launchpad={launchpad}
+        onMaterializeLaunchpad={onMaterializeLaunchpad}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+    unmountComposer = unmount;
+
+    fireEvent.change(screen.getByLabelText("New thread"), {
+      target: { value: "/review main" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+
+    await waitFor(() => {
+      expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        undefined,
+        undefined,
+        { type: "baseBranch", branch: "main" }
+      );
+    });
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        draftStore={draftStore}
+        launchpad={launchpad}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByLabelText("New thread")).toHaveValue("");
+  });
+
   it("preserves launchpad prompt and pasted images when sticky settings change", async () => {
     const onUpdateLaunchpad = vi.fn(async () => undefined);
     const imageFile = new File([new Uint8Array([1, 2, 3])], "sticky-mockup.png", {

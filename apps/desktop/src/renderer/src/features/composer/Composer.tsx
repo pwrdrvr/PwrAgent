@@ -838,6 +838,7 @@ export function Composer(props: ComposerProps) {
       : hydrateComposerDraft(props.launchpad.prompt ?? "", props.skills);
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
+  const submittedDraftScopeKeysRef = useRef<Set<string>>(new Set());
   const deletedSkillTokenHistoryRef = useRef<DeletedSkillTokenHistoryEntry[]>([]);
   const latestDraftSnapshotRef = useRef<{
     scopeKey: string;
@@ -992,6 +993,32 @@ export function Composer(props: ComposerProps) {
       draftStore.delete(scopeKey);
     }
   };
+  const markComposerDraftSubmitted = (scopeKey: string): void => {
+    if (!isDraftStoreScope(scopeKey)) {
+      return;
+    }
+
+    submittedDraftScopeKeysRef.current.add(scopeKey);
+    clearComposerDraftSnapshot(scopeKey);
+  };
+  const unmarkComposerDraftSubmitted = (scopeKey: string): void => {
+    submittedDraftScopeKeysRef.current.delete(scopeKey);
+  };
+  const clearSubmittedComposerDraft = (scopeKey: string): void => {
+    const emptySnapshot: ComposerDraftSnapshot = {
+      draft: "",
+      imageAttachments: [],
+      skillTokens: [],
+    };
+
+    clearComposerDraftSnapshot(scopeKey);
+    latestDraftSnapshotRef.current = {
+      scopeKey,
+      snapshot: emptySnapshot,
+    };
+    clearComposerDraft();
+    setImageAttachments([]);
+  };
   const persistLaunchpadDraftSnapshot = (
     scopeKey: string,
     snapshot: ComposerDraftSnapshot,
@@ -1010,6 +1037,18 @@ export function Composer(props: ComposerProps) {
         composerSupportsSkillTokens ? snapshot.skillTokens : [],
       ),
     });
+  };
+  const flushComposerDraftSnapshot = (
+    scopeKey: string,
+    snapshot: ComposerDraftSnapshot,
+  ): void => {
+    if (submittedDraftScopeKeysRef.current.has(scopeKey)) {
+      clearComposerDraftSnapshot(scopeKey);
+      return;
+    }
+
+    saveComposerDraftSnapshot(scopeKey, snapshot);
+    persistLaunchpadDraftSnapshot(scopeKey, snapshot);
   };
   const updateActiveTurnId = (nextTurnId?: string): void => {
     activeTurnIdRef.current = nextTurnId;
@@ -1106,8 +1145,7 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     return () => {
       const latest = latestDraftSnapshotRef.current;
-      saveComposerDraftSnapshot(latest.scopeKey, latest.snapshot);
-      persistLaunchpadDraftSnapshot(latest.scopeKey, latest.snapshot);
+      flushComposerDraftSnapshot(latest.scopeKey, latest.snapshot);
     };
   }, []);
 
@@ -1122,8 +1160,7 @@ export function Composer(props: ComposerProps) {
       imageAttachments,
       skillTokens,
     };
-    saveComposerDraftSnapshot(previousScopeKey, previousSnapshot);
-    persistLaunchpadDraftSnapshot(previousScopeKey, previousSnapshot);
+    flushComposerDraftSnapshot(previousScopeKey, previousSnapshot);
 
     activeComposerScopeKeyRef.current = composerScopeKey;
     const current = pasteScopeRef.current;
@@ -1410,6 +1447,10 @@ export function Composer(props: ComposerProps) {
     }
 
     const timeout = window.setTimeout(() => {
+      if (submittedDraftScopeKeysRef.current.has(composerScopeKey)) {
+        return;
+      }
+
       void props.onUpdateLaunchpad?.(launchpad.directoryKey, {
         imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
         prompt: canonicalDraft,
@@ -1419,7 +1460,7 @@ export function Composer(props: ComposerProps) {
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [canonicalDraft, imageAttachments, launchpad, props.onUpdateLaunchpad]);
+  }, [canonicalDraft, composerScopeKey, imageAttachments, launchpad, props.onUpdateLaunchpad]);
 
   const submitReviewCommand = async (reviewCommand: {
     displayText: string;
@@ -1438,6 +1479,8 @@ export function Composer(props: ComposerProps) {
     props.onPendingStatusChange?.("Reviewing");
 
     if (props.launchpad && props.onMaterializeLaunchpad) {
+      const submittedScopeKey = composerScopeKey;
+      markComposerDraftSubmitted(submittedScopeKey);
       try {
         await props.onMaterializeLaunchpad(
           props.launchpad.directoryKey,
@@ -1445,10 +1488,10 @@ export function Composer(props: ComposerProps) {
           undefined,
           reviewCommand.target
         );
-        clearComposerDraft();
+        clearSubmittedComposerDraft(submittedScopeKey);
         setReviewConfig(undefined);
-        setImageAttachments([]);
       } catch (error) {
+        unmarkComposerDraftSubmitted(submittedScopeKey);
         props.onPendingStatusChange?.(undefined);
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
@@ -1811,18 +1854,20 @@ export function Composer(props: ComposerProps) {
     setSending(true);
 
     if (props.launchpad && props.onMaterializeLaunchpad) {
+      const submittedScopeKey = composerScopeKey;
+      markComposerDraftSubmitted(submittedScopeKey);
       try {
         await props.onMaterializeLaunchpad(
           props.launchpad.directoryKey,
           payload.input,
           collaborationMode
         );
-        clearComposerDraft();
-        setImageAttachments([]);
+        clearSubmittedComposerDraft(submittedScopeKey);
         if (collaborationMode) {
           setPlanModeEnabled(false);
         }
       } catch (error) {
+        unmarkComposerDraftSubmitted(submittedScopeKey);
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
         setSending(false);
@@ -2788,6 +2833,7 @@ export function Composer(props: ComposerProps) {
     nextDraft: string,
     nextSkillTokens?: ComposerSkillToken[],
   ): void => {
+    unmarkComposerDraftSubmitted(composerScopeKey);
     const pendingProgrammaticChange =
       pendingProgrammaticComposerChangeRef.current;
     if (pendingProgrammaticChange && nextSkillTokens) {
