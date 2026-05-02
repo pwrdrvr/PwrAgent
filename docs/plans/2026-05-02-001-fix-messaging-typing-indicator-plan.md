@@ -1,7 +1,7 @@
 ---
 title: fix: Keep messaging typing indicators alive for active turns
 type: fix
-status: active
+status: completed
 date: 2026-05-02
 origin: docs/brainstorms/2026-04-30-messaging-platform-integration-requirements.md
 deepened: 2026-05-02
@@ -118,7 +118,7 @@ The important separation is that `message` delivery is orthogonal to `activity` 
 
 ## Implementation Units
 
-- [ ] **Unit 1: Characterize current early-idle lifecycle behavior**
+- [x] **Unit 1: Characterize current early-idle lifecycle behavior**
 
 **Goal:** Add failing controller-level coverage that proves an assistant `item/completed` event should not stop typing before terminal turn completion.
 
@@ -155,7 +155,7 @@ The important separation is that `message` delivery is orthogonal to `activity` 
 **Verification:**
 - Tests fail on the current early-idle implementation and describe the desired lifecycle in channel-neutral terms.
 
-- [ ] **Unit 2: Separate assistant message delivery from turn terminal state**
+- [x] **Unit 2: Separate assistant message delivery from turn terminal state**
 
 **Goal:** Refactor controller backend-event handling so assistant text delivery does not complete the active turn unless terminal lifecycle evidence is present.
 
@@ -189,7 +189,7 @@ The important separation is that `message` delivery is orthogonal to `activity` 
 **Verification:**
 - Messaging controller behavior expresses turn activity from lifecycle state, and assistant output can be delivered mid-turn without stopping provider typing leases.
 
-- [ ] **Unit 3: Preserve user-input break semantics and resumed-work behavior**
+- [x] **Unit 3: Preserve user-input break semantics and resumed-work behavior**
 
 **Goal:** Keep typing off while the agent is waiting on user input, and make the lifecycle robust when the same turn resumes after a questionnaire, approval, or future MCP elicitation.
 
@@ -228,7 +228,7 @@ The important separation is that `message` delivery is orthogonal to `activity` 
 **Verification:**
 - The controller distinguishes working, waiting-for-user, and terminal states without treating visible prompts as completed turns.
 
-- [ ] **Unit 4: Lock provider lease behavior to generic activity intents**
+- [x] **Unit 4: Lock provider lease behavior to generic activity intents**
 
 **Goal:** Ensure Telegram and Discord providers keep renewing typing while active intents continue, stop only on idle intents or lease expiry, and remain unaware of turn protocol details.
 
@@ -262,7 +262,7 @@ The important separation is that `message` delivery is orthogonal to `activity` 
 **Verification:**
 - Provider tests prove the adapters obey the generic activity contract while lifecycle semantics remain in the controller.
 
-- [ ] **Unit 5: Document typing lifecycle semantics**
+- [x] **Unit 5: Document typing lifecycle semantics**
 
 **Goal:** Capture the controller/provider boundary so future adapter work does not reintroduce message-delivery-driven typing state.
 
