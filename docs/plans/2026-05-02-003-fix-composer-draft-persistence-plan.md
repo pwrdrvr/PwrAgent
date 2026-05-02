@@ -1,7 +1,7 @@
 ---
 title: fix: Preserve composer drafts across navigation
 type: fix
-status: active
+status: completed
 date: 2026-05-02
 origin: docs/brainstorms/2026-05-02-desktop-composer-draft-persistence-regression-requirements.md
 ---
@@ -118,7 +118,7 @@ flowchart TB
     U4 --> U5
 ```
 
-- [ ] **Unit 1: Add failing Tiptap draft persistence E2E**
+- [x] **Unit 1: Add failing Tiptap draft persistence E2E**
 
 **Goal:** Capture the reported regression in a deterministic Electron E2E before changing implementation behavior.
 
@@ -156,7 +156,7 @@ flowchart TB
 **Verification:**
 - The E2E fails if either scope loses text, images, or the pairing of both.
 
-- [ ] **Unit 2: Stabilize scoped draft snapshots in the composer**
+- [x] **Unit 2: Stabilize scoped draft snapshots in the composer**
 
 **Goal:** Make draft save and restore operate on one coherent scoped snapshot for Tiptap text, skill tokens, and pasted images.
 
@@ -194,7 +194,7 @@ flowchart TB
 **Verification:**
 - Composer-level tests prove scope switching cannot separate text, skill tokens, and image attachments for Tiptap scopes.
 
-- [ ] **Unit 3: Harden launchpad overlay persistence and navigation refresh merging**
+- [x] **Unit 3: Harden launchpad overlay persistence and navigation refresh merging**
 
 **Goal:** Prevent debounced launchpad autosave, sticky setting patches, and navigation refreshes from replacing newer local launchpad drafts with older persisted state.
 
@@ -234,7 +234,7 @@ flowchart TB
 **Verification:**
 - Launchpad state in the renderer remains monotonic with respect to local user edits: older persistence or refresh data cannot erase newer unsent text or images.
 
-- [ ] **Unit 4: Keep existing-thread reply drafts stable through refresh and remount boundaries**
+- [x] **Unit 4: Keep existing-thread reply drafts stable through refresh and remount boundaries**
 
 **Goal:** Ensure existing-thread reply drafts survive thread switching, settings overlay transitions, component rerenders, and navigation refreshes without requiring restart persistence.
 
@@ -273,7 +273,7 @@ flowchart TB
 **Verification:**
 - Existing-thread drafts behave consistently with launchpad drafts for the current app session, without adding restart persistence.
 
-- [ ] **Unit 5: Expand regression coverage around Tiptap variants and sticky settings**
+- [x] **Unit 5: Expand regression coverage around Tiptap variants and sticky settings**
 
 **Goal:** Close the coverage gap that allowed Tiptap-specific and settings-triggered draft loss to escape.
 
