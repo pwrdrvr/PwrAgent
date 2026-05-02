@@ -41,11 +41,28 @@ export function migrateMessagingStoreData(raw: unknown): MessagingStoreData {
   return {
     version: CURRENT_MESSAGING_STORE_VERSION,
     browseSessions: migrateRecord(record.browseSessions, isMessagingBrowseSessionRecord),
-    bindings: migrateRecord(record.bindings, isMessagingBindingRecord),
+    bindings: migrateBindingRecords(record.bindings),
     callbackHandles: migrateRecord(record.callbackHandles, isMessagingCallbackHandleRecord),
     pendingIntents: migrateRecord(record.pendingIntents, isMessagingPendingIntentRecord),
     deliveries: migrateRecord(record.deliveries, isMessagingDeliveryRecord),
   };
+}
+
+function migrateBindingRecords(value: unknown): Record<string, MessagingBindingRecord> {
+  const bindings = migrateRecord(value, isMessagingBindingRecord);
+  return Object.fromEntries(
+    Object.entries(bindings).map(([id, binding]) => [
+      id,
+      stripCachedThreadState(binding),
+    ]),
+  );
+}
+
+function stripCachedThreadState(
+  binding: MessagingBindingRecord,
+): MessagingBindingRecord {
+  const { activeTurn: _activeTurn, threadDisplay: _threadDisplay, ...rest } = binding;
+  return rest;
 }
 
 function migrateRecord<T>(

@@ -126,10 +126,11 @@ describe("MessagingController", () => {
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "new-thread-1",
-      threadDisplay: {
-        projectLabel: "PwrAgnt",
-      },
     });
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/resume").channel,
+    );
+    expect(binding).not.toHaveProperty("threadDisplay");
   });
 
   it("binds a callback-selected thread to the channel", async () => {
@@ -586,13 +587,10 @@ describe("MessagingController", () => {
         }),
       ],
     });
-    await expect(
-      harness.store.findActiveBindingForChannel(buildTextEvent("who are you").channel),
-    ).resolves.toMatchObject({
-      activeTurn: {
-        status: "completed",
-      },
-    });
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildTextEvent("who are you").channel,
+    );
+    expect(binding).not.toHaveProperty("activeTurn");
   });
 
   it("ignores turn completion events that do not include output text", async () => {
@@ -1147,6 +1145,9 @@ describe("MessagingController", () => {
       updatedAt: 1000,
     }));
     const harness = await createHarness({ setConversationTitle });
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.title = "Renamed in Desktop";
+    harness.getNavigationSnapshot.mockResolvedValue(navigation);
     await bindThread(harness);
 
     await harness.controller.handleInboundEvent(
@@ -1174,17 +1175,17 @@ describe("MessagingController", () => {
             messageThreadId: 9,
           },
         },
-        title: "Thread one",
+        title: "Renamed in Desktop",
       }),
     );
     expect(harness.delivered.at(-2)).toMatchObject({
       kind: "confirmation",
       title: "Name synced",
-      body: expect.stringContaining('Thread one'),
+      body: expect.stringContaining('Renamed in Desktop'),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Binding: Thread one"),
+      text: expect.stringContaining("Binding: Renamed in Desktop"),
     });
   });
 });
