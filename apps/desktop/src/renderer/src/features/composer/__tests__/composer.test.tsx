@@ -228,6 +228,8 @@ describe("Composer", () => {
         backends={[backendSummary("codex")]}
         contextWindow={{
           cachedInputTokens: 32_000,
+          cumulativeCachedInputTokens: 48_000,
+          cumulativeInputTokens: 72_000,
           cumulativeTotalTokens: 80_000,
           inputTokens: 63_000,
           modelContextWindow: 128_000,
@@ -263,8 +265,9 @@ describe("Composer", () => {
         "Context window: 50% full (full moon)",
         "Current snapshot: 64k / 128k tokens",
         "Remaining: 64k tokens, 50% remaining",
-        "Current breakdown: 63k input, 32k cached, 1k output",
+        "Current breakdown: 63k input, 32k cached (50.8%), 1k output",
         "Cumulative usage reported: 80k tokens",
+        "Cumulative cached input: 48k (66.7%)",
       ].join("\n")
     );
     expect(screen.getByRole("img")).not.toHaveAttribute("title");

@@ -3809,7 +3809,7 @@ function buildContextWindowTooltip(
 
   const breakdown = [
     formatOptionalTokenDetail("input", contextWindow.inputTokens),
-    formatOptionalTokenDetail("cached", contextWindow.cachedInputTokens),
+    formatCachedTokenDetail(contextWindow.cachedInputTokens, contextWindow.inputTokens),
     formatOptionalTokenDetail("output", contextWindow.outputTokens),
     formatOptionalTokenDetail("reasoning", contextWindow.reasoningOutputTokens),
   ].filter((detail): detail is string => Boolean(detail));
@@ -3824,6 +3824,13 @@ function buildContextWindowTooltip(
         contextWindow.cumulativeTotalTokens
       )} tokens`
     );
+    const cumulativeCachedInput = formatCachedInputSummary(
+      contextWindow.cumulativeCachedInputTokens,
+      contextWindow.cumulativeInputTokens
+    );
+    if (cumulativeCachedInput) {
+      lines.push(`Cumulative cached input: ${cumulativeCachedInput}`);
+    }
   }
 
   return lines.join("\n");
@@ -3831,6 +3838,47 @@ function buildContextWindowTooltip(
 
 function formatOptionalTokenDetail(label: string, value: number | undefined): string | undefined {
   return typeof value === "number" ? `${formatCompactNumber(value)} ${label}` : undefined;
+}
+
+function formatCachedTokenDetail(
+  cachedInputTokens: number | undefined,
+  inputTokens: number | undefined
+): string | undefined {
+  if (typeof cachedInputTokens !== "number") {
+    return undefined;
+  }
+
+  const percent = formatCachedInputPercent(cachedInputTokens, inputTokens);
+  return `${formatCompactNumber(cachedInputTokens)} cached${percent ? ` (${percent})` : ""}`;
+}
+
+function formatCachedInputSummary(
+  cachedInputTokens: number | undefined,
+  inputTokens: number | undefined
+): string | undefined {
+  if (typeof cachedInputTokens !== "number") {
+    return undefined;
+  }
+
+  const percent = formatCachedInputPercent(cachedInputTokens, inputTokens);
+  return `${formatCompactNumber(cachedInputTokens)}${percent ? ` (${percent})` : ""}`;
+}
+
+function formatCachedInputPercent(
+  cachedInputTokens: number,
+  inputTokens: number | undefined
+): string | undefined {
+  if (typeof inputTokens !== "number" || inputTokens <= 0) {
+    return undefined;
+  }
+
+  const percent = Math.max(0, Math.min(100, (cachedInputTokens / inputTokens) * 100));
+  return formatPercent(percent);
+}
+
+function formatPercent(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(1)}%`;
 }
 
 function formatCompactNumber(value: number): string {
