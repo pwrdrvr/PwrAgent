@@ -189,7 +189,10 @@ export type TelegramGrammyBotLike = {
     editForumTopic(
       chatId: number | string,
       messageThreadId: number,
-      name: string,
+      other?: Omit<
+        TelegramEditForumTopicRequest,
+        "chat_id" | "message_thread_id"
+      >,
     ): Promise<boolean>;
     editMessageText(
       chatId: number | string,
@@ -1061,7 +1064,9 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
         await bot.api.editForumTopic(
           request.chat_id,
           request.message_thread_id,
-          request.name,
+          {
+            name: request.name,
+          },
         ),
       editMessageText: async (request) => {
         const { chat_id, message_id, text, ...other } = request;

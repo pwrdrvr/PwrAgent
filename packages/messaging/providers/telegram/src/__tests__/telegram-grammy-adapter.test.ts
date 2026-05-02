@@ -89,7 +89,9 @@ describe("adaptGrammyBot", () => {
     expect(grammyBot.api.editForumTopic).toHaveBeenCalledWith(
       42,
       9,
-      "Thread one",
+      {
+        name: "Thread one",
+      },
     );
     expect(grammyBot.api.sendPhoto).toHaveBeenCalledWith(
       42,
