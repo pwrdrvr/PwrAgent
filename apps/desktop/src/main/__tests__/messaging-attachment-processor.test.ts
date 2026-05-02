@@ -48,15 +48,11 @@ describe("processMessagingAttachments", () => {
     expect(result.input).toEqual([
       {
         type: "text",
-        text: "Please inspect this log",
-      },
-      {
-        type: "text",
-        text: expect.stringContaining("Attachment: streaming-logs.txt"),
+        text: expect.stringContaining("Please inspect this log\n\nAttached file: `streaming-logs.txt`"),
       },
     ]);
-    expect(result.input[1]).toMatchObject({
-      text: expect.stringContaining("line two"),
+    expect(result.input[0]).toMatchObject({
+      text: expect.stringContaining("```text\nline one\nline two\n```"),
     });
   });
 

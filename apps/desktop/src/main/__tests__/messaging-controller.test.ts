@@ -570,11 +570,7 @@ describe("MessagingController", () => {
         input: [
           {
             type: "text",
-            text: "Please inspect this",
-          },
-          {
-            type: "text",
-            text: expect.stringContaining("Attachment: streaming-logs.txt"),
+            text: expect.stringContaining("Please inspect this\n\nAttached file: `streaming-logs.txt`"),
           },
         ],
       }),

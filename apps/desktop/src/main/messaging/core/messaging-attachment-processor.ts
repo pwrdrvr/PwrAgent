@@ -44,12 +44,13 @@ export async function processMessagingAttachments(params: {
     ...DEFAULT_MESSAGING_ATTACHMENT_POLICY,
     ...params.policy,
   };
-  const input: AppServerTurnInputItem[] = [];
+  const textInput: string[] = [];
+  const mediaInput: AppServerTurnInputItem[] = [];
   const rejections: MessagingAttachmentRejection[] = [];
 
   const text = params.text?.trim();
   if (text) {
-    input.push({ type: "text", text });
+    textInput.push(text);
   }
 
   const attachments = params.attachments.slice(0, policy.maxAttachmentCount);
@@ -111,16 +112,15 @@ export async function processMessagingAttachments(params: {
           });
           continue;
         }
-        input.push({
-          type: "text",
-          text: formatAttachmentText({
+        textInput.push(
+          formatAttachmentText({
             content: truncateText(extracted, policy.maxExtractedTextCharacters),
             fileName: downloaded.fileName,
             mimeType: classification.mimeType,
             sizeBytes: downloaded.sizeBytes,
             truncated: extracted.length > policy.maxExtractedTextCharacters,
           }),
-        });
+        );
         continue;
       }
 
@@ -133,16 +133,15 @@ export async function processMessagingAttachments(params: {
           });
           continue;
         }
-        input.push({
-          type: "text",
-          text: formatAttachmentText({
+        textInput.push(
+          formatAttachmentText({
             content: truncateText(extracted, policy.maxExtractedTextCharacters),
             fileName: downloaded.fileName,
             mimeType: classification.mimeType,
             sizeBytes: downloaded.sizeBytes,
             truncated: extracted.length > policy.maxExtractedTextCharacters,
           }),
-        });
+        );
         continue;
       }
 
@@ -153,12 +152,11 @@ export async function processMessagingAttachments(params: {
           profile: policy.imageProfile,
         });
         if (classification.kind === "gif") {
-          input.push({
-            type: "text",
-            text: `Attachment ${downloaded.fileName} was an animated GIF. I converted the first frame to a still image for model input.`,
-          });
+          textInput.push(
+            `Attachment ${downloaded.fileName} was an animated GIF. I converted the first frame to a still image for model input.`,
+          );
         }
-        input.push({
+        mediaInput.push({
           type: "image",
           url: normalized.dataUrl,
         });
@@ -177,6 +175,18 @@ export async function processMessagingAttachments(params: {
     }
   }
 
+  const input: AppServerTurnInputItem[] = [
+    ...(textInput.length > 0
+      ? [
+          {
+            type: "text" as const,
+            text: textInput.join("\n\n"),
+          },
+        ]
+      : []),
+    ...mediaInput,
+  ];
+
   return { input, rejections };
 }
 
@@ -187,16 +197,66 @@ function formatAttachmentText(params: {
   sizeBytes: number;
   truncated: boolean;
 }): string {
+  const fence = markdownFenceFor(params.content);
   return [
-    `Attachment: ${params.fileName}`,
-    `MIME type: ${params.mimeType}`,
-    `Size: ${params.sizeBytes} bytes`,
+    `Attached file: \`${params.fileName}\``,
+    `Type: ${params.mimeType} | Size: ${formatByteSize(params.sizeBytes)}`,
     params.truncated ? "Content was truncated to the configured limit." : undefined,
     "",
+    `${fence}${markdownLanguageFor(params.fileName, params.mimeType)}`,
     params.content,
+    fence,
   ]
     .filter((line) => line !== undefined)
     .join("\n");
+}
+
+function formatByteSize(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} bytes`;
+  }
+  const kib = bytes / 1024;
+  if (kib < 1024) {
+    return `${kib.toFixed(kib >= 10 ? 0 : 1)} KB`;
+  }
+  const mib = kib / 1024;
+  return `${mib.toFixed(mib >= 10 ? 0 : 1)} MB`;
+}
+
+function markdownLanguageFor(fileName: string, mimeType: string): string {
+  const lowerName = fileName.toLowerCase();
+  const lowerMime = mimeType.toLowerCase();
+  if (lowerName.endsWith(".json") || lowerMime.includes("json")) {
+    return "json";
+  }
+  if (lowerName.endsWith(".jsonl") || lowerMime.includes("ndjson")) {
+    return "jsonl";
+  }
+  if (lowerName.endsWith(".csv")) {
+    return "csv";
+  }
+  if (lowerName.endsWith(".toml") || lowerMime.includes("toml")) {
+    return "toml";
+  }
+  if (
+    lowerName.endsWith(".yaml") ||
+    lowerName.endsWith(".yml") ||
+    lowerMime.includes("yaml")
+  ) {
+    return "yaml";
+  }
+  if (lowerName.endsWith(".md") || lowerName.endsWith(".markdown")) {
+    return "markdown";
+  }
+  return "text";
+}
+
+function markdownFenceFor(content: string): string {
+  const longestFence = Math.max(
+    2,
+    ...[...content.matchAll(/`+/g)].map((match) => match[0]?.length ?? 0),
+  );
+  return "`".repeat(longestFence + 1);
 }
 
 function truncateText(text: string, maxCharacters: number): string {
