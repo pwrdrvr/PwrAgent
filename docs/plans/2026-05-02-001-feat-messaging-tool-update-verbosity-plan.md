@@ -71,7 +71,7 @@ The desired behavior is a middle path: default to a compact but useful summary, 
 - **Deliver completed tool items, not start events.** Completed events have stable titles, status, and duration, and avoid double-counting start/completion pairs. Long-running turn visibility remains covered by typing/status updates.
 - **Represent generated updates as `message` intents with `role: "system"`.** This reuses the existing adapter rendering path while making the message source distinct from assistant output.
 - **Batch by turn and binding.** Multiple bound channels may point at the same thread but have different preferences; each binding needs its own aggregation state.
-- **Flush at terminal turn events and assistant final delivery.** Timed batches should not be lost if a turn ends before the next window boundary.
+- **Flush before any user-visible chat response.** Timed batches should not be lost if a turn ends before the next window boundary, and queued tool summaries must not arrive after a later response. Any controller path that is about to send assistant text, command output, approval prompts, questionnaire prompts, status replies, or terminal activity should first flush pending tool updates for the same binding/turn.
 - **Do not include raw command output in generated tool summaries.** The first version should show concise titles, status, and durations only. Raw output can contain secrets, be huge, or duplicate the final assistant answer.
 
 ## Open Questions
@@ -121,10 +121,10 @@ flowchart TB
     B --> T{"Threshold exceeded or timer fires?"}
     T -->|No| L["Maybe deliver individual low-volume message"]
     T -->|Yes| S["Deliver batched system summary"]
-    A --> F{"Terminal turn or assistant final?"}
+    A --> F{"About to deliver user-visible chat response?"}
     L --> F
     S --> F
-    F -->|Yes| X["Flush remaining batches and cleanup"]
+    F -->|Yes| X["Flush pending batches before response"]
 ```
 
 ## Implementation Units
@@ -249,7 +249,8 @@ flowchart TB
 - For `Show None`, return no generated messages.
 - For `Show More` and `Show Some`, deliver individual messages while the current window stays below its threshold; once the threshold is exceeded, mark the turn noisy and batch remaining and future activity on the mode's window boundary.
 - For `Show Less`, start in noisy mode and batch immediately, with a 60-second window.
-- Flush any pending batch when the turn completes, fails, is cancelled/interrupted, or when an assistant final message is delivered.
+- Flush any pending batch when the turn completes, fails, is cancelled/interrupted, or before any later user-visible message for the same binding/turn is delivered.
+- Expose the flush as a single policy/controller helper so every outbound chat path can enforce ordering without duplicating batching logic.
 - Keep timers cancellable and clean them up when the controller is disposed or the turn ends.
 
 **Patterns to follow:**
@@ -264,6 +265,7 @@ flowchart TB
 - Happy path: `Show All` emits every recognized completed tool immediately.
 - Happy path: `Show None` emits no generated tool messages while still allowing assistant final delivery.
 - Edge case: a turn that ends before the timer fires flushes pending batched updates exactly once.
+- Edge case: a queued batch flushes before the next user-visible message, even when the next message is not the assistant final.
 - Edge case: two bindings for the same thread can use different modes without sharing aggregation state.
 - Error path: duplicate item ids are ignored after the first processed notification.
 
@@ -288,8 +290,9 @@ flowchart TB
 - Resolve the effective tool update mode for each binding before applying the policy, using the Desktop Settings default when no binding override exists.
 - Deliver generated system messages through the existing `deliver` path so audit context, binding routing, delivery recording, and permanent failure handling remain unchanged.
 - Ensure assistant messages still dedupe independently through the existing assistant message key.
-- Flush pending tool batches before or alongside terminal activity signaling so final assistant text does not bury a delayed tool batch indefinitely.
+- Flush pending tool batches before every user-visible outbound chat response for the same binding/turn, including assistant text, status command replies, approval prompts, questionnaire prompts, and terminal activity signaling.
 - Keep generated tool messages separate from assistant-authored text by using `role: "system"` and generated copy such as `Tool updates` or `Ran 3 tools`.
+- Prefer a small controller-level `flushToolUpdatesBeforeUserMessage(...)` style helper so new outbound response paths naturally preserve ordering.
 
 **Patterns to follow:**
 - `apps/desktop/src/main/messaging/core/messaging-controller.ts`
@@ -301,6 +304,8 @@ flowchart TB
 - Happy path: a noisy sequence in default mode produces a batch message containing all undelivered titles.
 - Happy path: terminal `turn/completed` flushes remaining batch items before controller state is cleaned up.
 - Happy path: assistant final text is still delivered once and remains assistant role, while tool updates are system role.
+- Happy path: queued tool updates are delivered before a subsequent status or command response for the same bound conversation.
+- Happy path: queued tool updates are delivered before approval or questionnaire prompts that appear after tool activity.
 - Edge case: an unbound thread event does not generate messaging deliveries.
 - Error path: a failed generated delivery records the delivery result and follows existing permanent failure revocation behavior.
 - Integration: a real-ish sequence of `turn/started`, three command completions, assistant final, and `turn/completed` produces the expected status/activity/message order.
@@ -394,6 +399,7 @@ flowchart TB
 | Users miss useful progress in quiet turns | Emit low-volume individual messages in `Show Some` and `Show More`. |
 | Secret leakage through command output or args | Send titles only, redact suspicious command fragments, and avoid raw outputs/diffs. |
 | Timer leaks or late messages after turn end | Centralize batching state with explicit terminal flush and cleanup. |
+| Late batch arrives after another chat response | Flush pending tool updates before any user-visible outbound message for the same binding/turn. |
 | Duplicate tool updates | Deduplicate by binding, turn, and tool item id. |
 | Adapter-specific behavior creeping into workflow | Keep mode policy and summarization in `apps/desktop/src/main/messaging/core`; adapters render generic intents only. |
 
