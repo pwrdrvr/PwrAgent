@@ -84,7 +84,11 @@ export function readEnvInteger(
   if (rawValue === undefined) {
     return {};
   }
-  const value = Number(rawValue.trim());
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return {};
+  }
+  const value = Number(trimmed);
   return Number.isInteger(value) && value >= 0
     ? { value }
     : { error: `Invalid integer value for ${key}` };
