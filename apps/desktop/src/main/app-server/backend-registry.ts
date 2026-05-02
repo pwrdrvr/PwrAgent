@@ -89,6 +89,10 @@ import {
 } from "./thread-title-generation-service";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import {
+  BackendModelCatalog,
+  type BackendModelCatalogCallerReason,
+} from "./backend-model-catalog";
 
 type InitializeResult = {
   serverInfo?: {
@@ -169,7 +173,10 @@ type BackendClient = {
     target: StartReviewRequest["target"];
     delivery?: StartReviewRequest["delivery"];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }>;
-  listModels?(): Promise<BackendModelOption[]>;
+  listModels?(diagnostics?: {
+    callerReason?: string;
+    ownerId?: string;
+  }): Promise<BackendModelOption[]>;
   readAccount?(): Promise<BackendAccountSummary>;
   readRateLimits?(): Promise<BackendRateLimitSummary[]>;
   interruptTurn(params: {
@@ -868,10 +875,7 @@ export class DesktopBackendRegistry {
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly threadTitleGenerationService?: ThreadTitleService;
-  private codexDefaultModels?: BackendModelOption[];
-  private codexDefaultModelsPromise?: Promise<BackendModelOption[]>;
-  private grokDefaultModels?: BackendModelOption[];
-  private grokDefaultModelsPromise?: Promise<BackendModelOption[]>;
+  private readonly modelCatalog: BackendModelCatalog;
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
@@ -1019,9 +1023,10 @@ export class DesktopBackendRegistry {
                     : undefined,
                 },
               }));
-
-    void this.readCodexDefaultModelsOnce().catch(() => undefined);
-    void this.readGrokDefaultModelsOnce().catch(() => undefined);
+    this.modelCatalog = new BackendModelCatalog({
+      codex: this.codexDefaultClient,
+      grok: this.grokClient,
+    });
 
     this.subscribeClient("codex", this.codexDefaultClient);
     this.subscribeClient("codex", this.codexFullAccessClient);
@@ -1601,7 +1606,11 @@ export class DesktopBackendRegistry {
   async setThreadModelSettings(
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
-    const modelSettings = await this.resolveModelSettings(params.backend, params);
+    const modelSettings = await this.resolveModelSettings(
+      params.backend,
+      params,
+      "settings-refresh",
+    );
     await this.overlayStore.setThreadModelSettings({
       backend: params.backend,
       threadId: params.threadId,
@@ -2009,10 +2018,11 @@ export class DesktopBackendRegistry {
   private async resolveModelSettings(
     backend: AppServerBackendKind,
     settings: ModelSettings,
+    callerReason: BackendModelCatalogCallerReason = "thread-start-defaults",
   ): Promise<ModelSettings> {
     return resolveModelSettingsFromOptions(
       backend,
-      await this.getBackendLaunchpadOptions(backend),
+      await this.getBackendLaunchpadOptions(backend, callerReason),
       settings,
     );
   }
@@ -2039,9 +2049,13 @@ export class DesktopBackendRegistry {
     backend: BackendSummary,
     settings: ModelSettings,
   ): Promise<ModelSettings> {
+    const launchpadOptions =
+      backend.launchpadOptions ??
+      (await this.getBackendLaunchpadOptions(backend.kind, "launchpad-defaults"));
+
     return resolveModelSettingsFromOptions(
       backend.kind,
-      backend.launchpadOptions,
+      launchpadOptions,
       settings,
     );
   }
@@ -2074,51 +2088,28 @@ export class DesktopBackendRegistry {
     return await this.overlayStore.setLaunchpadDefaults(resolvedDefaults);
   }
 
-  private readCodexDefaultModelsOnce(): Promise<BackendModelOption[]> {
-    if (this.codexDefaultModels) {
-      return Promise.resolve(this.codexDefaultModels);
-    }
-
-    this.codexDefaultModelsPromise ??= readClientModels(this.codexDefaultClient)
-      .then((models) => {
-        this.codexDefaultModels = models;
-        return models;
-      })
-      .catch((error) => {
-        this.codexDefaultModelsPromise = undefined;
-        throw error;
-      });
-
-    return this.codexDefaultModelsPromise;
+  private readCodexDefaultModelsOnce(
+    callerReason: BackendModelCatalogCallerReason,
+  ): Promise<BackendModelOption[]> {
+    return this.modelCatalog.readModels("codex", callerReason);
   }
 
-  private readGrokDefaultModelsOnce(): Promise<BackendModelOption[]> {
-    if (this.grokDefaultModels) {
-      return Promise.resolve(this.grokDefaultModels);
-    }
-
-    this.grokDefaultModelsPromise ??= readClientModels(this.grokClient)
-      .then((models) => {
-        this.grokDefaultModels = models;
-        return models;
-      })
-      .catch((error) => {
-        this.grokDefaultModelsPromise = undefined;
-        throw error;
-      });
-
-    return this.grokDefaultModelsPromise;
+  private readGrokDefaultModelsOnce(
+    callerReason: BackendModelCatalogCallerReason,
+  ): Promise<BackendModelOption[]> {
+    return this.modelCatalog.readModels("grok", callerReason);
   }
 
   private async getBackendLaunchpadOptions(
     backend: AppServerBackendKind,
+    callerReason: BackendModelCatalogCallerReason,
   ): Promise<BackendLaunchpadOptions | undefined> {
     if (backend === "codex") {
-      const models = await this.readCodexDefaultModelsOnce().catch(() => []);
+      const models = await this.readCodexDefaultModelsOnce(callerReason).catch(() => []);
       return buildLaunchpadOptions(backend, models);
     }
 
-    const models = await this.readGrokDefaultModelsOnce().catch(() => []);
+    const models = await this.readGrokDefaultModelsOnce(callerReason).catch(() => []);
     return buildLaunchpadOptions(backend, models);
   }
 
@@ -2186,7 +2177,7 @@ export class DesktopBackendRegistry {
     ] = await Promise.allSettled([
       this.codexDefaultClient.getInitializeResult(),
       this.codexFullAccessClient.getInitializeResult(),
-      this.readCodexDefaultModelsOnce(),
+      this.readCodexDefaultModelsOnce("backend-summary"),
       readClientAccount(this.codexDefaultClient),
       readClientRateLimits(this.codexDefaultClient),
     ]);
@@ -2264,7 +2255,7 @@ export class DesktopBackendRegistry {
       const initialize = await client.getInitializeResult();
       const models =
         kind === "grok"
-          ? await this.readGrokDefaultModelsOnce().catch(() => [])
+          ? await this.readGrokDefaultModelsOnce("backend-summary").catch(() => [])
           : await readClientModels(client).catch(() => []);
       const methods = Array.isArray(initialize.methods)
         ? initialize.methods.filter((method): method is string => typeof method === "string")

@@ -13,6 +13,15 @@ deepened: 2026-05-02
 
 Make backend model discovery observable, explicit, and single-flight across startup consumers. Grok should not issue repeated `model/list` requests because messaging startup, renderer backend summaries, launchpad normalization, or thread-start defaults each asks for model options through a different path. For this pass, model discovery should be first-consumer driven rather than constructor-driven: messaging startup may construct backend bridges, but the first real model consumer, such as renderer backend summaries or launchpad model resolution, owns the initial fetch through the shared catalog.
 
+## Implementation Progress
+
+- Implemented protocol diagnostics and capture analysis so backend requests can be counted by method and attributed by caller reason/cache owner when available.
+- Implemented `BackendModelCatalog` as the shared Codex/Grok single-flight model cache with cached successes and retry after failed discovery.
+- Removed constructor-side model warmup from `DesktopBackendRegistry`; constructing the registry no longer calls Codex or Grok `listModels()`.
+- Routed backend summaries, launchpad/default model resolution, thread-start defaults, and settings refresh through the shared catalog with caller reasons.
+- Added focused unit coverage for catalog coalescing/retry, registry lazy model discovery, protocol capture analysis, and protocol log diagnostics.
+- Deferred the heavier startup E2E capture fixture; the new analyzer provides the manual acceptance workflow for live startup captures.
+
 ## Problem Frame
 
 The latest startup log shows Grok being initialized and asked for `model/list` before the renderer window exists. That happens because `bootstrapApp()` starts messaging before `createMainWindow()`, and `DesktopMessagingRuntime` constructs `DesktopMessagingBackendBridge`, whose default constructor calls `getDesktopBackendRegistry()`. The registry constructor currently creates the Grok client and starts model discovery as a constructor side effect.
@@ -128,7 +137,7 @@ flowchart TB
     U4 --> U5
 ```
 
-- [ ] **Unit 1: Add startup protocol evidence and counters**
+- [x] **Unit 1: Add startup protocol evidence and counters**
 
 **Goal:** Make every startup model-list request attributable before changing cache behavior, so the implementation can prove what remains.
 
@@ -165,7 +174,7 @@ flowchart TB
 **Verification:**
 - Developers can point the analyzer at a protocol capture and determine whether Grok made duplicate `model/list` calls or only duplicate `thread/list` calls.
 
-- [ ] **Unit 2: Extract a shared backend model catalog**
+- [x] **Unit 2: Extract a shared backend model catalog**
 
 **Goal:** Centralize Codex and Grok model discovery behind one single-flight cache that all registry paths share.
 
@@ -201,7 +210,7 @@ flowchart TB
 **Verification:**
 - Model discovery count is bounded by catalog state rather than by how many registry methods request model options.
 
-- [ ] **Unit 3: Remove constructor-side model warmup**
+- [x] **Unit 3: Remove constructor-side model warmup**
 
 **Goal:** Stop backend registry construction from issuing Grok or Codex model-list requests implicitly.
 
@@ -237,7 +246,7 @@ flowchart TB
 **Verification:**
 - Pre-renderer startup no longer emits Grok `model/list` solely because messaging created a backend bridge.
 
-- [ ] **Unit 4: Route all real model consumers through the catalog**
+- [x] **Unit 4: Route all real model consumers through the catalog**
 
 **Goal:** Make every legitimate model option consumer use the shared catalog and propagate caller reason.
 
