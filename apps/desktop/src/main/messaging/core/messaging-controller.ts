@@ -1607,11 +1607,6 @@ export class MessagingController {
       lastSignaledAt !== undefined &&
       now - lastSignaledAt < TYPING_ACTIVITY_REFRESH_MS
     ) {
-      if (options?.reason !== "item/agentMessage/delta") {
-        this.logger.debug?.(
-          `messaging typing suppressed state=${state} reason=${options?.reason ?? "unknown"} elapsedMs=${now - lastSignaledAt} thread=${binding.threadId} turn=${activeTurn.turnId} binding=${binding.id}`,
-        );
-      }
       return;
     }
     if (state === "active") {

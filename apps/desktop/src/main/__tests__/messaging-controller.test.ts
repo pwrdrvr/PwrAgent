@@ -16,7 +16,10 @@ import type {
   StartTurnRequest,
   SubmitServerRequestRequest,
 } from "@pwragnt/shared";
-import { MessagingController } from "../messaging/core/messaging-controller";
+import {
+  MessagingController,
+  type MessagingControllerOptions,
+} from "../messaging/core/messaging-controller";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import { MessagingStore } from "../messaging/core/messaging-store";
 
@@ -679,6 +682,62 @@ describe("MessagingController", () => {
       },
     });
     expect(harness.delivered.filter((intent) => intent.kind === "message")).toHaveLength(1);
+  });
+
+  it("suppresses high-frequency typing refreshes without logging each skipped delta", async () => {
+    let now = 1000;
+    const logger = {
+      debug: vi.fn<(message: string, data?: Record<string, unknown>) => void>(),
+    };
+    const harness = await createHarness({
+      logger,
+      now: () => now,
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("run noisy command"));
+    harness.delivered.length = 0;
+    logger.debug.mockClear();
+
+    now += 500;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/commandExecution/outputDelta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "call-1",
+          delta: "lots of output",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([]);
+    expect(logger.debug).not.toHaveBeenCalled();
+
+    now += 10_000;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/commandExecution/outputDelta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "call-1",
+          delta: "still working",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "activity",
+        activity: "typing",
+        state: "active",
+      }),
+    ]);
+    expect(logger.debug).toHaveBeenCalledTimes(1);
+    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining("typing signaled"));
   });
 
   it("ignores turn completion events that do not include output text", async () => {
@@ -1377,6 +1436,7 @@ describe("MessagingController", () => {
 
 async function createHarness(options?: {
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
+  logger?: MessagingControllerOptions["logger"];
   now?: () => number;
 }): Promise<{
   controller: MessagingController;
@@ -1459,6 +1519,7 @@ async function createHarness(options?: {
       adapter,
       authorizedActorIds: ["user-1"],
       backend,
+      logger: options?.logger,
       now: options?.now ?? (() => 1000),
       store,
     }),
