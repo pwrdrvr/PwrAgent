@@ -2027,7 +2027,15 @@ export class DesktopBackendRegistry {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
 
-    const workspace = await this.gitDirectoryService.prepareLaunchpadWorkspace(launchpad);
+    const preparedWorkspace =
+      await this.gitDirectoryService.prepareLaunchpadWorkspace(launchpad);
+    const workspace =
+      launchpad.directoryKind === "workspace" && !preparedWorkspace.cwd
+        ? {
+            ...preparedWorkspace,
+            cwd: await this.createScratchProjectDirectory(),
+          }
+        : preparedWorkspace;
     const startThreadResponse = await this.startThread({
       backend: launchpad.backend,
       executionMode: launchpad.executionMode,

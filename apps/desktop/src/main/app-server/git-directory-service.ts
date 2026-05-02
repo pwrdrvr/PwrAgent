@@ -290,9 +290,16 @@ export class GitDirectoryService {
   async prepareLaunchpadWorkspace(
     launchpad: Pick<
       NavigationLaunchpadDraft,
-      "branchName" | "directoryLabel" | "directoryPath" | "workMode"
+      "branchName" | "directoryKind" | "directoryLabel" | "directoryPath" | "workMode"
     >,
   ): Promise<{ cwd?: string; workMode: LaunchpadWorkMode }> {
+    if (launchpad.directoryKind === "workspace") {
+      return {
+        cwd: undefined,
+        workMode: "local",
+      };
+    }
+
     const directoryPath = launchpad.directoryPath?.trim();
     if (!directoryPath) {
       return {

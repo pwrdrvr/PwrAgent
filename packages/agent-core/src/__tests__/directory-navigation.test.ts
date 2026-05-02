@@ -233,6 +233,45 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("groups the scratch workspace root under Workspaces instead of a projects directory", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.pwragnt/projects",
+              label: "projects",
+              path: "/Users/huntharo/.pwragnt/projects",
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "thread-2",
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.pwragnt/projects/2026-05-02-a1b2c3",
+              label: "2026-05-02-a1b2c3",
+              path: "/Users/huntharo/.pwragnt/projects/2026-05-02-a1b2c3",
+              kind: "local",
+            },
+          ],
+          updatedAt: 2_000,
+        }),
+      ],
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "workspace:/Users/huntharo/.pwragnt/projects",
+        kind: "workspace",
+        label: "Workspaces",
+        path: "/Users/huntharo/.pwragnt/projects",
+        threadKeys: ["codex:thread-1", "codex:thread-2"],
+      }),
+    ]);
+  });
+
   it("keeps same-named Codex worktrees as separate directory rows", () => {
     const directories = buildDirectorySummaries({
       threads: [

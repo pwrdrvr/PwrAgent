@@ -1447,6 +1447,87 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("materializes workspace launchpads into a scratch directory instead of the workspace root", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/Users/test/.pwragnt/projects/2026-05-02-a1b2c3",
+    });
+
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: "workspace:/Users/test/.pwragnt/projects",
+      launchpad: {
+        directoryKey: "workspace:/Users/test/.pwragnt/projects",
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        directoryPath: "/Users/test/.pwragnt/projects",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    expect(codexClient.lastStartThreadParams?.cwd).toBe(
+      "/Users/test/.pwragnt/projects/2026-05-02-a1b2c3",
+    );
+
+    await registry.close();
+  });
+
+  it("materializes Grok workspace launchpads into a scratch directory", async () => {
+    const grokClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/Users/test/.pwragnt/projects/2026-05-02-d4e5f6",
+    });
+
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: "workspace:/Users/test/.pwragnt/projects",
+      launchpad: {
+        directoryKey: "workspace:/Users/test/.pwragnt/projects",
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        directoryPath: "/Users/test/.pwragnt/projects",
+        backend: "grok",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        model: "grok-4.20-reasoning",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    expect(grokClient.lastStartThreadParams?.cwd).toBe(
+      "/Users/test/.pwragnt/projects/2026-05-02-d4e5f6",
+    );
+
+    await registry.close();
+  });
+
   it("applies model settings from the selected thread overlay when starting turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
