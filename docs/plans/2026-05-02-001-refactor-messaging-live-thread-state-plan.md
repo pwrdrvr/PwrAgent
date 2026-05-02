@@ -1,7 +1,7 @@
 ---
 title: refactor: Use live desktop thread state for messaging bindings
 type: refactor
-status: active
+status: completed
 date: 2026-05-02
 origin: docs/brainstorms/2026-04-30-messaging-platform-integration-requirements.md
 ---
@@ -131,7 +131,7 @@ flowchart TB
     U4 --> U5["Unit 5: Migrate and harden tests"]
 ```
 
-- [ ] **Unit 1: Classify binding-store ownership**
+- [x] **Unit 1: Classify binding-store ownership**
 
 **Goal:** Make the allowed contents of `MessagingBindingRecord` explicit so future changes do not reintroduce desktop thread metadata into the binding cache.
 
@@ -166,7 +166,7 @@ flowchart TB
 **Verification:**
 - A reviewer can tell from the contracts and tests which binding fields are authoritative and which desktop fields must be resolved elsewhere.
 
-- [ ] **Unit 2: Add a resolved desktop thread state reader**
+- [x] **Unit 2: Add a resolved desktop thread state reader**
 
 **Goal:** Provide a single desktop-owned read model for messaging workflows that need current thread facts.
 
@@ -204,7 +204,7 @@ flowchart TB
 **Verification:**
 - Messaging workflows have one helper to ask "what does the desktop currently know about this bound thread?" without reading display fields from the binding record.
 
-- [ ] **Unit 3: Render status and sync-name from resolved state**
+- [x] **Unit 3: Render status and sync-name from resolved state**
 
 **Goal:** Make `/status`, status button updates, and "Sync name" use current desktop state rather than cached binding display metadata.
 
@@ -242,7 +242,7 @@ flowchart TB
 **Verification:**
 - Re-running `/status` after a desktop thread rename shows the new desktop title without rebinding or pressing Sync name.
 
-- [ ] **Unit 4: Stop persisting duplicate display metadata during binding flows**
+- [x] **Unit 4: Stop persisting duplicate display metadata during binding flows**
 
 **Goal:** Remove writes that refresh or create duplicate thread display state in `messaging-state.json`.
 
@@ -278,7 +278,7 @@ flowchart TB
 **Verification:**
 - New or refreshed bindings no longer add duplicate desktop thread display data to `messaging-state.json`.
 
-- [ ] **Unit 5: Migrate old state and harden cross-surface tests**
+- [x] **Unit 5: Migrate old state and harden cross-surface tests**
 
 **Goal:** Make existing user state safe and add regressions that prove messaging follows the desktop state source.
 
