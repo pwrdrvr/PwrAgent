@@ -72,6 +72,8 @@ export function textForDiscordIntent(intent: MessagingSurfaceIntent): string {
       return "";
     case "message":
       return intent.parts.map(renderContentPart).filter(Boolean).join("\n\n");
+    case "stream_update":
+      return intent.text;
     case "status":
       return intent.text;
     case "progress":

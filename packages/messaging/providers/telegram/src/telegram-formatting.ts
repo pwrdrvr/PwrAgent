@@ -78,6 +78,8 @@ export function textForTelegramIntent(intent: MessagingSurfaceIntent): string {
       return "";
     case "message":
       return intent.parts.map(renderContentPart).filter(Boolean).join("\n\n");
+    case "stream_update":
+      return renderTelegramHtml(intent.text, intent.markdown ?? "plain");
     case "status":
       return renderTelegramHtml(intent.text, "plain");
     case "progress":

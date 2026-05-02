@@ -20,8 +20,10 @@ import { layoutMessagingActionRows } from "@pwragnt/messaging-interface";
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
   actionsForTelegramIntent,
+  renderTelegramHtml,
   splitTelegramHtml,
   TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
+  TELEGRAM_MESSAGE_TEXT_LIMIT,
   type TelegramInlineKeyboardMarkup,
   textForTelegramIntent,
 } from "./telegram-formatting.ts";
@@ -329,6 +331,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private callbackBindings = new Map<string, TelegramCallbackBinding>();
   private defaultBot?: TelegramBotLike;
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
+  private streamSurfaces = new Map<string, TelegramDeliveryTarget>();
   private readonly options: {
     api?: TelegramBotApi;
     bot?: TelegramBotLike;
@@ -476,6 +479,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     if (intent.kind === "activity") {
       return await this.deliverActivity(intent, target);
+    }
+
+    if (intent.kind === "stream_update") {
+      return await this.deliverStreamUpdate(intent, target);
     }
 
     if (intent.kind === "dismiss") {
@@ -642,6 +649,84 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           }
         : undefined,
     };
+  }
+
+  private async deliverStreamUpdate(
+    intent: Extract<MessagingSurfaceIntent, { kind: "stream_update" }>,
+    target: TelegramDeliveryTarget,
+  ): Promise<MessagingDeliveryResult> {
+    if (
+      this.options.config.streamingResponses !== true ||
+      intent.policy === "disabled"
+    ) {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
+    }
+
+    const text = renderTelegramHtml(intent.text, intent.markdown ?? "plain") || " ";
+    if (Buffer.byteLength(text, "utf8") > TELEGRAM_MESSAGE_TEXT_LIMIT) {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
+    }
+
+    try {
+      const existing = this.streamSurfaces.get(intent.stream.key);
+      const message = existing?.messageId
+        ? await this.bot.api.editMessageText({
+            chat_id: existing.chatId,
+            disable_web_page_preview: true,
+            message_id: existing.messageId,
+            message_thread_id: existing.messageThreadId,
+            parse_mode: "HTML",
+            text,
+          })
+        : await this.bot.api.sendMessage({
+            chat_id: target.chatId,
+            disable_web_page_preview: true,
+            message_thread_id: target.messageThreadId,
+            parse_mode: "HTML",
+            text,
+          });
+      const surfaceTarget = {
+        chatId: target.chatId,
+        messageId: message.message_id,
+        messageThreadId: target.messageThreadId,
+      };
+      if (intent.stream.isFinal) {
+        this.streamSurfaces.delete(intent.stream.key);
+      } else {
+        this.streamSurfaces.set(intent.stream.key, surfaceTarget);
+      }
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: existing?.messageId ? "updated" : "presented",
+        surface: {
+          channel: this.channel,
+          id: String(message.message_id),
+          state: {
+            opaque: {
+              chatId: surfaceTarget.chatId,
+              messageId: surfaceTarget.messageId,
+              messageThreadId: surfaceTarget.messageThreadId ?? null,
+            },
+          },
+        },
+      };
+    } catch (error) {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: errorMessage(error),
+        outcome: "failed",
+      };
+    }
   }
 
   async setConversationTitle(

@@ -291,6 +291,137 @@ describe("TelegramAdapter", () => {
     );
   });
 
+  it("discards stream updates unless streaming responses are enabled", async () => {
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+      },
+      now: () => 1000,
+    });
+
+    const result = await adapter.deliver({
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      bindingId: "binding-1",
+      createdAt: 1000,
+      id: "stream-1",
+      kind: "stream_update",
+      markdown: "plain",
+      role: "assistant",
+      stream: {
+        isFinal: false,
+        key: "stream-key-1",
+        sequence: 1,
+      },
+      text: "Hello",
+    } satisfies MessagingSurfaceIntent);
+
+    expect(result).toMatchObject({
+      channel: "telegram",
+      outcome: "discarded",
+    });
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("creates and updates one Telegram message for enabled stream updates", async () => {
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+        streamingResponses: true,
+      },
+      now: () => 1000,
+    });
+    const baseIntent = {
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      bindingId: "binding-1",
+      createdAt: 1000,
+      id: "stream-1",
+      kind: "stream_update",
+      markdown: "plain",
+      role: "assistant",
+      stream: {
+        isFinal: false,
+        key: "stream-key-1",
+        sequence: 1,
+      },
+      text: "Hello",
+    } satisfies MessagingSurfaceIntent;
+
+    const first = await adapter.deliver(baseIntent);
+    const second = await adapter.deliver({
+      ...baseIntent,
+      id: "stream-2",
+      markdown: "markdown",
+      stream: {
+        ...baseIntent.stream,
+        isFinal: true,
+        sequence: 2,
+      },
+      text: "**Hello** world",
+    } satisfies MessagingSurfaceIntent);
+
+    expect(first).toMatchObject({
+      outcome: "presented",
+      surface: {
+        id: "200",
+      },
+    });
+    expect(second).toMatchObject({
+      outcome: "updated",
+      surface: {
+        id: "200",
+      },
+    });
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: 777,
+        parse_mode: "HTML",
+        text: "Hello",
+      }),
+    );
+    expect(api.editMessageText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: 777,
+        message_id: 200,
+        parse_mode: "HTML",
+        text: expect.stringContaining("Hello"),
+      }),
+    );
+  });
+
   it("renames Telegram forum topics without allowing plain chat renames", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({
