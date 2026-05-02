@@ -823,7 +823,7 @@ export class GrokAppServerClient {
           title: normalized.title ?? "Untitled thread",
           titleSource: normalized.titleSource ?? "fallback",
           summary: normalized.summary,
-          projectKey: thread.projectKey,
+          ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
           model: thread.model,

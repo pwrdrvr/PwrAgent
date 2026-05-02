@@ -1152,8 +1152,10 @@ describe("GrokAppServerClient", () => {
   it("reloads persisted Grok thread metadata after client recreation", async () => {
     const temp = await createTemporaryTestDirectory();
     const stateRoot = path.join(temp.path, "state");
+    const workspacePath = path.join(temp.path, "workspace");
 
     try {
+      await fs.mkdir(workspacePath, { recursive: true });
       const firstClient = new GrokAppServerClient({
         apiKey: "test-key",
         stateRoot,
@@ -1193,6 +1195,64 @@ describe("GrokAppServerClient", () => {
           hasPreviousPage: false,
         },
       });
+      await secondClient.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it("lists Grok threads created by another already-running client with the same state root", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const stateRoot = path.join(temp.path, "state");
+    const workspacePath = path.join(temp.path, "workspace");
+
+    try {
+      await fs.mkdir(workspacePath, { recursive: true });
+      const firstClient = new GrokAppServerClient({
+        apiKey: "test-key",
+        stateRoot,
+        threadIdGenerator: () => "thread-1",
+      });
+      const secondClient = new GrokAppServerClient({
+        apiKey: "test-key",
+        stateRoot,
+      });
+
+      await expect(secondClient.listThreads()).resolves.toEqual([]);
+
+      await firstClient.startThread({
+        cwd: workspacePath,
+        model: "grok-4.20-reasoning",
+      });
+      await firstClient.renameThread({
+        threadId: "thread-1",
+        name: "Messaging - Streaming Responses",
+      });
+
+      await expect(secondClient.listThreads()).resolves.toMatchObject([
+        {
+          id: "thread-1",
+          title: "Messaging - Streaming Responses",
+          titleSource: "explicit",
+          projectKey: workspacePath,
+          model: "grok-4.20-reasoning",
+          linkedDirectories: [
+            {
+              id: workspacePath,
+              label: "workspace",
+              path: workspacePath,
+              kind: "local",
+            },
+          ],
+          source: "grok",
+        },
+      ]);
+      await expect(secondClient.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+        entries: [],
+        messages: [],
+      });
+
+      await firstClient.close();
       await secondClient.close();
     } finally {
       await temp.cleanup();

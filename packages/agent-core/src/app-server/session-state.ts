@@ -83,6 +83,7 @@ export class AppServerSessionState {
   }
 
   listThreads(params: { archived?: boolean } = {}): ThreadSummary[] {
+    this.refreshFromStore();
     const includeArchived = params.archived === true;
     return [...this.threads.values()]
       .filter((thread) => Boolean(thread.archived) === includeArchived)
@@ -91,6 +92,7 @@ export class AppServerSessionState {
   }
 
   getThread(threadId: string): ThreadState | undefined {
+    this.refreshFromStore();
     return this.threads.get(threadId);
   }
 
@@ -100,6 +102,7 @@ export class AppServerSessionState {
   }
 
   archiveThread(threadId: string): ThreadState | undefined {
+    this.refreshFromStore();
     const thread = this.threads.get(threadId);
     if (!thread) {
       return undefined;
@@ -118,6 +121,7 @@ export class AppServerSessionState {
   }
 
   unarchiveThread(threadId: string): ThreadState | undefined {
+    this.refreshFromStore();
     const thread = this.threads.get(threadId);
     if (!thread) {
       return undefined;
@@ -139,7 +143,11 @@ export class AppServerSessionState {
     threadId: string,
     patch: ThreadMutation | Record<string, unknown>,
   ): ThreadState | undefined {
-    const thread = this.threads.get(threadId);
+    let thread = this.threads.get(threadId);
+    if (!thread) {
+      this.refreshFromStore();
+      thread = this.threads.get(threadId);
+    }
     if (!thread) {
       return undefined;
     }
@@ -285,6 +293,7 @@ export class AppServerSessionState {
   }
 
   readThread(threadId: string): ThreadReplay {
+    this.refreshFromStore();
     const thread = this.threads.get(threadId);
     if (!thread) {
       throw new Error(`Unknown thread: ${threadId}`);
@@ -324,6 +333,7 @@ export class AppServerSessionState {
   }
 
   getPreviousResponseId(threadId: string): string | undefined {
+    this.refreshFromStore();
     return this.responseIds.get(threadId);
   }
 
@@ -448,6 +458,13 @@ export class AppServerSessionState {
     });
   }
 
+  private refreshFromStore(): void {
+    if (!this.store) {
+      return;
+    }
+    this.hydrate(this.store.load());
+  }
+
   private hydrate(data: HydratedSessionState): void {
     for (const thread of data.threads) {
       this.threads.set(thread.threadId, thread);
@@ -472,8 +489,8 @@ export class AppServerSessionState {
     for (const [threadId, responseId] of Object.entries(data.responseIds)) {
       this.responseIds.set(threadId, responseId);
     }
-    this.itemSequence = data.itemSequence;
-    this.lastTimestamp = data.lastTimestamp;
+    this.itemSequence = Math.max(this.itemSequence, data.itemSequence);
+    this.lastTimestamp = Math.max(this.lastTimestamp, data.lastTimestamp);
   }
 
   private resolveReplayItemId(threadId: string, baseId: string): string {
