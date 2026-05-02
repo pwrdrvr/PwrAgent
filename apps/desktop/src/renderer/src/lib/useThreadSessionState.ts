@@ -395,7 +395,7 @@ function carryForwardTranscriptEntryOrder(
   }
 
   let changed = false;
-  const entries = response.replay.entries.map((entry) => {
+  let entries = response.replay.entries.map((entry) => {
     const source = findUniqueTranscriptOrderSource(entry, sources);
     if (!source || source.createdAt === entry.createdAt) {
       return entry;
@@ -408,6 +408,23 @@ function carryForwardTranscriptEntryOrder(
     };
   });
 
+  for (const source of sources) {
+    if (!isDurableDiffActivity(source)) {
+      continue;
+    }
+
+    const alreadyHydrated = entries.some(
+      (entry): entry is AppServerThreadActivityEntry =>
+        entry.type === "activity" && activityEntriesMatch(entry, source)
+    );
+    if (alreadyHydrated) {
+      continue;
+    }
+
+    changed = true;
+    entries = mergeTranscriptEntries(entries, [source]);
+  }
+
   if (!changed) {
     return response;
   }
@@ -419,6 +436,15 @@ function carryForwardTranscriptEntryOrder(
       entries,
     },
   };
+}
+
+function isDurableDiffActivity(
+  entry: AppServerThreadEntry
+): entry is AppServerThreadActivityEntry {
+  return (
+    entry.type === "activity" &&
+    entry.details.some((detail) => Boolean(detail.fileDiff?.diff))
+  );
 }
 
 function reviewEntriesMatch(

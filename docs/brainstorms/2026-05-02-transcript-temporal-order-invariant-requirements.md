@@ -79,6 +79,15 @@ except for explicitly older history loaded above the viewport.
   turn-derived position.
 - R12. Turn completion must preserve the relative order of all retained
   optimistic activity and all materialized assistant messages.
+- R21. Once an edited-file or changed-file transcript entry with inline diff
+  content has been shown, later hydration, duplicate suppression, or refresh
+  churn must not remove that file list or diff from the chat.
+- R22. If a hydrated `thread/read` response temporarily includes an edited-file
+  diff and a later response omits it, the renderer must retain the previously
+  visible diff activity unless a newer equivalent diff activity replaces it.
+- R23. End-of-turn transcript state should expose a durable modified/added/
+  deleted file summary with inline diff access, so the user can inspect the
+  final changes without relying on transient live protocol updates.
 
 **Testing Gates**
 - R13. Unit tests must fail when any visible transcript item has an ordering key
@@ -117,6 +126,9 @@ except for explicitly older history loaded above the viewport.
   relative position of any group or transcript message.
 - Hydrating from `thread/read` during or after an active turn does not reshuffle
   already-observed live transcript items.
+- Edited-file and changed-file diff entries remain visible after live updates,
+  hydration catch-up, and later refreshes that omit the diff from the backend
+  response.
 
 ## Why We Got This Wrong
 

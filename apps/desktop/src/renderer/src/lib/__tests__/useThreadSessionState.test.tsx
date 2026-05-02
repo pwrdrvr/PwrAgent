@@ -1112,6 +1112,167 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("does not delete edited file diffs when a later hydration omits them", async () => {
+    let now = 40_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    const turn = {
+      id: "turn-1",
+      status: "completed" as const,
+      durationMs: 70_000,
+    };
+    const liveDiff = [
+      "diff --git a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "--- a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "+++ b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "@@ -113,2 +113,1 @@",
+      "-<<<<<<< HEAD",
+      "-function appendMessageEntries(",
+      "+function messageMatchesOptimisticEntry(",
+    ].join("\n");
+    const hydratedDiffActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "persisted-diff-1",
+      summary: "Edited 1 file, +1, -2",
+      createdAt: 1_000,
+      details: [
+        {
+          id: "persisted-diff-detail-1",
+          kind: "write",
+          label: "Update useThreadSessionState.ts",
+          path: "apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+          fileDiff: {
+            kind: "update",
+            diff: liveDiff,
+            additions: 1,
+            removals: 2,
+          },
+        },
+      ],
+      turn,
+    };
+    const readThread = vi
+      .fn()
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }))
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [hydratedDiffActivity],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }))
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: "assistant-final-1",
+              role: "assistant" as const,
+              phase: "final" as const,
+              text: "Rebase completed and checks are green.",
+              createdAt: 2_000,
+              turn,
+            },
+          ],
+          messages: [
+            {
+              id: "assistant-final-1",
+              role: "assistant" as const,
+              text: "Rebase completed and checks are green.",
+              createdAt: 2_000,
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }));
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      result.current.upsertLiveTranscriptEntry({
+        ...hydratedDiffActivity,
+        id: "live-diff-turn-1",
+        createdAt: 1_500,
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Edited 1 file, +1, -2",
+    ]);
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "activity:Edited 1 file, +1, -2",
+      ]);
+    });
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 3_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "activity:Edited 1 file, +1, -2",
+        "message:Rebase completed and checks are green.",
+      ]);
+    });
+
+    const editedActivity = result.current.entries.find(
+      (entry): entry is AppServerThreadActivityEntry =>
+        entry.type === "activity" && entry.summary === "Edited 1 file, +1, -2"
+    );
+    expect(editedActivity?.details[0]?.fileDiff?.diff).toBe(liveDiff);
+  });
+
   it("preserves session-owned live activity across thread switches and hydration", async () => {
     let now = 20_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);

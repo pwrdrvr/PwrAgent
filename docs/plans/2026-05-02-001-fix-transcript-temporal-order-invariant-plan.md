@@ -43,6 +43,7 @@ That split means no layer could guarantee the visible transcript stayed in canon
 | R9-R12 live and hydrated merge semantics | Units 2, 4 |
 | R13-R17 unit, integration, E2E, and fixture coverage | Units 1, 3, 4, 5 |
 | R18-R20 diagnostics and protocol order reporting | Unit 6 |
+| R21-R23 durable edited-file diff retention and final change summary | Unit 2, Unit 4, follow-up test |
 
 ## Scope Boundaries
 
