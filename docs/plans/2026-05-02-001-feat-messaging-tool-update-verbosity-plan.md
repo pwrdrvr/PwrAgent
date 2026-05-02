@@ -10,7 +10,7 @@ origin: docs/brainstorms/2026-04-30-messaging-platform-integration-requirements.
 
 ## Overview
 
-Add channel-neutral messaging controls for agent tool-use updates so Telegram, Discord, and future messaging adapters can show useful progress without flooding the chat. Bound conversations should get a status-card control named `Tool updates: <mode>` that cycles through `Show None`, `Show Less`, `Show Some`, `Show More`, and `Show All`. `Show Some` is the default.
+Add channel-neutral messaging controls for agent tool-use updates so Telegram, Discord, and future messaging adapters can show useful progress without flooding the chat. The Desktop Settings `Messaging` section should expose the app-level default as `Tool usage notifications`, and bound conversations should also get a status-card control named `Tool updates: <mode>` that cycles through `Show None`, `Show Less`, `Show Some`, `Show More`, and `Show All`. `Show Some` is the default when neither config nor a binding override chooses otherwise.
 
 Tool updates are code-generated messaging messages, not assistant-authored responses. They summarize completed tool activity such as shell commands, MCP tool calls, web searches, dynamic tools, file reads, and file writes. The desktop transcript can still show live tool notifications independently; this plan only governs what the messaging integration forwards to remote chat surfaces.
 
@@ -18,22 +18,22 @@ Tool updates are code-generated messaging messages, not assistant-authored respo
 
 The messaging integration currently forwards assistant text, typing activity, status-card updates, approvals, and questionnaires, but it does not intentionally forward tool-use notifications. When a turn performs many small reads or shell commands, forwarding every notification to chat would be noisy. Suppressing all of them would make remote use feel opaque, especially from mobile or voice-driven contexts where the user cannot see the desktop transcript.
 
-The desired behavior is a middle path: default to a compact but useful summary, allow users to opt into every tool event when debugging, and allow quieter modes for high-volume channels.
+The desired behavior is a middle path: default to a compact but useful summary, allow users to opt into every tool event when debugging, and allow quieter modes for high-volume channels. Because this affects remote messaging behavior generally, the durable default belongs in the Desktop Settings `Messaging` area alongside Telegram and Discord setup. The status-card control is a fast per-binding override for a specific chat/thread binding.
 
 ## Requirements Trace
 
 - R1-R6. Preserve the channel-agnostic messaging surface by expressing tool updates as semantic messaging intents and binding preferences, not Telegram/Discord branches.
 - R10, R13, R17. Keep bound conversations usable during active turns by showing progress without swamping assistant responses.
-- R18-R22. Expose the control through status-card buttons and text fallback so remote and voice-driven users can change the mode.
+- R18-R22. Expose the control through Desktop Settings, status-card buttons, and text fallback so remote and voice-driven users can change the mode.
 - R23-R27. Keep behavior generic for Telegram, Discord, and future adapters; adapters only render the resulting message/status intents.
 - R31-R36. Keep generated tool text transcript-safe, avoid secrets and raw command output by default, and preserve actor/binding audit context through existing delivery paths.
 
 ## Scope Boundaries
 
-- In scope: per-binding tool update mode, status-card cycle action, turn-scoped tool event aggregation, generated messaging messages for individual and batched tool titles, tests for controller behavior and formatting.
+- In scope: Desktop Settings `Messaging` default for tool usage notifications, per-binding tool update override, status-card cycle action, turn-scoped tool event aggregation, generated messaging messages for individual and batched tool titles, tests for settings/controller behavior and formatting.
 - In scope: completed tool-like app-server notifications from active bound turns, including `commandExecution`, `mcpToolCall`, `dynamicToolCall`, `webSearch`, `fileChange`, and command actions that represent reads/searches/writes.
 - Out of scope: changing the desktop transcript UI, changing app-server protocol notifications, replaying historical tool activity into old messaging chats, showing raw command output by default, or adding provider-specific tool controls.
-- Out of scope: a full settings screen. The first control lives on the existing messaging status card.
+- Out of scope: a new top-level settings screen from scratch. This plan extends the existing Desktop Settings `Messaging` area rather than inventing another settings surface.
 
 ## Context & Research
 
@@ -46,12 +46,16 @@ The desired behavior is a middle path: default to a compact but useful summary, 
 - `apps/desktop/src/main/messaging/core/messaging-store.ts` persists binding preferences and delivery records with redaction and restart-safe JSON writes.
 - `apps/desktop/src/main/codex-app-server/client.ts` and `apps/desktop/src/renderer/src/features/thread-detail/live-transcript-activity.ts` already contain local examples for normalizing app-server tool item shapes into human-readable activity labels.
 - `packages/messaging/providers/telegram/src/telegram-formatting.ts` and `packages/messaging/providers/discord/src/discord-formatting.ts` render generic message/status intents without needing workflow-specific knowledge.
+- `docs/brainstorms/2026-04-30-desktop-settings-config-requirements.md` defines the Desktop Settings `Messaging` section as the app-level configuration area for messaging behavior.
+- `docs/plans/2026-04-30-003-feat-desktop-settings-config-plan.md` and current settings code already establish settings contracts, main-process config service, IPC, and renderer settings sections.
+- `packages/shared/src/contracts/settings.ts`, `apps/desktop/src/main/settings/desktop-settings-service.ts`, and `apps/desktop/src/renderer/src/features/settings/MessagingSettings.tsx` are the expected paths for adding the global default control.
 - `apps/desktop/src/main/__tests__/messaging-controller.test.ts` already covers binding, status actions, backend events, approvals, and tool-use capability metadata.
 
 ### Institutional Learnings
 
 - `docs/plans/2026-04-30-001-feat-messaging-platform-integration-plan.md` established that messaging workflow logic should target the PwrAgnt semantic surface, while adapters own platform rendering limits.
 - `docs/plans/2026-04-30-002-feat-messaging-command-surfaces-plan.md` established pinned status cards as the right place for bound-conversation controls.
+- `docs/plans/2026-04-30-003-feat-desktop-settings-config-plan.md` established that app-level Messaging configuration belongs in Desktop Settings, while composer/status surfaces can own thread or binding-level controls.
 - No `docs/solutions/` learnings exist yet for messaging tool-update behavior.
 
 ### External References
@@ -60,7 +64,8 @@ The desired behavior is a middle path: default to a compact but useful summary, 
 
 ## Key Technical Decisions
 
-- **Use a per-binding preference named for tool update verbosity.** Tool update mode belongs beside model, reasoning, fast mode, and permissions because it affects how a bound channel experiences future turns.
+- **Use Desktop Settings as the durable default and binding preferences as overrides.** The app-level default belongs in Desktop Settings `Messaging`; a bound chat can override that default from its status card when a specific conversation needs more or less noise.
+- **Resolve the effective mode with clear precedence.** Effective mode should be binding override first, then Desktop Settings `Messaging` default, then hardcoded `Show Some` for old config/store state.
 - **Make `Show Some` the default.** The default should prove the remote user that work is happening, but only promote batching after a turn becomes noisy.
 - **Cycle modes in quiet-to-loud order.** The status action should use the order `Show None -> Show Less -> Show Some -> Show More -> Show All -> Show None`. Because the default is `Show Some`, one click increases visibility to `Show More`, and two clicks reaches `Show All`.
 - **Deliver completed tool items, not start events.** Completed events have stable titles, status, and duration, and avoid double-counting start/completion pairs. Long-running turn visibility remains covered by typing/status updates.
@@ -74,6 +79,7 @@ The desired behavior is a middle path: default to a compact but useful summary, 
 ### Resolved During Planning
 
 - **Should the mode control be adapter-specific?** No. It belongs in the generic status-card workflow and binding preferences.
+- **Should there be a Desktop Settings control too?** Yes. The Desktop Settings `Messaging` section owns the general default for tool usage notifications; the status-card control owns per-binding overrides.
 - **Should batching happen in adapters?** No. Adapters should only render intents; batching depends on active turns and app-server notifications.
 - **Should `Show Less` emit individual messages before batching?** No. It starts in batch mode with a 60-second window because its purpose is low-noise operation.
 - **Should failed tools be hidden?** No. Failed completed tools should be summarized with a failed marker because remote users need to know that progress hit a problem.
@@ -96,6 +102,14 @@ The desired behavior is a middle path: default to a compact but useful summary, 
 | Show Less | 60s | 0 | starts batched; flushes every 60s and at turn end |
 | Show None | none | 0 | suppress generated tool update messages |
 
+Effective mode precedence:
+
+| Source | Purpose |
+| --- | --- |
+| Binding override | Per-chat/thread override from the status card |
+| Desktop Settings `Messaging` default | Durable app-level default for new and uncustomized bindings |
+| Hardcoded fallback | `Show Some` for missing config or old stores |
+
 ```mermaid
 flowchart TB
     E["Backend item/completed"] --> R{"Recognized tool item?"}
@@ -117,16 +131,16 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    U1["Unit 1: Preference and status control"] --> U2["Unit 2: Tool item summarizer"]
+    U1["Unit 1: Settings default and status control"] --> U2["Unit 2: Tool item summarizer"]
     U2 --> U3["Unit 3: Turn-scoped aggregator"]
     U3 --> U4["Unit 4: Controller delivery integration"]
     U4 --> U5["Unit 5: Adapter formatting and fixtures"]
     U5 --> U6["Unit 6: Documentation and polish"]
 ```
 
-- [ ] **Unit 1: Add tool update mode preference and status control**
+- [ ] **Unit 1: Add settings default, binding override, and status control**
 
-**Goal:** Persist a per-binding tool update mode and expose it on the messaging status card.
+**Goal:** Add an app-level default in Desktop Settings, support per-binding overrides, and expose the effective mode on the messaging status card.
 
 **Requirements:** R1-R6, R18-R22, R23-R27
 
@@ -135,32 +149,49 @@ flowchart TB
 **Files:**
 - Modify: `packages/shared/src/contracts/messaging.ts`
 - Modify: `packages/messaging/interface/src/index.ts`
+- Modify: `packages/shared/src/contracts/settings.ts`
+- Modify: `apps/desktop/src/main/settings/desktop-config.ts`
+- Modify: `apps/desktop/src/main/settings/desktop-settings-env.ts`
+- Modify: `apps/desktop/src/main/settings/desktop-settings-service.ts`
+- Modify: `apps/desktop/src/renderer/src/features/settings/MessagingSettings.tsx`
 - Modify: `apps/desktop/src/main/messaging/core/messaging-status-card.ts`
 - Modify: `apps/desktop/src/main/messaging/core/messaging-controller.ts`
+- Test: `packages/shared/src/contracts/__tests__/settings.test.ts`
+- Test: `apps/desktop/src/main/__tests__/desktop-settings-service.test.ts`
+- Test: `apps/desktop/src/renderer/src/features/settings/__tests__/settings-screen.test.tsx`
 - Test: `packages/messaging/interface/src/__tests__/messaging-contract.test.ts`
 - Test: `apps/desktop/src/main/__tests__/messaging-controller.test.ts`
 
 **Approach:**
 - Add a `MessagingToolUpdateMode` style union with the five labels represented as stable lowercase values.
-- Add an optional mode field to `MessagingBindingPreferences`; treat missing as `show_some` to avoid store migrations for existing bindings.
-- Add a status-card line such as `Tool updates: Show Some`.
+- Add the same mode type, or a deliberately shared equivalent, to desktop settings contracts so `Messaging` settings can store a default.
+- Add a `Tool usage notifications` control to `MessagingSettings.tsx`, above or before provider-specific Telegram/Discord groups, because it is general messaging behavior rather than a provider credential.
+- Add an optional override field to `MessagingBindingPreferences`; treat missing as "use the Desktop Settings default" rather than immediately materializing a binding value.
+- Resolve the effective mode as binding override -> Desktop Settings default -> `show_some`.
+- Add a status-card line such as `Tool updates: Show Some`, with copy that can indicate an override when useful without making the card verbose.
 - Add a `status:tool-updates` action that cycles in quiet-to-loud order and re-renders the status card.
 - Keep text fallback simple: `tools` or the status button should change the setting; exact free-form mode selection can be added later through a picker if needed.
 
 **Patterns to follow:**
 - `apps/desktop/src/main/messaging/core/messaging-status-card.ts`
 - `apps/desktop/src/main/messaging/core/messaging-controller.ts`
+- `apps/desktop/src/renderer/src/features/settings/MessagingSettings.tsx`
+- `apps/desktop/src/main/settings/desktop-settings-service.ts`
 - `apps/desktop/src/main/__tests__/messaging-controller.test.ts`
 
 **Test scenarios:**
 - Happy path: a binding with no preference renders `Tool updates: Show Some`.
+- Happy path: changing `Tool usage notifications` in Desktop Settings updates the messaging default in the redacted settings snapshot and persists it to config.
+- Happy path: a binding without an override uses the Desktop Settings default.
 - Happy path: clicking the tool update status action cycles from `Show Some` to `Show More`, persists the preference, and re-renders the status card.
+- Happy path: a binding override continues to win after the Desktop Settings default changes.
 - Happy path: repeated clicks cycle through all five modes and wrap to `Show None` after `Show All`.
 - Edge case: an old binding record without the preference still starts turns and renders status without migration errors.
+- Edge case: an old desktop config without the default setting resolves to `Show Some`.
 - Integration: `/status` after changing the mode shows the persisted mode for the active binding.
 
 **Verification:**
-- Messaging users can see and change the tool update mode from the status card without provider-specific code.
+- Desktop users can configure the general default in Settings, and messaging users can override a specific bound conversation from the status card without provider-specific code.
 
 - [ ] **Unit 2: Add channel-neutral tool item summarization**
 
@@ -212,7 +243,7 @@ flowchart TB
 - Test: `apps/desktop/src/main/__tests__/messaging-tool-update-policy.test.ts`
 
 **Approach:**
-- Track aggregation state by binding id and turn id.
+- Track aggregation state by binding id, turn id, and effective mode.
 - Deduplicate by normalized tool item id so repeated backend notifications do not generate duplicate chat messages.
 - For `Show All`, return an immediate individual message for each completed recognized item.
 - For `Show None`, return no generated messages.
@@ -254,6 +285,7 @@ flowchart TB
 
 **Approach:**
 - In `handleBackendEvent`, after locating bindings for the thread, pass recognized completed tool events to the per-binding tool update policy.
+- Resolve the effective tool update mode for each binding before applying the policy, using the Desktop Settings default when no binding override exists.
 - Deliver generated system messages through the existing `deliver` path so audit context, binding routing, delivery recording, and permanent failure handling remain unchanged.
 - Ensure assistant messages still dedupe independently through the existing assistant message key.
 - Flush pending tool batches before or alongside terminal activity signaling so final assistant text does not bury a delayed tool batch indefinitely.
@@ -325,10 +357,12 @@ flowchart TB
 **Files:**
 - Modify: `docs/plans/2026-04-30-001-feat-messaging-platform-integration-plan.md` or add a follow-up note if that plan is already complete
 - Modify: `README.md` or messaging setup docs if present
+- Modify: `docs/plans/2026-04-30-003-feat-desktop-settings-config-plan.md` only if the implementation team wants the older settings plan to mention this follow-up setting
 - Test: `apps/desktop/src/main/__tests__/messaging-controller.test.ts`
 
 **Approach:**
 - Document the five modes, default behavior, and batching windows.
+- Document that Desktop Settings `Messaging` owns the app-level default while the status card can override a specific binding.
 - Note that generated tool messages are title-only and intentionally exclude raw output.
 - Add manual validation notes for a bound Telegram or Discord chat: run a quiet tool sequence, then a noisy sequence, then cycle to `Show All`, `Show Less`, and `Show None`.
 - Keep this as product/operation documentation, not implementation choreography.
@@ -365,7 +399,8 @@ flowchart TB
 
 ## Documentation / Operational Notes
 
-- The default should require no user configuration. Existing bindings without the new preference behave as `Show Some`.
+- The default should require no user configuration. Existing desktop configs and bindings without the new fields behave as `Show Some`.
+- Desktop Settings `Messaging` should show this as a general messaging behavior setting, not inside the Telegram or Discord credential groups.
 - Status-card copy should stay compact because Telegram and Discord buttons have limited space.
 - Manual validation should include one low-volume command sequence and one high-volume file-read/search sequence.
 
@@ -374,8 +409,13 @@ flowchart TB
 - **Origin document:** `docs/brainstorms/2026-04-30-messaging-platform-integration-requirements.md`
 - Related plan: `docs/plans/2026-04-30-001-feat-messaging-platform-integration-plan.md`
 - Related plan: `docs/plans/2026-04-30-002-feat-messaging-command-surfaces-plan.md`
+- Related plan: `docs/plans/2026-04-30-003-feat-desktop-settings-config-plan.md`
+- Related requirements: `docs/brainstorms/2026-04-30-desktop-settings-config-requirements.md`
 - Related code: `apps/desktop/src/main/messaging/core/messaging-controller.ts`
 - Related code: `apps/desktop/src/main/messaging/core/messaging-status-card.ts`
 - Related code: `apps/desktop/src/main/messaging/core/messaging-renderer.ts`
+- Related code: `apps/desktop/src/renderer/src/features/settings/MessagingSettings.tsx`
+- Related code: `apps/desktop/src/main/settings/desktop-settings-service.ts`
 - Related code: `packages/shared/src/contracts/messaging.ts`
+- Related code: `packages/shared/src/contracts/settings.ts`
 - Related code: `packages/messaging/interface/src/index.ts`
