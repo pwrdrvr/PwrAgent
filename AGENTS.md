@@ -15,6 +15,16 @@
 - Use the project-local [desktop E2E fixture seeding skill](.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when seeding or refreshing desktop replay fixtures from live captured sessions.
 - For reliable desktop E2E runs, prefer `pnpm test:desktop-e2e` from the repo root. The package-level `pnpm --filter @pwragnt/desktop test:e2e` path is also safe now because it builds `apps/desktop/out/` before launching Playwright.
 
+## Pull Requests
+
+- Use Conventional Commit-style PR titles: `type(scope): short description`.
+- Prefer scopes that match the project area being changed:
+  - `messaging` for Telegram, Discord, adapters, and messaging integrations.
+  - `desktop` for the desktop app itself.
+  - `agent-core` for the coding agent, currently the Grok coding agent.
+  - `docs` for documentation changes.
+  - `tests` for test coverage, fixtures, and test infrastructure.
+
 ## Runtime Config
 
 - Grok app-server user config lives at `~/.config/grok-app-server/config.toml`.
