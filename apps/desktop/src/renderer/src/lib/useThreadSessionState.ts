@@ -215,8 +215,18 @@ function mergeTranscriptEntries(
     const terminalIndex =
       optimisticTurnId && !isTerminalTurnEntry(optimisticEntry)
         ? merged.findIndex(
-            (entry) =>
-              entry.turn?.id === optimisticTurnId && isTerminalTurnEntry(entry)
+            (entry) => {
+              if (entry.turn?.id !== optimisticTurnId || !isTerminalTurnEntry(entry)) {
+                return false;
+              }
+
+              const entryCreatedAt =
+                typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+              return (
+                typeof optimisticCreatedAt !== "number" ||
+                typeof entryCreatedAt !== "number"
+              );
+            }
           )
         : -1;
 

@@ -172,9 +172,17 @@ function insertPendingEntry(
     return;
   }
 
-  const finalMessageIndex = entries.findLastIndex(
-    (entry) => entry.turn?.id === pendingTurnId && isAssistantFinalMessage(entry)
-  );
+  const finalMessageIndex = entries.findLastIndex((entry) => {
+    if (entry.turn?.id !== pendingTurnId || !isAssistantFinalMessage(entry)) {
+      return false;
+    }
+
+    const finalCreatedAt = entryCreatedAt(entry);
+    return (
+      typeof pendingCreatedAt !== "number" ||
+      typeof finalCreatedAt !== "number"
+    );
+  });
   if (finalMessageIndex === -1) {
     entries.push(pendingEntry);
     return;

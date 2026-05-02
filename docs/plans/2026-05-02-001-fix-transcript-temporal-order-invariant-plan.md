@@ -1,6 +1,6 @@
 ---
 date: 2026-05-02
-status: active
+status: completed
 type: fix
 title: Enforce transcript temporal order invariant
 origin: docs/brainstorms/2026-05-02-transcript-temporal-order-invariant-requirements.md
@@ -313,7 +313,7 @@ flowchart TB
 - No render path collects non-contiguous entries into a group.
 - Collapsing and expanding a group does not change visible order.
 
-- [ ] **Unit 4: Preserve hydration precision and persisted item order**
+- [x] **Unit 4: Preserve hydration precision and persisted item order**
 
 **Goal:** Stop persisted refreshes from erasing stronger ordering information.
 
@@ -354,7 +354,7 @@ flowchart TB
 - Renderer hydration does not regress from live-observed order to coarser persisted timestamp order.
 - Grok and Codex transcript providers can continue using the same normalized transcript shape.
 
-- [ ] **Unit 5: Add replay E2E for the May 2 failure shape**
+- [x] **Unit 5: Add replay E2E for the May 2 failure shape**
 
 **Goal:** Make the actual failure shape impossible to reintroduce unnoticed.
 
@@ -399,7 +399,7 @@ flowchart TB
 - The E2E fails if any visible transcript item appears above an earlier canonical item.
 - The fixture is minimal, sanitized, and documents which capture/thread inspired it.
 
-- [ ] **Unit 6: Add diagnostics and protocol order reporting**
+- [x] **Unit 6: Add diagnostics and protocol order reporting**
 
 **Goal:** Make future ordering regressions easy to diagnose from tests, local demos, and protocol captures.
 

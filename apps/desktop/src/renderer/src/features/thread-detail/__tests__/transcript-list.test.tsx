@@ -1061,6 +1061,51 @@ describe("TranscriptList", () => {
     ).toBeTruthy();
   });
 
+  it("keeps later pending assistant text below an earlier final same-turn message", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "user-1",
+            role: "user",
+            text: "Keep the visible transcript chronological.",
+            createdAt: 1_777_480_900_000,
+            turn: { id: "turn-1", status: "completed" }
+          },
+          {
+            type: "message",
+            id: "assistant-final-1",
+            role: "assistant",
+            phase: "final",
+            text: "First visible assistant update.",
+            createdAt: 1_777_480_902_000,
+            turn: { id: "turn-1", status: "completed" }
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingAssistantMessage={{
+          type: "message",
+          id: "assistant-pending-2",
+          role: "assistant",
+          text: "Second visible assistant update.",
+          createdAt: 1_777_480_903_000,
+          turn: { id: "turn-1", status: "completed" }
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const first = screen.getByText("First visible assistant update.");
+    const second = screen.getByText("Second visible assistant update.");
+
+    expect(
+      first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it("collapses completed work groups when a final message arrives while live work is still pending", async () => {
     render(
       <TranscriptList

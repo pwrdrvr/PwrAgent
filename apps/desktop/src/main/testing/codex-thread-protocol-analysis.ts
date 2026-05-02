@@ -22,6 +22,19 @@ type ThreadListSample = {
   statusType?: string;
 };
 
+export type ThreadOrderEvent = {
+  itemId?: string;
+  itemIndex?: number;
+  kind: "assistant-message" | "tool-activity" | "turn" | "other";
+  label: string;
+  method?: string;
+  sequence: number;
+  source: "notification" | "threadRead";
+  threadId?: string;
+  timestamp: number;
+  turnId?: string;
+};
+
 type ThreadIdentityFieldCounts = {
   cwd: number;
   sessionCwd: number;
@@ -50,6 +63,9 @@ export type CodexThreadProtocolAnalysis = {
     requestCount: number;
     includeTurnsVariants: boolean[];
   };
+  threadOrder: {
+    events: ThreadOrderEvent[];
+  };
 };
 
 export async function analyzeCodexThreadProtocolCapture(params: {
@@ -58,6 +74,7 @@ export async function analyzeCodexThreadProtocolCapture(params: {
   const capturePath = path.resolve(params.capturePath);
   const records = await readProtocolCaptureFile(capturePath);
   const requestsById = buildRequestIndex(records);
+  const requestEnvelopesById = buildRequestEnvelopeIndex(records);
 
   const requestCounts: Record<string, number> = {};
   const notificationCounts: Record<string, number> = {};
@@ -78,6 +95,7 @@ export async function analyzeCodexThreadProtocolCapture(params: {
   let archivedRequestCount = 0;
   let threadReadRequestCount = 0;
   const includeTurnsVariants = new Set<boolean>();
+  const threadOrderEvents: ThreadOrderEvent[] = [];
 
   for (const entry of records) {
     const method = entry.envelope.method?.trim();
@@ -117,6 +135,10 @@ export async function analyzeCodexThreadProtocolCapture(params: {
 
     if (entry.record.direction === "inbound" && entry.record.kind === "notification" && method) {
       notificationCounts[method] = (notificationCounts[method] ?? 0) + 1;
+      const orderEvent = extractNotificationOrderEvent(entry);
+      if (orderEvent) {
+        threadOrderEvents.push(orderEvent);
+      }
       continue;
     }
 
@@ -125,6 +147,11 @@ export async function analyzeCodexThreadProtocolCapture(params: {
     }
 
     const responseMethod = lookupMethodForResponse(requestsById, entry.envelope);
+    if (responseMethod === "thread/read") {
+      threadOrderEvents.push(
+        ...extractThreadReadOrderEvents(entry, requestEnvelopesById),
+      );
+    }
     if (responseMethod !== "thread/list" && responseMethod !== "thread/loaded/list") {
       continue;
     }
@@ -186,6 +213,9 @@ export async function analyzeCodexThreadProtocolCapture(params: {
       requestCount: threadReadRequestCount,
       includeTurnsVariants: [...includeTurnsVariants].sort(),
     },
+    threadOrder: {
+      events: threadOrderEvents.sort(compareThreadOrderEvents),
+    },
   };
 }
 
@@ -208,6 +238,25 @@ function buildRequestIndex(
   return requestsById;
 }
 
+function buildRequestEnvelopeIndex(
+  records: CapturedProtocolEnvelopeRecord[],
+): Map<string, ProtocolCaptureEnvelope> {
+  const requestsById = new Map<string, ProtocolCaptureEnvelope>();
+  for (const entry of records) {
+    const method = entry.envelope.method?.trim();
+    if (
+      entry.record.direction === "outbound" &&
+      entry.record.kind === "request" &&
+      method &&
+      entry.envelope.id !== null &&
+      entry.envelope.id !== undefined
+    ) {
+      requestsById.set(String(entry.envelope.id), entry.envelope);
+    }
+  }
+  return requestsById;
+}
+
 function lookupMethodForResponse(
   requestsById: Map<string, string>,
   envelope: ProtocolCaptureEnvelope,
@@ -216,6 +265,177 @@ function lookupMethodForResponse(
     return undefined;
   }
   return requestsById.get(String(envelope.id));
+}
+
+function compareThreadOrderEvents(
+  left: ThreadOrderEvent,
+  right: ThreadOrderEvent,
+): number {
+  return (
+    left.sequence - right.sequence ||
+    (left.itemIndex ?? -1) - (right.itemIndex ?? -1) ||
+    left.label.localeCompare(right.label)
+  );
+}
+
+function extractNotificationOrderEvent(
+  entry: CapturedProtocolEnvelopeRecord,
+): ThreadOrderEvent | undefined {
+  const method = entry.envelope.method?.trim();
+  const params = asRecord(entry.envelope.params);
+  if (!method || !params) {
+    return undefined;
+  }
+
+  const threadId = pickString(params, ["threadId", "thread_id"]);
+  if (!threadId) {
+    return undefined;
+  }
+
+  const item = asRecord(params.item);
+  const itemId =
+    pickString(params, ["itemId", "item_id"]) ??
+    pickString(item ?? {}, ["id", "itemId", "item_id"]);
+  const turnId =
+    pickString(params, ["turnId", "turn_id"]) ??
+    pickString(item ?? {}, ["turnId", "turn_id"]);
+  const itemType = pickString(item ?? {}, ["type"]);
+  const delta = pickString(params, ["delta"]);
+
+  return {
+    ...(itemId ? { itemId } : {}),
+    kind: classifyOrderEventKind(method, itemType),
+    label: describeOrderEvent({
+      method,
+      item,
+      itemType,
+      delta,
+      params,
+    }),
+    method,
+    sequence: entry.record.sequence,
+    source: "notification",
+    threadId,
+    timestamp: entry.record.timestamp,
+    ...(turnId ? { turnId } : {}),
+  };
+}
+
+function extractThreadReadOrderEvents(
+  entry: CapturedProtocolEnvelopeRecord,
+  requestEnvelopesById: Map<string, ProtocolCaptureEnvelope>,
+): ThreadOrderEvent[] {
+  const requestId =
+    entry.envelope.id === null || entry.envelope.id === undefined
+      ? undefined
+      : String(entry.envelope.id);
+  const request = requestId ? requestEnvelopesById.get(requestId) : undefined;
+  if (request?.method !== "thread/read") {
+    return [];
+  }
+
+  const requestParams = asRecord(request.params);
+  const threadId = pickString(requestParams ?? {}, ["threadId", "thread_id"]);
+  const result = asRecord(entry.envelope.result);
+  const thread = asRecord(result?.thread);
+  const turns = Array.isArray(thread?.turns)
+    ? thread.turns
+        .map((turn) => asRecord(turn))
+        .filter((turn): turn is Record<string, unknown> => turn !== null)
+    : [];
+  const events: ThreadOrderEvent[] = [];
+
+  for (const turn of turns) {
+    const turnId = pickString(turn, ["id", "turnId", "turn_id"]);
+    const items = Array.isArray(turn.items)
+      ? turn.items
+          .map((item) => asRecord(item))
+          .filter((item): item is Record<string, unknown> => item !== null)
+      : [];
+
+    for (const [itemIndex, item] of items.entries()) {
+      const itemType = pickString(item, ["type"]);
+      const itemId = pickString(item, ["id", "itemId", "item_id", "call_id"]);
+      events.push({
+        ...(itemId ? { itemId } : {}),
+        itemIndex,
+        kind: classifyOrderEventKind("thread/read", itemType),
+        label: describeOrderEvent({
+          method: "thread/read",
+          item,
+          itemType,
+          params: item,
+        }),
+        method: "thread/read",
+        sequence: entry.record.sequence,
+        source: "threadRead",
+        ...(threadId ? { threadId } : {}),
+        timestamp: entry.record.timestamp,
+        ...(turnId ? { turnId } : {}),
+      });
+    }
+  }
+
+  return events;
+}
+
+function classifyOrderEventKind(
+  method: string,
+  itemType: string | undefined,
+): ThreadOrderEvent["kind"] {
+  if (method === "turn/completed" || method === "turn/started" || method === "turn/failed") {
+    return "turn";
+  }
+
+  if (method === "item/agentMessage/delta" || itemType === "agentMessage") {
+    return "assistant-message";
+  }
+
+  if (
+    itemType === "commandExecution" ||
+    itemType === "functionCall" ||
+    itemType === "mcpToolCall" ||
+    method.includes("commandExecution") ||
+    method.includes("mcpToolCall")
+  ) {
+    return "tool-activity";
+  }
+
+  return "other";
+}
+
+function describeOrderEvent(params: {
+  delta?: string;
+  item: Record<string, unknown> | null;
+  itemType?: string;
+  method: string;
+  params: Record<string, unknown>;
+}): string {
+  if (params.method === "item/agentMessage/delta") {
+    return compactLabel(params.delta ?? "assistant message delta");
+  }
+
+  if (params.method === "turn/completed") {
+    return "turn completed";
+  }
+
+  if (params.itemType === "agentMessage") {
+    return compactLabel(pickString(params.item ?? {}, ["text"]) ?? "assistant message");
+  }
+
+  if (params.itemType === "commandExecution") {
+    return compactLabel(
+      pickString(params.item ?? {}, ["command", "displayCommand"]) ??
+        "command execution",
+    );
+  }
+
+  return compactLabel(params.itemType ?? params.method);
+}
+
+function compactLabel(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
 }
 
 function compareRequestVariants(

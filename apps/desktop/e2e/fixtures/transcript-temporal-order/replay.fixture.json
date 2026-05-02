@@ -1,0 +1,321 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "transcript-temporal-order",
+    "sourceCaptureId": "synthetic-from-019de585-735e-7aa0-82d7-469a6a32eb80",
+    "threadId": "thread-transcript-temporal-order"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-transcript-temporal-order",
+          "title": "Transcript temporal ordering",
+          "titleSource": "explicit",
+          "summary": "Verify live and hydrated transcript items never render out of time order",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000000000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "user-message-1",
+            "role": "user",
+            "text": "Show the temporal transcript order."
+          }
+        ],
+        "messages": [
+          {
+            "id": "user-message-1",
+            "role": "user",
+            "text": "Show the temporal transcript order."
+          }
+        ],
+        "lastUserMessage": "Show the temporal transcript order.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "turn-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-transcript-temporal-order",
+          "turnId": "turn-temporal-order",
+          "turn": {
+            "id": "turn-temporal-order",
+            "status": "inProgress",
+            "startedAt": 1777730000
+          }
+        }
+      }
+    },
+    {
+      "id": "assistant-message-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "thread-transcript-temporal-order",
+          "turnId": "turn-temporal-order",
+          "itemId": "assistant-message-1",
+          "phase": "final",
+          "delta": "The code already logs explicit turn completion."
+        }
+      }
+    },
+    {
+      "id": "tool-read-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-transcript-temporal-order",
+          "turnId": "turn-temporal-order",
+          "item": {
+            "id": "tool-read-1",
+            "type": "commandExecution",
+            "status": "in_progress",
+            "command": "sed -n '1,120p' apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+            "commandActions": [
+              {
+                "type": "read",
+                "path": "apps/desktop/src/renderer/src/lib/useThreadSessionState.ts"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "assistant-message-2",
+      "kind": "notification",
+      "notification": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "thread-transcript-temporal-order",
+          "turnId": "turn-temporal-order",
+          "itemId": "assistant-message-2",
+          "phase": "final",
+          "delta": "I am going to close that gap in renderBindingStatus."
+        }
+      }
+    },
+    {
+      "id": "tool-search-started-1",
+      "kind": "notification",
+      "notification": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-transcript-temporal-order",
+          "turnId": "turn-temporal-order",
+          "item": {
+            "id": "tool-search-1",
+            "type": "commandExecution",
+            "status": "in_progress",
+            "command": "rg -n transcript apps/desktop/src/renderer/src/features/thread-detail",
+            "commandActions": [
+              {
+                "type": "search",
+                "path": "apps/desktop/src/renderer/src/features/thread-detail"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "assistant-message-3",
+      "kind": "notification",
+      "notification": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "threadId": "thread-transcript-temporal-order",
+          "turnId": "turn-temporal-order",
+          "itemId": "assistant-message-3",
+          "delta": "I added the controller hook that reconciles navigation state."
+        }
+      }
+    },
+    {
+      "id": "turn-completed-1",
+      "kind": "notification",
+      "notification": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-transcript-temporal-order",
+          "turnId": "turn-temporal-order",
+          "turn": {
+            "id": "turn-temporal-order",
+            "status": "completed",
+            "durationMs": 70000,
+            "output": []
+          }
+        }
+      }
+    },
+    {
+      "id": "thread-read-2",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "user-message-1",
+            "role": "user",
+            "text": "Show the temporal transcript order.",
+            "createdAt": 1777730000000
+          },
+          {
+            "type": "message",
+            "id": "assistant-message-1",
+            "role": "assistant",
+            "phase": "final",
+            "text": "The code already logs explicit turn completion.",
+            "createdAt": 1777730000000,
+            "turn": {
+              "id": "turn-temporal-order",
+              "status": "completed",
+              "durationMs": 70000
+            }
+          },
+          {
+            "type": "activity",
+            "id": "activity-tool-read-1",
+            "summary": "Explored 1 item",
+            "createdAt": 1777730000000,
+            "details": [
+              {
+                "id": "tool-read-1",
+                "kind": "read",
+                "label": "Read useThreadSessionState.ts",
+                "path": "apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+                "status": "completed"
+              }
+            ],
+            "turn": {
+              "id": "turn-temporal-order",
+              "status": "completed",
+              "durationMs": 70000
+            }
+          },
+          {
+            "type": "message",
+            "id": "assistant-message-2",
+            "role": "assistant",
+            "phase": "final",
+            "text": "I am going to close that gap in renderBindingStatus.",
+            "createdAt": 1777730000000,
+            "turn": {
+              "id": "turn-temporal-order",
+              "status": "completed",
+              "durationMs": 70000
+            }
+          },
+          {
+            "type": "activity",
+            "id": "activity-tool-search-1",
+            "summary": "Explored 1 item",
+            "createdAt": 1777730000000,
+            "details": [
+              {
+                "id": "tool-search-1",
+                "kind": "search",
+                "label": "Searched thread-detail",
+                "path": "apps/desktop/src/renderer/src/features/thread-detail",
+                "status": "completed"
+              }
+            ],
+            "turn": {
+              "id": "turn-temporal-order",
+              "status": "completed",
+              "durationMs": 70000
+            }
+          },
+          {
+            "type": "message",
+            "id": "assistant-message-3",
+            "role": "assistant",
+            "phase": "final",
+            "text": "I added the controller hook that reconciles navigation state.",
+            "createdAt": 1777730000000,
+            "turn": {
+              "id": "turn-temporal-order",
+              "status": "completed",
+              "durationMs": 70000
+            }
+          }
+        ],
+        "messages": [
+          {
+            "id": "user-message-1",
+            "role": "user",
+            "text": "Show the temporal transcript order.",
+            "createdAt": 1777730000000
+          },
+          {
+            "id": "assistant-message-1",
+            "role": "assistant",
+            "text": "The code already logs explicit turn completion.",
+            "createdAt": 1777730000000
+          },
+          {
+            "id": "assistant-message-2",
+            "role": "assistant",
+            "text": "I am going to close that gap in renderBindingStatus.",
+            "createdAt": 1777730000000
+          },
+          {
+            "id": "assistant-message-3",
+            "role": "assistant",
+            "text": "I added the controller hook that reconciles navigation state.",
+            "createdAt": 1777730000000
+          }
+        ],
+        "lastUserMessage": "Show the temporal transcript order.",
+        "lastAssistantMessage": "I added the controller hook that reconciles navigation state.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}
