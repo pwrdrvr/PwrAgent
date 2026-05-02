@@ -14,8 +14,10 @@ import type {
   AppServerThreadMessageEntry,
   AppServerThreadPlanEntry,
   AppServerSkillSummary,
-  AppServerThreadReplayPagination
+  AppServerThreadReplayPagination,
+  DesktopApplicationsSnapshot
 } from "@pwragnt/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
 import { ThinkingScanner } from "./ThinkingScanner";
 import { PendingQuestionnaire } from "./PendingQuestionnaire";
 import { PendingMcpInteraction } from "./PendingMcpInteraction";
@@ -38,6 +40,8 @@ type TranscriptViewport = {
 type TranscriptListProps = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
+  applications?: DesktopApplicationsSnapshot;
+  desktopApi?: Pick<DesktopApi, "openApplication">;
   entries: AppServerThreadEntry[];
   error?: string;
   loading: boolean;
@@ -679,7 +683,9 @@ export function TranscriptList(props: TranscriptListProps) {
               return (
                 <TranscriptWorkPhaseGroup
                   key={item.id}
+                  applications={props.applications}
                   collapsible={item.collapsible}
+                  desktopApi={props.desktopApi}
                   entries={item.entries}
                   expanded={expandedCommentaryGroupIds.has(item.id)}
                   label={item.label}
@@ -696,12 +702,24 @@ export function TranscriptList(props: TranscriptListProps) {
             return entry.type === "activity" ? (
               <TranscriptActivity key={entry.id} entry={entry} />
             ) : entry.type === "plan" ? (
-              <TranscriptPlan key={entry.id} entry={entry} />
+              <TranscriptPlan
+                key={entry.id}
+                applications={props.applications}
+                desktopApi={props.desktopApi}
+                entry={entry}
+              />
             ) : entry.type === "review" ? (
-              <TranscriptReview key={entry.id} entry={entry} />
+              <TranscriptReview
+                key={entry.id}
+                applications={props.applications}
+                desktopApi={props.desktopApi}
+                entry={entry}
+              />
             ) : (
               <TranscriptMessage
                 key={entry.id}
+                applications={props.applications}
+                desktopApi={props.desktopApi}
                 message={entry}
                 skills={skills}
                 onOpenImage={props.onOpenImage}
@@ -749,7 +767,9 @@ export function TranscriptList(props: TranscriptListProps) {
                 </span>
               </div>
               <ThreadMarkdown
+                applications={props.applications}
                 className="transcript-request__prompt"
+                desktopApi={props.desktopApi}
                 text={pendingRequestPrompt(props.pendingRequest)}
               />
               <div className="transcript-request__actions">

@@ -1,14 +1,18 @@
 import { memo, type ReactNode } from "react";
 import type {
+  DesktopApplicationsSnapshot,
   AppServerSkillSummary,
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
   AppServerThreadMessagePart,
 } from "@pwragnt/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptImage } from "./TranscriptImage";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 
 type TranscriptMessageProps = {
+  applications?: DesktopApplicationsSnapshot;
+  desktopApi?: Pick<DesktopApi, "openApplication">;
   message: AppServerThreadMessageEntry;
   skills: AppServerSkillSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
@@ -44,6 +48,8 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
             renderMessageSegment({
               segment,
               index,
+              applications: props.applications,
+              desktopApi: props.desktopApi,
               onOpenImage: props.onOpenImage,
               skills: props.skills,
             })
@@ -90,6 +96,8 @@ function groupMessageParts(parts: AppServerThreadMessagePart[]): MessagePartSegm
 }
 
 function renderMessageSegment(params: {
+  applications?: DesktopApplicationsSnapshot;
+  desktopApi?: Pick<DesktopApi, "openApplication">;
   segment: MessagePartSegment;
   index: number;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
@@ -125,7 +133,9 @@ function renderMessageSegment(params: {
   return (
     <ThreadMarkdown
       key={`text:${params.index}`}
+      applications={params.applications}
       className="transcript-message__text-block"
+      desktopApi={params.desktopApi}
       skills={params.skills}
       text={params.segment.part.text}
     />

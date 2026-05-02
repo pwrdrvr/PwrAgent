@@ -1,18 +1,33 @@
-import type { AppServerSkillSummary } from "@pwragnt/shared";
-import { memo, useMemo, type ReactNode } from "react";
+import type {
+  AppServerSkillSummary,
+  DesktopApplicationsSnapshot,
+} from "@pwragnt/shared";
+import { memo, useCallback, useMemo, type MouseEvent, type ReactNode } from "react";
 import ReactMarkdown, { type Components, type UrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import type { DesktopApi } from "../../lib/desktop-api";
 import { SkillChip } from "../composer/SkillChip";
 
 type ThreadMarkdownProps = {
+  applications?: DesktopApplicationsSnapshot;
   className?: string;
+  desktopApi?: Pick<DesktopApi, "openApplication">;
   skills?: AppServerSkillSummary[];
   text: string;
   variant?: "message" | "summary";
 };
 
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
+  const editorApplication = useMemo(
+    () =>
+      props.applications?.editors.find(
+        (application) =>
+          application.canOpenWorkspace &&
+          application.id === props.applications?.preferredEditorId.value
+      ) ?? props.applications?.editors.find((application) => application.canOpenWorkspace),
+    [props.applications]
+  );
   const skillsByPath = useMemo(
     () =>
       new Map(
@@ -24,6 +39,28 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       ),
     [props.skills]
   );
+
+  const openLocalFileLink = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>, href: string): void => {
+      const targetPath = localFilePathFromHref(href);
+      if (!targetPath || !editorApplication || !props.desktopApi?.openApplication) {
+        return;
+      }
+
+      event.preventDefault();
+      void props.desktopApi
+        .openApplication({
+          applicationId: editorApplication.id,
+          kind: "editor",
+          targetPath,
+        })
+        .catch((error: unknown) => {
+          console.error("Failed to open transcript file link", error);
+        });
+    },
+    [editorApplication, props.desktopApi]
+  );
+
   const components = useMemo<Components>(
     () => ({
       a(anchorProps) {
@@ -47,6 +84,9 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
           <a
             className="transcript-message__link"
             href={href || undefined}
+            onClick={(event) => {
+              openLocalFileLink(event, href);
+            }}
             rel="noreferrer"
             target="_blank"
             title={href || undefined}
@@ -120,7 +160,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         return <ul className="transcript-message__list">{listProps.children}</ul>;
       },
     }),
-    [skillsByPath]
+    [openLocalFileLink, skillsByPath]
   );
 
   return (
@@ -166,11 +206,23 @@ const normalizeMarkdownUrl: UrlTransform = (url) => {
 
 function normalizeSkillPath(href: string): string | undefined {
   if (href.startsWith("file://")) {
-    return decodeURIComponent(href.replace(/^file:\/\//, ""));
+    return stripFileLineSuffix(decodeURIComponent(href.replace(/^file:\/\//, "")));
   }
 
   if (href.startsWith("/")) {
-    return href;
+    return stripFileLineSuffix(href);
+  }
+
+  return undefined;
+}
+
+function localFilePathFromHref(href: string): string | undefined {
+  if (href.startsWith("file://")) {
+    return stripFileLineSuffix(decodeURIComponent(href.replace(/^file:\/\//, "")));
+  }
+
+  if (href.startsWith("/")) {
+    return stripFileLineSuffix(href);
   }
 
   return undefined;
@@ -183,6 +235,11 @@ function denormalizeMarkdownUrl(url: string): string {
 
   return url;
 }
+
+function stripFileLineSuffix(filePath: string): string {
+  return filePath.replace(/:(\d+)(?::\d+)?$/, "");
+}
+
 function extractTextContent(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") {
     return String(node);

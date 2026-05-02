@@ -1,11 +1,15 @@
 import type {
   AppServerReviewFinding,
   AppServerThreadReviewEntry,
+  DesktopApplicationsSnapshot,
 } from "@pwragnt/shared";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
+import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 
 type TranscriptReviewProps = {
+  applications?: DesktopApplicationsSnapshot;
+  desktopApi?: Pick<DesktopApi, "openApplication">;
   entry: AppServerThreadReviewEntry;
 };
 
@@ -124,7 +128,12 @@ export function TranscriptReview(props: TranscriptReviewProps) {
           <p className="transcript-review__eyebrow">Review</p>
           <p className="transcript-review__summary">{summary}</p>
           {body ? (
-            <ThreadMarkdown className="transcript-review__body" text={body} />
+            <ThreadMarkdown
+              applications={props.applications}
+              className="transcript-review__body"
+              desktopApi={props.desktopApi}
+              text={body}
+            />
           ) : null}
         </div>
         {props.entry.createdAt ? (
@@ -177,7 +186,9 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                   </span>
                 </div>
                 <ThreadMarkdown
+                  applications={props.applications}
                   className="transcript-review__finding-body"
+                  desktopApi={props.desktopApi}
                   text={finding.body}
                 />
                 <div className="transcript-review__location">
