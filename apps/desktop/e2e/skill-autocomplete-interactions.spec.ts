@@ -189,6 +189,92 @@ test("thread reply Tiptap skill insertion preserves rich Markdown blocks", async
   }
 });
 
+test("thread reply Tiptap Tab insertion keeps caret after chip and copy-paste preserves skill metadata", async () => {
+  const app = await launchElectronApp({
+    env: tiptapWysiwygComposerEnv,
+    fixturePath,
+    windowSize: {
+      width: 1180,
+      height: 760,
+    },
+  });
+
+  try {
+    await openSkillAutocompleteThread(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "Reply" });
+    await textbox.focus();
+    await app.window.keyboard.type("Let's use $ce:plan");
+    await expect(
+      app.window.getByRole("button", { name: /\$ce:plan/i }),
+    ).toBeVisible();
+    await app.window.keyboard.press("Tab");
+
+    const caretIsAfterChip = await tiptapInput.evaluate((element) => {
+      const chip = element.querySelector(".composer-tiptap-input__mention");
+      const selection = window.getSelection();
+      if (!chip || !selection || selection.rangeCount === 0) {
+        return false;
+      }
+
+      const caretRange = selection.getRangeAt(0);
+      const afterChipRange = document.createRange();
+      afterChipRange.setStartAfter(chip);
+      afterChipRange.collapse(true);
+      return caretRange.compareBoundaryPoints(
+        Range.START_TO_START,
+        afterChipRange,
+      ) >= 0;
+    });
+    expect(caretIsAfterChip).toBe(true);
+
+    await app.window.keyboard.type(" after");
+
+    const textAfterTabInsertion = await tiptapInput.innerText();
+    expect(textAfterTabInsertion.indexOf("$ce:plan")).toBeGreaterThanOrEqual(0);
+    expect(textAfterTabInsertion.indexOf("$ce:plan")).toBeLessThan(
+      textAfterTabInsertion.indexOf(" after"),
+    );
+
+    const chip = tiptapInput.locator(".composer-tiptap-input__mention", {
+      hasText: "$ce:plan",
+    });
+    await expect(chip).toBeVisible();
+    await expect(chip).toHaveAttribute(
+      "data-skill-path",
+      "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+    );
+
+    await textbox.focus();
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+C" : "Control+C",
+    );
+    await app.window.keyboard.press("Delete");
+    await expect(tiptapInput).toHaveAttribute("data-value", "");
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+V" : "Control+V",
+    );
+
+    const pastedChip = tiptapInput.locator(".composer-tiptap-input__mention", {
+      hasText: "$ce:plan",
+    });
+    await expect(pastedChip).toBeVisible();
+    await expect(tiptapInput.locator(".composer-tiptap-input__mention", {
+      hasText: "$skill",
+    })).toHaveCount(0);
+    await expect(pastedChip).toHaveAttribute(
+      "data-skill-path",
+      "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+    );
+  } finally {
+    await app.close();
+  }
+});
+
 test("thread reply skill autocomplete filters and commits the reported multi-line draft", async () => {
   const app = await launchElectronApp({
     env: customWidgetComposerEnv,

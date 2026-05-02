@@ -1829,7 +1829,7 @@ export function Composer(props: ComposerProps) {
       inputRef.current?.setSelectionRange(tokenIndex, tokenIndex);
     };
     if (composerUsesTiptap) {
-      requestAnimationFrame(restoreSelection);
+      requestAnimationFrame(() => inputRef.current?.focus());
     } else {
       restoreSelection();
     }

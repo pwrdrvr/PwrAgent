@@ -42,18 +42,30 @@ const SkillMention = Mention.extend({
     return {
       id: {
         default: null,
+        parseHTML: (element) =>
+          element.getAttribute("data-composer-skill-token-id") ??
+          element.getAttribute("data-id"),
       },
       name: {
         default: null,
+        parseHTML: (element) =>
+          element.getAttribute("data-skill-name") ??
+          element.getAttribute("data-label") ??
+          element.textContent?.replace(/^\$/, "") ??
+          null,
       },
       path: {
         default: null,
+        parseHTML: (element) => element.getAttribute("data-skill-path"),
       },
       description: {
         default: null,
+        parseHTML: (element) => element.getAttribute("data-skill-description"),
       },
       shortDescription: {
         default: null,
+        parseHTML: (element) =>
+          element.getAttribute("data-skill-short-description"),
       },
     };
   },
@@ -71,8 +83,16 @@ const SkillMention = Mention.extend({
         class: "thread-row__chip skill-chip composer-tiptap-input__mention",
         "data-type": "mention",
         "data-composer-skill-token-id": String(node.attrs.id ?? ""),
+        "data-id": String(node.attrs.id ?? ""),
+        "data-label": skill.name,
         "data-skill-name": skill.name,
         ...(skill.path ? { "data-skill-path": skill.path } : {}),
+        ...(skill.description
+          ? { "data-skill-description": skill.description }
+          : {}),
+        ...(skill.shortDescription
+          ? { "data-skill-short-description": skill.shortDescription }
+          : {}),
         ...(tooltip ? { "data-tooltip": tooltip } : {}),
       },
       `$${skill.name}`,
@@ -663,7 +683,7 @@ function applyExternalSkillInsertion(params: {
   return params.editor.commands.insertContentAt(
     { from, to },
     insertedContent,
-    { updateSelection: false },
+    { updateSelection: true },
   );
 }
 
@@ -833,6 +853,7 @@ export const ComposerTiptapInput = forwardRef<
         selectionIndex: selectionIndexRef.current,
       })
     ) {
+      pendingSelectionIndexRef.current = undefined;
       return;
     }
 
