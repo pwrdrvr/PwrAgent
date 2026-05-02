@@ -1,7 +1,7 @@
 ---
 title: fix: Repair skill autocomplete filtering and insertion regressions
 type: fix
-status: active
+status: completed
 date: 2026-05-02
 ---
 
