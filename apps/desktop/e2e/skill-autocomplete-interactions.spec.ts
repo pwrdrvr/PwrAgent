@@ -125,7 +125,8 @@ test("thread reply skill autocomplete has a visible overlay boundary and page na
     await openSkillAutocompleteThread(app);
 
     const richInput = app.window.getByTestId("composer-rich-input");
-    await richInput.fill("$");
+    await richInput.focus();
+    await app.window.keyboard.type("$");
 
     const listbox = app.window.getByRole("listbox", { name: "Skills" });
     await expect(listbox).toBeVisible();
