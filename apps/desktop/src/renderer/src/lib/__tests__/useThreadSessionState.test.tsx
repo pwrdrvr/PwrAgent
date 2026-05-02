@@ -1395,9 +1395,11 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(readThread).toHaveBeenCalledTimes(1);
     });
-    expect(transcriptLabels(result.current.entries)).toEqual([
-      "activity:Edited 5 files, +204, -2",
-    ]);
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "activity:Edited 5 files, +204, -2",
+      ]);
+    });
 
     act(() => {
       result.current.upsertLiveTranscriptEntry(currentDiffActivity);
