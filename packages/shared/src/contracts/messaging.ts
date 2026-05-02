@@ -348,6 +348,22 @@ export type MessagingDeliveryResult = {
   deliveredAt: number;
 };
 
+export type MessagingConversationTitleUpdateRequest = {
+  actor?: MessagingActorIdentity;
+  channel: MessagingChannelRef;
+  routingState?: MessagingAdapterState;
+  title: string;
+};
+
+export type MessagingConversationTitleUpdateResult = {
+  channel: MessagingChannelKind;
+  conversation: MessagingConversationRef;
+  errorMessage?: string;
+  outcome: "updated" | "unsupported" | "failed";
+  title: string;
+  updatedAt: number;
+};
+
 export type MessagingInboundBaseEvent = {
   id: string;
   kind: MessagingInboundEventKind;

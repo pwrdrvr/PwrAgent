@@ -1095,6 +1095,10 @@ export class MessagingController {
       await this.compactThread(binding, event);
       return;
     }
+    if (actionId === "status:sync-name") {
+      await this.syncConversationName(binding, event);
+      return;
+    }
 
     await this.deliver(
       buildConfirmationIntent({
@@ -1317,6 +1321,97 @@ export class MessagingController {
       force: true,
     });
     await this.renderBindingStatus(updatedBinding, event);
+  }
+
+  private async syncConversationName(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    if (!this.options.adapter.setConversationTitle) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-sync-name-unavailable"),
+          createdAt: this.now(),
+          title: "Name sync unavailable",
+          body: "This messaging provider does not support syncing the conversation name.",
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return;
+    }
+
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const threadTitle = normalizeConversationTitle(
+      findThreadForBinding(navigation, binding)?.title ?? binding.threadDisplay?.threadTitle,
+    );
+    if (!threadTitle) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-sync-name-missing-title"),
+          createdAt: this.now(),
+          title: "Name sync unavailable",
+          body: "This thread does not have a Codex thread name to sync yet.",
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return;
+    }
+
+    const result = await this.options.adapter.setConversationTitle({
+      actor: event.actor,
+      channel: binding.channel,
+      routingState: event.routingState ?? binding.routingState,
+      title: threadTitle,
+    });
+    if (result.outcome !== "updated") {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-sync-name-failed"),
+          createdAt: this.now(),
+          title: "Name sync unavailable",
+          body:
+            result.errorMessage ??
+            `This ${conversationKindLabel(binding.channel.conversation.kind)} cannot be renamed from messaging.`,
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return;
+    }
+
+    const updatedBinding = await this.options.store.upsertBinding({
+      ...binding,
+      channel: {
+        ...binding.channel,
+        conversation: {
+          ...binding.channel.conversation,
+          title: result.title,
+        },
+      },
+      threadDisplay: {
+        ...binding.threadDisplay,
+        threadTitle: result.title,
+      },
+      updatedAt: this.now(),
+    });
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("status-sync-name-confirmed"),
+        createdAt: this.now(),
+        title: "Name synced",
+        body: `Set this ${conversationKindLabel(binding.channel.conversation.kind)} name to "${result.title}".`,
+      }),
+      updatedBinding,
+      event,
+    );
+    await this.renderBindingStatus(updatedBinding, event, navigation);
   }
 
   private async updateBindingPreferences(
@@ -1785,6 +1880,24 @@ function readBrowseAction(event: MessagingInboundCallbackEvent): string | undefi
 function readStatusAction(event: MessagingInboundCallbackEvent): string | undefined {
   const actionId = event.actionId ?? event.interaction.id;
   return actionId.startsWith("status:") ? actionId : undefined;
+}
+
+function normalizeConversationTitle(title: string | undefined): string | undefined {
+  const normalized = title?.replace(/\s+/g, " ").trim();
+  return normalized || undefined;
+}
+
+function conversationKindLabel(kind: MessagingBindingRecord["channel"]["conversation"]["kind"]): string {
+  switch (kind) {
+    case "topic":
+      return "topic";
+    case "thread":
+      return "thread";
+    case "channel":
+      return "channel";
+    case "dm":
+      return "conversation";
+  }
 }
 
 function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefined {

@@ -99,6 +99,12 @@ export function buildBindingStatusIntent(params: {
         fallbackText: "compact",
       },
       {
+        id: "status:sync-name",
+        label: "Sync name",
+        style: "secondary",
+        fallbackText: "sync name",
+      },
+      {
         id: "status:stop",
         label: "Stop",
         style: "danger",

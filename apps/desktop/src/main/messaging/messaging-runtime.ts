@@ -1,6 +1,10 @@
 import { MessagingController } from "./core/messaging-controller";
 import type { MessagingStore } from "./core/messaging-store";
-import type { MessagingBackendBridge } from "./core/messaging-adapter";
+import type {
+  MessagingBackendBridge,
+  MessagingConversationTitleUpdateRequest,
+  MessagingConversationTitleUpdateResult,
+} from "./core/messaging-adapter";
 import type { AgentEvent, AppServerPendingRequestNotification } from "@pwragnt/shared";
 import type {
   MessagingChannelKind,
@@ -22,6 +26,9 @@ export type DesktopMessagingAdapter = {
   authorizedActorIds: readonly string[];
   channel: MessagingChannelKind;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  setConversationTitle?(
+    request: MessagingConversationTitleUpdateRequest,
+  ): Promise<MessagingConversationTitleUpdateResult>;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop?(): Promise<void>;
 };
