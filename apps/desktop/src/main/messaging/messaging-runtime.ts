@@ -153,6 +153,7 @@ export class DesktopMessagingRuntime {
 
     this.unsubscribeBackendEvents?.();
     this.unsubscribeBackendEvents = undefined;
+    this.controllers.forEach((controller) => controller.dispose());
     await Promise.all(this.adapters.map(async (adapter) => adapter.stop?.()));
     this.adapters = [];
     this.controllers = [];

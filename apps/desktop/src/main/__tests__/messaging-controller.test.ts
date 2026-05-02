@@ -785,6 +785,171 @@ describe("MessagingController", () => {
     );
   });
 
+  it("delivers quiet completed tool updates as generated system messages", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent(
+      buildToolCompletedEvent("tool-1", "/bin/zsh -lc 'npm view dive'"),
+    );
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "system",
+        parts: [
+          expect.objectContaining({
+            text: "Tool update: npm view dive",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("batches noisy default tool updates and flushes them before turn status", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+
+    for (const index of [1, 2, 3, 4]) {
+      await harness.controller.handleBackendEvent(
+        buildToolCompletedEvent(`tool-${index}`, `pnpm test ${index}`),
+      );
+    }
+
+    expect(harness.delivered.filter((intent) => intent.kind === "message"))
+      .toHaveLength(3);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const batchIndex = harness.delivered.findIndex(
+      (intent) =>
+        intent.kind === "message" &&
+        intent.role === "system" &&
+        intent.parts.some(
+          (part) => part.type === "text" && part.text.includes("Tool updates: ran 1 tool"),
+        ),
+    );
+    const statusIndex = harness.delivered.findIndex(
+      (intent) => intent.kind === "status" && intent.status === "idle",
+    );
+
+    expect(batchIndex).toBeGreaterThanOrEqual(0);
+    expect(statusIndex).toBeGreaterThan(batchIndex);
+  });
+
+  it("flushes queued tool updates before assistant final text", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+
+    for (const index of [1, 2, 3, 4]) {
+      await harness.controller.handleBackendEvent(
+        buildToolCompletedEvent(`tool-${index}`, `pnpm test ${index}`),
+      );
+    }
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [
+              {
+                type: "text",
+                text: "Done.",
+              },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const batchIndex = harness.delivered.findIndex(
+      (intent) =>
+        intent.kind === "message" &&
+        intent.role === "system" &&
+        intent.parts.some(
+          (part) => part.type === "text" && part.text.includes("Tool updates: ran 1 tool"),
+        ),
+    );
+    const assistantIndex = harness.delivered.findIndex(
+      (intent) => intent.kind === "message" && intent.role === "assistant",
+    );
+
+    expect(batchIndex).toBeGreaterThanOrEqual(0);
+    expect(assistantIndex).toBeGreaterThan(batchIndex);
+  });
+
+  it("suppresses generated tool messages in Show None while preserving assistant delivery", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(buildTextEvent("").channel);
+    await harness.store.upsertBinding({
+      ...binding!,
+      preferences: {
+        toolUpdateMode: "show_none",
+        updatedAt: 1000,
+      },
+      updatedAt: 1000,
+    });
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent(
+      buildToolCompletedEvent("tool-1", "pnpm test"),
+    );
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-1",
+            type: "agentMessage",
+            text: "Done.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "message" && intent.role === "system",
+      ),
+    ).toEqual([]);
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+      }),
+    );
+  });
+
   it("ignores turn completion events that do not include output text", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -1832,6 +1997,25 @@ function buildTextEvent(text: string): MessagingInboundTextEvent {
     receivedAt: 1000,
     text,
   };
+}
+
+function buildToolCompletedEvent(id: string, command: string): AgentEvent {
+  return {
+    backend: "codex",
+    notification: {
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id,
+          type: "commandExecution",
+          command,
+          status: "completed",
+        },
+      },
+    },
+  } satisfies AgentEvent;
 }
 
 function buildCallbackEvent(params: {
