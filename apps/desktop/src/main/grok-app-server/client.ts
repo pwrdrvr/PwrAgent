@@ -1048,10 +1048,12 @@ export class GrokAppServerClient {
         capabilities: { experimentalApi: true },
       });
 
+      await this.notify("initialized", {});
       this.initializeResult = (result ?? {}) as InitializeResult;
       this.initialized = true;
-      await this.notify("initialized", {});
     })().catch((error) => {
+      this.initialized = false;
+      this.initializeResult = null;
       this.initializePromise = undefined;
       throw error;
     });
