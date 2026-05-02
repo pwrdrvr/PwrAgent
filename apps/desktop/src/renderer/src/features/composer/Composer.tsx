@@ -1009,13 +1009,9 @@ export function Composer(props: ComposerProps) {
     autocompleteKey && autocompleteKey === dismissedAutocompleteKey
       ? undefined
       : availableAutocompleteKind;
-  const autocompleteKind: AutocompleteKind | undefined =
-    reviewConfig ||
-    (displayedAutocompleteKind === "slash" &&
-      parseReviewCommand(draft) &&
-      draft.trim() === "/review")
-      ? undefined
-      : displayedAutocompleteKind;
+  const autocompleteKind: AutocompleteKind | undefined = reviewConfig
+    ? undefined
+    : displayedAutocompleteKind;
   const hasAutocomplete = Boolean(autocompleteKind);
   const activeAutocompleteIndex =
     autocompleteKind === "skills" ? activeSkillIndex : activeSlashIndex;
