@@ -149,7 +149,7 @@ flowchart TB
     U7 --> U8
 ```
 
-- [ ] **Unit 1: Extend Generic Messaging Attachment Contracts**
+- [x] **Unit 1: Extend Generic Messaging Attachment Contracts**
 
 **Goal:** Represent inbound and outbound attachments in the generic messaging contract without platform-specific fields or SDK types.
 
@@ -183,7 +183,7 @@ flowchart TB
 **Verification:**
 - Generic contracts can describe Telegram and Discord attachment payloads without platform-specific branches in controller code.
 
-- [ ] **Unit 2: Factor Image Normalization Profiles**
+- [x] **Unit 2: Factor Image Normalization Profiles**
 
 **Goal:** Make the existing pasted-image normalization policy reusable by messaging ingestion and outbound response delivery.
 
@@ -225,7 +225,7 @@ flowchart TB
 **Verification:**
 - Renderer paste tests still pass conceptually with the `medium` profile, and messaging tests can normalize image bytes without using provider code.
 
-- [ ] **Unit 3: Add Telegram and Discord Attachment Handles**
+- [x] **Unit 3: Add Telegram and Discord Attachment Handles**
 
 **Goal:** Teach providers to expose download-capable attachment metadata and outbound upload capabilities through the generic adapter surface.
 
@@ -265,7 +265,7 @@ flowchart TB
 **Verification:**
 - Provider tests prove metadata normalization and download handles without starting agent turns or importing desktop messaging code.
 
-- [ ] **Unit 4: Build Main-Process Attachment Processor**
+- [x] **Unit 4: Build Main-Process Attachment Processor**
 
 **Goal:** Download, classify, cap, normalize, and convert accepted messaging attachments into `StartTurnRequest.input` items.
 
@@ -312,7 +312,7 @@ flowchart TB
 **Verification:**
 - Processor tests prove supported attachments become model-ready text/image items and unsupported attachments produce deterministic rejection summaries.
 
-- [ ] **Unit 5: Route Accepted Media Through MessagingController**
+- [x] **Unit 5: Route Accepted Media Through MessagingController**
 
 **Goal:** Replace the current blanket media rejection with authorized, bound attachment ingestion and mixed text-plus-attachment turn starts.
 
@@ -350,7 +350,7 @@ flowchart TB
 **Verification:**
 - Controller tests prove media events now route through the same binding and activity lifecycle as text without forwarding raw file parts to the backend.
 
-- [ ] **Unit 6: Deliver Response Images and Files Through Providers**
+- [x] **Unit 6: Deliver Response Images and Files Through Providers**
 
 **Goal:** Make assistant response attachments render as platform-native images/files when safe and degrade predictably when provider limits prevent delivery.
 
@@ -392,7 +392,7 @@ flowchart TB
 **Verification:**
 - Provider adapter tests prove response image/file delivery paths and degradation behavior from generic `MessagingMessageIntent` parts.
 
-- [ ] **Unit 7: Add Attachment Settings and Effective Policy Resolution**
+- [x] **Unit 7: Add Attachment Settings and Effective Policy Resolution**
 
 **Goal:** Expose durable settings for image profile and attachment caps with environment override behavior consistent with existing desktop settings.
 
@@ -431,7 +431,7 @@ flowchart TB
 **Verification:**
 - Messaging runtime can resolve one effective attachment policy and pass it to the attachment processor and outbound delivery code.
 
-- [ ] **Unit 8: Update Documentation and Smoke Coverage**
+- [x] **Unit 8: Update Documentation and Smoke Coverage**
 
 **Goal:** Document supported attachment types, limits, settings, provider behavior, and manual smoke flows.
 

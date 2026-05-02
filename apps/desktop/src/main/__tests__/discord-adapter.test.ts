@@ -853,8 +853,15 @@ describe("DiscordAdapter", () => {
     });
 
     expect(events.at(-1)).toMatchObject({
-      disposition: "unsupported",
+      disposition: "available",
       kind: "media",
+      attachments: [
+        expect.objectContaining({
+          disposition: "available",
+          kind: "file",
+          name: "secret.txt",
+        }),
+      ],
       media: {
         name: "secret.txt",
       },

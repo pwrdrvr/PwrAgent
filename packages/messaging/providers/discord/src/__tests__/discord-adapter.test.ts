@@ -145,6 +145,111 @@ describe("discord adapter", () => {
     });
     expect(updateChannelName).toHaveBeenCalledTimes(1);
   });
+
+  it("sends file message intents as Discord upload files", async () => {
+    const createMessage = vi.fn(async (channelId: string) => ({
+      channel_id: channelId,
+      id: "message-2",
+    }));
+    const adapter = new DiscordAdapter({
+      api: createApi({ createMessage }),
+      config: {
+        authorizedActorIds: ["user-1"],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+    });
+    const data = new Uint8Array([1, 2, 3]);
+
+    await expect(
+      adapter.deliver({
+        audit: discordAudit(),
+        createdAt: 1234,
+        id: "message-file-1",
+        kind: "message",
+        parts: [
+          {
+            text: "Generated log",
+            type: "text",
+          },
+          {
+            data,
+            mimeType: "text/plain",
+            name: "streaming-logs.txt",
+            sizeBytes: data.byteLength,
+            type: "file",
+          },
+        ],
+        role: "assistant",
+      }),
+    ).resolves.toMatchObject({
+      channel: "discord",
+      deliveredAt: 1234,
+      outcome: "presented",
+    });
+
+    expect(createMessage).toHaveBeenCalledWith(
+      "channel-1",
+      expect.objectContaining({
+        content: "Generated log",
+        files: [
+          {
+            data,
+            name: "streaming-logs.txt",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("uploads data URL image message intents instead of embedding them", async () => {
+    const createMessage = vi.fn(async (channelId: string) => ({
+      channel_id: channelId,
+      id: "message-2",
+    }));
+    const adapter = new DiscordAdapter({
+      api: createApi({ createMessage }),
+      config: {
+        authorizedActorIds: ["user-1"],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+    });
+
+    await adapter.deliver({
+      audit: discordAudit(),
+      createdAt: 1234,
+      id: "message-image-data-url",
+      kind: "message",
+      parts: [
+        {
+          text: "Rendered image",
+          type: "text",
+        },
+        {
+          type: "image",
+          url: "data:image/png;base64,AQID",
+        },
+      ],
+      role: "assistant",
+    });
+
+    expect(createMessage).toHaveBeenCalledWith(
+      "channel-1",
+      expect.objectContaining({
+        content: "Rendered image",
+        embeds: undefined,
+        files: [
+          {
+            data: new Uint8Array([1, 2, 3]),
+            name: "assistant-image.png",
+          },
+        ],
+      }),
+    );
+  });
 });
 
 function discordAudit(): MessagingAuditContext {

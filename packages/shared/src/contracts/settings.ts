@@ -44,6 +44,14 @@ export type DesktopSettingsSecretStorageState = {
   unavailableReason?: string;
 };
 
+export type DesktopMessagingImageProfile = "low" | "medium" | "high" | "actual";
+
+export type DesktopMessagingAttachmentSettingsSnapshot = {
+  imageProfile: DesktopSettingsValue<DesktopMessagingImageProfile>;
+  maxAttachmentBytes: DesktopSettingsValue<number>;
+  maxAttachmentCount: DesktopSettingsValue<number>;
+};
+
 export type DesktopCodexCandidateSource =
   | "env"
   | "config"
@@ -105,6 +113,7 @@ export type DesktopSettingsSnapshot = {
   };
   messaging: {
     toolUpdateMode: DesktopSettingsValue<MessagingToolUpdateMode>;
+    attachments: DesktopMessagingAttachmentSettingsSnapshot;
     telegram: {
       enabled: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
@@ -137,6 +146,11 @@ export type DesktopSettingsConfigPatch = {
   };
   messaging?: {
     toolUpdateMode?: MessagingToolUpdateMode;
+    attachments?: {
+      imageProfile?: DesktopMessagingImageProfile;
+      maxAttachmentBytes?: number;
+      maxAttachmentCount?: number;
+    };
     telegram?: {
       enabled?: boolean;
       authorizedUserIds?: string[];

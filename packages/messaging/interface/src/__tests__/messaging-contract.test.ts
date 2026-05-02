@@ -228,10 +228,65 @@ describe("messaging surface contract", () => {
         name: "voice.m4a",
         mimeType: "audio/mp4",
       },
+      attachments: [
+        {
+          id: "attachment-1",
+          kind: "audio",
+          name: "voice.m4a",
+          mimeType: "audio/mp4",
+          disposition: "unsupported",
+          reason: "audio attachments are not supported",
+        },
+      ],
       disposition: "unsupported",
     } satisfies MessagingInboundMediaEvent;
 
     expect(event.disposition).toBe("unsupported");
+    expect(event.attachments[0]).toMatchObject({
+      kind: "audio",
+      name: "voice.m4a",
+    });
+  });
+
+  it("describes available inbound attachments with opaque download state", () => {
+    const event = {
+      id: "media-2",
+      kind: "media",
+      actor: {
+        platformUserId: "user-1",
+      },
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "dm",
+        },
+      },
+      receivedAt: 1000,
+      text: "Please inspect this log",
+      disposition: "available",
+      attachments: [
+        {
+          id: "telegram-file-1",
+          kind: "file",
+          name: "streaming-logs.txt",
+          mimeType: "text/plain",
+          sizeBytes: 2560,
+          disposition: "available",
+          state: {
+            opaque: {
+              provider: "telegram",
+              fileId: "opaque-to-core",
+            },
+          },
+        },
+      ],
+    } satisfies MessagingInboundMediaEvent;
+
+    expect(event.attachments).toHaveLength(1);
+    expect(event.attachments[0]?.state?.opaque).toMatchObject({
+      provider: "telegram",
+    });
   });
 
   it("describes restart-safe bindings, browse sessions, and callback handles", () => {

@@ -1,16 +1,22 @@
 import type { DiscordMessagingConfig } from "@pwragnt/messaging-provider-discord";
 import type { TelegramMessagingConfig } from "@pwragnt/messaging-provider-telegram";
 import type { MessagingToolUpdateMode } from "@pwragnt/shared";
+import type { MessagingAttachmentPolicy } from "./core/messaging-attachment-processor";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import {
   DISCORD_APPLICATION_ID_ENV,
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
+  MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
+  MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
+  MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
   readEnvBoolean,
+  readEnvInteger,
+  readEnvMessagingImageProfile,
 } from "../settings/desktop-settings-env";
 
 export {
@@ -18,12 +24,16 @@ export {
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
+  MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
+  MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
+  MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
 };
 
 export type DesktopMessagingConfig = {
+  attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   discord?: DiscordMessagingConfig;
   telegram?: TelegramMessagingConfig;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
@@ -41,9 +51,11 @@ export function loadDesktopMessagingConfig(
   const telegramAuthorizedActorIds = parseList(env[TELEGRAM_AUTHORIZED_USER_IDS_ENV]);
   const discordBotToken = readEnv(env, DISCORD_BOT_TOKEN_ENV, "DISCORD_BOT_TOKEN");
   const discordAuthorizedActorIds = parseList(env[DISCORD_AUTHORIZED_USER_IDS_ENV]);
+  const attachmentPolicy = readAttachmentPolicyFromEnv(env);
 
   return {
     toolUpdateDefaultMode: "show_some",
+    ...(attachmentPolicy ? { attachmentPolicy } : {}),
     ...(telegramBotToken && telegramAuthorizedActorIds.length > 0
       ? {
           telegram: {
@@ -84,9 +96,15 @@ export async function loadDesktopMessagingConfigFromSettings(
   const discordAuthorizedActorIds =
     envConfig.discord?.authorizedActorIds
     ?? snapshot.messaging.discord.authorizedUserIds.value;
+  const attachmentPolicy: Partial<MessagingAttachmentPolicy> = {
+    imageProfile: snapshot.messaging.attachments.imageProfile.value,
+    maxAttachmentBytes: snapshot.messaging.attachments.maxAttachmentBytes.value,
+    maxAttachmentCount: snapshot.messaging.attachments.maxAttachmentCount.value,
+  };
 
   return {
     toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
+    attachmentPolicy,
     ...(shouldEnableSettingsChannel(
       snapshot.messaging.telegram.enabled.value,
       envConfig.telegram,
@@ -150,6 +168,7 @@ export function redactDesktopMessagingConfig(
           authorizedActorCount: config.discord.authorizedActorIds.length,
         }
       : undefined,
+    attachmentPolicy: config.attachmentPolicy,
   };
 }
 
@@ -170,6 +189,26 @@ function parseList(value: string | undefined): string[] {
         .filter(Boolean),
     ),
   ];
+}
+
+function readAttachmentPolicyFromEnv(
+  env: NodeJS.ProcessEnv,
+): Partial<MessagingAttachmentPolicy> | undefined {
+  const imageProfile = readEnvMessagingImageProfile(env).value;
+  const maxAttachmentBytes = readEnvInteger(
+    env,
+    MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
+  ).value;
+  const maxAttachmentCount = readEnvInteger(
+    env,
+    MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
+  ).value;
+  const policy: Partial<MessagingAttachmentPolicy> = {
+    ...(imageProfile ? { imageProfile } : {}),
+    ...(maxAttachmentBytes !== undefined ? { maxAttachmentBytes } : {}),
+    ...(maxAttachmentCount !== undefined ? { maxAttachmentCount } : {}),
+  };
+  return Object.keys(policy).length > 0 ? policy : undefined;
 }
 
 function shouldEnableSettingsChannel<TConfig>(

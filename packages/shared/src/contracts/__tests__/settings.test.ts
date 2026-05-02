@@ -29,6 +29,11 @@ describe("desktop settings contracts", () => {
           value: "show_some",
           source: "default",
         },
+        attachments: {
+          imageProfile: { value: "medium", source: "default" },
+          maxAttachmentBytes: { value: 10485760, source: "default" },
+          maxAttachmentCount: { value: 4, source: "default" },
+        },
         telegram: {
           enabled: { value: true, source: "config" },
           botToken: {

@@ -10,6 +10,9 @@ import type {
   ListBackendsRequest,
   ListBackendsResponse,
   MessagingDeliveryResult,
+  MessagingAttachmentDownloadRequest,
+  MessagingAttachmentDownloadResult,
+  MessagingAdapterCapabilities,
   MessagingInboundEvent,
   MessagingActorIdentity,
   MessagingAdapterState,
@@ -46,7 +49,11 @@ export type MessagingConversationTitleUpdateResult = {
 };
 
 export type MessagingAdapter = {
+  capabilities?: MessagingAdapterCapabilities;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  downloadAttachment?(
+    request: MessagingAttachmentDownloadRequest,
+  ): Promise<MessagingAttachmentDownloadResult>;
   setConversationTitle?(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;

@@ -5,6 +5,7 @@ import {
   type TelegramGrammyBotLike,
   type TelegramPinChatMessageRequest,
   type TelegramSendChatActionRequest,
+  type TelegramSendDocumentRequest,
   type TelegramSendMessageRequest,
   type TelegramSendPhotoRequest,
   type TelegramUnpinChatMessageRequest,
@@ -44,6 +45,12 @@ describe("adaptGrammyBot", () => {
       caption: "image",
       chat_id: 42,
       photo: "https://example.com/image.png",
+    });
+    await bot.api.sendDocument({
+      caption: "file",
+      chat_id: 42,
+      document: new Uint8Array([1, 2, 3]),
+      filename: "streaming-logs.txt",
     });
     await bot.api.answerCallbackQuery({
       callback_query_id: "callback-1",
@@ -100,6 +107,15 @@ describe("adaptGrammyBot", () => {
         caption: "image",
       },
     );
+    expect(grammyBot.api.sendDocument).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({
+        filename: "streaming-logs.txt",
+      }),
+      {
+        caption: "file",
+      },
+    );
     expect(grammyBot.api.answerCallbackQuery).toHaveBeenCalledWith("callback-1", {
       text: "Done",
     });
@@ -119,9 +135,11 @@ function createGrammyBot(): TelegramGrammyBotLike & {
     deleteWebhook: ReturnType<typeof vi.fn>;
     editForumTopic: ReturnType<typeof vi.fn>;
     editMessageText: ReturnType<typeof vi.fn>;
+    getFile: ReturnType<typeof vi.fn>;
     getWebhookInfo: ReturnType<typeof vi.fn>;
     pinChatMessage: ReturnType<typeof vi.fn>;
     sendChatAction: ReturnType<typeof vi.fn>;
+    sendDocument: ReturnType<typeof vi.fn>;
     sendMessage: ReturnType<typeof vi.fn>;
     sendPhoto: ReturnType<typeof vi.fn>;
     setMyCommands: ReturnType<typeof vi.fn>;
@@ -150,6 +168,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
           message_id: messageId,
         }),
       ),
+      getFile: vi.fn(async () => ({ file_path: "documents/file.txt" })),
       getWebhookInfo: vi.fn(async () => ({ url: "" })),
       pinChatMessage: vi.fn(
         async (
@@ -164,6 +183,22 @@ function createGrammyBot(): TelegramGrammyBotLike & {
           _action: TelegramSendChatActionRequest["action"],
           _other?: Omit<TelegramSendChatActionRequest, "chat_id" | "action">,
         ) => true,
+      ),
+      sendDocument: vi.fn(
+        async (
+          chatId: number | string,
+          _document: unknown,
+          _other?: Omit<
+            TelegramSendDocumentRequest,
+            "chat_id" | "document" | "filename"
+          >,
+        ) => ({
+          chat: {
+            id: Number(chatId),
+            type: "private" as const,
+          },
+          message_id: 202,
+        }),
       ),
       sendMessage: vi.fn(
         async (
@@ -182,7 +217,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
         async (
           chatId: number | string,
           _photo: string,
-          _other?: Omit<TelegramSendPhotoRequest, "chat_id" | "photo">,
+          _other?: Omit<TelegramSendPhotoRequest, "chat_id" | "photo" | "filename">,
         ) => ({
           chat: {
             id: Number(chatId),

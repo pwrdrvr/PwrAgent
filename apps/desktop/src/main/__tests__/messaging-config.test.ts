@@ -94,6 +94,11 @@ describe("desktop messaging config", () => {
 
     expect(config).toEqual({
       toolUpdateDefaultMode: "show_some",
+      attachmentPolicy: {
+        imageProfile: "medium",
+        maxAttachmentBytes: 10485760,
+        maxAttachmentCount: 4,
+      },
       telegram: {
         channel: "telegram",
         enabled: true,

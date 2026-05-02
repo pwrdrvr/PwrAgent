@@ -1,6 +1,15 @@
-export const NORMALIZED_IMAGE_MAX_LONG_EDGE = 2048;
-export const NORMALIZED_IMAGE_MAX_SHORT_EDGE = 1024;
-export const NORMALIZED_IMAGE_JPEG_QUALITY = 0.85;
+import {
+  DEFAULT_IMAGE_UPLOAD_QUALITY_PROFILE,
+  IMAGE_UPLOAD_QUALITY_PROFILES,
+  type ImageUploadQualityProfile,
+} from "../../../shared/image-normalization";
+
+export const NORMALIZED_IMAGE_MAX_LONG_EDGE =
+  IMAGE_UPLOAD_QUALITY_PROFILES.medium.maxLongEdge;
+export const NORMALIZED_IMAGE_MAX_SHORT_EDGE =
+  IMAGE_UPLOAD_QUALITY_PROFILES.medium.maxShortEdge;
+export const NORMALIZED_IMAGE_JPEG_QUALITY =
+  IMAGE_UPLOAD_QUALITY_PROFILES.medium.jpegQuality;
 
 export type NormalizedImageMimeType = "image/jpeg" | "image/png";
 
@@ -53,6 +62,7 @@ type NormalizeImageFileOptions = {
   jpegQuality?: number;
   maxLongEdge?: number;
   maxShortEdge?: number;
+  qualityProfile?: ImageUploadQualityProfile;
   dependencies?: Partial<ImageNormalizationDependencies>;
 };
 
@@ -114,13 +124,17 @@ export async function normalizeImageFile(
   file: File,
   options: NormalizeImageFileOptions = {},
 ): Promise<NormalizedImage> {
+  const profile =
+    IMAGE_UPLOAD_QUALITY_PROFILES[
+      options.qualityProfile ?? DEFAULT_IMAGE_UPLOAD_QUALITY_PROFILE
+    ];
   return await normalizeBlob({
     blob: file,
     fallback: options.fallback,
     fileName: file.name || "pasted-image",
-    jpegQuality: options.jpegQuality ?? NORMALIZED_IMAGE_JPEG_QUALITY,
-    maxLongEdge: options.maxLongEdge ?? NORMALIZED_IMAGE_MAX_LONG_EDGE,
-    maxShortEdge: options.maxShortEdge ?? NORMALIZED_IMAGE_MAX_SHORT_EDGE,
+    jpegQuality: options.jpegQuality ?? profile.jpegQuality,
+    maxLongEdge: options.maxLongEdge ?? profile.maxLongEdge,
+    maxShortEdge: options.maxShortEdge ?? profile.maxShortEdge,
     originalMimeType: inferImageMimeType(file),
     originalSize: file.size,
     dependencies: {
