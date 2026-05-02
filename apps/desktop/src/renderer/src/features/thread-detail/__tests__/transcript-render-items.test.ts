@@ -145,11 +145,12 @@ describe("buildTranscriptRenderItems", () => {
     });
 
     expect(items).toEqual([
+      { type: "entry", entry: first },
       {
         type: "workPhaseGroup",
         id: "work:turn-1:active",
         collapsible: false,
-        entries: [first, activity],
+        entries: [activity],
         label: "Working for 1m 01s",
       },
     ]);
@@ -290,6 +291,74 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it("only shows the active elapsed label for bottom-contiguous work", () => {
+    const turn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 1_000,
+    };
+    const firstActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Read one file",
+      details: [],
+      turn,
+    };
+    const answer = commentary("c1", "Interim update.", turn);
+    const secondActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-2",
+      summary: "Read another file",
+      details: [],
+      turn,
+    };
+
+    const items = buildTranscriptRenderItems({
+      entries: [firstActivity, answer, secondActivity],
+      activeTurnId: "turn-1",
+      now: 62_000,
+    });
+
+    expect(items).toEqual([
+      { type: "entry", entry: firstActivity },
+      { type: "entry", entry: answer },
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:active",
+        collapsible: false,
+        entries: [secondActivity],
+        label: "Working for 1m 01s",
+      },
+    ]);
+  });
+
+  it("does not show an active elapsed label when active work is no longer at the bottom", () => {
+    const turn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 1_000,
+    };
+    const activity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Read one file",
+      details: [],
+      turn,
+    };
+    const answer = commentary("c1", "Interim update.", turn);
+
+    const items = buildTranscriptRenderItems({
+      entries: [activity, answer],
+      activeTurnId: "turn-1",
+      now: 62_000,
+    });
+
+    expect(items).toEqual([
+      { type: "entry", entry: activity },
+      { type: "entry", entry: answer },
+    ]);
+  });
+
   it("does not repeat elapsed labels for review-bounded work in one turn", () => {
     const turn = completedTurn("turn-review", 74_000);
     const startedReview = review(
@@ -379,6 +448,53 @@ describe("buildTranscriptRenderItems", () => {
         entries: [secondActivity],
         label: "More work",
       },
+    ]);
+  });
+
+  it("renders edited-file diffs as top-level activity instead of nested work", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const firstActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Used 2 tools",
+      details: [],
+      turn,
+    };
+    const answer = final("f1", "Final answer.", turn);
+    const diffActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "diff-1",
+      summary: "Edited 2 files, +12, -3",
+      details: [
+        {
+          id: "diff-detail-1",
+          kind: "write",
+          label: "Update TranscriptList.tsx",
+          fileDiff: {
+            kind: "update",
+            additions: 12,
+            removals: 3,
+            diff: "diff --git a/TranscriptList.tsx b/TranscriptList.tsx",
+          },
+        },
+      ],
+      turn,
+    };
+
+    const items = buildTranscriptRenderItems({
+      entries: [firstActivity, answer, diffActivity],
+    });
+
+    expect(items).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:tool-1:complete",
+        collapsible: true,
+        entries: [firstActivity],
+        label: "Worked for 1m 10s",
+      },
+      { type: "entry", entry: answer },
+      { type: "entry", entry: diffActivity },
     ]);
   });
 

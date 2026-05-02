@@ -1,6 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { AppServerThreadActivityEntry } from "@pwragnt/shared";
+import type {
+  AppServerThreadActivityEntry,
+  AppServerThreadEntry,
+} from "@pwragnt/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -23,6 +26,44 @@ function buildThread(params: {
       inInbox: false,
     },
     updatedAt: params.updatedAt,
+  };
+}
+
+function transcriptLabels(entries: AppServerThreadEntry[]): string[] {
+  return entries.map((entry) =>
+    entry.type === "message" && "text" in entry
+      ? `message:${entry.text}`
+      : entry.type === "activity" && "summary" in entry
+        ? `activity:${entry.summary}`
+        : entry.type
+  );
+}
+
+function diffActivity(params: {
+  diff: string;
+  id: string;
+  summary: string;
+  turn: AppServerThreadActivityEntry["turn"];
+}): AppServerThreadActivityEntry {
+  return {
+    type: "activity",
+    id: params.id,
+    summary: params.summary,
+    createdAt: Date.now(),
+    details: [
+      {
+        id: `${params.id}-detail`,
+        kind: "write",
+        label: "Update current.ts",
+        fileDiff: {
+          kind: "update",
+          diff: params.diff,
+          additions: 1,
+          removals: 1,
+        },
+      },
+    ],
+    turn: params.turn,
   };
 }
 
@@ -848,6 +889,584 @@ describe("useThreadSessionState", () => {
         .filter((entry) => entry.type === "message")
         .map((entry) => entry.phase)
     ).toEqual(["commentary", "commentary", "final"]);
+  });
+
+  it("keeps live activity between assistant messages after coarse hydration", async () => {
+    let now = 30_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const completedTurn = {
+      id: "turn-1",
+      status: "completed" as const,
+      durationMs: 70_000,
+    };
+    const readThread = vi
+      .fn()
+      .mockImplementationOnce(
+        async ({
+          backend,
+          threadId,
+        }: {
+          backend?: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [],
+            messages: [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        })
+      )
+      .mockImplementationOnce(
+        async ({
+          backend,
+          threadId,
+        }: {
+          backend?: "codex" | "grok";
+          threadId: string;
+        }) => ({
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [
+              {
+                type: "message" as const,
+                id: "message-1",
+                role: "assistant" as const,
+                phase: "commentary" as const,
+                text: "First commentary.",
+                createdAt: 1_000,
+                turn: completedTurn,
+              },
+              {
+                type: "message" as const,
+                id: "message-2",
+                role: "assistant" as const,
+                phase: "commentary" as const,
+                text: "Second commentary.",
+                createdAt: 1_000,
+                turn: completedTurn,
+              },
+              {
+                type: "message" as const,
+                id: "turn-1:assistant",
+                role: "assistant" as const,
+                phase: "final" as const,
+                text: "Final answer.",
+                createdAt: 1_000,
+                turn: completedTurn,
+              },
+            ],
+            messages: [
+              {
+                id: "message-1",
+                role: "assistant" as const,
+                text: "First commentary.",
+                createdAt: 1_000,
+              },
+              {
+                id: "message-2",
+                role: "assistant" as const,
+                text: "Second commentary.",
+                createdAt: 1_000,
+              },
+              {
+                id: "turn-1:assistant",
+                role: "assistant" as const,
+                text: "Final answer.",
+                createdAt: 1_000,
+              },
+            ],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        })
+      );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: {
+              id: "turn-1",
+              status: "inProgress",
+              startedAt: 1_000,
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-1",
+            delta: "First commentary.",
+            phase: "commentary",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "read-1",
+              type: "commandExecution",
+              command: "sed -n '1,40p' src/one.ts",
+              commandActions: [{ type: "read", path: "src/one.ts" }],
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-2",
+            delta: "Second commentary.",
+            phase: "commentary",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "read-2",
+              type: "commandExecution",
+              command: "rg -n transcript src",
+              commandActions: [{ type: "search", path: "src" }],
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              durationMs: 70_000,
+              output: [{ type: "text", text: "Final answer." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:First commentary.",
+      "activity:Explored 1 item",
+      "message:Second commentary.",
+      "activity:Explored 1 item",
+      "message:Final answer.",
+    ]);
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:First commentary.",
+        "activity:Explored 1 item",
+        "message:Second commentary.",
+        "activity:Explored 1 item",
+        "message:Final answer.",
+      ]);
+    });
+  });
+
+  it("does not delete edited file diffs when a later hydration omits them", async () => {
+    let now = 40_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    const turn = {
+      id: "turn-1",
+      status: "completed" as const,
+      durationMs: 70_000,
+    };
+    const liveDiff = [
+      "diff --git a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "--- a/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "+++ b/apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+      "@@ -113,2 +113,1 @@",
+      "-<<<<<<< HEAD",
+      "-function appendMessageEntries(",
+      "+function messageMatchesOptimisticEntry(",
+    ].join("\n");
+    const hydratedDiffActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "persisted-diff-1",
+      summary: "Edited 1 file, +1, -2",
+      createdAt: 1_000,
+      details: [
+        {
+          id: "persisted-diff-detail-1",
+          kind: "write",
+          label: "Update useThreadSessionState.ts",
+          path: "apps/desktop/src/renderer/src/lib/useThreadSessionState.ts",
+          fileDiff: {
+            kind: "update",
+            diff: liveDiff,
+            additions: 1,
+            removals: 2,
+          },
+        },
+      ],
+      turn,
+    };
+    const readThread = vi
+      .fn()
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }))
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [hydratedDiffActivity],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }))
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: "assistant-final-1",
+              role: "assistant" as const,
+              phase: "final" as const,
+              text: "Rebase completed and checks are green.",
+              createdAt: 2_000,
+              turn,
+            },
+          ],
+          messages: [
+            {
+              id: "assistant-final-1",
+              role: "assistant" as const,
+              text: "Rebase completed and checks are green.",
+              createdAt: 2_000,
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }));
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      result.current.upsertLiveTranscriptEntry({
+        ...hydratedDiffActivity,
+        id: "live-diff-turn-1",
+        createdAt: 1_500,
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Edited 1 file, +1, -2",
+    ]);
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "activity:Edited 1 file, +1, -2",
+      ]);
+    });
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 3_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "activity:Edited 1 file, +1, -2",
+        "message:Rebase completed and checks are green.",
+      ]);
+    });
+
+    const editedActivity = result.current.entries.find(
+      (entry): entry is AppServerThreadActivityEntry =>
+        entry.type === "activity" && entry.summary === "Edited 1 file, +1, -2"
+    );
+    expect(editedActivity?.details[0]?.fileDiff?.diff).toBe(liveDiff);
+  });
+
+  it("only carries forward edited file diffs for the current turn", async () => {
+    let now = 50_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    const previousTurn = {
+      id: "turn-previous",
+      status: "completed" as const,
+      durationMs: 70_000,
+    };
+    const currentTurn = {
+      id: "turn-current",
+      status: "completed" as const,
+      durationMs: 80_000,
+    };
+    const nextTurn = {
+      id: "turn-next",
+      status: "completed" as const,
+      durationMs: 90_000,
+    };
+    const previousDiff = "diff --git a/old.ts b/old.ts\n--- a/old.ts\n+++ b/old.ts";
+    const currentDiff = "diff --git a/current.ts b/current.ts\n--- a/current.ts\n+++ b/current.ts";
+    const previousDiffActivity = diffActivity({
+      id: "previous-diff",
+      summary: "Edited 5 files, +204, -2",
+      diff: previousDiff,
+      turn: previousTurn,
+    });
+    const currentDiffActivity = diffActivity({
+      id: "current-diff",
+      summary: "Edited 6 files, +58, -46",
+      diff: currentDiff,
+      turn: currentTurn,
+    });
+    const readThread = vi
+      .fn()
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [previousDiffActivity],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }))
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: "assistant-final-current",
+              role: "assistant" as const,
+              phase: "final" as const,
+              text: "Current turn is complete.",
+              createdAt: 2_000,
+              turn: currentTurn,
+            },
+          ],
+          messages: [
+            {
+              id: "assistant-final-current",
+              role: "assistant" as const,
+              text: "Current turn is complete.",
+              createdAt: 2_000,
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }))
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: "assistant-final-next",
+              role: "assistant" as const,
+              phase: "final" as const,
+              text: "Next turn is complete.",
+              createdAt: 3_000,
+              turn: nextTurn,
+            },
+          ],
+          messages: [
+            {
+              id: "assistant-final-next",
+              role: "assistant" as const,
+              text: "Next turn is complete.",
+              createdAt: 3_000,
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }));
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "activity:Edited 5 files, +204, -2",
+      ]);
+    });
+
+    act(() => {
+      result.current.upsertLiveTranscriptEntry(currentDiffActivity);
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Edited 5 files, +204, -2",
+      "activity:Edited 6 files, +58, -46",
+    ]);
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Current turn is complete.",
+        "activity:Edited 6 files, +58, -46",
+      ]);
+    });
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 3_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Next turn is complete.",
+      ]);
+    });
   });
 
   it("preserves session-owned live activity across thread switches and hydration", async () => {

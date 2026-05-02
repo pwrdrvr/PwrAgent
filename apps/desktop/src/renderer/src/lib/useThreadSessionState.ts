@@ -215,8 +215,18 @@ function mergeTranscriptEntries(
     const terminalIndex =
       optimisticTurnId && !isTerminalTurnEntry(optimisticEntry)
         ? merged.findIndex(
-            (entry) =>
-              entry.turn?.id === optimisticTurnId && isTerminalTurnEntry(entry)
+            (entry) => {
+              if (entry.turn?.id !== optimisticTurnId || !isTerminalTurnEntry(entry)) {
+                return false;
+              }
+
+              const entryCreatedAt =
+                typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+              return (
+                typeof optimisticCreatedAt !== "number" ||
+                typeof entryCreatedAt !== "number"
+              );
+            }
           )
         : -1;
 
@@ -316,6 +326,153 @@ function activityEntriesMatch(
       }
       return false;
     })
+  );
+}
+
+function transcriptEntriesMatch(
+  candidate: AppServerThreadEntry,
+  existingEntry: AppServerThreadEntry
+): boolean {
+  if (candidate.id === existingEntry.id) {
+    return true;
+  }
+
+  if (candidate.type !== existingEntry.type) {
+    return false;
+  }
+
+  if (candidate.type === "message" && existingEntry.type === "message") {
+    return messageMatchesOptimisticEntry(
+      {
+        id: candidate.id,
+        role: candidate.role,
+        text: candidate.text,
+        parts: candidate.parts,
+        createdAt: candidate.createdAt,
+      },
+      existingEntry
+    );
+  }
+
+  if (candidate.type === "activity" && existingEntry.type === "activity") {
+    return activityEntriesMatch(candidate, existingEntry);
+  }
+
+  if (candidate.type === "review" && existingEntry.type === "review") {
+    return reviewEntriesMatch(candidate, existingEntry);
+  }
+
+  return false;
+}
+
+function findUniqueTranscriptOrderSource(
+  entry: AppServerThreadEntry,
+  sources: AppServerThreadEntry[]
+): AppServerThreadEntry | undefined {
+  const exactMatches = sources.filter(
+    (source) => source.id === entry.id && typeof source.createdAt === "number"
+  );
+  if (exactMatches.length > 0) {
+    return exactMatches[0];
+  }
+
+  const logicalMatches = sources.filter(
+    (source) =>
+      typeof source.createdAt === "number" &&
+      source.id !== entry.id &&
+      transcriptEntriesMatch(entry, source)
+  );
+
+  return logicalMatches.length === 1 ? logicalMatches[0] : undefined;
+}
+
+function carryForwardTranscriptEntryOrder(
+  response: AppServerReadThreadResponse,
+  sources: AppServerThreadEntry[],
+  liveSources: AppServerThreadEntry[] = []
+): AppServerReadThreadResponse {
+  if (sources.length === 0) {
+    return response;
+  }
+
+  let changed = false;
+  let entries = response.replay.entries.map((entry) => {
+    const source = findUniqueTranscriptOrderSource(entry, sources);
+    if (!source || source.createdAt === entry.createdAt) {
+      return entry;
+    }
+
+    changed = true;
+    return {
+      ...entry,
+      createdAt: source.createdAt,
+    };
+  });
+
+  const freshCurrentTurnId = latestTranscriptTurnId(response.replay.entries);
+  const durableDiffSources = (
+    freshCurrentTurnId ? sources : liveSources
+  ).filter(
+    (source): source is AppServerThreadActivityEntry =>
+      isDurableDiffActivity(source) &&
+      (!freshCurrentTurnId || source.turn?.id === freshCurrentTurnId)
+  );
+  const currentDurableDiffTurnId = durableDiffSources
+    .map((source) => source.turn?.id)
+    .findLast((turnId): turnId is string => Boolean(turnId));
+  const latestDurableDiffSource = durableDiffSources.at(-1);
+
+  for (const source of durableDiffSources) {
+    if (currentDurableDiffTurnId) {
+      if (source.turn?.id !== currentDurableDiffTurnId) {
+        continue;
+      }
+    } else if (source !== latestDurableDiffSource) {
+      continue;
+    }
+
+    const alreadyHydrated = entries.some(
+      (entry): entry is AppServerThreadActivityEntry =>
+        entry.type === "activity" && activityEntriesMatch(entry, source)
+    );
+    if (alreadyHydrated) {
+      continue;
+    }
+
+    changed = true;
+    entries = mergeTranscriptEntries(entries, [source]);
+  }
+
+  if (!changed) {
+    return response;
+  }
+
+  return {
+    ...response,
+    replay: {
+      ...response.replay,
+      entries,
+    },
+  };
+}
+
+function latestTranscriptTurnId(entries: AppServerThreadEntry[]): string | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const turnId = entries[index]?.turn?.id;
+    if (turnId) {
+      return turnId;
+    }
+  }
+
+  return undefined;
+}
+
+function isDurableDiffActivity(
+  entry: AppServerThreadEntry
+): entry is AppServerThreadActivityEntry {
+  return (
+    entry.type === "activity" &&
+    entry.details.some((detail) => Boolean(detail.fileDiff?.diff))
   );
 }
 
@@ -1504,7 +1661,19 @@ export function useThreadSessionState(params: {
         }
 
         updateSession(targetThreadKey, (current) => {
-          const hydratedCompletedTurn = didHydrateCompletedTurn(current.response, response);
+          const liveTranscriptSources = [
+            ...current.optimisticEntries,
+            ...(current.pendingAssistantMessage ? [current.pendingAssistantMessage] : []),
+          ];
+          const orderedResponse = carryForwardTranscriptEntryOrder(
+            response,
+            [...(current.response?.replay.entries ?? []), ...liveTranscriptSources],
+            liveTranscriptSources
+          );
+          const hydratedCompletedTurn = didHydrateCompletedTurn(
+            current.response,
+            orderedResponse
+          );
           const needsHydrationAfterCompletion =
             current.needsHydrationAfterCompletion && !hydratedCompletedTurn;
           const completionHydrationRetries = needsHydrationAfterCompletion
@@ -1520,7 +1689,7 @@ export function useThreadSessionState(params: {
             logStaleThinkingState({
               current,
               reasons: thinkingReasons,
-              response,
+              response: orderedResponse,
               targetThreadKey,
             });
           }
@@ -1544,14 +1713,17 @@ export function useThreadSessionState(params: {
             loading: false,
             completionHydrationRetries,
             needsHydrationAfterCompletion,
-            optimisticEntries: pruneOptimisticEntries(current.optimisticEntries, response),
+            optimisticEntries: pruneOptimisticEntries(
+              current.optimisticEntries,
+              orderedResponse
+            ),
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
               : current.pendingAssistantMessage,
             pendingStatusText: shouldClearStaleThinking
               ? undefined
               : current.pendingStatusText,
-            response,
+            response: orderedResponse,
           };
         });
       } catch (error) {

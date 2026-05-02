@@ -36,15 +36,13 @@ export function buildTranscriptRenderItems(params: {
 
   if (activeTurnId) {
     const groups = buildCompletedGroups(params.entries, activeTurnId);
-    const activeGroup = buildActiveWorkGroup(
+    const activeGroups = buildActiveWorkGroups(
       params.entries,
       activeTurnId,
       params.now,
       params.activeTurnStartedAt
     );
-    if (activeGroup) {
-      groups.push(activeGroup);
-    }
+    groups.push(...activeGroups);
     if (groups.length > 0) {
       return renderWithGroups(params.entries, groups);
     }
@@ -72,20 +70,13 @@ type RenderGroup = {
   label: string;
 };
 
-function buildActiveWorkGroup(
+function buildActiveWorkGroups(
   entries: AppServerThreadEntry[],
   activeTurnId: string,
   now = Date.now(),
   activeTurnStartedAt?: number
-): RenderGroup | undefined {
-  const turnEntries = entries.filter(
-    (entry) => entry.turn?.id === activeTurnId && isWorkPhaseEntry(entry)
-  );
-  if (!hasConcreteWork(turnEntries)) {
-    return undefined;
-  }
-
-  const turn = turnEntries.find((entry) => entry.turn)?.turn;
+): RenderGroup[] {
+  const turn = entries.find((entry) => entry.turn?.id === activeTurnId)?.turn;
   const startedAtCandidates = [activeTurnStartedAt, turn?.startedAt].filter(
     (value): value is number => typeof value === "number"
   );
@@ -94,15 +85,30 @@ function buildActiveWorkGroup(
   const elapsedMs =
     typeof startedAt === "number" ? Math.max(now - startedAt, 0) : undefined;
   if (typeof elapsedMs !== "number" || elapsedMs <= 60_000) {
-    return undefined;
+    return [];
   }
 
-  return {
-    collapsible: false,
-    entries: turnEntries,
-    id: `work:${activeTurnId}:active`,
-    label: `Working for ${formatElapsedMs(elapsedMs)}`,
-  };
+  const activeEntries: AppServerThreadEntry[] = [];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry.turn?.id !== activeTurnId || !isConcreteWorkEntry(entry)) {
+      break;
+    }
+    activeEntries.unshift(entry);
+  }
+
+  if (!hasConcreteWork(activeEntries)) {
+    return [];
+  }
+
+  return [
+    {
+      collapsible: false,
+      entries: activeEntries,
+      id: `work:${activeTurnId}:active`,
+      label: `Working for ${formatElapsedMs(elapsedMs)}`,
+    },
+  ];
 }
 
 function buildCompletedGroups(
@@ -260,7 +266,11 @@ function isWorkPhaseEntry(
   | AppServerThreadMessageEntry
   | AppServerThreadActivityEntry
   | AppServerThreadPlanEntry {
-  if (entry.type === "activity" || entry.type === "plan") {
+  if (entry.type === "activity") {
+    return !isFileDiffActivity(entry);
+  }
+
+  if (entry.type === "plan") {
     return true;
   }
 
@@ -268,7 +278,20 @@ function isWorkPhaseEntry(
 }
 
 function hasConcreteWork(entries: AppServerThreadEntry[]): boolean {
-  return entries.some((entry) => entry.type === "activity" || entry.type === "plan");
+  return entries.some(isConcreteWorkEntry);
+}
+
+function isConcreteWorkEntry(
+  entry: AppServerThreadEntry
+): entry is AppServerThreadActivityEntry | AppServerThreadPlanEntry {
+  return (
+    entry.type === "plan" ||
+    (entry.type === "activity" && !isFileDiffActivity(entry))
+  );
+}
+
+function isFileDiffActivity(entry: AppServerThreadActivityEntry): boolean {
+  return entry.details.some((detail) => Boolean(detail.fileDiff?.diff));
 }
 
 function readCompletedTurn(
