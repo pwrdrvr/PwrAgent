@@ -225,7 +225,9 @@ function mcpToolTitle(item: Record<string, unknown>): string {
 
 function webSearchTitle(item: Record<string, unknown>): string {
   const query = readString(item, "query") ?? readToolArgument(item, "query");
-  return query ? truncateTitle(`Searched web: ${query}`) : "Searched web";
+  return query
+    ? truncateTitle(`Searched web: ${redactTitleText(query)}`)
+    : "Searched web";
 }
 
 function dynamicToolTitle(item: Record<string, unknown>): string {

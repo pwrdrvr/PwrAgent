@@ -143,6 +143,32 @@ describe("messaging tool activity", () => {
     expect(activity?.title).toBe("Read file");
   });
 
+  it("redacts token-like web search query fragments from titles", () => {
+    const directQuery = summarizeToolActivityFromBackendEvent(
+      buildCompletedItem({
+        id: "web-search-1",
+        type: "webSearch",
+        query: "xai token=abc123 failure",
+      }),
+    );
+    const argumentQuery = summarizeToolActivityFromBackendEvent(
+      buildCompletedItem({
+        id: "web-search-2",
+        type: "webSearch",
+        arguments: {
+          query: "authorization BearerSecret stack trace",
+        },
+      }),
+    );
+
+    expect(directQuery?.title).toBe("Searched web: xai token=[redacted] failure");
+    expect(argumentQuery?.title).toBe(
+      "Searched web: authorization [redacted] stack trace",
+    );
+    expect(directQuery?.title).not.toContain("abc123");
+    expect(argumentQuery?.title).not.toContain("BearerSecret");
+  });
+
   it("marks failed tools without including raw output", () => {
     const activity = summarizeToolActivityFromBackendEvent(
       buildCompletedItem({
