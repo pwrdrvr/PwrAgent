@@ -68,7 +68,7 @@ import {
 import {
   createThreadDirectoryEnricher,
   type ThreadDirectoryEnrichment,
-} from "./thread-directory-enricher";
+} from "../app-server/thread-directory-enricher";
 import { normalizeReviewDisplayText } from "../../shared/review-command";
 import { StdioJsonRpcTransport } from "./stdio-transport";
 import type {

@@ -51,7 +51,7 @@ describe("createThreadDirectoryEnricher", () => {
     }));
 
     const { createThreadDirectoryEnricher } = await import(
-      "../codex-app-server/thread-directory-enricher"
+      "../app-server/thread-directory-enricher"
     );
     const enricher = createThreadDirectoryEnricher({
       cacheTtlMs: 60_000,
@@ -88,7 +88,7 @@ describe("createThreadDirectoryEnricher", () => {
     }));
 
     const { createThreadDirectoryEnricher } = await import(
-      "../codex-app-server/thread-directory-enricher"
+      "../app-server/thread-directory-enricher"
     );
     const enricher = createThreadDirectoryEnricher();
 
