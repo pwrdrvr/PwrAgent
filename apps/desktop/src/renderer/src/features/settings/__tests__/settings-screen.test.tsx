@@ -32,6 +32,7 @@ function createSnapshot(
       },
     },
     messaging: {
+      toolUpdateMode: { value: "show_some", source: "default" },
       telegram: {
         enabled: { value: false, source: "default" },
         botToken: { configured: false, source: "unset", writable: true },
@@ -177,6 +178,19 @@ describe("SettingsScreen", () => {
     });
 
     fireEvent.click(within(sections).getByRole("button", { name: "Messaging" }));
+    expect(screen.getByRole("heading", { name: "General" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Show Some" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Show All" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          toolUpdateMode: "show_all",
+        },
+      });
+    });
     expect(screen.getByRole("heading", { name: "Telegram" })).toBeInTheDocument();
     expect(screen.getByText("Authorized SuperGroups")).toBeInTheDocument();
     expect(screen.getAllByText("unset").length).toBeGreaterThanOrEqual(5);

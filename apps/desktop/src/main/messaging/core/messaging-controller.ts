@@ -17,6 +17,7 @@ import type {
   MessagingMessageIntent,
   MessagingPendingIntentRecord,
   MessagingSurfaceIntent,
+  MessagingToolUpdateMode,
   NavigationSnapshot,
   NavigationThreadSummary,
   ThreadExecutionMode,
@@ -50,6 +51,8 @@ import {
   buildBindingStatusIntent,
   buildStatusModelPickerIntent,
   buildStatusReasoningPickerIntent,
+  nextMessagingToolUpdateMode,
+  resolveMessagingToolUpdateMode,
 } from "./messaging-status-card.js";
 import { resolveMessagingThreadState } from "./messaging-thread-state.js";
 
@@ -104,6 +107,10 @@ type MessagingControllerLogger = {
   debug?(message: string, data?: Record<string, unknown>): void;
 };
 
+type MessagingToolUpdateDefaultModeResolver =
+  | MessagingToolUpdateMode
+  | (() => MessagingToolUpdateMode | Promise<MessagingToolUpdateMode>);
+
 export type MessagingControllerOptions = {
   adapter: MessagingAdapter;
   authorizedActorIds: string[];
@@ -114,6 +121,7 @@ export type MessagingControllerOptions = {
   now?: () => number;
   pendingIntentTtlMs?: number;
   store: MessagingStore;
+  toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
 };
 
 export class MessagingController {
@@ -430,6 +438,11 @@ export class MessagingController {
         undefined,
         event,
       );
+      return;
+    }
+
+    if (isToolsFallbackText(event.text)) {
+      await this.cycleToolUpdateMode(binding, event);
       return;
     }
 
@@ -1104,6 +1117,10 @@ export class MessagingController {
       await this.togglePermissionsMode(binding, event);
       return;
     }
+    if (actionId === "status:tool-updates") {
+      await this.cycleToolUpdateMode(binding, event);
+      return;
+    }
     if (actionId === "status:stop") {
       await this.stopActiveTurn(binding, event);
       return;
@@ -1424,6 +1441,20 @@ export class MessagingController {
     await this.renderBindingStatus(updatedBinding, event, navigation);
   }
 
+  private async cycleToolUpdateMode(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const currentMode = resolveMessagingToolUpdateMode(
+      binding,
+      await this.resolveToolUpdateDefaultMode(),
+    );
+    const updatedBinding = await this.updateBindingPreferences(binding, {
+      toolUpdateMode: nextMessagingToolUpdateMode(currentMode),
+    });
+    await this.renderBindingStatus(updatedBinding, event);
+  }
+
   private async updateBindingPreferences(
     binding: MessagingBindingRecord,
     patch: Partial<NonNullable<MessagingBindingRecord["preferences"]>>,
@@ -1537,6 +1568,22 @@ export class MessagingController {
     return await this.renderBindingStatus(retiredBinding, event, snapshot);
   }
 
+  private async resolveToolUpdateDefaultMode(): Promise<MessagingToolUpdateMode> {
+    const configured = this.options.toolUpdateDefaultMode;
+    if (!configured) {
+      return "show_some";
+    }
+
+    try {
+      return typeof configured === "function" ? await configured() : configured;
+    } catch (error) {
+      this.logger.debug?.("messaging tool update default resolution failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return "show_some";
+    }
+  }
+
   private async retireBindingStatus(
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
@@ -1559,6 +1606,7 @@ export class MessagingController {
               binding,
               navigation,
             }),
+            toolUpdateMode: await this.resolveToolUpdateDefaultMode(),
           }),
           actions: [],
           delivery: {
@@ -1637,6 +1685,7 @@ export class MessagingController {
         binding,
         navigation: snapshot,
       }),
+      toolUpdateMode: await this.resolveToolUpdateDefaultMode(),
     });
     const result = await this.deliver(intent, binding, event);
     if (!result.surface) {
@@ -2176,6 +2225,10 @@ function parseTextCommandArgs(text: string): string[] {
   }
 
   return trimmed.slice(1).split(/\s+/).slice(1).filter(Boolean);
+}
+
+function isToolsFallbackText(text: string): boolean {
+  return text.trim().toLowerCase() === "tools";
 }
 
 function readBindingTarget(

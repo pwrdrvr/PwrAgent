@@ -25,6 +25,10 @@ describe("desktop settings contracts", () => {
         },
       },
       messaging: {
+        toolUpdateMode: {
+          value: "show_some",
+          source: "default",
+        },
         telegram: {
           enabled: { value: true, source: "config" },
           botToken: {

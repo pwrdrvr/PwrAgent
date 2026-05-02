@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import type {
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
+  MessagingToolUpdateMode,
 } from "@pwragnt/shared";
 import {
   formatSourceLabel,
@@ -20,6 +21,7 @@ export function MessagingSettings(props: {
     secret: DesktopSettingsSecretName,
     value: string,
   ) => Promise<boolean>;
+  onToolUpdateModeChange: (mode: MessagingToolUpdateMode) => Promise<void>;
   onSaveDiscord: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["discord"]>,
   ) => Promise<void>;
@@ -29,6 +31,7 @@ export function MessagingSettings(props: {
 }) {
   const telegram = props.snapshot.messaging.telegram;
   const discord = props.snapshot.messaging.discord;
+  const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
   const runtimeMessaging = props.snapshot.runtime.messaging;
 
   return (
@@ -47,6 +50,19 @@ export function MessagingSettings(props: {
           </p>
         </section>
       ) : null}
+      <MessagingGroup title="General">
+        <SegmentedField
+          disabled={props.saving}
+          label="Tool usage notifications"
+          options={TOOL_UPDATE_MODE_OPTIONS}
+          source={sourceBadge(toolUpdateMode)}
+          value={toolUpdateMode.value}
+          onChange={(mode) => {
+            void props.onToolUpdateModeChange(mode);
+          }}
+        />
+      </MessagingGroup>
+
       <MessagingGroup title="Telegram">
         <ToggleField
           checked={telegram.enabled.value}
@@ -171,6 +187,17 @@ export function MessagingSettings(props: {
   );
 }
 
+const TOOL_UPDATE_MODE_OPTIONS: Array<{
+  label: string;
+  value: MessagingToolUpdateMode;
+}> = [
+  { label: "Show None", value: "show_none" },
+  { label: "Show Less", value: "show_less" },
+  { label: "Show Some", value: "show_some" },
+  { label: "Show More", value: "show_more" },
+  { label: "Show All", value: "show_all" },
+];
+
 function MessagingGroup(props: { children: ReactNode; title: string }) {
   return (
     <section className="settings-panel" aria-labelledby={`settings-${props.title}-title`}>
@@ -182,6 +209,39 @@ function MessagingGroup(props: { children: ReactNode; title: string }) {
       </div>
       <div className="settings-fields">{props.children}</div>
     </section>
+  );
+}
+
+function SegmentedField<TValue extends string>(props: {
+  disabled?: boolean;
+  label: string;
+  options: Array<{ label: string; value: TValue }>;
+  source: string;
+  value: TValue;
+  onChange: (value: TValue) => void;
+}) {
+  return (
+    <div className="settings-field">
+      <div className="settings-row__label">{props.label}</div>
+      <span className="settings-source">{props.source}</span>
+      <div className="settings-segmented" role="radiogroup" aria-label={props.label}>
+        {props.options.map((option) => (
+          <button
+            key={option.value}
+            aria-checked={props.value === option.value}
+            className={`settings-segmented__button${
+              props.value === option.value ? " is-active" : ""
+            }`}
+            disabled={props.disabled}
+            role="radio"
+            type="button"
+            onClick={() => props.onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

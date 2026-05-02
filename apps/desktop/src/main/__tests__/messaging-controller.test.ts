@@ -11,6 +11,7 @@ import type {
   MessagingInboundEvent,
   MessagingInboundTextEvent,
   MessagingSurfaceIntent,
+  MessagingToolUpdateMode,
   NavigationSnapshot,
   StartThreadRequest,
   StartTurnRequest,
@@ -166,6 +167,16 @@ describe("MessagingController", () => {
         pin: true,
       },
       text: expect.stringContaining("Binding: Thread one"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      text: expect.stringContaining("Tool updates: Show Some"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:tool-updates",
+          label: "Tools: Show Some",
+          fallbackText: "tools",
+        }),
+      ]),
     });
   });
 
@@ -1417,6 +1428,56 @@ describe("MessagingController", () => {
     );
   });
 
+  it("uses the desktop tool update default until the binding overrides it", async () => {
+    const harness = await createHarness({
+      toolUpdateDefaultMode: "show_less",
+    });
+    await bindThread(harness);
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Tool updates: Show Less"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:tool-updates" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Tool updates: Show Some"),
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.toMatchObject({
+      preferences: {
+        toolUpdateMode: "show_some",
+      },
+    });
+  });
+
+  it("cycles the tool update status action through all modes and wraps", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    for (const expected of [
+      "Show More",
+      "Show All",
+      "Show None",
+      "Show Less",
+      "Show Some",
+    ]) {
+      await harness.controller.handleInboundEvent(
+        buildCallbackEvent({ actionId: "status:tool-updates" }),
+      );
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining(`Tool updates: ${expected}`),
+      });
+    }
+  });
+
   it("stops an active turn through the backend bridge", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -1518,6 +1579,7 @@ async function createHarness(options?: {
   logger?: MessagingControllerOptions["logger"];
   now?: () => number;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
+  toolUpdateDefaultMode?: MessagingToolUpdateMode;
 }): Promise<{
   controller: MessagingController;
   compactThread: ReturnType<typeof vi.fn>;
@@ -1608,6 +1670,7 @@ async function createHarness(options?: {
       logger: options?.logger,
       now: options?.now ?? (() => 1000),
       store,
+      toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
     }),
     compactThread,
     delivered,

@@ -82,6 +82,8 @@ export class DesktopMessagingRuntime {
         backend: this.options.backendBridge,
         channel: adapter.channel,
         store,
+        toolUpdateDefaultMode: async () =>
+          (await this.loadConfig()).toolUpdateDefaultMode ?? "show_some",
       });
 
       try {

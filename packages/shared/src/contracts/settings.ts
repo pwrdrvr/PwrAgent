@@ -1,3 +1,5 @@
+import type { MessagingToolUpdateMode } from "./messaging";
+
 export const DESKTOP_CHAT_REPLY_COMPOSERS = [
   "textarea",
   "tiptap-chips",
@@ -102,6 +104,7 @@ export type DesktopSettingsSnapshot = {
     chatReplyComposer: DesktopSettingsValue<DesktopChatReplyComposer>;
   };
   messaging: {
+    toolUpdateMode: DesktopSettingsValue<MessagingToolUpdateMode>;
     telegram: {
       enabled: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
@@ -133,6 +136,7 @@ export type DesktopSettingsConfigPatch = {
     chatReplyComposer?: DesktopChatReplyComposer;
   };
   messaging?: {
+    toolUpdateMode?: MessagingToolUpdateMode;
     telegram?: {
       enabled?: boolean;
       authorizedUserIds?: string[];
