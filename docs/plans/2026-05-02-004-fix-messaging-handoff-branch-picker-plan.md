@@ -23,6 +23,17 @@ Keep the existing branch-moving handoff available as a secondary path, but make
 any branch picker paged at about eight choices per page with room for Previous,
 Next, Back, Refresh, and Cancel.
 
+Also update the desktop handoff dialog so it presents the same product choices
+explicitly instead of forcing the current "branch to move / leave Local on"
+flow. The dialog should offer:
+
+- Move dirty non-ignored changes to a new detached-HEAD worktree and leave the
+  current branch checked out where it is.
+- Move the current branch plus dirty non-ignored changes to a new worktree and
+  switch the current checkout to a selected branch.
+- A disabled placeholder for a future model-suggested branch name path that
+  behaves like the detached path but creates a named branch immediately.
+
 ## Problem Frame
 
 Live Telegram testing showed the current Local-to-worktree handoff branch picker
@@ -68,18 +79,25 @@ remote handoff into a branch-management prompt.
   branch-page navigation, branch selection, back, refresh, and cancel.
 - R10. Worktree-to-local handoff behavior is not changed by this fix except for
   any shared copy or fallback improvements needed for consistency.
+- R11. Desktop Local-to-worktree handoff must present the same two implemented
+  strategies explicitly: detached dirty-change handoff, and branch-moving
+  handoff with selected leave-current-checkout branch.
+- R12. Desktop Local-to-worktree handoff must show a disabled placeholder for a
+  future model-suggested branch-name strategy, without making a backend call.
+- R13. Desktop confirmation copy must make clear whether the current branch
+  stays where it is, whether the branch moves, and whether ignored or committed
+  changes are excluded.
 
 ## Scope Boundaries
 
-- In scope: messaging handoff intent construction, controller handoff callback
+- In scope: desktop and messaging handoff intent/dialog construction, controller handoff callback
   routing, text fallback, branch pagination state, backend contract support for
   a detached-worktree handoff strategy, Git handoff service behavior needed by
   that strategy, and focused Telegram/Discord formatting tests.
 - In scope: keeping the existing branch-moving Local-to-worktree path available
   as an explicit secondary or advanced action.
-- Out of scope: changing the desktop renderer composer handoff default unless
-  implementation finds the shared backend contract forces a small compatibility
-  adjustment.
+- In scope: changing the desktop renderer composer handoff dialog so it no
+  longer presents branch-moving as the only Local-to-worktree choice.
 - Out of scope: preserving ignored files. Existing handoff behavior already
   excludes ignored files, and the messaging copy should continue to say so.
 - Out of scope: moving committed branch history when the user chooses the
@@ -110,6 +128,12 @@ remote handoff into a branch-management prompt.
 - `apps/desktop/src/main/app-server/git-workspace-handoff-service.ts` currently
   requires `leaveLocalBranch` for Local-to-worktree and then moves the current
   branch into a new worktree.
+- `apps/desktop/src/renderer/src/features/composer/Composer.tsx` currently
+  renders the desktop `Handoff to New Worktree` dialog as a branch-moving flow
+  with one `Leave Local on` select and no strategy choice.
+- `apps/desktop/src/renderer/src/styles/app.css` owns the existing handoff
+  dialog visual treatment; desktop updates should extend those classes rather
+  than introducing a new modal system.
 - `packages/shared/src/contracts/normalized-app-server.ts` currently has
   `HandoffThreadWorkspaceRequest` with `direction`, `sourceBranch`, and
   `leaveLocalBranch`, but no explicit strategy for detached dirty-change
@@ -187,6 +211,12 @@ remote handoff into a branch-management prompt.
   valid workflow.
 - **Should worktree-to-local change now?** No. The observed problem and new
   product assumption affect Local-to-worktree.
+- **Should the desktop dialog change too?** Yes. Desktop should expose the same
+  product model so Local-to-worktree is not only branch-moving in one surface and
+  detached dirty-change handoff in another.
+- **Should the model-suggested branch path be implemented now?** No. Add a
+  visible disabled placeholder only; the branch-name suggestion side call is
+  being prepared separately.
 
 ### Deferred to Implementation
 
@@ -195,8 +225,9 @@ remote handoff into a branch-management prompt.
   dirty-change handoff, secondary branch-moving handoff.
 - Exact shared contract field names are deferred, but the strategy must be
   explicit and serializable through existing callback values.
-- Whether desktop composer should expose the new detached strategy is deferred.
-  This plan only requires messaging to prefer it.
+- Exact future contract for model-suggested branch names is deferred to the
+  upcoming ephemeral model side-call work. This plan should only leave a clear
+  UI placeholder and avoid fake branch suggestions.
 
 ## High-Level Technical Design
 
@@ -218,6 +249,9 @@ stateDiagram-v2
     RunningBranchMove --> RefreshedStatus: success
     HandoffOverview --> WorktreeToLocalConfirm: worktree-to-local
     WorktreeToLocalConfirm --> RunningWorktreeToLocal: Confirm
+    DesktopDialog --> DetachedConfirm: Move changes to Detached HEAD
+    DesktopDialog --> BranchMoveConfirm: Move branch + changes
+    DesktopDialog --> SuggestedBranchPlaceholder: disabled future option
     RunningWorktreeToLocal --> RefreshedStatus: success
     DetachedConfirm --> HandoffOverview: Back
     BranchMovePage --> HandoffOverview: Back
@@ -237,7 +271,9 @@ flowchart TB
     U1 --> U3["Unit 3: Messaging handoff flow"]
     U2 --> U3
     U3 --> U4["Unit 4: Provider and contract tests"]
-    U4 --> U5["Unit 5: Documentation and smoke checklist"]
+    U2 --> U5["Unit 5: Desktop handoff dialog"]
+    U4 --> U6["Unit 6: Documentation and smoke checklist"]
+    U5 --> U6
 ```
 
 - [ ] **Unit 1: Add explicit handoff strategy to shared contracts**
@@ -475,14 +511,70 @@ choices and keep opaque callback handles.
 - Provider tests demonstrate that bounded generic intents solve the Telegram
   problem without adding Telegram/Discord branches to workflow code.
 
-- [ ] **Unit 5: Update documentation and manual smoke coverage**
+- [ ] **Unit 5: Update the desktop handoff dialog**
+
+**Goal:** Replace the current single-path desktop Local-to-worktree dialog with
+an explicit strategy choice that supports detached dirty-change handoff,
+branch-moving handoff, and a disabled future suggested-branch placeholder.
+
+**Requirements:** R4, R5, R6, R7, R11, R12, R13
+
+**Dependencies:** Units 1 and 2
+
+**Files:**
+- Modify: `apps/desktop/src/renderer/src/features/composer/Composer.tsx`
+- Modify: `apps/desktop/src/renderer/src/styles/app.css`
+- Test: `apps/desktop/src/renderer/src/features/composer/__tests__/composer.test.tsx`
+
+**Approach:**
+- Add local dialog state for the selected handoff strategy. Default
+  Local-to-worktree to detached dirty-change handoff when a default branch is
+  available.
+- Render strategy choices as selectable rows inside the existing handoff modal:
+  detached dirty-change handoff, branch-moving handoff, and disabled
+  model-suggested branch placeholder.
+- Only show `Leave Local on` / `Leave current checkout on` when the
+  branch-moving strategy is selected.
+- Submit detached handoff with the explicit detached strategy and default branch
+  metadata. Submit branch-moving handoff with the explicit branch-moving
+  strategy and selected `leaveLocalBranch`.
+- Keep existing worktree-to-local confirmation behavior.
+- Use existing modal, button, select, and theme classes. Add only scoped styles
+  needed for strategy rows and disabled placeholder state.
+
+**Patterns to follow:**
+- Existing composer setup controls in
+  `apps/desktop/src/renderer/src/features/composer/Composer.tsx`
+- Existing workspace handoff modal classes in
+  `apps/desktop/src/renderer/src/styles/app.css`
+
+**Test scenarios:**
+- Happy path: opening `Handoff to New Worktree` shows three strategy rows, with
+  detached dirty-change handoff selected by default and the suggested-branch row
+  disabled.
+- Happy path: submitting the default selected strategy calls
+  `onHandoffThreadWorkspace` with the detached strategy and default branch/base
+  metadata, without `leaveLocalBranch`.
+- Happy path: selecting branch-moving handoff reveals the leave-current-checkout
+  branch select and submits the branch-moving strategy with `leaveLocalBranch`.
+- Edge case: when default branch metadata is missing, detached strategy is
+  disabled or clearly unavailable, and branch-moving remains selectable when
+  branch choices exist.
+- Regression: worktree-to-local still renders direct confirmation and submits
+  `worktree-to-local` unchanged.
+
+**Verification:**
+- Desktop composer tests prove the dialog exposes the intended choices and sends
+  the right strategy-specific request shape.
+
+- [ ] **Unit 6: Update documentation and manual smoke coverage**
 
 **Goal:** Document the new opinionated messaging handoff behavior and the manual
 validation case that exposed the bug.
 
 **Requirements:** R1, R4, R5, R6, R7, R9
 
-**Dependencies:** Units 1-4
+**Dependencies:** Units 1-5
 
 **Files:**
 - Modify: `docs/messaging-platform-integration.md`
@@ -493,6 +585,7 @@ validation case that exposed the bug.
 - Update the workspace handoff docs to distinguish:
   - primary messaging Local-to-worktree detached dirty-change handoff;
   - secondary branch-moving handoff with paged branch selection;
+  - desktop dialog strategy selection and disabled suggested-branch placeholder;
   - unchanged worktree-to-local confirmation.
 - Add a manual Telegram smoke step with a repository that has more than 50
   branches and verify that branch choices are paged.
@@ -514,7 +607,8 @@ validation case that exposed the bug.
 
 - **Interaction graph:** `/status` still starts the flow, but Local-to-worktree
   now splits into primary detached confirmation and secondary paged branch-moving
-  selection. Existing worktree-to-local flow remains direct confirmation.
+  selection. Desktop Local-to-worktree now presents the same strategies inside
+  the handoff modal. Existing worktree-to-local flow remains direct confirmation.
 - **Error propagation:** Backend strategy validation failures should surface as
   recoverable handoff-unavailable or handoff-failed intents, not provider
   exceptions. Git stash/apply recovery details should pass through existing
@@ -543,6 +637,7 @@ validation case that exposed the bug.
 | Provider buttons remain too dense despite pagination | Use eight choices per page and reserve rows for navigation/cancel; provider tests assert bounded output |
 | Git service drops a stash before apply is safely complete | Reuse apply-then-drop behavior and add temporary Git tests for conflict/recovery paths |
 | Dirty changes depend on commits that exist only on the Local branch | Confirmation copy says committed branch history is not moved; stash apply failures keep recovery details |
+| Desktop and messaging drift into different handoff semantics | Share the explicit strategy contract and cover both surfaces in tests |
 
 ## Documentation / Operational Notes
 
@@ -550,6 +645,8 @@ validation case that exposed the bug.
   Telegram because the live failure was observed there.
 - Mention that the primary detached path is best for moving uncommitted work out
   of Local, while `Move branch instead` is the branch-history path.
+- Mention the desktop placeholder for future model-suggested branch naming so it
+  is understood as intentionally disabled.
 - No migration is required unless implementation decides to persist a new
   handoff submode/session record shape outside pending intents.
 
