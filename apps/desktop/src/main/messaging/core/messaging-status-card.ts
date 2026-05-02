@@ -14,16 +14,24 @@ export function buildBindingStatusIntent(params: {
   const preferences = params.binding.preferences;
   const projectLabel = params.threadState.projectLabel ?? unavailable();
   const directoryPath = params.threadState.directoryPath ?? unavailable();
-  const model = params.threadState.model ?? preferences?.model ?? unavailable();
+  const defaults = params.threadState.launchpadDefaults;
+  const model =
+    params.threadState.model ??
+    preferences?.model ??
+    defaults?.model ??
+    unavailable();
   const reasoning =
     params.threadState.reasoningEffort ??
     preferences?.reasoningEffort ??
+    defaults?.reasoningEffort ??
     unavailable();
-  const fastMode = params.threadState.fastMode ?? preferences?.fastMode;
+  const fastMode =
+    params.threadState.fastMode ?? preferences?.fastMode ?? defaults?.fastMode;
   const permissionsMode =
     params.threadState.executionMode ??
     preferences?.permissionsMode ??
     (preferences?.executionMode === "full-access" ? "full-access" : undefined) ??
+    defaults?.executionMode ??
     "default";
   const activeTurn = params.threadState.activeTurn;
   const branch = formatBranch(params.threadState);

@@ -204,6 +204,49 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).toContain("Thread state: unavailable");
     expect(intent.text).not.toContain("Old cached title");
   });
+
+  it("uses launchpad defaults after live state and binding preferences", () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.launchpadDefaults = {
+      backend: "codex",
+      executionMode: "full-access",
+      fastMode: true,
+      model: "gpt-5.4",
+      reasoningEffort: "medium",
+    };
+    const thread = navigation.threads[0]!;
+    delete thread.executionMode;
+    delete thread.fastMode;
+    delete thread.model;
+    delete thread.reasoningEffort;
+    const binding = {
+      id: "binding-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "dm",
+        },
+      },
+      createdAt: 1000,
+      threadId: "thread-1",
+      updatedAt: 1000,
+    } satisfies MessagingBindingRecord;
+
+    const intent = buildBindingStatusIntent({
+      id: "status-6",
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Model: gpt-5.4");
+    expect(intent.text).toContain("Reasoning: medium");
+    expect(intent.text).toContain("Fast mode: on");
+    expect(intent.text).toContain("Permissions: Full Access");
+  });
 });
 
 function buildNavigationSnapshot(): NavigationSnapshot {

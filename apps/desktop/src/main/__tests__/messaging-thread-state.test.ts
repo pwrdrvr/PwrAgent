@@ -51,6 +51,10 @@ describe("resolveMessagingThreadState", () => {
     const state = resolveMessagingThreadState({ binding, navigation });
 
     expect(state).toEqual({
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
       missing: true,
       threadKey: "codex:thread-1",
     });

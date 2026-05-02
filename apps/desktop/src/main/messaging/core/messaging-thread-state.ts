@@ -2,6 +2,7 @@ import type {
   MessagingActiveTurnSummary,
   MessagingBindingRecord,
   NavigationDirectorySummary,
+  NavigationLaunchpadDefaults,
   NavigationSnapshot,
   NavigationThreadSummary,
   ThreadExecutionMode,
@@ -14,6 +15,7 @@ export type MessagingResolvedThreadState = {
   executionMode?: ThreadExecutionMode;
   fastMode?: boolean;
   gitBranch?: string;
+  launchpadDefaults?: NavigationLaunchpadDefaults;
   missing: boolean;
   model?: string;
   observedGitBranch?: string;
@@ -43,6 +45,7 @@ export function resolveMessagingThreadState(params: {
   if (!thread) {
     return {
       activeTurn: params.activeTurn,
+      launchpadDefaults: params.navigation.launchpadDefaults,
       missing: true,
       threadKey,
     };
@@ -66,6 +69,7 @@ export function resolveMessagingThreadState(params: {
     executionMode: thread.executionMode,
     fastMode: thread.fastMode,
     gitBranch: thread.gitBranch,
+    launchpadDefaults: params.navigation.launchpadDefaults,
     missing: false,
     model: thread.model,
     observedGitBranch: thread.observedGitBranch,
