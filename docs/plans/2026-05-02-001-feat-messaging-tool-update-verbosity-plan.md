@@ -1,7 +1,7 @@
 ---
 title: feat: Add messaging tool update verbosity controls
 type: feat
-status: active
+status: completed
 date: 2026-05-02
 origin: docs/brainstorms/2026-04-30-messaging-platform-integration-requirements.md
 ---
@@ -138,7 +138,7 @@ flowchart TB
     U5 --> U6["Unit 6: Documentation and polish"]
 ```
 
-- [ ] **Unit 1: Add settings default, binding override, and status control**
+- [x] **Unit 1: Add settings default, binding override, and status control**
 
 **Goal:** Add an app-level default in Desktop Settings, support per-binding overrides, and expose the effective mode on the messaging status card.
 
@@ -193,7 +193,7 @@ flowchart TB
 **Verification:**
 - Desktop users can configure the general default in Settings, and messaging users can override a specific bound conversation from the status card without provider-specific code.
 
-- [ ] **Unit 2: Add channel-neutral tool item summarization**
+- [x] **Unit 2: Add channel-neutral tool item summarization**
 
 **Goal:** Convert app-server tool-like notifications into concise, transcript-safe titles that can be delivered as generated messaging messages.
 
@@ -229,7 +229,7 @@ flowchart TB
 **Verification:**
 - The summarizer produces stable, short, safe labels for the tool event shapes already used by desktop transcripts.
 
-- [ ] **Unit 3: Implement turn-scoped batching policy**
+- [x] **Unit 3: Implement turn-scoped batching policy**
 
 **Goal:** Add a deterministic batching engine that applies each binding's selected mode across a single active turn.
 
@@ -272,7 +272,7 @@ flowchart TB
 **Verification:**
 - The policy is deterministic under fake time and can be tested without Telegram, Discord, or live app-server processes.
 
-- [ ] **Unit 4: Wire tool update delivery into backend event handling**
+- [x] **Unit 4: Wire tool update delivery into backend event handling**
 
 **Goal:** Use the summarizer and batching policy from the controller's backend event path to deliver generated tool messages to bound channels.
 
@@ -313,7 +313,7 @@ flowchart TB
 **Verification:**
 - Messaging output now includes controlled tool progress without changing adapter-specific delivery APIs.
 
-- [ ] **Unit 5: Verify provider rendering and callback behavior**
+- [x] **Unit 5: Verify provider rendering and callback behavior**
 
 **Goal:** Ensure Telegram and Discord render generated tool update messages and the new status-card control acceptably through their existing generic intent paths.
 
@@ -351,7 +351,7 @@ flowchart TB
 **Verification:**
 - The feature remains adapter-neutral, and Telegram/Discord only need normal formatting/adapter coverage.
 
-- [ ] **Unit 6: Document behavior and add manual validation notes**
+- [x] **Unit 6: Document behavior and add manual validation notes**
 
 **Goal:** Capture the mode semantics and manual validation flow so future messaging adapters can match the same behavior.
 
