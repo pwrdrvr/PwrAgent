@@ -1,7 +1,7 @@
 ---
 title: fix: Normalize Grok messaging thread workspaces
 type: fix
-status: active
+status: completed
 date: 2026-05-02
 origin: docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md
 ---
