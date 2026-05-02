@@ -444,6 +444,53 @@ function readStatusType(value: unknown): string | undefined {
   return typeof type === "string" ? type : undefined;
 }
 
+function readTurnStatus(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || !("status" in value)) {
+    return undefined;
+  }
+
+  const status = value.status;
+  return typeof status === "string" ? status : undefined;
+}
+
+function logBackendLifecycleNotification(
+  backend: AppServerBackendKind,
+  notification: AppServerNotification,
+): void {
+  if (
+    notification.method !== "turn/completed" &&
+    notification.method !== "turn/failed" &&
+    notification.method !== "turn/cancelled" &&
+    notification.method !== "thread/status/changed"
+  ) {
+    return;
+  }
+
+  if (notification.method === "thread/status/changed") {
+    backendRegistryLog.info("backend lifecycle notification", {
+      backend,
+      method: notification.method,
+      status: readStatusType(notification.params.status),
+      threadId: notification.params.threadId,
+    });
+    return;
+  }
+
+  if (
+    notification.method === "turn/completed" ||
+    notification.method === "turn/failed" ||
+    notification.method === "turn/cancelled"
+  ) {
+    backendRegistryLog.info("backend lifecycle notification", {
+      backend,
+      method: notification.method,
+      status: readTurnStatus(notification.params.turn),
+      threadId: notification.params.threadId,
+      turnId: notification.params.turnId,
+    });
+  }
+}
+
 function mergeMethods(results: InitializeResult[]): string[] {
   return [...new Set(results.flatMap((result) => result.methods ?? []))];
 }
@@ -2059,6 +2106,7 @@ export class DesktopBackendRegistry {
   private subscribeClient(backend: AppServerBackendKind, client: BackendClient): void {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
+        logBackendLifecycleNotification(backend, notification);
         await this.emit({ backend, notification });
       }),
     );
