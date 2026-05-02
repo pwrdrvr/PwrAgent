@@ -984,15 +984,20 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "New thread" }));
     const newThreadComposer = await screen.findByRole("textbox", { name: "New thread" });
-    fireEvent.change(newThreadComposer, {
-      target: {
-        value: "Start a Grok-backed thread from the sidebar.",
-      },
+    await act(async () => {
+      fireEvent.change(newThreadComposer, {
+        target: {
+          value: "Start a Grok-backed thread from the sidebar.",
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(newThreadComposer).toHaveValue("Start a Grok-backed thread from the sidebar.");
     });
     const startThreadButton = screen.getByRole("button", { name: "Start thread" });
     await waitFor(() => {
       expect(startThreadButton).toBeEnabled();
-    });
+    }, { timeout: 5000 });
     fireEvent.click(startThreadButton);
 
     expect(
