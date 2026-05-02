@@ -1313,7 +1313,7 @@ export class DesktopBackendRegistry {
       backend: request.backend,
       threadId: request.threadId,
       directory: result.linkedDirectory,
-      gitBranch: result.branch,
+      gitBranch: result.strategy === "detached-changes" ? null : result.branch,
     });
     await this.updateThreadGitBranchMetadata({
       backend: request.backend,

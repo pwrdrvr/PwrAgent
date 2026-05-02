@@ -8,6 +8,7 @@ import type {
   LinkedDirectorySummary,
   ThreadIdentifier,
   ThreadWorkspaceHandoffDirection,
+  ThreadWorkspaceHandoffStrategy,
   ThreadWorkspaceHandoffStashSummary,
   WorktreeSnapshotSummary,
 } from "@pwragnt/shared";
@@ -29,9 +30,11 @@ type HandoffParams = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   direction: ThreadWorkspaceHandoffDirection;
+  strategy?: ThreadWorkspaceHandoffStrategy;
   repositoryPath?: string;
   sourcePath?: string;
   sourceBranch?: string;
+  baseBranch?: string;
   leaveLocalBranch?: string;
   now?: number;
 };
@@ -286,6 +289,11 @@ export class GitWorkspaceHandoffService {
       throw new Error("Local-to-worktree handoff must start from the local checkout.");
     }
 
+    const strategy = params.strategy ?? "move-branch";
+    if (strategy === "detached-changes") {
+      return await this.handoffLocalChangesToDetachedWorktree(params, context);
+    }
+
     ensureBranchNotCheckedOutElsewhere({
       allowedPath: context.sourcePath,
       branch: context.branch,
@@ -330,8 +338,69 @@ export class GitWorkspaceHandoffService {
       backend: context.backend,
       threadId: context.threadId,
       direction: "local-to-worktree",
+      strategy: "move-branch",
       workMode: "worktree",
       branch: context.branch,
+      repositoryPath: context.repositoryPath,
+      targetPath,
+      linkedDirectory,
+      sourceStash: appliedSourceStash,
+      warnings,
+      completedAt: context.now,
+    };
+  }
+
+  private async handoffLocalChangesToDetachedWorktree(
+    params: HandoffParams,
+    context: HandoffContext,
+  ): Promise<HandoffThreadWorkspaceResponse> {
+    const baseBranch = sanitizeBranchName(params.baseBranch ?? "");
+    if (!baseBranch) {
+      throw new Error("Choose a base branch for detached worktree handoff.");
+    }
+
+    const baseCommit = trim(
+      (await runGit(context.repositoryPath, ["rev-parse", "--verify", `${baseBranch}^{commit}`]))
+        .stdout,
+    );
+    const targetPath = this.buildTargetWorktreePath({
+      repositoryPath: context.repositoryPath,
+      branch: `${context.branch}-detached`,
+      now: context.now,
+    });
+    if (await pathExists(targetPath)) {
+      throw new Error(`Target worktree path already exists: ${targetPath}`);
+    }
+
+    const warnings = [
+      "Ignored files are not preserved by workspace handoff.",
+      "Committed changes from the current branch are not moved to the detached worktree.",
+    ];
+    const sourceStash = await createNamedStashIfDirty({
+      path: context.sourcePath,
+      message: this.buildStashMessage(context, "source"),
+    });
+    if (!sourceStash) {
+      warnings.push("No dirty non-ignored changes were available to move.");
+    }
+
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    await runGit(context.repositoryPath, ["worktree", "add", "--detach", targetPath, baseCommit]);
+    const appliedSourceStash = await applyVerifyAndDropStash(targetPath, sourceStash);
+
+    const linkedDirectory = this.buildLinkedDirectory({
+      context,
+      kind: "worktree",
+      targetPath,
+    });
+
+    return {
+      backend: context.backend,
+      threadId: context.threadId,
+      direction: "local-to-worktree",
+      strategy: "detached-changes",
+      workMode: "worktree",
+      baseBranch,
       repositoryPath: context.repositoryPath,
       targetPath,
       linkedDirectory,
@@ -394,6 +463,7 @@ export class GitWorkspaceHandoffService {
       backend: context.backend,
       threadId: context.threadId,
       direction: "worktree-to-local",
+      strategy: "move-branch",
       workMode: "local",
       branch: context.branch,
       repositoryPath: context.repositoryPath,

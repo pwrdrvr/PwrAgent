@@ -40,7 +40,7 @@ async function createRepo(): Promise<string> {
   await git(repoPath, ["config", "user.email", "test@example.com"]);
   await git(repoPath, ["config", "user.name", "Test User"]);
   await writeFile(path.join(repoPath, "README.md"), "main\n", "utf8");
-  await writeFile(path.join(repoPath, ".gitignore"), "node_modules/\n", "utf8");
+  await writeFile(path.join(repoPath, ".gitignore"), "node_modules/\n.worktrees/\n", "utf8");
   await git(repoPath, ["add", "."]);
   await git(repoPath, ["commit", "-m", "initial"]);
   await git(repoPath, ["switch", "-c", "feature/handoff"]);
@@ -92,6 +92,47 @@ describe("GitWorkspaceHandoffService", () => {
     expect(await pathExists(path.join(result.targetPath, "node_modules", "ignored.txt"))).toBe(
       false,
     );
+  });
+
+  it("moves dirty local changes to a detached worktree and leaves local on the current branch", async () => {
+    const repoPath = await createRepo();
+    await writeFile(path.join(repoPath, "README.md"), "dirty local\n", "utf8");
+    await writeFile(path.join(repoPath, "notes.txt"), "untracked\n", "utf8");
+    await mkdir(path.join(repoPath, "node_modules"));
+    await writeFile(path.join(repoPath, "node_modules", "ignored.txt"), "ignored\n", "utf8");
+
+    const service = new GitWorkspaceHandoffService();
+    const result = await service.handoff({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      strategy: "detached-changes",
+      repositoryPath: repoPath,
+      sourcePath: repoPath,
+      sourceBranch: "feature/handoff",
+      baseBranch: "main",
+      now: 1500,
+    });
+
+    expect(result.workMode).toBe("worktree");
+    expect(result.strategy).toBe("detached-changes");
+    expect(result.branch).toBeUndefined();
+    expect(result.baseBranch).toBe("main");
+    expect(result.linkedDirectory.kind).toBe("worktree");
+    expect(result.sourceStash).toMatchObject({ applied: true, dropped: true });
+    expect(await git(repoPath, ["branch", "--show-current"])).toBe("feature/handoff");
+    expect(await git(result.targetPath, ["branch", "--show-current"])).toBe("");
+    expect(await pathExists(path.join(result.targetPath, "feature.txt"))).toBe(false);
+    await expect(readFile(path.join(result.targetPath, "README.md"), "utf8")).resolves.toBe(
+      "dirty local\n",
+    );
+    await expect(readFile(path.join(result.targetPath, "notes.txt"), "utf8")).resolves.toBe(
+      "untracked\n",
+    );
+    expect(await pathExists(path.join(result.targetPath, "node_modules", "ignored.txt"))).toBe(
+      false,
+    );
+    expect(await git(repoPath, ["status", "--porcelain", "--untracked-files=normal"])).toBe("");
   });
 
   it("moves a dirty worktree branch back to local and archives the old worktree", async () => {

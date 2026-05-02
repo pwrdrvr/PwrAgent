@@ -179,7 +179,7 @@ export class OverlayStore {
   async replaceWorkspaceLinkedDirectory(params: {
     backend: ThreadOverlayState["backend"];
     directory: LinkedDirectorySummary;
-    gitBranch?: string;
+    gitBranch?: string | null;
     threadId: string;
   }): Promise<ThreadOverlayState> {
     return await this.withData(async (data) => {
@@ -204,10 +204,14 @@ export class OverlayStore {
         }),
         params.directory,
       ];
+      const nextGitBranch =
+        params.gitBranch === null ? undefined : params.gitBranch ?? current.gitBranch;
+      const nextObservedGitBranch =
+        params.gitBranch === null ? undefined : params.gitBranch ?? current.observedGitBranch;
       const nextState: ThreadOverlayState = {
         ...current,
-        gitBranch: params.gitBranch ?? current.gitBranch,
-        observedGitBranch: params.gitBranch ?? current.observedGitBranch,
+        gitBranch: nextGitBranch,
+        observedGitBranch: nextObservedGitBranch,
         extraLinkedDirectories: nextDirectories,
       };
       data.threads[threadKey] = nextState;

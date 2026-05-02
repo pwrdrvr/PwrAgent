@@ -276,7 +276,7 @@ flowchart TB
     U5 --> U6
 ```
 
-- [ ] **Unit 1: Add explicit handoff strategy to shared contracts**
+- [x] **Unit 1: Add explicit handoff strategy to shared contracts**
 
 **Goal:** Let callers request either branch-moving handoff or detached
 dirty-change handoff without overloading missing fields.
@@ -326,7 +326,7 @@ dirty-change handoff without overloading missing fields.
 - Shared contracts can express both handoff modes, and old branch-moving tests
   still pass after compatibility updates.
 
-- [ ] **Unit 2: Support detached dirty-change handoff in the Git service**
+- [x] **Unit 2: Support detached dirty-change handoff in the Git service**
 
 **Goal:** Add the main-process Git behavior needed by the opinionated messaging
 default: create a detached worktree from the default branch commit and move dirty
@@ -511,7 +511,7 @@ choices and keep opaque callback handles.
 - Provider tests demonstrate that bounded generic intents solve the Telegram
   problem without adding Telegram/Discord branches to workflow code.
 
-- [ ] **Unit 5: Update the desktop handoff dialog**
+- [x] **Unit 5: Update the desktop handoff dialog**
 
 **Goal:** Replace the current single-path desktop Local-to-worktree dialog with
 an explicit strategy choice that supports detached dirty-change handoff,

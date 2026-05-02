@@ -4334,6 +4334,42 @@ textarea {
   font-weight: 600;
 }
 
+.workspace-handoff-dialog__strategy-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.workspace-handoff-dialog__strategy {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-handoff-dialog__strategy[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border-subtle));
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-input));
+}
+
+.workspace-handoff-dialog__strategy:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.workspace-handoff-dialog__strategy-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .workspace-handoff-dialog__note {
   color: var(--text-muted);
 }
