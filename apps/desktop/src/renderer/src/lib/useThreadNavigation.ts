@@ -1406,24 +1406,25 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       launchpadUpdateRevisionRef.current.set(directoryKey, revision);
 
       setState((current) => {
-        const currentLaunchpad = current.response?.directories.find(
+        const currentResponse = current.response;
+        const currentLaunchpad = currentResponse?.directories.find(
           (directory) => directory.key === directoryKey
         )?.launchpad;
-        if (!currentLaunchpad) {
+        if (!currentResponse || !currentLaunchpad) {
           return current;
         }
 
         return {
           ...current,
           response: applyLaunchpadUpdate(
-            current.response,
+            currentResponse,
             {
               ...currentLaunchpad,
               ...patch,
               directoryKey,
               updatedAt: Date.now(),
             },
-            current.response.launchpadDefaults
+            currentResponse.launchpadDefaults
           ),
         };
       });
