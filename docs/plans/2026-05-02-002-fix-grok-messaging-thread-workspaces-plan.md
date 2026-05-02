@@ -121,7 +121,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Add failing coverage for Grok worktree labels**
+- [x] **Unit 1: Add failing coverage for Grok worktree labels**
 
 **Goal:** Prove that Grok thread summaries and messaging resume labels should use the primary project label for launchpad worktrees.
 
@@ -154,7 +154,7 @@ flowchart TB
 **Verification:**
 - The tests fail before implementation because Grok currently labels from the raw worktree basename.
 
-- [ ] **Unit 2: Share Git-aware thread directory enrichment across Codex and Grok**
+- [x] **Unit 2: Share Git-aware thread directory enrichment across Codex and Grok**
 
 **Goal:** Route Grok thread summary enrichment through the same Git-root/worktree resolver already used for Codex.
 
@@ -190,7 +190,7 @@ flowchart TB
 **Verification:**
 - Grok thread picker labels and project picker grouping match Codex for worktree-backed PwrAgnt threads.
 
-- [ ] **Unit 3: Add failing live cross-instance Grok visibility coverage**
+- [x] **Unit 3: Add failing live cross-instance Grok visibility coverage**
 
 **Goal:** Prove that two already-running Grok app-server clients sharing one state root should see each other's completed thread metadata through `thread/list`.
 
@@ -225,7 +225,7 @@ flowchart TB
 **Verification:**
 - The tests fail before implementation because the second live state/client remains stale.
 
-- [ ] **Unit 4: Refresh Grok session state from store on list/read boundaries**
+- [x] **Unit 4: Refresh Grok session state from store on list/read boundaries**
 
 **Goal:** Make live embedded Grok app-server instances import persisted thread changes written by sibling instances.
 
@@ -261,7 +261,7 @@ flowchart TB
 **Verification:**
 - Two live desktop Grok clients sharing one state root can see each other's completed thread summaries on the next list/read call.
 
-- [ ] **Unit 5: Verify messaging resume parity and capture evidence**
+- [x] **Unit 5: Verify messaging resume parity and capture evidence**
 
 **Goal:** Confirm the end-to-end `/resume` path now shows Grok worktree threads under the same project label semantics as Codex.
 

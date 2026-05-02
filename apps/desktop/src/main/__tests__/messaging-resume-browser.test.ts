@@ -137,6 +137,65 @@ describe("messaging resume browser", () => {
     expect(intent.fallbackText).not.toContain("launchpad-pwragnt-main-moohzbj1");
   });
 
+  it("filters Grok worktree threads by the primary project selection", () => {
+    const intent = buildResumeIntent({
+      id: "intent-1",
+      createdAt: 1000,
+      navigation: buildNavigationSnapshot({
+        threads: [
+          {
+            id: "thread-eksfk3v0",
+            title: "Messaging - Streaming Responses",
+            titleSource: "explicit",
+            source: "grok",
+            projectKey: "/repo/pwragnt/.worktrees/launchpad-pwragnt-main-moohzbj1",
+            linkedDirectories: [
+              {
+                id: "/repo/pwragnt",
+                kind: "worktree",
+                label: "PwrAgnt",
+                path: "/repo/pwragnt",
+                worktreePath: "/repo/pwragnt/.worktrees/launchpad-pwragnt-main-moohzbj1",
+              },
+            ],
+            inbox: {
+              inInbox: false,
+            },
+            updatedAt: 1000,
+          },
+        ],
+        directories: [
+          {
+            key: "directory:/repo/pwragnt",
+            kind: "directory",
+            label: "PwrAgnt",
+            path: "/repo/pwragnt",
+            threadKeys: ["grok:thread-eksfk3v0"],
+            needsAttentionCount: 0,
+            latestUpdatedAt: 1000,
+          },
+        ],
+      }),
+      session: buildBrowseSession({
+        mode: "project_threads",
+        selectedProject: {
+          directoryKey: "directory:/repo/pwragnt",
+          label: "PwrAgnt",
+          path: "/repo/pwragnt",
+        },
+      }),
+    });
+
+    expect(intent.kind).toBe("thread_picker");
+    expect(intent.fallbackText).toContain(
+      "Showing recent PwrAgnt threads for PwrAgnt.",
+    );
+    expect(intent.fallbackText).toContain(
+      "1. Messaging - Streaming Responses (PwrAgnt)",
+    );
+    expect(intent.fallbackText).not.toContain("launchpad-pwragnt-main-moohzbj1");
+  });
+
   it("renders a new-thread project picker", () => {
     const intent = buildResumeIntent({
       id: "intent-1",
