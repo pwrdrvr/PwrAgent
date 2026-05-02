@@ -754,7 +754,22 @@ export const ComposerTiptapInput = forwardRef<
           propsRef.current.onDrop?.(event as unknown as DragEvent<HTMLDivElement>);
           return event.defaultPrevented;
         },
-        keydown: (view, event) => {
+        keydown: (_view, event) => {
+          const currentProps = propsRef.current;
+          if (
+            (event.key === "Backspace" || event.key === "Delete") &&
+            currentProps.value.trim().length === 0 &&
+            currentProps.skillTokens.length === 1
+          ) {
+            event.preventDefault();
+            const currentEditor = editorRef.current;
+            currentEditor?.commands.setContent(buildTiptapContent("", []), {
+              emitUpdate: false,
+            });
+            propsRef.current.onChange("", []);
+            return true;
+          }
+
           if (
             propsRef.current.markdownConversion &&
             event.key === "Enter" &&

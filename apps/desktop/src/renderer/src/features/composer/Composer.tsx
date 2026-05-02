@@ -2492,14 +2492,22 @@ export function Composer(props: ComposerProps) {
     token: ComposerSkillToken,
     selectionStart: number,
   ): void => {
+    const nextSkillTokens = skillTokens.filter(
+      (candidate) => candidate.id !== token.id
+    );
     deletedSkillTokenHistoryRef.current.push({
       draft,
       selectionStart,
       skillTokens,
     });
-    setSkillTokens((current) =>
-      current.filter((candidate) => candidate.id !== token.id)
-    );
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+    });
+    saveComposerDraftSnapshot(composerScopeKey, {
+      draft,
+      imageAttachments,
+      skillTokens: nextSkillTokens,
+    });
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(selectionStart, selectionStart);
@@ -2886,6 +2894,17 @@ export function Composer(props: ComposerProps) {
     }
 
     if (restoreDeletedSkillToken(event)) {
+      return;
+    }
+
+    if (
+      event.key === "Backspace" &&
+      deleteEditorContent(event, "backward")
+    ) {
+      return;
+    }
+
+    if (event.key === "Delete" && deleteEditorContent(event, "forward")) {
       return;
     }
 
