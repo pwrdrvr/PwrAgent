@@ -136,6 +136,12 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("lets transcript scroll restoration own scroll anchoring", () => {
+    expect(css).toMatch(
+      /\.transcript-list__items\s*\{[\s\S]*?overflow-anchor:\s*none;[\s\S]*?\}/
+    );
+  });
+
   it("keeps thread header titles tall enough for descenders", () => {
     const compactTitleRule = extractRuleBody(css, ".thread-header__compact-title");
     const threadRowTitleRule = extractRuleBody(css, ".thread-row__title");

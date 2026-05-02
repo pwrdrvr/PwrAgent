@@ -12,6 +12,7 @@ import type {
   MessagingInboundCallbackEvent,
   MessagingInboundCommandEvent,
   MessagingInboundEvent,
+  MessagingInboundMediaEvent,
   MessagingInboundTextEvent,
   MessagingJsonValue,
   MessagingMessageIntent,
@@ -62,7 +63,12 @@ import {
   MessagingToolUpdatePolicy,
   type MessagingToolUpdatePolicyDelivery,
 } from "./messaging-tool-update-policy.js";
-
+import {
+  DEFAULT_MESSAGING_ATTACHMENT_POLICY,
+  processMessagingAttachments,
+  type MessagingAttachmentPolicy,
+  type MessagingAttachmentRejection,
+} from "./messaging-attachment-processor.js";
 const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;
@@ -110,6 +116,14 @@ function findThreadForBinding(
   );
 }
 
+function formatAttachmentRejections(
+  rejections: MessagingAttachmentRejection[],
+): string {
+  return rejections
+    .map((rejection) => `${rejection.name}: ${rejection.reason}`)
+    .join("\n");
+}
+
 type MessagingControllerLogger = {
   debug?(message: string, data?: Record<string, unknown>): void;
 };
@@ -127,6 +141,7 @@ export type MessagingControllerOptions = {
   logger?: MessagingControllerLogger;
   now?: () => number;
   pendingIntentTtlMs?: number;
+  attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   store: MessagingStore;
   toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
 };
@@ -184,17 +199,7 @@ export class MessagingController {
     }
 
     if (event.kind === "media") {
-      await this.deliver(
-        buildErrorIntent({
-          id: this.newIntentId("unsupported-media"),
-          createdAt: this.now(),
-          title: "Media is not supported yet",
-          body: "This messaging integration accepts text and buttons for now.",
-          recoverable: true,
-        }),
-        undefined,
-        event,
-      );
+      await this.handleMedia(event);
       return;
     }
 
@@ -500,6 +505,108 @@ export class MessagingController {
     await this.signalTurnActivity(binding, activeTurn, {
       force: true,
     });
+    await this.renderBindingStatus(binding, undefined, navigation);
+  }
+
+  private async handleMedia(event: MessagingInboundMediaEvent): Promise<void> {
+    const command = event.text ? parseTextCommand(event.text) : undefined;
+    if (command) {
+      await this.handleCommand({
+        ...event,
+        kind: "command",
+        command,
+        args: parseTextCommandArgs(event.text ?? ""),
+        rawText: event.text ?? "",
+      });
+      return;
+    }
+
+    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    if (!binding) {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("needs-binding-media"),
+          createdAt: this.now(),
+          title: "Choose a thread",
+          body: "Bind this conversation to a PwrAgnt thread before sending attachments.",
+          fallbackText: "Reply /resume to choose a thread.",
+          actions: [
+            {
+              id: "command:resume",
+              label: "Resume",
+              style: "primary",
+              fallbackText: "/resume",
+            },
+          ],
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    const processed = await processMessagingAttachments({
+      adapter: this.options.adapter,
+      attachments: event.attachments,
+      policy: {
+        ...DEFAULT_MESSAGING_ATTACHMENT_POLICY,
+        ...this.options.attachmentPolicy,
+      },
+      text: event.text,
+    });
+
+    if (processed.input.length === 0) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("unsupported-media"),
+          createdAt: this.now(),
+          title: "Attachment not supported",
+          body:
+            processed.rejections.length > 0
+              ? formatAttachmentRejections(processed.rejections)
+              : "This attachment could not be prepared for the model.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const turnSettings = turnSettingsForBinding(binding, navigation);
+    const started = await this.options.backend.startTurn({
+      backend: binding.backend,
+      threadId: binding.threadId,
+      input: processed.input,
+      ...turnSettings,
+    });
+    const activeTurn: MessagingActiveTurnSummary = {
+      turnId: started.turnId,
+      status: "working",
+      startedAt: this.now(),
+      updatedAt: this.now(),
+    };
+    this.setActiveTurn(binding, activeTurn);
+    await this.signalTurnActivity(binding, activeTurn, {
+      force: true,
+    });
+
+    if (processed.rejections.length > 0) {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("attachment-partial"),
+          createdAt: this.now(),
+          title: "Some attachments were skipped",
+          body: formatAttachmentRejections(processed.rejections),
+        }),
+        binding,
+        event,
+      );
+    }
+
     await this.renderBindingStatus(binding, undefined, navigation);
   }
 

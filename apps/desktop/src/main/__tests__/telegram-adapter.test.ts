@@ -20,6 +20,7 @@ import type {
   TelegramEditMessageTextRequest,
   TelegramPinChatMessageRequest,
   TelegramSendChatActionRequest,
+  TelegramSendDocumentRequest,
   TelegramSendMessageRequest,
   TelegramSendPhotoRequest,
   TelegramUnpinChatMessageRequest,
@@ -1002,13 +1003,20 @@ describe("TelegramAdapter", () => {
     });
 
     expect(events.at(-1)).toMatchObject({
-      disposition: "unsupported",
+      disposition: "available",
       kind: "media",
+      attachments: [
+        expect.objectContaining({
+          disposition: "available",
+          kind: "file",
+          name: "secret.txt",
+        }),
+      ],
       media: {
         name: "secret.txt",
       },
     });
-    expect("getFile" in api).toBe(false);
+    expect(api.getFile).not.toHaveBeenCalled();
   });
 
   it("ignores Telegram pin service messages", async () => {
@@ -1232,6 +1240,117 @@ describe("TelegramAdapter", () => {
       }),
     );
   });
+
+  it("uploads data URL image message intents through sendPhoto", async () => {
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      now: () => 1000,
+      pollOnStart: false,
+    });
+
+    await adapter.deliver({
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      createdAt: 1000,
+      id: "intent-data-image",
+      kind: "message",
+      parts: [
+        {
+          type: "image",
+          url: "data:image/png;base64,AQID",
+        },
+        {
+          markdown: "plain",
+          text: "Rendered image",
+          type: "text",
+        },
+      ],
+    });
+
+    expect(api.sendPhoto).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caption: "Rendered image",
+        chat_id: 777,
+        filename: "assistant-image.png",
+        photo: new Uint8Array([1, 2, 3]),
+      }),
+    );
+  });
+
+  it("sends file message intents through sendDocument", async () => {
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      now: () => 1000,
+      pollOnStart: false,
+    });
+    const data = new Uint8Array([1, 2, 3]);
+
+    await adapter.deliver({
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      createdAt: 1000,
+      id: "intent-file",
+      kind: "message",
+      parts: [
+        {
+          markdown: "plain",
+          text: "Generated log",
+          type: "text",
+        },
+        {
+          data,
+          mimeType: "text/plain",
+          name: "streaming-logs.txt",
+          sizeBytes: data.byteLength,
+          type: "file",
+        },
+      ],
+    });
+
+    expect(api.sendDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caption: "Generated log",
+        chat_id: 777,
+        document: data,
+        filename: "streaming-logs.txt",
+      }),
+    );
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
 });
 
 async function createControllerHarness(): Promise<{
@@ -1290,8 +1409,10 @@ function createApi(): {
   editForumTopic: ReturnType<typeof vi.fn>;
   editMessageText: ReturnType<typeof vi.fn>;
   getWebhookInfo: ReturnType<typeof vi.fn>;
+  getFile: ReturnType<typeof vi.fn>;
   pinChatMessage: ReturnType<typeof vi.fn>;
   sendChatAction: ReturnType<typeof vi.fn>;
+  sendDocument: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   sendPhoto: ReturnType<typeof vi.fn>;
   setMyCommands: ReturnType<typeof vi.fn>;
@@ -1309,8 +1430,16 @@ function createApi(): {
       message_id: request.message_id,
     })),
     getWebhookInfo: vi.fn(async () => ({ url: "" })),
+    getFile: vi.fn(async () => ({ file_path: "documents/streaming-logs.txt" })),
     pinChatMessage: vi.fn(async (_request: TelegramPinChatMessageRequest) => true),
     sendChatAction: vi.fn(async (_request: TelegramSendChatActionRequest) => true),
+    sendDocument: vi.fn(async (request: TelegramSendDocumentRequest) => ({
+      chat: {
+        id: Number(request.chat_id),
+        type: "private",
+      },
+      message_id: 202,
+    })),
     sendMessage: vi.fn(async (request: TelegramSendMessageRequest) => ({
       chat: {
         id: Number(request.chat_id),

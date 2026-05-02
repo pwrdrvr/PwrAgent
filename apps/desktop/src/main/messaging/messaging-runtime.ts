@@ -1,6 +1,7 @@
 import { MessagingController } from "./core/messaging-controller";
 import type { MessagingStore } from "./core/messaging-store";
 import type {
+  MessagingAdapter,
   MessagingBackendBridge,
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
@@ -26,6 +27,7 @@ export type DesktopMessagingAdapter = {
   authorizedActorIds: readonly string[];
   channel: MessagingChannelKind;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  downloadAttachment?: MessagingAdapter["downloadAttachment"];
   setConversationTitle?(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
@@ -78,6 +80,7 @@ export class DesktopMessagingRuntime {
       const authorizedActorIdSet = new Set(authorizedActorIds);
       const controller = new MessagingController({
         adapter,
+        attachmentPolicy: config.attachmentPolicy,
         authorizedActorIds,
         backend: this.options.backendBridge,
         channel: adapter.channel,

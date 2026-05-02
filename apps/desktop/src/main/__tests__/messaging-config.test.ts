@@ -8,6 +8,8 @@ import {
   DISCORD_BOT_TOKEN_ENV,
   loadDesktopMessagingConfig,
   loadDesktopMessagingConfigFromSettings,
+  MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
+  MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   redactDesktopMessagingConfig,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
@@ -94,6 +96,11 @@ describe("desktop messaging config", () => {
 
     expect(config).toEqual({
       toolUpdateDefaultMode: "show_some",
+      attachmentPolicy: {
+        imageProfile: "medium",
+        maxAttachmentBytes: 10485760,
+        maxAttachmentCount: 4,
+      },
       telegram: {
         channel: "telegram",
         enabled: true,
@@ -126,6 +133,15 @@ describe("desktop messaging config", () => {
       botToken: "env-telegram-token",
       authorizedActorIds: ["42"],
     });
+  });
+
+  it("treats blank attachment integer env vars as unset", () => {
+    const config = loadDesktopMessagingConfig({
+      [MESSAGING_ATTACHMENT_MAX_BYTES_ENV]: "  ",
+      [MESSAGING_ATTACHMENT_MAX_COUNT_ENV]: "",
+    });
+
+    expect(config.attachmentPolicy).toBeUndefined();
   });
 
   it("redacts bot tokens while preserving useful diagnostics", () => {

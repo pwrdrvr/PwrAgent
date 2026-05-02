@@ -10,6 +10,7 @@ export type {
   TelegramPinChatMessageRequest,
   TelegramProviderLogger,
   TelegramSendChatActionRequest,
+  TelegramSendDocumentRequest,
   TelegramSendMessageRequest,
   TelegramSendPhotoRequest,
   TelegramSentMessage,

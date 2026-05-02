@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
-import { Bot } from "grammy";
+import { Bot, InputFile } from "grammy";
 import type {
   MessagingAdapterState,
+  MessagingAdapterCapabilities,
+  MessagingAttachmentDescriptor,
+  MessagingAttachmentDownloadRequest,
+  MessagingAttachmentDownloadResult,
   MessagingCallbackHandleStore,
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
   MessagingDeliveryResult,
+  MessagingFilePart,
   MessagingInboundEvent,
   MessagingJsonValue,
   MessagingSurfaceAction,
@@ -36,6 +41,13 @@ type TelegramDeliveryTarget = {
   messageThreadId?: number;
 };
 
+type FetchLike = (url: string) => Promise<{
+  arrayBuffer(): Promise<ArrayBuffer>;
+  ok: boolean;
+  status: number;
+  statusText: string;
+}>;
+
 type TelegramTypingSignal = {
   interval: ReturnType<typeof setInterval>;
   signalId: number;
@@ -62,12 +74,24 @@ export type TelegramChat = {
 };
 
 export type TelegramMessage = {
+  animation?: {
+    file_id: string;
+    file_name?: string;
+    file_size?: number;
+    height?: number;
+    mime_type?: string;
+    width?: number;
+  };
+  caption?: string;
   chat: TelegramChat;
   date?: number;
   document?: {
     file_id: string;
     file_name?: string;
+    file_size?: number;
+    height?: number;
     mime_type?: string;
+    width?: number;
   };
   forum_topic_closed?: Record<string, never>;
   forum_topic_created?: {
@@ -88,6 +112,8 @@ export type TelegramMessage = {
   photo?: Array<{
     file_id: string;
     file_size?: number;
+    height?: number;
+    width?: number;
   }>;
   pinned_message?: TelegramMessage;
   text?: string;
@@ -138,7 +164,18 @@ export type TelegramSendPhotoRequest = {
   chat_id: number | string;
   message_thread_id?: number;
   parse_mode?: "HTML";
-  photo: string;
+  filename?: string;
+  photo: string | Uint8Array;
+  reply_markup?: TelegramInlineKeyboardMarkup;
+};
+
+export type TelegramSendDocumentRequest = {
+  caption?: string;
+  chat_id: number | string;
+  document: string | Uint8Array;
+  filename?: string;
+  message_thread_id?: number;
+  parse_mode?: "HTML";
   reply_markup?: TelegramInlineKeyboardMarkup;
 };
 
@@ -173,8 +210,10 @@ export type TelegramBotApi = {
   editForumTopic(request: TelegramEditForumTopicRequest): Promise<boolean>;
   editMessageText(request: TelegramEditMessageTextRequest): Promise<TelegramSentMessage>;
   getWebhookInfo(): Promise<{ url: string }>;
+  getFile(fileId: string): Promise<{ file_path?: string }>;
   pinChatMessage(request: TelegramPinChatMessageRequest): Promise<boolean>;
   sendChatAction(request: TelegramSendChatActionRequest): Promise<boolean>;
+  sendDocument(request: TelegramSendDocumentRequest): Promise<TelegramSentMessage>;
   sendMessage(request: TelegramSendMessageRequest): Promise<TelegramSentMessage>;
   sendPhoto(request: TelegramSendPhotoRequest): Promise<TelegramSentMessage>;
   setMyCommands(params: {
@@ -214,6 +253,7 @@ export type TelegramGrammyBotLike = {
       other?: Omit<TelegramEditMessageTextRequest, "chat_id" | "message_id" | "text">,
     ): Promise<TelegramSentMessage | boolean>;
     getWebhookInfo(): Promise<{ url: string }>;
+    getFile(fileId: string): Promise<{ file_path?: string }>;
     pinChatMessage(
       chatId: number | string,
       messageId: number,
@@ -229,10 +269,15 @@ export type TelegramGrammyBotLike = {
       text: string,
       other?: Omit<TelegramSendMessageRequest, "chat_id" | "text">,
     ): Promise<TelegramSentMessage>;
+    sendDocument(
+      chatId: number | string,
+      document: InputFile | string,
+      other?: Omit<TelegramSendDocumentRequest, "chat_id" | "document" | "filename">,
+    ): Promise<TelegramSentMessage>;
     sendPhoto(
       chatId: number | string,
-      photo: string,
-      other?: Omit<TelegramSendPhotoRequest, "chat_id" | "photo">,
+      photo: InputFile | string,
+      other?: Omit<TelegramSendPhotoRequest, "chat_id" | "photo" | "filename">,
     ): Promise<TelegramSentMessage>;
     setMyCommands(
       commands: Array<{ command: string; description: string }>,
@@ -251,8 +296,12 @@ export type TelegramGrammyBotLike = {
 
 export type TelegramProviderAdapter = {
   authorizedActorIds: readonly string[];
+  capabilities?: MessagingAdapterCapabilities;
   channel: "telegram";
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  downloadAttachment?(
+    request: MessagingAttachmentDownloadRequest,
+  ): Promise<MessagingAttachmentDownloadResult>;
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
@@ -262,6 +311,19 @@ export type TelegramProviderAdapter = {
 
 export class TelegramAdapter implements TelegramProviderAdapter {
   readonly channel = "telegram" as const;
+  readonly capabilities: MessagingAdapterCapabilities = {
+    inboundAttachments: {
+      maxAttachmentCount: 10,
+      maxDownloadBytes: 20 * 1024 * 1024,
+      supportsDownload: true,
+    },
+    outboundAttachments: {
+      maxUploadBytes: 50 * 1024 * 1024,
+      supportsFileUpload: false,
+      supportsImageUpload: true,
+      supportsRemoteImageUrl: true,
+    },
+  };
 
   private callbackBindings = new Map<string, TelegramCallbackBinding>();
   private defaultBot?: TelegramBotLike;
@@ -270,6 +332,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     api?: TelegramBotApi;
     bot?: TelegramBotLike;
     config: TelegramMessagingConfig;
+    fetch?: FetchLike;
     logger?: TelegramProviderLogger;
     now?: () => number;
     pollOnStart?: boolean;
@@ -330,6 +393,41 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     this.listener = undefined;
   }
 
+  async downloadAttachment(
+    request: MessagingAttachmentDownloadRequest,
+  ): Promise<MessagingAttachmentDownloadResult> {
+    const opaque = request.attachment.state?.opaque;
+    if (!opaque || typeof opaque !== "object" || Array.isArray(opaque)) {
+      throw new Error("Telegram attachment download state is missing.");
+    }
+    const fileId = opaque.fileId;
+    if (typeof fileId !== "string" || !fileId) {
+      throw new Error("Telegram attachment file id is missing.");
+    }
+    const file = await this.bot.api.getFile(fileId);
+    if (!file.file_path) {
+      throw new Error("Telegram did not return a downloadable file path.");
+    }
+    const response = await this.fetch(
+      `https://api.telegram.org/file/bot${this.options.config.botToken}/${file.file_path}`,
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Telegram attachment download failed: ${response.status} ${response.statusText}`,
+      );
+    }
+    const data = new Uint8Array(await response.arrayBuffer());
+    if (data.byteLength > request.maxBytes) {
+      throw new Error("Telegram attachment exceeds the configured download limit.");
+    }
+    return {
+      data,
+      fileName: request.attachment.name,
+      mimeType: request.attachment.mimeType,
+      sizeBytes: data.byteLength,
+    };
+  }
+
   async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
     const target = this.resolveTarget(intent);
     if (!target) {
@@ -368,18 +466,20 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     const actions = actionsForTelegramIntent(intent);
     const replyMarkup = await this.buildReplyMarkup(intent, actions);
-    const text = textForTelegramIntent(intent);
-    const image = this.firstImageUrl(intent);
+    const files = uploadableFileParts(intent);
+    const text = files.length > 0 ? textForTelegramIntentWithoutFiles(intent) : textForTelegramIntent(intent);
+    const image = this.firstImagePayload(intent);
     const sentMessages: TelegramSentMessage[] = [];
     let outcome: MessagingDeliveryResult["outcome"] = "presented";
     this.options.logger?.debug(
-      `telegram deliver begin kind=${intent.kind} mode=${intent.delivery?.mode ?? "new"} target=${this.compactTypingTarget(target)} chars=${text.length} actions=${actions.length} image=${Boolean(image)} preview="${compactPreview(text)}"`,
+      `telegram deliver begin kind=${intent.kind} mode=${intent.delivery?.mode ?? "new"} target=${this.compactTypingTarget(target)} chars=${text.length} actions=${actions.length} image=${Boolean(image)} files=${files.length} preview="${compactPreview(text)}"`,
     );
 
     if (
       intent.delivery?.mode === "update" &&
       target.messageId &&
       !image &&
+      files.length === 0 &&
       Buffer.byteLength(text || " ", "utf8") <= 4096
     ) {
       try {
@@ -411,6 +511,37 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         );
         outcome = "presented_new";
       }
+    } else if (files.length > 0) {
+      const caption = text && Buffer.byteLength(text, "utf8") <= 1024 ? text : undefined;
+      if (text && !caption) {
+        const chunks = splitTelegramHtml(text);
+        for (const chunk of chunks) {
+          sentMessages.push(
+            await this.bot.api.sendMessage({
+              chat_id: target.chatId,
+              disable_web_page_preview: true,
+              message_thread_id: target.messageThreadId,
+              parse_mode: "HTML",
+              text: chunk,
+            }),
+          );
+        }
+      }
+
+      const lastFileIndex = files.length - 1;
+      for (const [index, file] of files.entries()) {
+        sentMessages.push(
+          await this.bot.api.sendDocument({
+            caption: index === 0 ? caption : undefined,
+            chat_id: target.chatId,
+            document: file.url ?? file.data!,
+            filename: file.name,
+            message_thread_id: target.messageThreadId,
+            parse_mode: caption && index === 0 ? "HTML" : undefined,
+            reply_markup: index === lastFileIndex ? replyMarkup : undefined,
+          }),
+        );
+      }
     } else if (image) {
       sentMessages.push(
         await this.bot.api.sendPhoto({
@@ -418,7 +549,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           chat_id: target.chatId,
           message_thread_id: target.messageThreadId,
           parse_mode: text ? "HTML" : undefined,
-          photo: image,
+          filename: image.filename,
+          photo: image.source,
           reply_markup: replyMarkup,
         }),
       );
@@ -553,28 +685,35 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return;
     }
 
-    if (!message.text) {
+    const attachments = this.attachmentsFromMessage(message);
+    if (attachments.length > 0) {
       await listener({
         id: `telegram:update:${updateId}:message:${message.message_id}`,
         kind: "media",
         actor: this.actorFromUser(message.from),
+        attachments,
         channel: this.channelFromMessage(message),
-        disposition: "unsupported",
+        disposition: attachments.some((attachment) => attachment.disposition === "available")
+          ? "available"
+          : "unsupported",
         media: {
           type: "file",
-          name:
-            message.document?.file_name ??
-            message.voice?.mime_type ??
-            message.video?.mime_type ??
-            "telegram-media",
+          name: attachments[0]?.name ?? "telegram-media",
           mimeType:
             message.document?.mime_type ??
+            message.animation?.mime_type ??
             message.voice?.mime_type ??
             message.video?.mime_type,
+          sizeBytes: attachments[0]?.sizeBytes,
         },
         receivedAt: this.messageReceivedAt(message),
         routingState: this.routingStateFromMessage(message),
+        text: message.caption,
       });
+      return;
+    }
+
+    if (!message.text) {
       return;
     }
 
@@ -650,6 +789,128 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       receivedAt: this.now(),
       routingState: this.routingStateFromMessage(message),
     });
+  }
+
+  private attachmentsFromMessage(message: TelegramMessage): MessagingAttachmentDescriptor[] {
+    const attachments: MessagingAttachmentDescriptor[] = [];
+    if (message.document) {
+      const mimeType = message.document.mime_type;
+      const image = mimeType?.startsWith("image/");
+      attachments.push({
+        id: `telegram:file:${message.document.file_id}`,
+        kind: image ? "image" : "file",
+        name: message.document.file_name ?? "telegram-document",
+        disposition: this.isDownloadableTelegramMimeType(mimeType) ? "available" : "rejected",
+        height: message.document.height,
+        mimeType,
+        reason: this.isDownloadableTelegramMimeType(mimeType)
+          ? undefined
+          : "unsupported attachment type",
+        sizeBytes: message.document.file_size,
+        state: {
+          opaque: {
+            fileId: message.document.file_id,
+            provider: "telegram",
+          },
+        },
+        width: message.document.width,
+      });
+    }
+
+    if (message.photo && message.photo.length > 0) {
+      const photo = [...message.photo].sort(
+        (left, right) => (right.file_size ?? 0) - (left.file_size ?? 0),
+      )[0]!;
+      attachments.push({
+        id: `telegram:photo:${photo.file_id}`,
+        kind: "image",
+        name: "telegram-photo.jpg",
+        disposition: "available",
+        height: photo.height,
+        mimeType: "image/jpeg",
+        sizeBytes: photo.file_size,
+        state: {
+          opaque: {
+            fileId: photo.file_id,
+            provider: "telegram",
+          },
+        },
+        width: photo.width,
+      });
+    }
+
+    if (message.animation) {
+      attachments.push({
+        id: `telegram:animation:${message.animation.file_id}`,
+        kind: "gif",
+        name: message.animation.file_name ?? "telegram-animation.gif",
+        disposition: "available",
+        height: message.animation.height,
+        mimeType: message.animation.mime_type ?? "image/gif",
+        sizeBytes: message.animation.file_size,
+        state: {
+          opaque: {
+            fileId: message.animation.file_id,
+            provider: "telegram",
+          },
+        },
+        width: message.animation.width,
+      });
+    }
+
+    if (message.voice) {
+      attachments.push({
+        id: `telegram:voice:${message.voice.file_id}`,
+        kind: "audio",
+        name: message.voice.mime_type ?? "telegram-voice",
+        disposition: "unsupported",
+        mimeType: message.voice.mime_type,
+        reason: "audio attachments are not supported",
+        state: {
+          opaque: {
+            fileId: message.voice.file_id,
+            provider: "telegram",
+          },
+        },
+      });
+    }
+
+    if (message.video) {
+      attachments.push({
+        id: `telegram:video:${message.video.file_id}`,
+        kind: "video",
+        name: message.video.mime_type ?? "telegram-video",
+        disposition: "unsupported",
+        mimeType: message.video.mime_type,
+        reason: "video attachments are not supported",
+        state: {
+          opaque: {
+            fileId: message.video.file_id,
+            provider: "telegram",
+          },
+        },
+      });
+    }
+
+    return attachments;
+  }
+
+  private isDownloadableTelegramMimeType(mimeType: string | undefined): boolean {
+    if (!mimeType) {
+      return true;
+    }
+    return (
+      mimeType.startsWith("text/") ||
+      mimeType.startsWith("image/") ||
+      [
+        "application/json",
+        "application/pdf",
+        "application/toml",
+        "application/x-yaml",
+        "application/yaml",
+        "text/csv",
+      ].includes(mimeType)
+    );
   }
 
   private async buildReplyMarkup(
@@ -769,12 +1030,24 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     };
   }
 
-  private firstImageUrl(intent: MessagingSurfaceIntent): string | undefined {
+  private firstImagePayload(
+    intent: MessagingSurfaceIntent,
+  ): { filename?: string; source: string | Uint8Array } | undefined {
     if (intent.kind !== "message") {
       return undefined;
     }
 
-    return intent.parts.find((part) => part.type === "image" && "url" in part)?.url;
+    const url = intent.parts.find((part) => part.type === "image" && "url" in part)?.url;
+    if (!url) {
+      return undefined;
+    }
+
+    const dataImage = parseDataImageUrl(url);
+    if (dataImage) {
+      return dataImage;
+    }
+
+    return { source: url };
   }
 
   private async deliverActivity(
@@ -1052,6 +1325,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return this.options.now?.() ?? Date.now();
   }
 
+  private get fetch(): FetchLike {
+    return this.options.fetch ?? fetch;
+  }
+
 }
 
 export function createTelegramAdapter(
@@ -1064,6 +1341,51 @@ export function createTelegramAdapter(
     logger,
     store,
   });
+}
+
+function uploadableFileParts(intent: MessagingSurfaceIntent): MessagingFilePart[] {
+  if (intent.kind !== "message") {
+    return [];
+  }
+
+  return intent.parts.filter(
+    (part): part is MessagingFilePart =>
+      part.type === "file" && (part.data !== undefined || Boolean(part.url)),
+  );
+}
+
+function textForTelegramIntentWithoutFiles(intent: MessagingSurfaceIntent): string {
+  if (intent.kind !== "message") {
+    return textForTelegramIntent(intent);
+  }
+
+  return textForTelegramIntent({
+    ...intent,
+    parts: intent.parts.filter((part) => part.type !== "file"),
+  });
+}
+
+function parseDataImageUrl(
+  url: string,
+): { filename: string; source: Uint8Array } | undefined {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)$/i.exec(url);
+  if (!match) {
+    return undefined;
+  }
+
+  const mimeType = match[1]?.toLowerCase();
+  const extension =
+    mimeType === "image/jpeg"
+      ? "jpg"
+      : mimeType === "image/png"
+        ? "png"
+        : mimeType === "image/gif"
+          ? "gif"
+          : "img";
+  return {
+    filename: `assistant-image.${extension}`,
+    source: new Uint8Array(Buffer.from(match[2] ?? "", "base64")),
+  };
 }
 
 export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
@@ -1090,6 +1412,7 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
         );
       },
       getWebhookInfo: async () => await bot.api.getWebhookInfo(),
+      getFile: async (fileId) => await bot.api.getFile(fileId),
       pinChatMessage: async (request) => {
         const { chat_id, message_id, ...other } = request;
         return await bot.api.pinChatMessage(chat_id, message_id, other);
@@ -1102,9 +1425,19 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
         const { chat_id, text, ...other } = request;
         return await bot.api.sendMessage(chat_id, text, other);
       },
+      sendDocument: async (request) => {
+        const { chat_id, document, filename, ...other } = request;
+        const upload =
+          typeof document === "string"
+            ? document
+            : new InputFile(Buffer.from(document), filename);
+        return await bot.api.sendDocument(chat_id, upload, other);
+      },
       sendPhoto: async (request) => {
-        const { chat_id, photo, ...other } = request;
-        return await bot.api.sendPhoto(chat_id, photo, other);
+        const { chat_id, filename, photo, ...other } = request;
+        const upload =
+          typeof photo === "string" ? photo : new InputFile(Buffer.from(photo), filename);
+        return await bot.api.sendPhoto(chat_id, upload, other);
       },
       setMyCommands: async (params) =>
         await bot.api.setMyCommands(params.commands),

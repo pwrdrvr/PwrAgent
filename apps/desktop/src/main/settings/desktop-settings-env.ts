@@ -1,4 +1,7 @@
-import type { DesktopChatReplyComposer } from "@pwragnt/shared";
+import type {
+  DesktopChatReplyComposer,
+  DesktopMessagingImageProfile,
+} from "@pwragnt/shared";
 
 export const DESKTOP_CONFIG_PATH_ENV = "PWRAGNT_CONFIG_PATH";
 export const CHAT_REPLY_COMPOSER_ENV =
@@ -18,6 +21,12 @@ export const DISCORD_AUTHORIZED_USER_IDS_ENV =
   "PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS";
 export const DISCORD_AUTHORIZED_GUILDS_ENV =
   "PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_GUILDS";
+export const MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV =
+  "PWRAGNT_MESSAGING_ATTACHMENT_IMAGE_PROFILE";
+export const MESSAGING_ATTACHMENT_MAX_BYTES_ENV =
+  "PWRAGNT_MESSAGING_ATTACHMENT_MAX_BYTES";
+export const MESSAGING_ATTACHMENT_MAX_COUNT_ENV =
+  "PWRAGNT_MESSAGING_ATTACHMENT_MAX_COUNT";
 export const CODEX_COMMAND_ENV = "PWRAGNT_CODEX_COMMAND";
 
 export type ParsedEnvValue<T> = {
@@ -67,6 +76,39 @@ export function readEnvList(
     .filter(Boolean);
 }
 
+export function readEnvInteger(
+  env: NodeJS.ProcessEnv,
+  key: string,
+): ParsedEnvValue<number> {
+  const rawValue = env[key];
+  if (rawValue === undefined) {
+    return {};
+  }
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return {};
+  }
+  const value = Number(trimmed);
+  return Number.isInteger(value) && value >= 0
+    ? { value }
+    : { error: `Invalid integer value for ${key}` };
+}
+
+export function readEnvMessagingImageProfile(
+  env: NodeJS.ProcessEnv,
+): ParsedEnvValue<DesktopMessagingImageProfile> {
+  const value = readEnvString(env, MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV);
+  if (!value) {
+    return {};
+  }
+  if (!isDesktopMessagingImageProfile(value)) {
+    return {
+      error: `Invalid image profile for ${MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV}`,
+    };
+  }
+  return { value };
+}
+
 export function readEnvComposer(
   env: NodeJS.ProcessEnv,
 ): ParsedEnvValue<DesktopChatReplyComposer> {
@@ -89,4 +131,10 @@ function isDesktopChatReplyComposer(
     || value === "tiptap-wysiwyg-markdown-chips"
     || value === "custom-widget-chips"
   );
+}
+
+function isDesktopMessagingImageProfile(
+  value: string,
+): value is DesktopMessagingImageProfile {
+  return value === "low" || value === "medium" || value === "high" || value === "actual";
 }

@@ -18,6 +18,7 @@ Adapters should support:
 - error surfaces
 - image and file parts when the platform can render them safely
 - best-effort dismiss or update when the platform supports it
+- attachment capability metadata for provider-owned download and upload limits
 
 ## Outputs
 
@@ -26,9 +27,14 @@ Adapters emit `MessagingInboundEvent` values:
 - `command` for explicit commands such as `/threads`
 - `text` for ordinary user text
 - `callback` for button/component/select interactions
-- `media` with `disposition: "unsupported"` for inbound media until a separate
-  ingestion policy exists
+- `media` with generic attachment descriptors for provider media/files
 - `lifecycle` for adapter start/stop/bind events when useful
+
+Media events may include message text plus one or more attachments. Adapter
+fields such as Telegram file IDs or Discord CDN URLs must stay inside opaque
+attachment state; the controller decides whether to download, classify,
+normalize, extract, or reject the attachment after authorization and binding
+checks pass.
 
 The `actor.platformUserId` must be the stable platform ID used for
 authorization. Mutable usernames and display names may be included for audit or
@@ -68,8 +74,26 @@ native autolinking to plain text; neutralize that only with a provider-specific
 policy and tests for the concrete platform behavior.
 
 Telegram currently uses Bot API long polling, HTML-safe text, inline keyboards,
-and `sendPhoto` for image URLs. Discord uses Gateway events, REST message
-delivery, defensive `allowed_mentions`, components, and image embeds.
+`sendPhoto` for image URLs/data images, and `sendDocument` for generic file
+parts. Discord uses Gateway events, REST message delivery, defensive
+`allowed_mentions`, components, image embeds for remote URLs, and multipart
+uploads for byte-backed file/image parts.
+
+## Attachment Policy
+
+Providers expose metadata and transport:
+
+- inbound attachment descriptors with name, MIME hint, size hint, dimensions
+  where available, disposition, and opaque download state
+- a download method that resolves opaque state into bounded bytes
+- capability hints for inbound download and outbound file/image upload limits
+
+Desktop messaging core owns ingestion policy. It enforces attachment count and
+byte caps, sniffs content instead of trusting MIME alone, converts supported
+text-like files into bounded text input, normalizes images/GIF stills into
+model-safe JPEG/PNG data URLs, and returns user-visible rejection reasons for
+unsupported or oversized files. Downloaded bytes and extracted file contents are
+not persisted in messaging state.
 
 ## Typing Activity
 

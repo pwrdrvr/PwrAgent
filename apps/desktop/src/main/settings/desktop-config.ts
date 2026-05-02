@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type {
   DesktopChatReplyComposer,
+  DesktopMessagingImageProfile,
   MessagingToolUpdateMode,
 } from "@pwragnt/shared";
 import { DESKTOP_CONFIG_PATH_ENV } from "./desktop-settings-env";
@@ -19,6 +20,11 @@ export type DesktopSettingsConfig = {
   };
   messaging?: {
     toolUpdateMode?: MessagingToolUpdateMode;
+    attachments?: {
+      imageProfile?: DesktopMessagingImageProfile;
+      maxAttachmentBytes?: number;
+      maxAttachmentCount?: number;
+    };
     telegram?: {
       enabled?: boolean;
       authorizedUserIds?: string[];
@@ -46,7 +52,7 @@ export type DesktopSettingsConfig = {
   };
 };
 
-type TomlScalar = string | boolean | string[];
+type TomlScalar = string | number | boolean | string[];
 
 export function defaultDesktopConfigDir(
   options?: DesktopConfigPathOptions,
@@ -101,6 +107,10 @@ export function mergeDesktopSettingsConfig(
     messaging: {
       toolUpdateMode:
         patch.messaging?.toolUpdateMode ?? current.messaging?.toolUpdateMode,
+      attachments: {
+        ...current.messaging?.attachments,
+        ...patch.messaging?.attachments,
+      },
       telegram: {
         ...current.messaging?.telegram,
         ...patch.messaging?.telegram,
@@ -194,6 +204,20 @@ export function stringifyDesktopSettingsToml(
     );
   }
 
+  const attachments = config.messaging?.attachments;
+  if (attachments && hasDefinedValue(attachments)) {
+    sections.push(
+      [
+        "[messaging.attachments]",
+        formatOptionalTomlEntry("image_profile", attachments.imageProfile),
+        formatOptionalTomlEntry("max_attachment_bytes", attachments.maxAttachmentBytes),
+        formatOptionalTomlEntry("max_attachment_count", attachments.maxAttachmentCount),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+
   const telegram = config.messaging?.telegram;
   if (telegram && hasDefinedValue(telegram)) {
     sections.push(
@@ -267,6 +291,7 @@ function normalizeDesktopConfig(
 ): DesktopSettingsConfig {
   const experimental = tables["experimental"];
   const messaging = tables["messaging"];
+  const attachments = tables["messaging.attachments"];
   const telegram = tables["messaging.telegram"];
   const discord = tables["messaging.discord"];
   const codex = tables["models.codex"];
@@ -279,6 +304,11 @@ function normalizeDesktopConfig(
     },
     messaging: {
       toolUpdateMode: readToolUpdateMode(messaging?.tool_update_mode),
+      attachments: {
+        imageProfile: readImageProfile(attachments?.image_profile),
+        maxAttachmentBytes: readNumber(attachments?.max_attachment_bytes),
+        maxAttachmentCount: readNumber(attachments?.max_attachment_count),
+      },
       telegram: {
         enabled: readBoolean(telegram?.enabled),
         authorizedUserIds: readStringArray(telegram?.authorized_user_ids),
@@ -314,17 +344,22 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     pruned.experimental = config.experimental;
   }
 
+  const attachments = config.messaging?.attachments;
   const telegram = config.messaging?.telegram;
   const discord = config.messaging?.discord;
   const toolUpdateMode = config.messaging?.toolUpdateMode;
   if (
     toolUpdateMode !== undefined ||
-    (telegram && hasDefinedValue(telegram))
+    (attachments && hasDefinedValue(attachments))
+    || (telegram && hasDefinedValue(telegram))
     || (discord && hasDefinedValue(discord))
   ) {
     pruned.messaging = {};
     if (toolUpdateMode !== undefined) {
       pruned.messaging.toolUpdateMode = toolUpdateMode;
+    }
+    if (attachments && hasDefinedValue(attachments)) {
+      pruned.messaging.attachments = attachments;
     }
     if (telegram && hasDefinedValue(telegram)) {
       pruned.messaging.telegram = telegram;
@@ -410,6 +445,24 @@ function readStringArray(value: TomlScalar | undefined): string[] | undefined {
   return Array.isArray(value) ? value.map((item) => item.trim()).filter(Boolean) : undefined;
 }
 
+function readNumber(value: TomlScalar | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readImageProfile(
+  value: TomlScalar | undefined,
+): DesktopMessagingImageProfile | undefined {
+  return typeof value === "string" && isDesktopMessagingImageProfile(value)
+    ? value
+    : undefined;
+}
+
+function isDesktopMessagingImageProfile(
+  value: string,
+): value is DesktopMessagingImageProfile {
+  return value === "low" || value === "medium" || value === "high" || value === "actual";
+}
+
 function parseTomlValue(
   value: string,
   filePath: string,
@@ -426,6 +479,9 @@ function parseTomlValue(
   }
   if (value.startsWith("\"") && value.endsWith("\"")) {
     return unescapeQuotedString(value.slice(1, -1), filePath, lineNumber);
+  }
+  if (/^-?\d+$/.test(value)) {
+    return Number(value);
   }
   throw new Error(`Unsupported TOML value on line ${lineNumber} in ${filePath}`);
 }
@@ -557,13 +613,16 @@ function unescapeQuotedString(
 
 function formatOptionalTomlEntry(
   key: string,
-  value: string | boolean | string[] | undefined,
+  value: string | number | boolean | string[] | undefined,
 ): string | undefined {
   return value === undefined ? undefined : `${key} = ${formatTomlValue(value)}`;
 }
 
-function formatTomlValue(value: string | boolean | string[]): string {
+function formatTomlValue(value: string | number | boolean | string[]): string {
   if (typeof value === "boolean") {
+    return String(value);
+  }
+  if (typeof value === "number") {
     return String(value);
   }
   if (Array.isArray(value)) {

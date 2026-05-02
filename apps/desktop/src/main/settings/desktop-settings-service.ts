@@ -1,5 +1,6 @@
 import type {
   DesktopChatReplyComposer,
+  DesktopMessagingImageProfile,
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
   DesktopSettingsSecretState,
@@ -24,13 +25,18 @@ import {
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
+  MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
+  MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
+  MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
   readEnvBoolean,
   readEnvComposer,
+  readEnvInteger,
   readEnvList,
+  readEnvMessagingImageProfile,
   readEnvString,
 } from "./desktop-settings-env";
 import { discoverCodexCommands } from "./codex-discovery";
@@ -120,6 +126,21 @@ export class DesktopSettingsService {
         toolUpdateMode: this.resolveToolUpdateMode(
           config.messaging?.toolUpdateMode,
         ),
+        attachments: {
+          imageProfile: this.resolveMessagingImageProfile(
+            config.messaging?.attachments?.imageProfile,
+          ),
+          maxAttachmentBytes: this.resolveNumber(
+            config.messaging?.attachments?.maxAttachmentBytes,
+            10 * 1024 * 1024,
+            MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
+          ),
+          maxAttachmentCount: this.resolveNumber(
+            config.messaging?.attachments?.maxAttachmentCount,
+            4,
+            MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
+          ),
+        },
         telegram: {
           enabled: this.resolveBoolean(
             config.messaging?.telegram?.enabled,
@@ -267,6 +288,46 @@ export class DesktopSettingsService {
     envKey: string,
   ): DesktopSettingsValue<boolean> {
     const envValue = readEnvBoolean(this.env, envKey);
+    if (envValue.value !== undefined) {
+      return {
+        value: envValue.value,
+        source: "env",
+        overriddenByEnv: configValue !== undefined,
+      };
+    }
+
+    return {
+      value: configValue ?? defaultValue,
+      source: configValue === undefined ? "default" : "config",
+      error: envValue.error,
+    };
+  }
+
+  private resolveMessagingImageProfile(
+    configValue: DesktopMessagingImageProfile | undefined,
+  ): DesktopSettingsValue<DesktopMessagingImageProfile> {
+    const envValue = readEnvMessagingImageProfile(this.env);
+    if (envValue.value) {
+      return {
+        value: envValue.value,
+        source: "env",
+        overriddenByEnv: configValue !== undefined,
+      };
+    }
+
+    return {
+      value: configValue ?? "medium",
+      source: configValue === undefined ? "default" : "config",
+      error: envValue.error,
+    };
+  }
+
+  private resolveNumber(
+    configValue: number | undefined,
+    defaultValue: number,
+    envKey: string,
+  ): DesktopSettingsValue<number> {
+    const envValue = readEnvInteger(this.env, envKey);
     if (envValue.value !== undefined) {
       return {
         value: envValue.value,

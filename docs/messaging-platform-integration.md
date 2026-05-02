@@ -69,6 +69,19 @@ default, then `Show Some` for old state. Pending batches flush before assistant
 messages, approval or questionnaire prompts, status replies, and terminal turn
 status so tool progress does not arrive after the response it explains.
 
+## Attachments
+
+Bound, authorized conversations can send supported attachments into the active
+thread. PwrAgnt accepts bounded text-like files (`.txt`, `.md`, `.csv`, `.json`,
+`.jsonl`, `.toml`, `.yaml`, `.yml`, logs, and similar UTF-8 text), images, GIFs
+as still images for model input, and PDFs when bounded text can be extracted.
+Unsupported binaries, audio/video, archives, OCR-only PDFs, and oversized files
+are rejected with a short provider message instead of being forwarded to a model.
+
+Images use the shared upload profile setting. The default `medium` profile
+matches desktop paste behavior; `low`, `high`, and `actual` can be set through
+TOML or environment variables while still respecting hard safety caps.
+
 ## Configuration
 
 Messaging is disabled unless a channel has both credentials and authorized actor
@@ -112,6 +125,12 @@ Discord:
 - `PWRAGNT_MESSAGING_DISCORD_APPLICATION_ID`
 - `PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS`
 
+Attachment policy:
+
+- `PWRAGNT_MESSAGING_ATTACHMENT_IMAGE_PROFILE` (`low`, `medium`, `high`, or `actual`)
+- `PWRAGNT_MESSAGING_ATTACHMENT_MAX_BYTES`
+- `PWRAGNT_MESSAGING_ATTACHMENT_MAX_COUNT`
+
 The authorized ID variables are comma-separated lists. Bot tokens are redacted
 from runtime logs. Telegram also accepts `TELEGRAM_BOT_TOKEN` and Discord also
 accepts `DISCORD_BOT_TOKEN` as local migration fallbacks.
@@ -128,7 +147,8 @@ commands on every startup.
 - A conversation must be bound to a thread before ordinary text is routed.
 - Bindings, pending intents, and delivery records live in
   `messaging-state.json` under the desktop state root.
-- Inbound media is not downloaded or forwarded into agent turns in this MVP.
+- Inbound attachments are downloaded only after authorization and active binding
+  checks, then capped, sniffed, normalized, or rejected before model upload.
 - Telegram callback data and Discord component IDs contain short opaque handles,
   not thread IDs, request payloads, tokens, or callback secrets.
 - Discord deliveries use defensive `allowed_mentions` so agent output does not
@@ -161,7 +181,10 @@ Telegram:
 14. Verify markdown, inline code, fenced code, long responses, and image output render.
 15. Restart PwrAgnt and verify the same Telegram conversation still routes to the bound thread.
 16. Send `/detach` and verify the status card is unpinned and free-form text asks for `/resume`.
-17. Send a file or voice message and verify it is rejected without download.
+17. Send a small `.txt` attachment and verify a turn starts with the extracted text.
+18. Send an image attachment and verify a turn starts with normalized image input.
+19. Send an oversized file or voice message and verify it is rejected without model upload.
+20. Verify assistant image and file parts render as Telegram photo/document attachments.
 
 Discord:
 
@@ -176,7 +199,10 @@ Discord:
 9. Trigger an approval request and test accept, session accept, decline, and cancel.
 10. Verify markdown, inline code, fenced code, long responses, and image output render.
 11. Restart PwrAgnt and verify the same Discord channel still routes to the bound thread.
-12. Send an attachment and verify it is rejected without download.
+12. Send a small `.txt` attachment and verify a turn starts with the extracted text.
+13. Send an image attachment and verify a turn starts with normalized image input.
+14. Send an oversized attachment and verify it is rejected without model upload.
+15. Verify assistant image and file parts render as Discord embeds/uploads.
 
 Discord currently has parity for the shared workflow and button actions, but it
 does not pin or edit status cards yet; status updates degrade to normal

@@ -163,6 +163,7 @@ export type MessagingImagePart = AppServerThreadImagePart & {
 export type MessagingFilePart = {
   type: "file";
   name: string;
+  data?: Uint8Array;
   url?: string;
   mimeType?: string;
   sizeBytes?: number;
@@ -402,10 +403,40 @@ export type MessagingInboundCallbackEvent = MessagingInboundBaseEvent & {
   value?: MessagingJsonValue;
 };
 
+export type MessagingAttachmentDisposition =
+  | "available"
+  | "rejected"
+  | "unsupported";
+
+export type MessagingAttachmentKind =
+  | "file"
+  | "image"
+  | "gif"
+  | "audio"
+  | "video"
+  | "unknown";
+
+export type MessagingAttachmentDescriptor = {
+  id: string;
+  kind: MessagingAttachmentKind;
+  name: string;
+  disposition: MessagingAttachmentDisposition;
+  description?: string;
+  height?: number;
+  mimeType?: string;
+  reason?: string;
+  sizeBytes?: number;
+  state?: MessagingAdapterState;
+  url?: string;
+  width?: number;
+};
+
 export type MessagingInboundMediaEvent = MessagingInboundBaseEvent & {
   kind: "media";
-  media: MessagingFilePart | AppServerThreadMessagePart;
-  disposition: "unsupported";
+  attachments: MessagingAttachmentDescriptor[];
+  disposition: MessagingAttachmentDisposition;
+  media?: MessagingFilePart | AppServerThreadMessagePart;
+  text?: string;
 };
 
 export type MessagingInboundLifecycleEvent = MessagingInboundBaseEvent & {
@@ -531,4 +562,30 @@ export type MessagingCallbackHandleRecord = {
   surface?: MessagingSurfaceRef;
   updatedAt: number;
   value?: MessagingJsonValue;
+};
+
+export type MessagingAttachmentDownloadRequest = {
+  attachment: MessagingAttachmentDescriptor;
+  maxBytes: number;
+};
+
+export type MessagingAttachmentDownloadResult = {
+  data: Uint8Array;
+  fileName: string;
+  mimeType?: string;
+  sizeBytes: number;
+};
+
+export type MessagingAdapterCapabilities = {
+  inboundAttachments?: {
+    maxAttachmentCount?: number;
+    maxDownloadBytes?: number;
+    supportsDownload: boolean;
+  };
+  outboundAttachments?: {
+    maxUploadBytes?: number;
+    supportsFileUpload: boolean;
+    supportsImageUpload: boolean;
+    supportsRemoteImageUrl: boolean;
+  };
 };

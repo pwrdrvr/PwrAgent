@@ -117,9 +117,9 @@ vi.mock("../diagnostics/startup-cpu-profiler", () => ({
 }));
 
 async function flushMicrotasks(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 describe("bootstrapApp", () => {
@@ -157,6 +157,7 @@ describe("bootstrapApp", () => {
     startupProfilerInstance.attachWindow.mockReset();
     StartupCpuProfilerMock.mockClear();
     vi.resetModules();
+    vi.stubEnv("PWRAGNT_DISABLE_MESSAGING", undefined);
   });
 
   afterEach(() => {

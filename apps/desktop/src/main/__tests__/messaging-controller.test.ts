@@ -502,6 +502,15 @@ describe("MessagingController", () => {
         type: "file",
         name: "voice.m4a",
       },
+      attachments: [
+        {
+          id: "voice-1",
+          kind: "audio",
+          name: "voice.m4a",
+          disposition: "unsupported",
+          reason: "audio attachments are not supported",
+        },
+      ],
       disposition: "unsupported",
     });
 
@@ -512,8 +521,60 @@ describe("MessagingController", () => {
     );
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "error",
-      title: "Media is not supported yet",
+      title: "Attachment not supported",
     });
+  });
+
+  it("routes supported inbound text attachments into bound thread turns", async () => {
+    const harness = await createHarness({
+      downloadAttachment: vi.fn(async ({ attachment }) => {
+        const data = new TextEncoder().encode("first line\nsecond line");
+        return {
+          data,
+          fileName: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: data.byteLength,
+        };
+      }),
+    });
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("Please inspect this"),
+      id: "event-media",
+      kind: "media",
+      text: "Please inspect this",
+      attachments: [
+        {
+          id: "file-1",
+          kind: "file",
+          name: "streaming-logs.txt",
+          disposition: "available",
+          mimeType: "text/plain",
+          sizeBytes: 22,
+        },
+      ],
+      disposition: "available",
+    });
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: expect.stringContaining("Please inspect this\n\nAttached file: `streaming-logs.txt`"),
+          },
+        ],
+      }),
+    );
   });
 
   it("routes completed assistant output to active thread bindings", async () => {
@@ -1741,6 +1802,7 @@ describe("MessagingController", () => {
 
 async function createHarness(options?: {
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
+  downloadAttachment?: MessagingAdapter["downloadAttachment"];
   logger?: MessagingControllerOptions["logger"];
   now?: () => number;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
@@ -1763,6 +1825,9 @@ async function createHarness(options?: {
   const store = await createStore();
   const delivered: MessagingSurfaceIntent[] = [];
   const adapter: MessagingAdapter = {
+    ...(options?.downloadAttachment
+      ? { downloadAttachment: options.downloadAttachment }
+      : {}),
     deliver: vi.fn(
       options?.deliver ??
         (async (intent) => {

@@ -13,10 +13,15 @@ import {
   type User,
 } from "discord.js";
 import type {
+  MessagingAdapterCapabilities,
   MessagingAdapterState,
+  MessagingAttachmentDescriptor,
+  MessagingAttachmentDownloadRequest,
+  MessagingAttachmentDownloadResult,
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
   MessagingDeliveryResult,
+  MessagingFilePart,
   MessagingInboundEvent,
   MessagingJsonValue,
   MessagingSurfaceAction,
@@ -45,6 +50,13 @@ type DiscordComponentBinding = {
   actionId: string;
   value?: MessagingJsonValue;
 };
+
+type FetchLike = (url: string) => Promise<{
+  arrayBuffer(): Promise<ArrayBuffer>;
+  ok: boolean;
+  status: number;
+  statusText: string;
+}>;
 
 type DiscordTypingSignal = {
   interval: ReturnType<typeof setInterval>;
@@ -77,6 +89,10 @@ export type DiscordCreateMessageRequest = {
     image?: {
       url: string;
     };
+  }>;
+  files?: Array<{
+    data: Uint8Array;
+    name: string;
   }>;
 };
 
@@ -189,6 +205,7 @@ export type DiscordApi = DiscordApplicationCommandApi & {
 type DiscordAdapterOptions = {
   api?: DiscordApi;
   config: DiscordMessagingConfig;
+  fetch?: FetchLike;
   gateway?: DiscordGatewayConnection;
   logger?: DiscordProviderLogger;
   now?: () => number;
@@ -196,8 +213,12 @@ type DiscordAdapterOptions = {
 
 export type DiscordProviderAdapter = {
   authorizedActorIds: readonly string[];
+  capabilities?: MessagingAdapterCapabilities;
   channel: "discord";
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  downloadAttachment?(
+    request: MessagingAttachmentDownloadRequest,
+  ): Promise<MessagingAttachmentDownloadResult>;
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
@@ -207,6 +228,19 @@ export type DiscordProviderAdapter = {
 
 export class DiscordAdapter implements DiscordProviderAdapter {
   readonly channel = "discord" as const;
+  readonly capabilities: MessagingAdapterCapabilities = {
+    inboundAttachments: {
+      maxAttachmentCount: 10,
+      maxDownloadBytes: 25 * 1024 * 1024,
+      supportsDownload: true,
+    },
+    outboundAttachments: {
+      maxUploadBytes: 25 * 1024 * 1024,
+      supportsFileUpload: true,
+      supportsImageUpload: true,
+      supportsRemoteImageUrl: true,
+    },
+  };
 
   private componentBindings = new Map<string, DiscordComponentBinding>();
   private defaultApi?: DiscordApi;
@@ -242,6 +276,35 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     await this.gateway.close();
   }
 
+  async downloadAttachment(
+    request: MessagingAttachmentDownloadRequest,
+  ): Promise<MessagingAttachmentDownloadResult> {
+    const opaque = request.attachment.state?.opaque;
+    if (!opaque || typeof opaque !== "object" || Array.isArray(opaque)) {
+      throw new Error("Discord attachment download state is missing.");
+    }
+    const url = opaque.url;
+    if (typeof url !== "string" || !url) {
+      throw new Error("Discord attachment URL is missing.");
+    }
+    const response = await this.fetch(url);
+    if (!response.ok) {
+      throw new Error(
+        `Discord attachment download failed: ${response.status} ${response.statusText}`,
+      );
+    }
+    const data = new Uint8Array(await response.arrayBuffer());
+    if (data.byteLength > request.maxBytes) {
+      throw new Error("Discord attachment exceeds the configured download limit.");
+    }
+    return {
+      data,
+      fileName: request.attachment.name,
+      mimeType: request.attachment.mimeType,
+      sizeBytes: data.byteLength,
+    };
+  }
+
   async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
     if (intent.kind === "dismiss") {
       return {
@@ -271,8 +334,14 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         (action) => this.createCustomId(intent, action),
         intent.actionLayout,
       );
-      const imageUrl = this.firstImageUrl(intent);
-      const chunks = splitDiscordContent(textForDiscordIntent(intent) || " ");
+      const imageUpload = uploadableImagePart(intent);
+      const imageUrl = imageUpload ? undefined : this.firstImageUrl(intent);
+      const files = [...uploadableFileParts(intent), ...(imageUpload ? [imageUpload] : [])];
+      const chunks = splitDiscordContent(
+        (files.length > 0
+          ? textForDiscordIntentWithoutUploads(intent)
+          : textForDiscordIntent(intent)) || " ",
+      );
       const componentPayload =
         components ?? (intent.delivery?.replaceMarkup ? [] : undefined);
 
@@ -280,7 +349,8 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         target.applicationId &&
         target.interactionToken &&
         chunks.length === 1 &&
-        !imageUrl
+        !imageUrl &&
+        files.length === 0
       ) {
         const message = await this.api.updateInteractionOriginalResponse(
           target.applicationId,
@@ -313,6 +383,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
               allowed_mentions: defensiveAllowedMentions(),
               components: componentPayload,
               content: chunks[0] ?? " ",
+              files: filesForDiscordRequest(files),
             },
           );
           return {
@@ -345,6 +416,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
                   },
                 ]
               : undefined,
+          files: index === chunks.length - 1 ? filesForDiscordRequest(files) : undefined,
         };
         messages.push(await this.api.createMessage(target.channelId, request));
       }
@@ -437,21 +509,27 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     });
 
     if (message.attachments && message.attachments.length > 0) {
-      const attachment = message.attachments[0]!;
+      const attachments = message.attachments.map((attachment) =>
+        this.attachmentFromDiscord(attachment),
+      );
       await listener({
         id: `discord:message:${message.id}`,
         kind: "media",
+        attachments,
         actor: this.actorFromUser(message.author),
         channel,
-        disposition: "unsupported",
+        disposition: attachments.some((attachment) => attachment.disposition === "available")
+          ? "available"
+          : "unsupported",
         media: {
           type: "file",
-          name: attachment.filename,
-          mimeType: attachment.content_type,
-          sizeBytes: attachment.size,
+          name: attachments[0]?.name ?? "discord-attachment",
+          mimeType: attachments[0]?.mimeType,
+          sizeBytes: attachments[0]?.sizeBytes,
         },
         receivedAt,
         routingState,
+        text: message.content,
       });
       return;
     }
@@ -897,6 +975,35 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     };
   }
 
+  private attachmentFromDiscord(attachment: {
+    content_type?: string;
+    filename: string;
+    id: string;
+    size?: number;
+    url: string;
+  }): MessagingAttachmentDescriptor {
+    const mimeType = attachment.content_type;
+    const kind = attachmentKindFromDiscordMimeType(mimeType, attachment.filename);
+    const available =
+      kind === "file" || kind === "image" || kind === "gif";
+    return {
+      id: `discord:attachment:${attachment.id}`,
+      kind,
+      name: attachment.filename,
+      disposition: available ? "available" : "unsupported",
+      mimeType,
+      reason: available ? undefined : "unsupported attachment type",
+      sizeBytes: attachment.size,
+      state: {
+        opaque: {
+          attachmentId: attachment.id,
+          provider: "discord",
+          url: attachment.url,
+        },
+      },
+    };
+  }
+
   private get api(): DiscordApi {
     this.defaultApi ??= new DiscordRestApi(this.options.config.botToken);
     return this.options.api ?? this.defaultApi;
@@ -910,6 +1017,117 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private now(): number {
     return this.options.now?.() ?? Date.now();
   }
+
+  private get fetch(): FetchLike {
+    return this.options.fetch ?? fetch;
+  }
+}
+
+function uploadableFileParts(intent: MessagingSurfaceIntent): MessagingFilePart[] {
+  if (intent.kind !== "message") {
+    return [];
+  }
+
+  return intent.parts.filter(
+    (part): part is MessagingFilePart =>
+      part.type === "file" && part.data !== undefined,
+  );
+}
+
+function uploadableImagePart(intent: MessagingSurfaceIntent): MessagingFilePart | undefined {
+  if (intent.kind !== "message") {
+    return undefined;
+  }
+
+  const url = intent.parts.find((part) => part.type === "image")?.url;
+  if (!url) {
+    return undefined;
+  }
+
+  const dataImage = parseDataImageUrl(url);
+  if (!dataImage) {
+    return undefined;
+  }
+
+  return {
+    data: dataImage.data,
+    mimeType: dataImage.mimeType,
+    name: dataImage.name,
+    sizeBytes: dataImage.data.byteLength,
+    type: "file",
+  };
+}
+
+function textForDiscordIntentWithoutUploads(intent: MessagingSurfaceIntent): string {
+  if (intent.kind !== "message") {
+    return textForDiscordIntent(intent);
+  }
+
+  return textForDiscordIntent({
+    ...intent,
+    parts: intent.parts.filter(
+      (part) =>
+        !(part.type === "file" && part.data !== undefined) &&
+        !(part.type === "image" && part.url.startsWith("data:image/")),
+    ),
+  });
+}
+
+function filesForDiscordRequest(
+  files: MessagingFilePart[],
+): DiscordCreateMessageRequest["files"] | undefined {
+  if (files.length === 0) {
+    return undefined;
+  }
+
+  return files.map((file) => ({
+    data: file.data!,
+    name: file.name,
+  }));
+}
+
+function parseDataImageUrl(
+  url: string,
+): { data: Uint8Array; mimeType: string; name: string } | undefined {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)$/i.exec(url);
+  if (!match) {
+    return undefined;
+  }
+
+  const mimeType = match[1]?.toLowerCase() ?? "image/png";
+  const extension =
+    mimeType === "image/jpeg"
+      ? "jpg"
+      : mimeType === "image/png"
+        ? "png"
+        : mimeType === "image/gif"
+          ? "gif"
+          : "img";
+  return {
+    data: new Uint8Array(Buffer.from(match[2] ?? "", "base64")),
+    mimeType,
+    name: `assistant-image.${extension}`,
+  };
+}
+
+function attachmentKindFromDiscordMimeType(
+  mimeType: string | undefined,
+  filename: string,
+): MessagingAttachmentDescriptor["kind"] {
+  const lowerName = filename.toLowerCase();
+  if (mimeType?.startsWith("image/gif") || lowerName.endsWith(".gif")) {
+    return "gif";
+  }
+  if (mimeType?.startsWith("image/")) {
+    return "image";
+  }
+  if (mimeType?.startsWith("audio/")) {
+    return "audio";
+  }
+  if (mimeType?.startsWith("video/")) {
+    return "video";
+  }
+  return "file";
 }
 
 export function createDiscordAdapter(
@@ -942,8 +1160,13 @@ class DiscordRestApi implements DiscordApi {
     channelId: string,
     request: DiscordCreateMessageRequest,
   ): Promise<DiscordMessage> {
+    const { files, ...body } = request;
     return (await this.rest.post(Routes.channelMessages(channelId), {
-      body: request,
+      body,
+      files: files?.map((file) => ({
+        data: Buffer.from(file.data),
+        name: file.name,
+      })),
     })) as DiscordMessage;
   }
 
@@ -971,10 +1194,15 @@ class DiscordRestApi implements DiscordApi {
     interactionToken: string,
     request: DiscordCreateMessageRequest,
   ): Promise<DiscordMessage> {
+    const { files, ...body } = request;
     return (await this.rest.patch(
       `/webhooks/${applicationId}/${interactionToken}/messages/@original`,
       {
-        body: request,
+        body,
+        files: files?.map((file) => ({
+          data: Buffer.from(file.data),
+          name: file.name,
+        })),
       },
     )) as DiscordMessage;
   }
@@ -1018,8 +1246,13 @@ class DiscordRestApi implements DiscordApi {
     messageId: string,
     request: DiscordCreateMessageRequest,
   ): Promise<DiscordMessage> {
+    const { files, ...body } = request;
     return (await this.rest.patch(Routes.channelMessage(channelId, messageId), {
-      body: request,
+      body,
+      files: files?.map((file) => ({
+        data: Buffer.from(file.data),
+        name: file.name,
+      })),
     })) as DiscordMessage;
   }
 }
