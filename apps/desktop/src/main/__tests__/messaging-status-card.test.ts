@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { MessagingBindingRecord, NavigationSnapshot } from "@pwragnt/shared";
-import { buildBindingStatusIntent } from "../messaging/core/messaging-status-card";
+import {
+  buildBindingStatusIntent,
+  buildHandoffBranchPickerIntent,
+  buildHandoffConfirmationIntent,
+  buildHandoffOverviewIntent,
+  handoffRequestFromValue,
+  type MessagingWorkspaceHandoffContext,
+} from "../messaging/core/messaging-status-card";
 import { resolveMessagingThreadState } from "../messaging/core/messaging-thread-state";
 
 describe("buildBindingStatusIntent", () => {
@@ -247,7 +254,144 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).toContain("Fast mode: on");
     expect(intent.text).toContain("Permissions: Full Access");
   });
+
+  it("adds the status handoff action when a handoff context is available", () => {
+    const binding = buildBinding();
+    const navigation = buildNavigationSnapshot();
+    const intent = buildBindingStatusIntent({
+      id: "status-7",
+      createdAt: 1000,
+      binding,
+      handoff: buildHandoffContext(),
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.actions).toContainEqual(
+      expect.objectContaining({
+        id: "status:handoff",
+        label: "Handoff",
+        value: expect.objectContaining({
+          backend: "codex",
+          direction: "local-to-worktree",
+          repositoryPath: "/repo/pwragnt",
+          sourceBranch: "feature/handoff",
+          sourcePath: "/repo/pwragnt",
+          threadId: "thread-1",
+        }),
+      }),
+    );
+  });
+
+  it("builds handoff overview, branch picker, and confirmation intents", () => {
+    const binding = buildBinding();
+    const context = buildHandoffContext();
+    const overview = buildHandoffOverviewIntent({
+      id: "handoff-overview-1",
+      binding,
+      context,
+      createdAt: 1000,
+    });
+
+    expect(overview).toMatchObject({
+      kind: "single_select",
+      prompt: expect.stringContaining("Workspace Handoff"),
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "handoff:local-to-worktree",
+          label: "Handoff to New Worktree",
+        }),
+      ]),
+    });
+
+    const branchPicker = buildHandoffBranchPickerIntent({
+      id: "handoff-branch-1",
+      binding,
+      context,
+      createdAt: 1000,
+    });
+    expect(branchPicker.choices[0]).toMatchObject({
+      id: "handoff:select-leave-branch",
+      label: "1. main",
+      value: expect.objectContaining({
+        leaveLocalBranch: "main",
+      }),
+    });
+
+    const confirmation = buildHandoffConfirmationIntent({
+      id: "handoff-confirm-1",
+      binding,
+      context,
+      createdAt: 1000,
+      leaveLocalBranch: "main",
+    });
+    expect(confirmation).toMatchObject({
+      kind: "confirmation",
+      title: "Confirm Handoff",
+      body: expect.stringContaining("Leave Local on: main"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "handoff:confirm",
+          value: expect.objectContaining({
+            leaveLocalBranch: "main",
+          }),
+        }),
+      ]),
+    });
+  });
+
+  it("parses a handoff request only from complete action values", () => {
+    expect(
+      handoffRequestFromValue({
+        backend: "codex",
+        direction: "local-to-worktree",
+        repositoryPath: "/repo/pwragnt",
+        sourceBranch: "feature/handoff",
+        sourcePath: "/repo/pwragnt",
+        threadId: "thread-1",
+      }),
+    ).toEqual({
+      backend: "codex",
+      direction: "local-to-worktree",
+      repositoryPath: "/repo/pwragnt",
+      sourceBranch: "feature/handoff",
+      sourcePath: "/repo/pwragnt",
+      threadId: "thread-1",
+    });
+    expect(handoffRequestFromValue({ direction: "local-to-worktree" })).toBeUndefined();
+  });
 });
+
+function buildBinding(): MessagingBindingRecord {
+  return {
+    id: "binding-1",
+    authorizedActorIds: ["user-1"],
+    backend: "codex",
+    channel: {
+      channel: "telegram",
+      conversation: {
+        id: "chat-1",
+        kind: "dm",
+      },
+    },
+    createdAt: 1000,
+    threadId: "thread-1",
+    updatedAt: 1000,
+  };
+}
+
+function buildHandoffContext(): MessagingWorkspaceHandoffContext {
+  return {
+    backend: "codex",
+    branch: "feature/handoff",
+    leaveLocalBranches: ["main", "develop"],
+    projectLabel: "PwrAgnt",
+    repositoryPath: "/repo/pwragnt",
+    threadId: "thread-1",
+    threadTitle: "Thread one",
+    workingDirectoryPath: "/repo/pwragnt",
+    workspaceKind: "local",
+  };
+}
 
 function buildNavigationSnapshot(): NavigationSnapshot {
   return {

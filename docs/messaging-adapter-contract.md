@@ -108,6 +108,14 @@ surfaces can happen while a turn is paused for the user. The controller owns
 those lifecycle decisions and translates them into active or idle activity
 intents.
 
+Workspace handoff is expressed with the same generic status, single-select,
+confirmation, and error intents as other messaging workflows. Adapters should
+render its `Handoff`, branch, confirm, back, refresh, and cancel actions like
+any other `MessagingSurfaceAction`; provider payloads must remain short opaque
+handles. If a platform cannot show every button, text fallback remains the
+required escape hatch until PwrAgnt has a generic low-button-count variation
+policy.
+
 ## Adding A New Adapter
 
 To add Mattermost, Feishu/Lark, Slack, Matrix, or another channel:

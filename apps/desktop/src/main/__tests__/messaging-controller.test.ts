@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
   AppServerPendingRequestNotification,
+  HandoffThreadWorkspaceRequest,
   ListBackendsResponse,
+  MessagingSurfaceAction,
   MessagingDeliveryResult,
   MessagingInboundCallbackEvent,
   MessagingInboundEvent,
@@ -1740,6 +1742,205 @@ describe("MessagingController", () => {
     });
   });
 
+  it("runs a local-to-worktree handoff from the status menu", async () => {
+    const harness = await createHarness();
+    harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:handoff" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: expect.stringContaining("Workspace Handoff"),
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "handoff:local-to-worktree",
+          label: "Handoff to New Worktree",
+        }),
+      ]),
+    });
+
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: toWorktree.id,
+        value: toWorktree.value,
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: expect.stringContaining("Choose the branch"),
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "handoff:select-leave-branch",
+          label: "1. main",
+        }),
+      ]),
+    });
+
+    const leaveMain = findChoice(harness.delivered.at(-1), "handoff:select-leave-branch");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: leaveMain.id,
+        value: leaveMain.value,
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Leave Local on: main"),
+    });
+
+    const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
+    harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    harness.getNavigationSnapshot.mockResolvedValueOnce(
+      buildLocalHandoffNavigationSnapshot(),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: confirm.id,
+        value: confirm.value,
+      }),
+    );
+
+    expect(harness.handoffThreadWorkspace).toHaveBeenCalledWith({
+      backend: "codex",
+      direction: "local-to-worktree",
+      leaveLocalBranch: "main",
+      repositoryPath: "/repo/pwragnt",
+      sourceBranch: "feature/handoff",
+      sourcePath: "/repo/pwragnt",
+      threadId: "thread-1",
+    });
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "status",
+      status: "completed",
+      text: expect.stringContaining("/repo/pwragnt/.worktrees/pwragnt-feature-handoff"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining(
+        "Worktree: /repo/pwragnt/.worktrees/pwragnt-feature-handoff",
+      ),
+    });
+  });
+
+  it("runs a worktree-to-local handoff from the status menu", async () => {
+    const harness = await createHarness();
+    harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:handoff" }),
+    );
+
+    const toLocal = findChoice(harness.delivered.at(-1), "handoff:worktree-to-local");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: toLocal.id,
+        value: toLocal.value,
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Confirm Handoff",
+      body: expect.stringContaining("Confirm handoff to Local."),
+    });
+
+    const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
+    harness.getNavigationSnapshot.mockResolvedValue(buildNavigationSnapshot());
+    harness.getNavigationSnapshot.mockResolvedValueOnce(
+      buildWorktreeHandoffNavigationSnapshot(),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: confirm.id,
+        value: confirm.value,
+      }),
+    );
+
+    expect(harness.handoffThreadWorkspace).toHaveBeenCalledWith({
+      backend: "codex",
+      direction: "worktree-to-local",
+      repositoryPath: "/repo/pwragnt",
+      sourceBranch: "feature/handoff",
+      sourcePath: "/repo/pwragnt/.worktrees/pwragnt-feature-handoff",
+      threadId: "thread-1",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Directory: /repo/pwragnt"),
+    });
+    const finalStatus = harness.delivered.at(-1);
+    if (!finalStatus || finalStatus.kind !== "status") {
+      throw new Error("Expected final handoff delivery to be a status intent");
+    }
+    expect(finalStatus.text).not.toContain("Worktree:");
+  });
+
+  it("rejects stale handoff confirmations when workspace metadata changes", async () => {
+    const harness = await createHarness();
+    harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:handoff" }),
+    );
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: toWorktree.id,
+        value: toWorktree.value,
+      }),
+    );
+    const leaveMain = findChoice(harness.delivered.at(-1), "handoff:select-leave-branch");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: leaveMain.id,
+        value: leaveMain.value,
+      }),
+    );
+    const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
+
+    harness.getNavigationSnapshot.mockResolvedValue(buildNavigationSnapshot());
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: confirm.id,
+        value: confirm.value,
+      }),
+    );
+
+    expect(harness.handoffThreadWorkspace).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Handoff unavailable",
+    });
+  });
+
+  it("reports handoff as unavailable when the backend bridge does not expose it", async () => {
+    const harness = await createHarness({ handoff: false });
+    harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:handoff" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Handoff unavailable",
+      body: expect.stringContaining("does not expose"),
+    });
+  });
+
   it("syncs the platform conversation name from the bound thread title", async () => {
     const setConversationTitle = vi.fn(
       async (
@@ -1803,6 +2004,7 @@ describe("MessagingController", () => {
 async function createHarness(options?: {
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
+  handoff?: false;
   logger?: MessagingControllerOptions["logger"];
   now?: () => number;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
@@ -1812,6 +2014,7 @@ async function createHarness(options?: {
   compactThread: ReturnType<typeof vi.fn>;
   delivered: MessagingSurfaceIntent[];
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
+  handoffThreadWorkspace: ReturnType<typeof vi.fn> | undefined;
   interruptTurn: ReturnType<typeof vi.fn>;
   listBackends: ReturnType<typeof vi.fn>;
   readThreadStatus: ReturnType<typeof vi.fn>;
@@ -1868,6 +2071,38 @@ async function createHarness(options?: {
   const interruptTurn = vi.fn(async (request) => request);
   const setThreadExecutionMode = vi.fn(async (request) => request);
   const setThreadModelSettings = vi.fn(async (request) => request);
+  const handoffThreadWorkspace =
+    options?.handoff === false
+      ? undefined
+      : vi.fn(async (request: HandoffThreadWorkspaceRequest) => ({
+          backend: request.backend,
+          threadId: request.threadId,
+          direction: request.direction,
+          workMode: request.direction === "local-to-worktree"
+            ? "worktree" as const
+            : "local" as const,
+          branch: request.sourceBranch,
+          repositoryPath: request.repositoryPath ?? "/repo/pwragnt",
+          targetPath: request.direction === "local-to-worktree"
+            ? "/repo/pwragnt/.worktrees/pwragnt-feature-handoff"
+            : "/repo/pwragnt",
+          linkedDirectory: request.direction === "local-to-worktree"
+            ? {
+                id: "pwragnt-handoff:codex:thread-1",
+                kind: "worktree" as const,
+                label: "PwrAgnt",
+                path: "/repo/pwragnt",
+                worktreePath: "/repo/pwragnt/.worktrees/pwragnt-feature-handoff",
+              }
+            : {
+                id: "directory:pwragnt",
+                kind: "local" as const,
+                label: "PwrAgnt",
+                path: "/repo/pwragnt",
+              },
+          warnings: [],
+          completedAt: 1000,
+        }));
   const listBackends = vi.fn(async (): Promise<ListBackendsResponse> => ({
     fetchedAt: 1000,
     backends: [buildBackendSummary()],
@@ -1882,6 +2117,7 @@ async function createHarness(options?: {
   const backend: MessagingBackendBridge = {
     compactThread,
     getNavigationSnapshot,
+    ...(handoffThreadWorkspace ? { handoffThreadWorkspace } : {}),
     interruptTurn,
     listBackends,
     readThreadStatus,
@@ -1905,6 +2141,7 @@ async function createHarness(options?: {
     compactThread,
     delivered,
     getNavigationSnapshot,
+    handoffThreadWorkspace,
     interruptTurn,
     listBackends,
     readThreadStatus,
@@ -2019,6 +2256,68 @@ function buildNavigationSnapshot(): NavigationSnapshot {
       executionMode: "default",
     },
   };
+}
+
+function buildLocalHandoffNavigationSnapshot(): NavigationSnapshot {
+  const snapshot = buildNavigationSnapshot();
+  snapshot.threads[0] = {
+    ...snapshot.threads[0]!,
+    gitBranch: "feature/handoff",
+  };
+  snapshot.directories[0] = {
+    ...snapshot.directories[0]!,
+    gitStatus: {
+      currentBranch: "feature/handoff",
+      handoffBranches: ["main", "develop"],
+    },
+  };
+  return snapshot;
+}
+
+function buildWorktreeHandoffNavigationSnapshot(): NavigationSnapshot {
+  const snapshot = buildNavigationSnapshot();
+  snapshot.threads[0] = {
+    ...snapshot.threads[0]!,
+    gitBranch: "feature/handoff",
+    linkedDirectories: [
+      {
+        id: "pwragnt-handoff:codex:thread-1",
+        kind: "worktree",
+        label: "PwrAgnt",
+        path: "/repo/pwragnt",
+        worktreePath: "/repo/pwragnt/.worktrees/pwragnt-feature-handoff",
+      },
+    ],
+  };
+  return snapshot;
+}
+
+function findChoice(
+  intent: MessagingSurfaceIntent | undefined,
+  actionId: string,
+): MessagingSurfaceAction {
+  if (!intent || !("choices" in intent)) {
+    throw new Error(`Intent does not contain choices for ${actionId}`);
+  }
+  const action = intent.choices.find((choice) => choice.id === actionId);
+  if (!action) {
+    throw new Error(`Choice ${actionId} not found`);
+  }
+  return action;
+}
+
+function findAction(
+  intent: MessagingSurfaceIntent | undefined,
+  actionId: string,
+): MessagingSurfaceAction {
+  if (!intent || !("actions" in intent) || !Array.isArray(intent.actions)) {
+    throw new Error(`Intent does not contain actions for ${actionId}`);
+  }
+  const action = intent.actions.find((candidate) => candidate.id === actionId);
+  if (!action) {
+    throw new Error(`Action ${actionId} not found`);
+  }
+  return action;
 }
 
 function buildCommandEvent(

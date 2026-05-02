@@ -5,6 +5,8 @@ import type {
   CompactThreadRequest,
   CompactThreadResponse,
   GetNavigationSnapshotRequest,
+  HandoffThreadWorkspaceRequest,
+  HandoffThreadWorkspaceResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
   ListBackendsRequest,
@@ -68,6 +70,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       threadId: request.threadId,
     });
     return response.threadStatus ?? response.replay.threadStatus;
+  }
+
+  async handoffThreadWorkspace(
+    request: HandoffThreadWorkspaceRequest,
+  ): Promise<HandoffThreadWorkspaceResponse> {
+    return await this.registry.handoffThreadWorkspace(request);
   }
 
   async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {

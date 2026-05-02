@@ -147,6 +147,70 @@ describe("discord formatting", () => {
     ]);
   });
 
+  it("renders workspace handoff choices inside component limits", () => {
+    const intent = {
+      id: "handoff-overview-1",
+      kind: "single_select",
+      createdAt: 1000,
+      prompt: [
+        "Workspace Handoff",
+        "Repository: /repo/pwragnt",
+        "Working directory: /repo/pwragnt/.worktrees/pwragnt-feature-handoff",
+        "Branch: feature/handoff",
+      ].join("\n"),
+      fallbackText: "Reply with 1, Back, Refresh, or Cancel.",
+      choices: [
+        {
+          id: "handoff:worktree-to-local",
+          label: "Handoff to Local",
+          style: "primary",
+          fallbackText: "1",
+          value: {
+            backend: "codex",
+            threadId: "thread-1",
+            direction: "worktree-to-local",
+            repositoryPath: "/repo/pwragnt",
+            sourcePath: "/repo/pwragnt/.worktrees/pwragnt-feature-handoff",
+            sourceBranch: "feature/handoff",
+          },
+        },
+        {
+          id: "status:refresh",
+          label: "Back",
+          style: "secondary",
+          fallbackText: "back",
+        },
+        {
+          id: "status:refresh",
+          label: "Refresh",
+          style: "secondary",
+          fallbackText: "refresh",
+        },
+        {
+          id: "handoff:cancel",
+          label: "Cancel",
+          style: "secondary",
+          fallbackText: "cancel",
+        },
+      ],
+    } satisfies Parameters<typeof textForDiscordIntent>[0];
+
+    const components = buildDiscordComponents(
+      intent.choices,
+      (action) => `dc:${action.id}`,
+    );
+
+    expect(textForDiscordIntent(intent)).toContain("Workspace Handoff");
+    expect(components).toHaveLength(1);
+    expect(components?.[0]?.components.map((button) => button.label)).toEqual([
+      "Handoff to Local",
+      "Back",
+      "Refresh",
+      "Cancel",
+    ]);
+    expect(JSON.stringify(components)).not.toContain("/repo/pwragnt");
+  });
+
   it("preserves approval markdown code blocks", () => {
     const rendered = textForDiscordIntent({
       id: "approval-1",

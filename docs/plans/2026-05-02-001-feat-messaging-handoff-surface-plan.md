@@ -161,7 +161,7 @@ flowchart TB
     U3 --> U5["Unit 5: Docs and manual validation"]
 ```
 
-- [ ] **Unit 1: Expose handoff through the messaging backend bridge**
+- [x] **Unit 1: Expose handoff through the messaging backend bridge**
 
 **Goal:** Give messaging controller code a channel-neutral way to invoke the existing desktop handoff operation and to capture enough handoff metadata in binding display state.
 
@@ -200,7 +200,7 @@ flowchart TB
 **Verification:**
 - Messaging code can call desktop handoff through a typed bridge, and package boundary lint remains compatible with the messaging package guidance.
 
-- [ ] **Unit 2: Add channel-neutral handoff status intents**
+- [x] **Unit 2: Add channel-neutral handoff status intents**
 
 **Goal:** Build the status-card Handoff entry point and the handoff sub-mode intents that explain current workspace state, present valid choices, and provide text fallback.
 
@@ -248,7 +248,7 @@ flowchart TB
 **Verification:**
 - Handoff sub-mode can be rendered and navigated with generic messaging intents, without provider-specific branches and without changing `/resume` behavior.
 
-- [ ] **Unit 3: Execute handoff from messaging callbacks and refresh binding state**
+- [x] **Unit 3: Execute handoff from messaging callbacks and refresh binding state**
 
 **Goal:** Wire `status:handoff` callbacks through branch selection, confirmation, backend invocation, success refresh, and failure reporting.
 
@@ -298,7 +298,7 @@ flowchart TB
 **Verification:**
 - A bound messaging conversation can complete both handoff directions through generic callbacks or text fallback, and status reflects the final desktop navigation state after success.
 
-- [ ] **Unit 4: Keep provider rendering and button limits honest**
+- [x] **Unit 4: Keep provider rendering and button limits honest**
 
 **Goal:** Ensure Telegram and Discord render the new Handoff flow cleanly with existing generic actions and do not regress current status-card layouts.
 
@@ -331,7 +331,7 @@ flowchart TB
 **Verification:**
 - Telegram and Discord provider tests prove the first handoff slice fits the current adapter rendering contract, with no new platform-specific branches in workflow code.
 
-- [ ] **Unit 5: Update docs and manual validation checklist**
+- [x] **Unit 5: Update docs and manual validation checklist**
 
 **Goal:** Document the new messaging handoff flow, its boundaries, and how to validate it end to end.
 

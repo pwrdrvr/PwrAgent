@@ -4,6 +4,8 @@ import type {
   AppServerThreadStatus,
   CompactThreadRequest,
   CompactThreadResponse,
+  HandoffThreadWorkspaceRequest,
+  HandoffThreadWorkspaceResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
   GetNavigationSnapshotRequest,
@@ -67,6 +69,9 @@ export type MessagingBackendBridge = {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<AppServerThreadStatus | undefined>;
+  handoffThreadWorkspace?(
+    request: HandoffThreadWorkspaceRequest,
+  ): Promise<HandoffThreadWorkspaceResponse>;
   startThread?(request: StartThreadRequest): Promise<StartThreadResponse>;
   startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
   compactThread?(request: CompactThreadRequest): Promise<CompactThreadResponse>;

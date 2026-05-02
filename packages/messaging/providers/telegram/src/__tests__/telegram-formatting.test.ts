@@ -132,6 +132,55 @@ describe("telegram formatting", () => {
     ]);
   });
 
+  it("renders workspace handoff choices with opaque callback handles", () => {
+    const intent = {
+      id: "handoff-overview-1",
+      kind: "single_select",
+      createdAt: 1000,
+      prompt: [
+        "Workspace Handoff",
+        "Repository: /repo/pwragnt",
+        "Working directory: /repo/pwragnt",
+        "Branch: feature/handoff",
+      ].join("\n"),
+      fallbackText: "Reply with 1, Back, Refresh, or Cancel.",
+      choices: [
+        {
+          id: "handoff:local-to-worktree",
+          label: "Handoff to New Worktree",
+          style: "primary",
+          fallbackText: "1",
+          value: {
+            backend: "codex",
+            threadId: "thread-1",
+            direction: "local-to-worktree",
+            repositoryPath: "/repo/pwragnt",
+            sourcePath: "/repo/pwragnt",
+            sourceBranch: "feature/handoff",
+          },
+        },
+        {
+          id: "handoff:cancel",
+          label: "Cancel",
+          style: "secondary",
+          fallbackText: "cancel",
+        },
+      ],
+    } satisfies Parameters<typeof textForTelegramIntent>[0];
+
+    const keyboard = buildTelegramKeyboard(
+      intent.choices,
+      (action) => `tg:${action.id}`,
+    );
+
+    expect(textForTelegramIntent(intent)).toContain("Workspace Handoff");
+    expect(keyboard?.inline_keyboard.map((row) => row.map((button) => button.text))).toEqual([
+      ["Handoff to New Worktree"],
+      ["Cancel"],
+    ]);
+    expect(JSON.stringify(keyboard)).not.toContain("/repo/pwragnt");
+  });
+
   it("escapes plain text without introducing formatting", () => {
     expect(escapeTelegramHtml("a < b && b > c")).toBe(
       "a &lt; b &amp;&amp; b &gt; c",
