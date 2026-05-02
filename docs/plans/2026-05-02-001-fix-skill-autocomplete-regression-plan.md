@@ -116,7 +116,7 @@ The key invariant is that `Trigger` is computed from the current draft and curre
 
 ## Implementation Units
 
-- [ ] **Unit 1: Lock down trigger detection and filtering regressions**
+- [x] **Unit 1: Lock down trigger detection and filtering regressions**
 
 **Goal:** Add failing coverage for `$ce`, `$ce:p`, and `$ce:plan` in the reported multi-line composer text, then make skill filtering use the full typed prefix consistently.
 
@@ -154,7 +154,7 @@ The key invariant is that `Trigger` is computed from the current draft and curre
 - The component tests fail on the current behavior and pass after the trigger/filtering fix.
 - No app-server or skill loading behavior changes are needed.
 
-- [ ] **Unit 2: Make skill commit replace the active trigger without text or line-break damage**
+- [x] **Unit 2: Make skill commit replace the active trigger without text or line-break damage**
 
 **Goal:** Ensure keyboard commit replaces the full typed trigger range in a multi-line draft, inserts one inline skill chip, leaves no raw suffix text, and preserves existing newlines exactly.
 
@@ -198,7 +198,7 @@ The key invariant is that `Trigger` is computed from the current draft and curre
 - The reported leftover `plan` suffix and added blank lines are covered by failing tests and fixed.
 - Existing chip deletion, draft persistence, and send payload tests remain green.
 
-- [ ] **Unit 3: Add PageUp/PageDown autocomplete navigation**
+- [x] **Unit 3: Add PageUp/PageDown autocomplete navigation**
 
 **Goal:** Capture PageUp and PageDown while autocomplete is open and move the active option by a visible page, keeping the option in view.
 
@@ -235,7 +235,7 @@ The key invariant is that `Trigger` is computed from the current draft and curre
 - Component tests prove active-index behavior.
 - E2E coverage proves the visible list scrolls to keep the paged option reachable.
 
-- [ ] **Unit 4: Strengthen autocomplete overlay visual contrast**
+- [x] **Unit 4: Strengthen autocomplete overlay visual contrast**
 
 **Goal:** Make the autocomplete list boundary legible against the transcript and composer area without drifting from the black-first Tangerine Terminal visual system.
 
