@@ -3178,6 +3178,8 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.contextWindow).toEqual({
       cachedInputTokens: undefined,
+      cumulativeCachedInputTokens: undefined,
+      cumulativeInputTokens: undefined,
       cumulativeTotalTokens: undefined,
       inputTokens: undefined,
       modelContextWindow: 128_000,
@@ -3245,6 +3247,8 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.contextWindow).toEqual({
       cachedInputTokens: undefined,
+      cumulativeCachedInputTokens: undefined,
+      cumulativeInputTokens: undefined,
       cumulativeTotalTokens: undefined,
       inputTokens: 1_200,
       modelContextWindow: 258_400,
@@ -3320,6 +3324,8 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.contextWindow).toMatchObject({
       cachedInputTokens: 20_352,
+      cumulativeCachedInputTokens: 23_808,
+      cumulativeInputTokens: 41_267,
       cumulativeTotalTokens: 41_342,
       inputTokens: 20_663,
       modelContextWindow: 258_400,

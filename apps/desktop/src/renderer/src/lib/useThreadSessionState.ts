@@ -82,6 +82,8 @@ export type ThreadViewportState = {
 
 export type ThreadContextWindowState = {
   cachedInputTokens?: number;
+  cumulativeCachedInputTokens?: number;
+  cumulativeInputTokens?: number;
   cumulativeTotalTokens?: number;
   inputTokens?: number;
   modelContextWindow: number;
@@ -654,13 +656,16 @@ function normalizeThreadContextWindowState(
     0,
     Math.min(100, (remainingTokens / modelContextWindow) * 100)
   );
+  const hasDistinctCumulativeUsage =
+    totalUsage?.totalTokens !== undefined && totalUsage.totalTokens !== totalTokens;
 
   return {
     cachedInputTokens: currentUsage.cachedInputTokens,
-    cumulativeTotalTokens:
-      totalUsage?.totalTokens !== undefined && totalUsage.totalTokens !== totalTokens
-        ? totalUsage.totalTokens
-        : undefined,
+    cumulativeCachedInputTokens: hasDistinctCumulativeUsage
+      ? totalUsage.cachedInputTokens
+      : undefined,
+    cumulativeInputTokens: hasDistinctCumulativeUsage ? totalUsage.inputTokens : undefined,
+    cumulativeTotalTokens: hasDistinctCumulativeUsage ? totalUsage.totalTokens : undefined,
     inputTokens: currentUsage.inputTokens,
     modelContextWindow,
     outputTokens: currentUsage.outputTokens,
