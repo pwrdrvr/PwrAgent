@@ -10,6 +10,10 @@ import type {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { Composer } from "../Composer";
+import type {
+  ComposerDraftSnapshot,
+  ComposerDraftStore,
+} from "../useComposerDraftStore";
 
 vi.mock("../../../lib/image-normalization", () => ({
   normalizeImageFile: vi.fn(async (file: File) => ({
@@ -43,6 +47,19 @@ function openDropdown(label: string): HTMLElement {
 function chooseDropdownOption(label: string, optionName: string): void {
   openDropdown(label);
   fireEvent.click(screen.getByRole("option", { name: optionName }));
+}
+
+function createComposerDraftStore(): ComposerDraftStore {
+  const drafts = new Map<string, ComposerDraftSnapshot>();
+  return {
+    delete: (scopeKey) => {
+      drafts.delete(scopeKey);
+    },
+    get: (scopeKey) => drafts.get(scopeKey),
+    set: (scopeKey, snapshot) => {
+      drafts.set(scopeKey, snapshot);
+    },
+  };
 }
 
 function backendSummary(
@@ -1719,7 +1736,7 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
         "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
-        { workMode: "worktree" },
+        expect.objectContaining({ workMode: "worktree" }),
         { stickySettingsChanged: true }
       );
     });
@@ -2273,6 +2290,352 @@ describe("Composer", () => {
 
     expect(textarea).toHaveValue("Line one edited\nLine two");
     expect(textarea.selectionStart).toBe(8);
+  });
+
+  it("restores a thread reply draft with pasted images after the composer remounts", async () => {
+    const draftStore = createComposerDraftStore();
+    const imageFile = new File([new Uint8Array([1, 2, 3])], "reply-mockup.png", {
+      type: "image/png",
+    });
+    const thread = {
+      id: "thread-1",
+      title: "Build Codex client",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    const { unmount } = render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        draftStore={draftStore}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Keep this reply draft" },
+    });
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => imageFile,
+          },
+        ],
+      },
+    });
+    expect(await screen.findByAltText("reply-mockup.png")).toBeInTheDocument();
+
+    unmount();
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        draftStore={draftStore}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    expect(screen.getByLabelText("Reply")).toHaveValue("Keep this reply draft");
+    expect(screen.getByAltText("reply-mockup.png")).toBeInTheDocument();
+  });
+
+  it("flushes a launchpad draft on unmount before the debounce window expires", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+    const draftStore = createComposerDraftStore();
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    const { unmount } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        draftStore={draftStore}
+        launchpad={launchpad}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("New thread"), {
+      target: { value: "Persist this launchpad before navigation" },
+    });
+    unmount();
+
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({
+          prompt: "Persist this launchpad before navigation",
+        })
+      );
+    });
+  });
+
+  it("does not restore a submitted launchpad draft when materialization unmounts before local clear", async () => {
+    const draftStore = createComposerDraftStore();
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    let unmountComposer: () => void = () => undefined;
+    const onMaterializeLaunchpad = vi.fn(async () => {
+      unmountComposer();
+    });
+
+    const { unmount } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        draftStore={draftStore}
+        launchpad={launchpad}
+        onMaterializeLaunchpad={onMaterializeLaunchpad}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+    unmountComposer = unmount;
+
+    fireEvent.change(screen.getByLabelText("New thread"), {
+      target: { value: "Submitted launchpad should not come back" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+
+    await waitFor(() => {
+      expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        [{ type: "text", text: "Submitted launchpad should not come back" }],
+        undefined
+      );
+    });
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        draftStore={draftStore}
+        launchpad={launchpad}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByLabelText("New thread")).toHaveValue("");
+  });
+
+  it("does not restore a submitted launchpad review draft when materialization unmounts before local clear", async () => {
+    const draftStore = createComposerDraftStore();
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    let unmountComposer: () => void = () => undefined;
+    const onMaterializeLaunchpad = vi.fn(async () => {
+      unmountComposer();
+    });
+
+    const { unmount } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        draftStore={draftStore}
+        launchpad={launchpad}
+        onMaterializeLaunchpad={onMaterializeLaunchpad}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+    unmountComposer = unmount;
+
+    fireEvent.change(screen.getByLabelText("New thread"), {
+      target: { value: "/review main" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+
+    await waitFor(() => {
+      expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        undefined,
+        undefined,
+        { type: "baseBranch", branch: "main" }
+      );
+    });
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        draftStore={draftStore}
+        launchpad={launchpad}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByLabelText("New thread")).toHaveValue("");
+  });
+
+  it("preserves launchpad prompt and pasted images when sticky settings change", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+    const imageFile = new File([new Uint8Array([1, 2, 3])], "sticky-mockup.png", {
+      type: "image/png",
+    });
+
+    render(
+      <Composer
+        backends={[
+          backendSummary("codex", {
+            models: [
+              { id: "gpt-5.4", label: "GPT 5.4" },
+              { id: "gpt-5.5", label: "GPT 5.5" },
+            ],
+          }),
+        ]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          model: "gpt-5.4",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("New thread"), {
+      target: { value: "Keep this launchpad while changing settings" },
+    });
+    fireEvent.paste(screen.getByLabelText("New thread"), {
+      clipboardData: {
+        files: [],
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => imageFile,
+          },
+        ],
+      },
+    });
+    expect(await screen.findByAltText("sticky-mockup.png")).toBeInTheDocument();
+
+    chooseDropdownOption("Model", "GPT 5.5");
+
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({
+          imageAttachments: expect.arrayContaining([
+            expect.objectContaining({ name: "sticky-mockup.png" }),
+          ]),
+          model: "gpt-5.5",
+          prompt: "Keep this launchpad while changing settings",
+        }),
+        { stickySettingsChanged: true },
+      );
+    });
   });
 
   it("inserts skill markdown from autocomplete and sends it through startTurn", async () => {

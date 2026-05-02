@@ -28,6 +28,7 @@ import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { Composer } from "../composer/Composer";
+import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import { ThreadHeader } from "./ThreadHeader";
 import { TranscriptImageLightbox } from "./TranscriptImageLightbox";
@@ -583,6 +584,7 @@ type ThreadViewProps = {
   applications?: DesktopApplicationsSnapshot;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   composerDisabled: boolean;
+  composerDraftStore?: ComposerDraftStore;
   composerImplementation?: DesktopChatReplyComposer;
   desktopApi?: DesktopApi;
   launchpadError?: string;
@@ -1419,6 +1421,7 @@ export function ThreadView(props: ThreadViewProps) {
               applications={props.applications}
               desktopApi={props.desktopApi}
               composerImplementation={props.composerImplementation}
+              draftStore={props.composerDraftStore}
               directory={props.selectedDirectory}
               disabled={!launchpadBackend?.available}
               launchpad={selectedLaunchpad}
@@ -1501,6 +1504,7 @@ export function ThreadView(props: ThreadViewProps) {
             applications={props.applications}
             desktopApi={props.desktopApi}
             composerImplementation={props.composerImplementation}
+            draftStore={props.composerDraftStore}
             directory={props.selectedDirectory}
             disabled={props.composerDisabled}
             contextWindow={props.contextWindow}

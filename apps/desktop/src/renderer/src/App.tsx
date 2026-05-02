@@ -6,6 +6,7 @@ import {
   type DesktopSettingsState,
 } from "./features/settings/useDesktopSettings";
 import { ThreadView } from "./features/thread-detail/ThreadView";
+import { useComposerDraftStore } from "./features/composer/useComposerDraftStore";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
@@ -51,6 +52,7 @@ function DesktopAppShell(props: {
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
   const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);
+  const composerDraftStore = useComposerDraftStore();
   const session = useThreadSessionState({
     desktopApi,
     thread: navigation.selectedThread,
@@ -143,6 +145,7 @@ function DesktopAppShell(props: {
             )
           }
           composerImplementation={settings.composerImplementation}
+          composerDraftStore={composerDraftStore}
           desktopApi={desktopApi}
           launchpadError={navigation.launchpadError}
           loading={session.loading}

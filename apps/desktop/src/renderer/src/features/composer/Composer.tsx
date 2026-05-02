@@ -48,6 +48,11 @@ import {
 } from "./ComposerRichInput";
 import { ComposerTextareaInput } from "./ComposerTextareaInput";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
+import {
+  useComposerDraftStore,
+  type ComposerDraftSnapshot,
+  type ComposerDraftStore,
+} from "./useComposerDraftStore";
 
 type ComposerProps = {
   activeTurnId?: string;
@@ -63,6 +68,7 @@ type ComposerProps = {
   disabled?: boolean;
   contextWindow?: ThreadContextWindowState;
   composerImplementation?: DesktopChatReplyComposer;
+  draftStore?: ComposerDraftStore;
   launchpad?: NavigationLaunchpadDraft;
   launchpadError?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
@@ -198,12 +204,6 @@ type ReviewConfigState = {
   target?: ReviewTargetChoice;
 };
 
-type ComposerDraftState = {
-  draft: string;
-  imageAttachments: ComposerImageAttachment[];
-  skillTokens: ComposerSkillToken[];
-};
-
 const DEFAULT_REASONING_EFFORT = "medium";
 
 const SLASH_COMMANDS: SlashCommandSuggestion[] = [
@@ -288,6 +288,12 @@ function buildReviewBranchOptions(params: {
     }
   }
   return [...options];
+}
+
+function getLaunchpadDirectoryKeyFromScope(scopeKey: string): string | undefined {
+  return scopeKey.startsWith("launchpad:")
+    ? scopeKey.slice("launchpad:".length)
+    : undefined;
 }
 
 function createReviewConfig(params: {
@@ -820,11 +826,41 @@ export function Composer(props: ComposerProps) {
     : props.thread
       ? `thread:${props.thread.source}:${props.thread.id}`
       : "empty";
+  const localDraftStore = useComposerDraftStore();
+  const draftStore = props.draftStore ?? localDraftStore;
+  const composerImplementation = props.composerImplementation ?? "textarea";
+  const composerSupportsSkillTokens = composerImplementation !== "textarea";
+  const composerUsesTiptap = composerImplementation.startsWith("tiptap-");
+  const savedInitialDraft = draftStore.get(composerScopeKey);
+  const hydratedInitialLaunchpad =
+    savedInitialDraft || !props.launchpad
+      ? undefined
+      : hydrateComposerDraft(props.launchpad.prompt ?? "", props.skills);
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
-  const scopedThreadDraftsRef = useRef(new Map<string, ComposerDraftState>());
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
+  const submittedDraftScopeKeysRef = useRef<Set<string>>(new Set());
   const deletedSkillTokenHistoryRef = useRef<DeletedSkillTokenHistoryEntry[]>([]);
-  const [draft, setDraft] = useState("");
+  const latestDraftSnapshotRef = useRef<{
+    scopeKey: string;
+    snapshot: ComposerDraftSnapshot;
+  }>({
+    scopeKey: composerScopeKey,
+    snapshot: {
+      draft: savedInitialDraft?.draft ?? hydratedInitialLaunchpad?.draft ?? "",
+      imageAttachments:
+        savedInitialDraft?.imageAttachments ??
+        props.launchpad?.imageAttachments ??
+        [],
+      skillTokens:
+        composerSupportsSkillTokens
+          ? savedInitialDraft?.skillTokens ?? hydratedInitialLaunchpad?.skillTokens ?? []
+          : [],
+    },
+  });
+  const launchpadUpdateRef = useRef(props.onUpdateLaunchpad);
+  const [draft, setDraft] = useState(
+    latestDraftSnapshotRef.current.snapshot.draft
+  );
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const workspaceMenuRef = useDismissableMenu<HTMLDivElement>(
     workspaceMenuOpen,
@@ -844,9 +880,13 @@ export function Composer(props: ComposerProps) {
   const [activeTurnId, setActiveTurnId] = useState<string | undefined>(undefined);
   const [sendError, setSendError] = useState<string>();
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
-  const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>([]);
+  const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
+    latestDraftSnapshotRef.current.snapshot.imageAttachments
+  );
   const [planModeEnabled, setPlanModeEnabled] = useState(false);
-  const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>([]);
+  const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>(
+    latestDraftSnapshotRef.current.snapshot.skillTokens
+  );
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
@@ -858,9 +898,6 @@ export function Composer(props: ComposerProps) {
   const [reviewConfig, setReviewConfig] = useState<ReviewConfigState>();
   const isLaunchpad = Boolean(props.launchpad && props.directory);
   const launchpad = props.launchpad;
-  const composerImplementation = props.composerImplementation ?? "textarea";
-  const composerSupportsSkillTokens = composerImplementation !== "textarea";
-  const composerUsesTiptap = composerImplementation.startsWith("tiptap-");
   const backend = useMemo(
     () =>
       props.backends?.find((candidate) =>
@@ -873,8 +910,8 @@ export function Composer(props: ComposerProps) {
     inputRef.current?.selectionStart ?? draft.length,
     draft.length,
   );
-  const isThreadComposerScope = (scopeKey: string): boolean =>
-    scopeKey.startsWith("thread:");
+  const isDraftStoreScope = (scopeKey: string): boolean =>
+    scopeKey.startsWith("thread:") || scopeKey.startsWith("launchpad:");
   const canonicalDraft = useMemo(
     () =>
       serializeDraftWithSkillTokens(
@@ -886,6 +923,15 @@ export function Composer(props: ComposerProps) {
   const hasComposerContent =
     draft.trim().length > 0 ||
     (composerSupportsSkillTokens && skillTokens.length > 0);
+  launchpadUpdateRef.current = props.onUpdateLaunchpad;
+  latestDraftSnapshotRef.current = {
+    scopeKey: composerScopeKey,
+    snapshot: {
+      draft,
+      imageAttachments,
+      skillTokens: composerSupportsSkillTokens ? skillTokens : [],
+    },
+  };
   const setComposerDraftFromCanonical = (nextDraft: string): void => {
     deletedSkillTokenHistoryRef.current = [];
     if (!composerSupportsSkillTokens) {
@@ -923,11 +969,11 @@ export function Composer(props: ComposerProps) {
     }
     setDraft(nextDraft);
   };
-  const saveThreadComposerDraft = (
+  const saveComposerDraftSnapshot = (
     scopeKey: string,
-    state: ComposerDraftState,
+    state: ComposerDraftSnapshot,
   ): void => {
-    if (!isThreadComposerScope(scopeKey)) {
+    if (!isDraftStoreScope(scopeKey)) {
       return;
     }
 
@@ -936,16 +982,73 @@ export function Composer(props: ComposerProps) {
       state.skillTokens.length === 0 &&
       state.imageAttachments.length === 0
     ) {
-      scopedThreadDraftsRef.current.delete(scopeKey);
+      draftStore.delete(scopeKey);
       return;
     }
 
-    scopedThreadDraftsRef.current.set(scopeKey, state);
+    draftStore.set(scopeKey, state);
   };
-  const clearThreadComposerDraft = (scopeKey: string): void => {
-    if (isThreadComposerScope(scopeKey)) {
-      scopedThreadDraftsRef.current.delete(scopeKey);
+  const clearComposerDraftSnapshot = (scopeKey: string): void => {
+    if (isDraftStoreScope(scopeKey)) {
+      draftStore.delete(scopeKey);
     }
+  };
+  const markComposerDraftSubmitted = (scopeKey: string): void => {
+    if (!isDraftStoreScope(scopeKey)) {
+      return;
+    }
+
+    submittedDraftScopeKeysRef.current.add(scopeKey);
+    clearComposerDraftSnapshot(scopeKey);
+  };
+  const unmarkComposerDraftSubmitted = (scopeKey: string): void => {
+    submittedDraftScopeKeysRef.current.delete(scopeKey);
+  };
+  const clearSubmittedComposerDraft = (scopeKey: string): void => {
+    const emptySnapshot: ComposerDraftSnapshot = {
+      draft: "",
+      imageAttachments: [],
+      skillTokens: [],
+    };
+
+    clearComposerDraftSnapshot(scopeKey);
+    latestDraftSnapshotRef.current = {
+      scopeKey,
+      snapshot: emptySnapshot,
+    };
+    clearComposerDraft();
+    setImageAttachments([]);
+  };
+  const persistLaunchpadDraftSnapshot = (
+    scopeKey: string,
+    snapshot: ComposerDraftSnapshot,
+  ): void => {
+    const directoryKey = getLaunchpadDirectoryKeyFromScope(scopeKey);
+    const updateLaunchpad = launchpadUpdateRef.current;
+    if (!directoryKey || !updateLaunchpad) {
+      return;
+    }
+
+    void updateLaunchpad(directoryKey, {
+      imageAttachments:
+        snapshot.imageAttachments.length > 0 ? snapshot.imageAttachments : undefined,
+      prompt: serializeDraftWithSkillTokens(
+        snapshot.draft,
+        composerSupportsSkillTokens ? snapshot.skillTokens : [],
+      ),
+    });
+  };
+  const flushComposerDraftSnapshot = (
+    scopeKey: string,
+    snapshot: ComposerDraftSnapshot,
+  ): void => {
+    if (submittedDraftScopeKeysRef.current.has(scopeKey)) {
+      clearComposerDraftSnapshot(scopeKey);
+      return;
+    }
+
+    saveComposerDraftSnapshot(scopeKey, snapshot);
+    persistLaunchpadDraftSnapshot(scopeKey, snapshot);
   };
   const updateActiveTurnId = (nextTurnId?: string): void => {
     activeTurnIdRef.current = nextTurnId;
@@ -1040,16 +1143,24 @@ export function Composer(props: ComposerProps) {
   const isReviewComposerOpen = Boolean(reviewConfig && isBareReviewCommand);
 
   useEffect(() => {
+    return () => {
+      const latest = latestDraftSnapshotRef.current;
+      flushComposerDraftSnapshot(latest.scopeKey, latest.snapshot);
+    };
+  }, []);
+
+  useEffect(() => {
     const previousScopeKey = activeComposerScopeKeyRef.current;
     if (previousScopeKey === composerScopeKey) {
       return;
     }
 
-    saveThreadComposerDraft(previousScopeKey, {
+    const previousSnapshot = {
       draft,
       imageAttachments,
       skillTokens,
-    });
+    };
+    flushComposerDraftSnapshot(previousScopeKey, previousSnapshot);
 
     activeComposerScopeKeyRef.current = composerScopeKey;
     const current = pasteScopeRef.current;
@@ -1059,7 +1170,7 @@ export function Composer(props: ComposerProps) {
     };
 
     if (props.thread) {
-      const saved = scopedThreadDraftsRef.current.get(composerScopeKey);
+      const saved = draftStore.get(composerScopeKey);
       setDraft(saved?.draft ?? "");
       setImageAttachments(saved?.imageAttachments ?? []);
       setSkillTokens(saved?.skillTokens ?? []);
@@ -1162,8 +1273,15 @@ export function Composer(props: ComposerProps) {
     }
 
     hydratedLaunchpadKeyRef.current = props.launchpad?.directoryKey;
-    setComposerDraftFromCanonical(props.launchpad?.prompt ?? "");
-    setImageAttachments(props.launchpad?.imageAttachments ?? []);
+    const saved = draftStore.get(composerScopeKey);
+    if (saved) {
+      setDraft(saved.draft);
+      setImageAttachments(saved.imageAttachments);
+      setSkillTokens(composerSupportsSkillTokens ? saved.skillTokens : []);
+    } else {
+      setComposerDraftFromCanonical(props.launchpad?.prompt ?? "");
+      setImageAttachments(props.launchpad?.imageAttachments ?? []);
+    }
     setSending(false);
     setInterrupting(false);
     setSteering(false);
@@ -1172,7 +1290,15 @@ export function Composer(props: ComposerProps) {
     setReviewConfig(undefined);
     setQueuedTurn(undefined);
     setPendingSteer(undefined);
-  }, [isLaunchpad, props.launchpad?.directoryKey, props.launchpad?.prompt, props.skills]);
+  }, [
+    composerScopeKey,
+    composerSupportsSkillTokens,
+    draftStore,
+    isLaunchpad,
+    props.launchpad?.directoryKey,
+    props.launchpad?.prompt,
+    props.skills,
+  ]);
 
   useEffect(() => {
     if (!props.thread) {
@@ -1321,6 +1447,10 @@ export function Composer(props: ComposerProps) {
     }
 
     const timeout = window.setTimeout(() => {
+      if (submittedDraftScopeKeysRef.current.has(composerScopeKey)) {
+        return;
+      }
+
       void props.onUpdateLaunchpad?.(launchpad.directoryKey, {
         imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
         prompt: canonicalDraft,
@@ -1330,7 +1460,7 @@ export function Composer(props: ComposerProps) {
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [canonicalDraft, imageAttachments, launchpad, props.onUpdateLaunchpad]);
+  }, [canonicalDraft, composerScopeKey, imageAttachments, launchpad, props.onUpdateLaunchpad]);
 
   const submitReviewCommand = async (reviewCommand: {
     displayText: string;
@@ -1349,6 +1479,8 @@ export function Composer(props: ComposerProps) {
     props.onPendingStatusChange?.("Reviewing");
 
     if (props.launchpad && props.onMaterializeLaunchpad) {
+      const submittedScopeKey = composerScopeKey;
+      markComposerDraftSubmitted(submittedScopeKey);
       try {
         await props.onMaterializeLaunchpad(
           props.launchpad.directoryKey,
@@ -1356,10 +1488,10 @@ export function Composer(props: ComposerProps) {
           undefined,
           reviewCommand.target
         );
-        clearComposerDraft();
+        clearSubmittedComposerDraft(submittedScopeKey);
         setReviewConfig(undefined);
-        setImageAttachments([]);
       } catch (error) {
+        unmarkComposerDraftSubmitted(submittedScopeKey);
         props.onPendingStatusChange?.(undefined);
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
@@ -1387,7 +1519,7 @@ export function Composer(props: ComposerProps) {
       });
       updateActiveTurnId(response.turnId);
       props.onActiveTurnIdChange?.(response.turnId);
-      clearThreadComposerDraft(composerScopeKey);
+      clearComposerDraftSnapshot(composerScopeKey);
       clearComposerDraft();
       setReviewConfig(undefined);
     } catch (error) {
@@ -1500,7 +1632,7 @@ export function Composer(props: ComposerProps) {
       if (queued) {
         setQueuedTurn(undefined);
       } else {
-        clearThreadComposerDraft(composerScopeKey);
+        clearComposerDraftSnapshot(composerScopeKey);
         clearComposerDraft();
         setImageAttachments([]);
         if (collaborationMode) {
@@ -1546,7 +1678,7 @@ export function Composer(props: ComposerProps) {
       text: canonicalDraft,
       imageAttachments,
     });
-    clearThreadComposerDraft(composerScopeKey);
+    clearComposerDraftSnapshot(composerScopeKey);
     clearComposerDraft();
     setImageAttachments([]);
     setReviewConfig(undefined);
@@ -1636,7 +1768,7 @@ export function Composer(props: ComposerProps) {
       imageAttachments: pending.imageAttachments,
       status: "pending",
     });
-    clearThreadComposerDraft(composerScopeKey);
+    clearComposerDraftSnapshot(composerScopeKey);
     clearComposerDraft();
     setImageAttachments([]);
     setReviewConfig(undefined);
@@ -1722,18 +1854,20 @@ export function Composer(props: ComposerProps) {
     setSending(true);
 
     if (props.launchpad && props.onMaterializeLaunchpad) {
+      const submittedScopeKey = composerScopeKey;
+      markComposerDraftSubmitted(submittedScopeKey);
       try {
         await props.onMaterializeLaunchpad(
           props.launchpad.directoryKey,
           payload.input,
           collaborationMode
         );
-        clearComposerDraft();
-        setImageAttachments([]);
+        clearSubmittedComposerDraft(submittedScopeKey);
         if (collaborationMode) {
           setPlanModeEnabled(false);
         }
       } catch (error) {
+        unmarkComposerDraftSubmitted(submittedScopeKey);
         setSendError(error instanceof Error ? error.message : String(error));
       } finally {
         setSending(false);
@@ -1896,7 +2030,7 @@ export function Composer(props: ComposerProps) {
   const removeImageAttachment = (id: string): void => {
     setImageAttachments((current) => {
       const nextAttachments = current.filter((attachment) => attachment.id !== id);
-      saveThreadComposerDraft(composerScopeKey, {
+      saveComposerDraftSnapshot(composerScopeKey, {
         draft,
         imageAttachments: nextAttachments,
         skillTokens,
@@ -1952,10 +2086,8 @@ export function Composer(props: ComposerProps) {
 
   const attachImages = async (files: ComposerImageFile[]): Promise<void> => {
     const pasteScope = pasteScopeRef.current;
-    const pasteDraft = canonicalDraft;
+    const pasteDraft = draft;
     const pasteImageAttachments = imageAttachments;
-    const pasteLaunchpad = props.launchpad;
-    const updateLaunchpad = props.onUpdateLaunchpad;
 
     try {
       const nextAttachments = await Promise.all(
@@ -2006,35 +2138,29 @@ export function Composer(props: ComposerProps) {
       );
 
       if (activeComposerScopeKeyRef.current !== pasteScope.key) {
-        if (pasteLaunchpad && updateLaunchpad) {
-          const mergedAttachments = [...pasteImageAttachments, ...nextAttachments];
-          void updateLaunchpad(pasteLaunchpad.directoryKey, {
-            imageAttachments: mergedAttachments.length > 0 ? mergedAttachments : undefined,
-            prompt: pasteDraft,
-          });
-          return;
-        }
-
-        const saved = scopedThreadDraftsRef.current.get(pasteScope.key) ?? {
-          draft: "",
-          imageAttachments: [],
-          skillTokens: [],
+        const saved = draftStore.get(pasteScope.key) ?? {
+          draft: pasteDraft,
+          imageAttachments: pasteImageAttachments,
+          skillTokens,
         };
-        saveThreadComposerDraft(pasteScope.key, {
+        const nextSnapshot = {
           draft: saved.draft,
           imageAttachments: [...saved.imageAttachments, ...nextAttachments],
           skillTokens: saved.skillTokens,
-        });
+        };
+        saveComposerDraftSnapshot(pasteScope.key, nextSnapshot);
+        persistLaunchpadDraftSnapshot(pasteScope.key, nextSnapshot);
         return;
       }
 
       setImageAttachments((current) => {
         const mergedAttachments = [...current, ...nextAttachments];
-        saveThreadComposerDraft(pasteScope.key, {
+        const nextSnapshot = {
           draft,
           imageAttachments: mergedAttachments,
           skillTokens,
-        });
+        };
+        saveComposerDraftSnapshot(pasteScope.key, nextSnapshot);
         persistLaunchpadImageAttachments(mergedAttachments);
         return mergedAttachments;
       });
@@ -2069,9 +2195,18 @@ export function Composer(props: ComposerProps) {
     }
 
     setSendError(undefined);
-    void props.onUpdateLaunchpad(props.launchpad.directoryKey, patch, {
-      stickySettingsChanged: true,
-    });
+    void props.onUpdateLaunchpad(
+      props.launchpad.directoryKey,
+      {
+        imageAttachments:
+          imageAttachments.length > 0 ? imageAttachments : undefined,
+        prompt: canonicalDraft,
+        ...patch,
+      },
+      {
+        stickySettingsChanged: true,
+      },
+    );
   };
 
   const handleThreadModelSettingsPatch = (
@@ -2402,14 +2537,22 @@ export function Composer(props: ComposerProps) {
     token: ComposerSkillToken,
     selectionStart: number,
   ): void => {
+    const nextSkillTokens = skillTokens.filter(
+      (candidate) => candidate.id !== token.id
+    );
     deletedSkillTokenHistoryRef.current.push({
       draft,
       selectionStart,
       skillTokens,
     });
-    setSkillTokens((current) =>
-      current.filter((candidate) => candidate.id !== token.id)
-    );
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+    });
+    saveComposerDraftSnapshot(composerScopeKey, {
+      draft,
+      imageAttachments,
+      skillTokens: nextSkillTokens,
+    });
     requestAnimationFrame(() => {
       inputRef.current?.focus();
       inputRef.current?.setSelectionRange(selectionStart, selectionStart);
@@ -2690,6 +2833,7 @@ export function Composer(props: ComposerProps) {
     nextDraft: string,
     nextSkillTokens?: ComposerSkillToken[],
   ): void => {
+    unmarkComposerDraftSubmitted(composerScopeKey);
     const pendingProgrammaticChange =
       pendingProgrammaticComposerChangeRef.current;
     if (pendingProgrammaticChange && nextSkillTokens) {
@@ -2725,8 +2869,16 @@ export function Composer(props: ComposerProps) {
               : undefined;
           })()
         : undefined;
+    const storedSkillTokens = composerSupportsSkillTokens
+      ? nextSkillTokens ?? skillTokens
+      : [];
 
     updateVisibleDraft(nextDraft, nextSkillTokens);
+    saveComposerDraftSnapshot(composerScopeKey, {
+      draft: nextDraft,
+      imageAttachments,
+      skillTokens: storedSkillTokens,
+    });
     if (deletedSkillTokenHistoryEntry) {
       deletedSkillTokenHistoryRef.current.push(deletedSkillTokenHistoryEntry);
     }
@@ -2788,6 +2940,17 @@ export function Composer(props: ComposerProps) {
     }
 
     if (restoreDeletedSkillToken(event)) {
+      return;
+    }
+
+    if (
+      event.key === "Backspace" &&
+      deleteEditorContent(event, "backward")
+    ) {
+      return;
+    }
+
+    if (event.key === "Delete" && deleteEditorContent(event, "forward")) {
       return;
     }
 

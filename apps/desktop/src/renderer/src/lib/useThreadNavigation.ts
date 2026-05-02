@@ -808,6 +808,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const scheduledRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
   );
+  const launchpadUpdateRevisionRef = useRef(new Map<string, number>());
 
   optimisticThreadRef.current = optimisticThread;
   retainedUnreadThreadRef.current = retainedUnreadThread;
@@ -1400,6 +1401,33 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       }
 
       setLaunchpadError(undefined);
+      const revision =
+        (launchpadUpdateRevisionRef.current.get(directoryKey) ?? 0) + 1;
+      launchpadUpdateRevisionRef.current.set(directoryKey, revision);
+
+      setState((current) => {
+        const currentResponse = current.response;
+        const currentLaunchpad = currentResponse?.directories.find(
+          (directory) => directory.key === directoryKey
+        )?.launchpad;
+        if (!currentResponse || !currentLaunchpad) {
+          return current;
+        }
+
+        return {
+          ...current,
+          response: applyLaunchpadUpdate(
+            currentResponse,
+            {
+              ...currentLaunchpad,
+              ...patch,
+              directoryKey,
+              updatedAt: Date.now(),
+            },
+            currentResponse.launchpadDefaults
+          ),
+        };
+      });
 
       try {
         const response = await desktopApi.updateDirectoryLaunchpad({
@@ -1407,6 +1435,9 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           patch,
           stickySettingsChanged: options?.stickySettingsChanged,
         });
+        if (launchpadUpdateRevisionRef.current.get(directoryKey) !== revision) {
+          return;
+        }
         setState((current) => ({
           ...current,
           response: applyLaunchpadUpdate(
@@ -1416,6 +1447,9 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
           ),
         }));
       } catch (error) {
+        if (launchpadUpdateRevisionRef.current.get(directoryKey) !== revision) {
+          return;
+        }
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
