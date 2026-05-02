@@ -1,7 +1,7 @@
 ---
 title: feat: Add optional messaging streaming responses
 type: feat
-status: active
+status: completed
 date: 2026-05-02
 origin: docs/brainstorms/2026-04-30-messaging-platform-integration-requirements.md
 deepened: 2026-05-02
@@ -143,7 +143,7 @@ flowchart TB
   U5 --> U6["Unit 6: Tests and docs"]
 ```
 
-- [ ] **Unit 1: Extend generic messaging contracts**
+- [x] **Unit 1: Extend generic messaging contracts**
 
 **Goal:** Add a channel-neutral intent for assistant response stream updates and represent provider/binding streaming policy without leaking backend protocol details into adapters.
 
@@ -181,7 +181,7 @@ flowchart TB
 **Verification:**
 - Shared and interface contract tests prove the new intent is generic, exported, and compatible with existing adapter boundaries.
 
-- [ ] **Unit 2: Add Telegram and Discord streaming settings**
+- [x] **Unit 2: Add Telegram and Discord streaming settings**
 
 **Goal:** Make streaming responses configurable at the desktop settings level for Telegram and Discord, with environment override support and runtime propagation into provider configs.
 
@@ -225,7 +225,7 @@ flowchart TB
 **Verification:**
 - Settings snapshots, TOML round-trips, env overrides, and runtime messaging config all agree on the streaming response setting.
 
-- [ ] **Unit 3: Buffer and emit assistant response stream updates**
+- [x] **Unit 3: Buffer and emit assistant response stream updates**
 
 **Goal:** Translate backend `item/agentMessage/delta` events into bounded generic stream intents for every active binding on the target thread.
 
@@ -262,7 +262,7 @@ flowchart TB
 **Verification:**
 - Controller tests show stream updates are emitted from assistant deltas, bounded by cadence, flushed on completion, and independent from final-message delivery.
 
-- [ ] **Unit 4: Render or discard streaming in Telegram and Discord adapters**
+- [x] **Unit 4: Render or discard streaming in Telegram and Discord adapters**
 
 **Goal:** Implement provider-side stream intent handling so Telegram and Discord can either update a live response surface when enabled or discard stream updates safely when disabled.
 
@@ -309,7 +309,7 @@ flowchart TB
 **Verification:**
 - Provider tests prove both adapters gate streaming by config and can update a stream surface without parsing backend protocol events.
 
-- [ ] **Unit 5: Preserve final delivery, dedupe, and cleanup semantics**
+- [x] **Unit 5: Preserve final delivery, dedupe, and cleanup semantics**
 
 **Goal:** Ensure streaming surfaces converge into the final assistant message without duplicate visible responses or leaked stream buffers.
 
@@ -351,7 +351,7 @@ flowchart TB
 **Verification:**
 - End-to-end controller-plus-adapter tests show no duplicate final responses and no lost final response when streaming is disabled or fails.
 
-- [ ] **Unit 6: Document behavior and update manual validation**
+- [x] **Unit 6: Document behavior and update manual validation**
 
 **Goal:** Make the streaming contract and operator-facing settings visible in docs and smoke checks.
 

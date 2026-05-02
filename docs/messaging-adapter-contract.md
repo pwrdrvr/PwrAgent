@@ -19,6 +19,7 @@ Adapters should support:
 - image and file parts when the platform can render them safely
 - best-effort dismiss or update when the platform supports it
 - attachment capability metadata for provider-owned download and upload limits
+- optional assistant response stream updates
 
 ## Outputs
 
@@ -113,6 +114,28 @@ delivery can happen while a turn is still working, and pending user-input
 surfaces can happen while a turn is paused for the user. The controller owns
 those lifecycle decisions and translates them into active or idle activity
 intents.
+
+## Streaming Responses
+
+`stream_update` is a semantic assistant response update. It carries a stable
+stream key, accumulated assistant text, optional raw delta text, a monotonic
+sequence number, and an `isFinal` flag. The controller owns backend protocol
+translation and buffering; adapters must not inspect app-server event names such
+as `item/agentMessage/delta`.
+
+Streaming is optional. An adapter may return a benign `discarded` delivery
+result when the provider does not support streaming, provider settings disable
+streaming, a binding policy disables streaming, or platform limits make the
+current update unsafe to edit. Discarding a stream update is not a delivery
+failure and must not be treated as evidence that the conversation target is
+invalid.
+
+When streaming is enabled, adapters should use accumulated text for idempotent
+edits and keep any stream-key-to-platform-surface mapping in runtime memory
+only. Stream surfaces are transient; completed assistant message delivery
+remains the authoritative final response. Partial stream text may contain
+unfinished markdown, code fences, or links, so adapters should use conservative
+formatting until the final update or final assistant message arrives.
 
 Workspace handoff is expressed with the same generic status, single-select,
 confirmation, and error intents as other messaging workflows. Adapters should
