@@ -53,6 +53,18 @@ function pathFromDirectoryKey(directoryKey: string): string | undefined {
 }
 
 function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescriptor {
+  const scratchWorkspaceRootMatch = directory.path.match(
+    /^(.*[\\/]\.pwragnt[\\/]projects)$/,
+  );
+  if (scratchWorkspaceRootMatch) {
+    return {
+      key: `workspace:${scratchWorkspaceRootMatch[1]}`,
+      kind: "workspace",
+      label: "Workspaces",
+      path: scratchWorkspaceRootMatch[1],
+    };
+  }
+
   const scratchWorkspaceMatch = directory.path.match(
     /^(.*[\\/]\.pwragnt[\\/]projects)[\\/][^\\/]+$/,
   );

@@ -40,6 +40,7 @@ describe("GitDirectoryService", () => {
 
     await expect(
       service.prepareLaunchpadWorkspace({
+        directoryKind: "directory",
         directoryLabel: "FixtureRepo",
         directoryPath: repoDir,
         workMode: "local",
@@ -91,6 +92,7 @@ describe("GitDirectoryService", () => {
     const releaseRevision = runGit(repoDir, ["rev-parse", "release"]);
 
     const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
       directoryLabel: "FixtureRepo",
       directoryPath: repoDir,
       workMode: "worktree",
@@ -107,5 +109,21 @@ describe("GitDirectoryService", () => {
       .split("\n")
       .filter(Boolean);
     expect(branchesAfter).toEqual(branchesBefore);
+  });
+
+  it("does not use the workspace root as the cwd for workspace launchpads", async () => {
+    const service = new GitDirectoryService();
+
+    await expect(
+      service.prepareLaunchpadWorkspace({
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        directoryPath: "/Users/test/.pwragnt/projects",
+        workMode: "local",
+      }),
+    ).resolves.toEqual({
+      cwd: undefined,
+      workMode: "local",
+    });
   });
 });
