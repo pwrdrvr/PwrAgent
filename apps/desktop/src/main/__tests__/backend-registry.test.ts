@@ -812,6 +812,74 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("reads Grok models once from the default client and reuses them", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+    });
+    const grokClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Grok App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+      models: [
+        {
+          id: "grok-custom-reasoning",
+          label: "Grok Custom Reasoning",
+          supportsReasoning: true,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: {
+          serverInfo: { name: "Codex App Server", version: "1.0.0" },
+          methods: ["thread/start", "turn/start"],
+        },
+      }),
+      grokClient,
+      overlayStore: createOverlayStoreMock({
+        launchpadDefaults: {
+          backend: "grok",
+          executionMode: "default",
+          workMode: "local",
+        },
+      }),
+      createScratchProjectDirectory: async () => "/tmp/pwragnt-scratch",
+    });
+
+    const firstResponse = await registry.listBackends({ includeUnavailable: true });
+    const secondResponse = await registry.listBackends({ includeUnavailable: true });
+    await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+      preferredBackend: "grok",
+    });
+    await registry.startThread({ backend: "grok" });
+
+    expect(grokClient.listModelsCallCount).toBe(1);
+    expect(firstResponse.backends[1]?.launchpadOptions?.models).toMatchObject([
+      {
+        id: "grok-custom-reasoning",
+        label: "Grok Custom Reasoning",
+      },
+    ]);
+    expect(secondResponse.backends[1]?.launchpadOptions?.models).toMatchObject([
+      {
+        id: "grok-custom-reasoning",
+        label: "Grok Custom Reasoning",
+      },
+    ]);
+    expect(grokClient.lastStartThreadParams?.model).toBe("grok-custom-reasoning");
+
+    await registry.close();
+  });
+
   it("retries Codex model discovery after a transient startup failure", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {

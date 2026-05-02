@@ -870,6 +870,8 @@ export class DesktopBackendRegistry {
   private readonly threadTitleGenerationService?: ThreadTitleService;
   private codexDefaultModels?: BackendModelOption[];
   private codexDefaultModelsPromise?: Promise<BackendModelOption[]>;
+  private grokDefaultModels?: BackendModelOption[];
+  private grokDefaultModelsPromise?: Promise<BackendModelOption[]>;
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
@@ -1019,6 +1021,7 @@ export class DesktopBackendRegistry {
               }));
 
     void this.readCodexDefaultModelsOnce().catch(() => undefined);
+    void this.readGrokDefaultModelsOnce().catch(() => undefined);
 
     this.subscribeClient("codex", this.codexDefaultClient);
     this.subscribeClient("codex", this.codexFullAccessClient);
@@ -2089,6 +2092,24 @@ export class DesktopBackendRegistry {
     return this.codexDefaultModelsPromise;
   }
 
+  private readGrokDefaultModelsOnce(): Promise<BackendModelOption[]> {
+    if (this.grokDefaultModels) {
+      return Promise.resolve(this.grokDefaultModels);
+    }
+
+    this.grokDefaultModelsPromise ??= readClientModels(this.grokClient)
+      .then((models) => {
+        this.grokDefaultModels = models;
+        return models;
+      })
+      .catch((error) => {
+        this.grokDefaultModelsPromise = undefined;
+        throw error;
+      });
+
+    return this.grokDefaultModelsPromise;
+  }
+
   private async getBackendLaunchpadOptions(
     backend: AppServerBackendKind,
   ): Promise<BackendLaunchpadOptions | undefined> {
@@ -2097,10 +2118,8 @@ export class DesktopBackendRegistry {
       return buildLaunchpadOptions(backend, models);
     }
 
-    return buildLaunchpadOptions(
-      backend,
-      await readClientModels(this.grokClient).catch(() => []),
-    );
+    const models = await this.readGrokDefaultModelsOnce().catch(() => []);
+    return buildLaunchpadOptions(backend, models);
   }
 
   private subscribeClient(backend: AppServerBackendKind, client: BackendClient): void {
@@ -2243,7 +2262,10 @@ export class DesktopBackendRegistry {
   ): Promise<BackendSummary> {
     try {
       const initialize = await client.getInitializeResult();
-      const models = await readClientModels(client).catch(() => []);
+      const models =
+        kind === "grok"
+          ? await this.readGrokDefaultModelsOnce().catch(() => [])
+          : await readClientModels(client).catch(() => []);
       const methods = Array.isArray(initialize.methods)
         ? initialize.methods.filter((method): method is string => typeof method === "string")
         : [];
