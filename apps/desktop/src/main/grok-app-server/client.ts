@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   AppServerSessionState,
   CodexAppServer,
@@ -31,6 +30,10 @@ import type {
 import type { JsonRpcObserver } from "../codex-app-server/json-rpc";
 import { summarizeToolActivityItems } from "../app-server/thread-activity";
 import { getMainLogger } from "../log";
+import {
+  createThreadDirectoryEnricher,
+  type ThreadDirectoryEnrichment,
+} from "../app-server/thread-directory-enricher";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
 const grokClientLog = getMainLogger("pwragnt:grok-client");
@@ -66,6 +69,9 @@ type GrokClientOptions = {
   directoryResolver?: (
     projectKey?: string
   ) => Promise<LinkedDirectorySummary[]>;
+  threadDirectoryEnricher?: (
+    projectKey?: string
+  ) => Promise<ThreadDirectoryEnrichment>;
   server?: GrokServerLike;
   threadIdGenerator?: () => string;
   turnIdGenerator?: () => string;
@@ -193,24 +199,6 @@ function withThreadStatus(
 ): AppServerThreadReplay {
   const threadStatus = readThreadStatus(source);
   return threadStatus ? { ...replay, threadStatus } : replay;
-}
-
-async function resolveLinkedDirectories(
-  projectKey?: string
-): Promise<LinkedDirectorySummary[]> {
-  if (!projectKey?.trim()) {
-    return [];
-  }
-
-  const resolvedPath = path.resolve(projectKey);
-  return [
-    {
-      id: resolvedPath,
-      label: path.basename(resolvedPath) || resolvedPath,
-      path: resolvedPath,
-      kind: "local",
-    },
-  ];
 }
 
 function extractThreadSummaryList(value: unknown): RawThreadSummary[] {
@@ -750,9 +738,9 @@ function extractModelOptions(value: unknown): BackendModelOption[] {
 }
 
 export class GrokAppServerClient {
-  private readonly directoryResolver: (
+  private readonly threadDirectoryEnricher: (
     projectKey?: string
-  ) => Promise<LinkedDirectorySummary[]>;
+  ) => Promise<ThreadDirectoryEnrichment>;
   private requestCounter = 0;
   private server: GrokServerLike | null;
   private initialized = false;
@@ -769,7 +757,13 @@ export class GrokAppServerClient {
   private unsubscribeRequest?: () => void;
 
   constructor(private readonly options: GrokClientOptions = {}) {
-    this.directoryResolver = options.directoryResolver ?? resolveLinkedDirectories;
+    this.threadDirectoryEnricher =
+      options.threadDirectoryEnricher ??
+      (options.directoryResolver
+        ? async (projectKey?: string) => ({
+            linkedDirectories: await options.directoryResolver!(projectKey),
+          })
+        : createThreadDirectoryEnricher());
     this.server = options.server ?? null;
     if (this.server) {
       this.subscribeToServerNotifications(this.server);
@@ -823,18 +817,23 @@ export class GrokAppServerClient {
     return await Promise.all(
       extractThreadSummaryList(result).map(async (thread) => {
         const normalized = normalizeThreadSummary(thread);
+        const enrichment = await this.threadDirectoryEnricher(thread.projectKey);
         return {
           id: thread.threadId,
           title: normalized.title ?? "Untitled thread",
           titleSource: normalized.titleSource ?? "fallback",
           summary: normalized.summary,
+          ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
           model: thread.model,
           serviceTier: thread.serviceTier,
           reasoningEffort: thread.reasoningEffort,
           fastMode: thread.fastMode,
-          linkedDirectories: await this.directoryResolver(thread.projectKey),
+          linkedDirectories: enrichment.linkedDirectories,
+          ...(enrichment.observedGitBranch
+            ? { observedGitBranch: enrichment.observedGitBranch }
+            : {}),
           source: "grok" as const,
         };
       })

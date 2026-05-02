@@ -256,6 +256,89 @@ describe("AppServerSessionState", () => {
     }
   });
 
+  it("refreshes persisted threads created by another live session state", async () => {
+    const temp = await createTemporaryTestDirectory();
+
+    try {
+      const firstState = new AppServerSessionState({
+        store: new GrokRolloutStore(temp.path),
+      });
+      const secondState = new AppServerSessionState({
+        store: new GrokRolloutStore(temp.path),
+      });
+
+      expect(secondState.listThreads()).toEqual([]);
+
+      firstState.createThread({
+        threadId: "thread-1",
+        cwd: "/repo/workspace",
+        model: "grok-4.20-reasoning",
+      });
+      firstState.setThreadName("thread-1", "Messaging - Streaming Responses");
+      firstState.appendInput("thread-1", [{ type: "text", text: "Name this thread" }]);
+      firstState.appendAssistant("thread-1", "Ready whenever you are.");
+      firstState.setPreviousResponseId("thread-1", "resp_1");
+
+      expect(secondState.listThreads()).toMatchObject([
+        {
+          threadId: "thread-1",
+          title: "Messaging - Streaming Responses",
+          titleSource: "explicit",
+          summary: "Ready whenever you are.",
+          projectKey: "/repo/workspace",
+          model: "grok-4.20-reasoning",
+        },
+      ]);
+      expect(secondState.readThread("thread-1")).toMatchObject({
+        threadId: "thread-1",
+        messages: [
+          { role: "user", text: "Name this thread" },
+          { role: "assistant", text: "Ready whenever you are." },
+        ],
+        lastUserMessage: "Name this thread",
+        lastAssistantMessage: "Ready whenever you are.",
+      });
+      expect(secondState.getPreviousResponseId("thread-1")).toBe("resp_1");
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it("preserves active run handles while refreshing thread metadata from the store", async () => {
+    const temp = await createTemporaryTestDirectory();
+
+    try {
+      const activeState = new AppServerSessionState({
+        store: new GrokRolloutStore(temp.path),
+      });
+      activeState.createThread({
+        threadId: "thread-1",
+        cwd: "/repo/workspace",
+      });
+      const run = activeState.createRun({
+        turnId: "turn-1",
+        threadId: "thread-1",
+        handle: createActiveTurn(),
+      });
+
+      const externalState = new AppServerSessionState({
+        store: new GrokRolloutStore(temp.path),
+      });
+      externalState.setThreadName("thread-1", "Updated elsewhere");
+
+      expect(activeState.listThreads()).toMatchObject([
+        {
+          threadId: "thread-1",
+          title: "Updated elsewhere",
+          titleSource: "explicit",
+        },
+      ]);
+      expect(activeState.getRun("turn-1")).toBe(run);
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
   it("keeps repeated tool ids from separate turns as distinct replay items", () => {
     const state = new AppServerSessionState();
 

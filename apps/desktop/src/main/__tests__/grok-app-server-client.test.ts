@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   CodexAppServer,
@@ -14,6 +16,8 @@ import { GrokAppServerClient } from "../grok-app-server/client";
 import { ProtocolCaptureStore } from "../testing/capture-store";
 import { createProtocolCaptureObserver } from "../testing/protocol-capture";
 
+const execFile = promisify(execFileCallback);
+
 async function flushAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -21,6 +25,78 @@ async function flushAsync(): Promise<void> {
 }
 
 describe("GrokAppServerClient", () => {
+  it("labels worktree-backed Grok threads by the primary repo while preserving projectKey", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const repoPath = path.join(temp.path, "PwrAgnt");
+    const worktreePath = path.join(
+      repoPath,
+      ".worktrees",
+      "launchpad-pwragnt-main-moohzbj1",
+    );
+
+    try {
+      await fs.mkdir(repoPath, { recursive: true });
+      await execFile("git", ["-C", repoPath, "init"]);
+      await fs.writeFile(path.join(repoPath, "README.md"), "test\n", "utf8");
+      await execFile("git", ["-C", repoPath, "add", "README.md"]);
+      await execFile("git", [
+        "-C",
+        repoPath,
+        "-c",
+        "user.name=PwrAgnt Tests",
+        "-c",
+        "user.email=tests@example.com",
+        "commit",
+        "-m",
+        "initial",
+      ]);
+      await execFile("git", [
+        "-C",
+        repoPath,
+        "worktree",
+        "add",
+        "-b",
+        "launchpad-pwragnt-main-moohzbj1",
+        worktreePath,
+      ]);
+      const repoRealPath = await fs.realpath(repoPath);
+      const worktreeRealPath = await fs.realpath(worktreePath);
+
+      const server = new CodexAppServer({
+        provider: new FakeProvider(),
+        threadIdGenerator: () => "thread-eksfk3v0",
+        turnIdGenerator: () => "turn-1",
+      });
+      const client = new GrokAppServerClient({ server });
+
+      await client.startThread({
+        cwd: worktreePath,
+        model: "grok-4.20-reasoning",
+      });
+
+      await expect(client.listThreads()).resolves.toMatchObject([
+        {
+          id: "thread-eksfk3v0",
+          projectKey: worktreePath,
+          linkedDirectories: [
+            {
+              id: repoRealPath,
+              path: repoRealPath,
+              worktreePath: worktreeRealPath,
+              label: "PwrAgnt",
+              kind: "worktree",
+            },
+          ],
+          source: "grok",
+        },
+      ]);
+
+      await client.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
   it("lists threads, reads replay, and forwards turn notifications", async () => {
     const provider = new FakeProvider();
     const server = new CodexAppServer({
@@ -67,6 +143,7 @@ describe("GrokAppServerClient", () => {
         title: "Untitled thread",
         titleSource: "fallback",
         summary: undefined,
+        projectKey: "/repo/workspace",
         model: "grok-4.20-reasoning",
         serviceTier: undefined,
         reasoningEffort: undefined,
@@ -104,6 +181,7 @@ describe("GrokAppServerClient", () => {
         title: "Ship Unit 3",
         titleSource: "derived",
         summary: "Done.",
+        projectKey: "/repo/workspace",
         model: "grok-4.20-reasoning",
         serviceTier: undefined,
         reasoningEffort: undefined,
@@ -1074,8 +1152,10 @@ describe("GrokAppServerClient", () => {
   it("reloads persisted Grok thread metadata after client recreation", async () => {
     const temp = await createTemporaryTestDirectory();
     const stateRoot = path.join(temp.path, "state");
+    const workspacePath = path.join(temp.path, "workspace");
 
     try {
+      await fs.mkdir(workspacePath, { recursive: true });
       const firstClient = new GrokAppServerClient({
         apiKey: "test-key",
         stateRoot,
@@ -1115,6 +1195,64 @@ describe("GrokAppServerClient", () => {
           hasPreviousPage: false,
         },
       });
+      await secondClient.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it("lists Grok threads created by another already-running client with the same state root", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const stateRoot = path.join(temp.path, "state");
+    const workspacePath = path.join(temp.path, "workspace");
+
+    try {
+      await fs.mkdir(workspacePath, { recursive: true });
+      const firstClient = new GrokAppServerClient({
+        apiKey: "test-key",
+        stateRoot,
+        threadIdGenerator: () => "thread-1",
+      });
+      const secondClient = new GrokAppServerClient({
+        apiKey: "test-key",
+        stateRoot,
+      });
+
+      await expect(secondClient.listThreads()).resolves.toEqual([]);
+
+      await firstClient.startThread({
+        cwd: workspacePath,
+        model: "grok-4.20-reasoning",
+      });
+      await firstClient.renameThread({
+        threadId: "thread-1",
+        name: "Messaging - Streaming Responses",
+      });
+
+      await expect(secondClient.listThreads()).resolves.toMatchObject([
+        {
+          id: "thread-1",
+          title: "Messaging - Streaming Responses",
+          titleSource: "explicit",
+          projectKey: workspacePath,
+          model: "grok-4.20-reasoning",
+          linkedDirectories: [
+            {
+              id: workspacePath,
+              label: "workspace",
+              path: workspacePath,
+              kind: "local",
+            },
+          ],
+          source: "grok",
+        },
+      ]);
+      await expect(secondClient.readThread({ threadId: "thread-1" })).resolves.toMatchObject({
+        entries: [],
+        messages: [],
+      });
+
+      await firstClient.close();
       await secondClient.close();
     } finally {
       await temp.cleanup();
