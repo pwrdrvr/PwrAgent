@@ -105,6 +105,21 @@ const SkillMention = Mention.extend({
   },
 });
 
+const MarkdownStarterKit = StarterKit.configure({
+  link: false,
+});
+
+const PlainTextStarterKit = StarterKit.configure({
+  blockquote: false,
+  bulletList: false,
+  codeBlock: false,
+  heading: false,
+  horizontalRule: false,
+  link: false,
+  listItem: false,
+  orderedList: false,
+});
+
 function splitTextContent(text: string): JSONContent[] {
   const nodes: JSONContent[] = [];
   const lines = text.split("\n");
@@ -703,17 +718,7 @@ export const ComposerTiptapInput = forwardRef<
   });
   const extensions = useMemo(
     () => [
-      props.markdownConversion
-        ? StarterKit
-        : StarterKit.configure({
-            blockquote: false,
-            bulletList: false,
-            codeBlock: false,
-            heading: false,
-            horizontalRule: false,
-            listItem: false,
-            orderedList: false,
-          }),
+      props.markdownConversion ? MarkdownStarterKit : PlainTextStarterKit,
       SkillMention,
     ],
     [props.markdownConversion],

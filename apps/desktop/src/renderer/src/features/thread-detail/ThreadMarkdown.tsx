@@ -67,6 +67,11 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         const href = typeof anchorProps.href === "string" ? anchorProps.href : "";
         const skillPath = normalizeSkillPath(href);
         const label = extractTextContent(anchorProps.children).trim();
+        const source = sourceForNode(props.text, anchorProps.node);
+
+        if (isImplicitBareAutolink({ href, label, source })) {
+          return <>{anchorProps.children}</>;
+        }
 
         if (
           skillPath &&
@@ -80,6 +85,10 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
           return <SkillChip label={label || undefined} skill={skill} />;
         }
 
+        if (!href) {
+          return <>{anchorProps.children}</>;
+        }
+
         return (
           <a
             className="transcript-message__link"
@@ -87,7 +96,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
             onClick={(event) => {
               openLocalFileLink(event, href);
             }}
-            rel="noreferrer"
+            rel="noopener noreferrer"
             target="_blank"
             title={href || undefined}
           >
@@ -160,7 +169,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         return <ul className="transcript-message__list">{listProps.children}</ul>;
       },
     }),
-    [openLocalFileLink, skillsByPath]
+    [openLocalFileLink, props.text, skillsByPath]
   );
 
   return (
@@ -192,17 +201,81 @@ const normalizeMarkdownUrl: UrlTransform = (url) => {
     return `file://${trimmed}`;
   }
 
-  if (
-    trimmed.startsWith("http://") ||
-    trimmed.startsWith("https://") ||
-    trimmed.startsWith("mailto:") ||
-    trimmed.startsWith("file://")
-  ) {
-    return trimmed;
+  return isSafeMarkdownUrl(trimmed) ? trimmed : "";
+};
+
+function isSafeMarkdownUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
   }
 
-  return "";
-};
+  if (
+    parsed.protocol === "https:" ||
+    parsed.protocol === "mailto:" ||
+    parsed.protocol === "file:"
+  ) {
+    return true;
+  }
+
+  return parsed.protocol === "http:" && isLoopbackHost(parsed.hostname);
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized.endsWith(".localhost")
+  );
+}
+
+function isImplicitBareAutolink(params: {
+  href: string;
+  label: string;
+  source?: string;
+}): boolean {
+  const source = params.source?.trim();
+  if (!source || source !== params.label) {
+    return false;
+  }
+
+  return (
+    !source.startsWith("<") &&
+    !source.startsWith("[") &&
+    !/^[a-z][a-z\d+.-]*:/i.test(source)
+  );
+}
+
+function sourceForNode(
+  markdown: string,
+  node: unknown,
+): string | undefined {
+  const position = (
+    node as {
+      position?: {
+        end?: { offset?: number };
+        start?: { offset?: number };
+      };
+    }
+  )?.position;
+  const start = position?.start?.offset;
+  const end = position?.end?.offset;
+
+  if (
+    typeof start !== "number" ||
+    typeof end !== "number" ||
+    start < 0 ||
+    end < start
+  ) {
+    return undefined;
+  }
+
+  return markdown.slice(start, end);
+}
 
 function normalizeSkillPath(href: string): string | undefined {
   if (href.startsWith("file://")) {

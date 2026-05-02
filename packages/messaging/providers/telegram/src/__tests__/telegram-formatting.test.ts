@@ -10,6 +10,30 @@ import {
 } from "../telegram-formatting.ts";
 
 describe("telegram formatting", () => {
+  it("keeps bare repo plan paths as text instead of explicit links", () => {
+    const planPath =
+      "docs/plans/2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md";
+    const rendered = textForTelegramIntent({
+      id: "message-1",
+      kind: "message",
+      createdAt: 1000,
+      role: "assistant",
+      parts: [
+        {
+          type: "text",
+          text: `Use ${planPath} for the fix.`,
+          markdown: "markdown",
+        },
+      ],
+    });
+
+    expect(rendered).toContain(planPath);
+    expect(rendered).not.toContain("<a");
+    expect(rendered).not.toContain("href=");
+    expect(rendered).not.toContain(`http://${planPath}`);
+    expect(rendered).not.toContain(`https://${planPath}`);
+  });
+
   it("escapes HTML and preserves inline and fenced code as Telegram HTML", () => {
     const rendered = renderTelegramHtml(
       "Use `pnpm test` <now>\n\n```ts\nexpect(true).toBe(true)\n```",
