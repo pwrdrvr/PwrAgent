@@ -89,6 +89,62 @@ describe("discord adapter", () => {
       },
     });
   });
+
+  it("renames Discord threads without allowing plain channel renames", async () => {
+    const updateChannelName = vi.fn(async () => {});
+    const adapter = new DiscordAdapter({
+      api: createApi({ updateChannelName }),
+      config: {
+        authorizedActorIds: ["user-1"],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+    });
+
+    await expect(
+      adapter.setConversationTitle({
+        channel: {
+          channel: "discord",
+          conversation: {
+            id: "thread-channel-1",
+            kind: "channel",
+            parentId: "guild-1",
+          },
+        },
+        routingState: {
+          opaque: {
+            channelType: 11,
+            isThread: true,
+          },
+        },
+        title: "Thread one",
+      }),
+    ).resolves.toMatchObject({
+      outcome: "updated",
+      title: "Thread one",
+    });
+    expect(updateChannelName).toHaveBeenCalledWith("thread-channel-1", {
+      name: "Thread one",
+    });
+
+    await expect(
+      adapter.setConversationTitle({
+        channel: {
+          channel: "discord",
+          conversation: {
+            id: "plain-channel-1",
+            kind: "channel",
+            parentId: "guild-1",
+          },
+        },
+        title: "Thread one",
+      }),
+    ).resolves.toMatchObject({
+      outcome: "unsupported",
+    });
+    expect(updateChannelName).toHaveBeenCalledTimes(1);
+  });
 });
 
 function discordAudit(): MessagingAuditContext {
@@ -122,6 +178,7 @@ function createApi(overrides: Partial<DiscordApi> = {}): DiscordApi {
     deleteApplicationCommand: async () => {},
     listApplicationCommands: async () => [],
     sendTyping: async () => {},
+    updateChannelName: async () => {},
     updateApplicationCommand: async () => applicationCommand(),
     updateInteractionOriginalResponse: async () => ({
       channel_id: "channel-1",

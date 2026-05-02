@@ -14,6 +14,8 @@ import {
 } from "discord.js";
 import type {
   MessagingAdapterState,
+  MessagingConversationTitleUpdateRequest,
+  MessagingConversationTitleUpdateResult,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   MessagingJsonValue,
@@ -108,13 +110,16 @@ export type DiscordMessageCreateDispatch = {
   }>;
   author: DiscordUser;
   channel_id: string;
+  channel_type?: number;
   content?: string;
   guild_id?: string;
   id: string;
+  is_thread?: boolean;
 };
 
 export type DiscordInteractionCreateDispatch = {
   channel_id: string;
+  channel_type?: number;
   data?: {
     custom_id?: string;
     name?: string;
@@ -122,6 +127,7 @@ export type DiscordInteractionCreateDispatch = {
   };
   guild_id?: string;
   id: string;
+  is_thread?: boolean;
   member?: {
     nick?: string | null;
     user?: DiscordUser;
@@ -157,6 +163,7 @@ export type DiscordGatewayConnection = {
 };
 
 export type DiscordApi = DiscordApplicationCommandApi & {
+  updateChannelName(channelId: string, request: { name: string }): Promise<void>;
   createInteractionResponse(
     interactionId: string,
     interactionToken: string,
@@ -191,6 +198,9 @@ export type DiscordProviderAdapter = {
   authorizedActorIds: readonly string[];
   channel: "discord";
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  setConversationTitle(
+    request: MessagingConversationTitleUpdateRequest,
+  ): Promise<MessagingConversationTitleUpdateResult>;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop?(): Promise<void>;
 };
@@ -362,6 +372,46 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
   }
 
+  async setConversationTitle(
+    request: MessagingConversationTitleUpdateRequest,
+  ): Promise<MessagingConversationTitleUpdateResult> {
+    const title = sanitizeDiscordThreadName(request.title);
+    const conversation = request.channel.conversation;
+    if (!isDiscordThreadConversation(request)) {
+      return {
+        channel: this.channel,
+        conversation,
+        errorMessage: "Discord name sync is only available inside Discord threads.",
+        outcome: "unsupported",
+        title,
+        updatedAt: this.now(),
+      };
+    }
+
+    try {
+      await this.api.updateChannelName(conversation.id, { name: title });
+      return {
+        channel: this.channel,
+        conversation: {
+          ...conversation,
+          title,
+        },
+        outcome: "updated",
+        title,
+        updatedAt: this.now(),
+      };
+    } catch (error) {
+      return {
+        channel: this.channel,
+        conversation,
+        errorMessage: errorMessage(error),
+        outcome: "failed",
+        title,
+        updatedAt: this.now(),
+      };
+    }
+  }
+
   async handleGatewayEvent(event: DiscordGatewayEvent): Promise<void> {
     if (event.t === "MESSAGE_CREATE") {
       await this.handleMessageCreate(event.d);
@@ -381,7 +431,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
     const channel = this.channelFromDiscord(message.channel_id, message.guild_id);
     const receivedAt = this.now();
-    const routingState = this.routingStateFromDiscord(message.channel_id, message.guild_id);
+    const routingState = this.routingStateFromDiscord(message.channel_id, message.guild_id, {
+      channelType: message.channel_type,
+      isThread: message.is_thread,
+    });
 
     if (message.attachments && message.attachments.length > 0) {
       const attachment = message.attachments[0]!;
@@ -488,6 +541,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       routingState: this.routingStateFromDiscord(
         interaction.channel_id,
         interaction.guild_id,
+        {
+          channelType: interaction.channel_type,
+          isThread: interaction.is_thread,
+        },
       ),
     });
   }
@@ -516,7 +573,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         interaction.channel_id,
         interaction.guild_id,
         {
+          channelType: interaction.channel_type,
           interactionToken: interaction.token,
+          isThread: interaction.is_thread,
         },
       ),
     });
@@ -818,16 +877,22 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private routingStateFromDiscord(
     channelId: string,
     guildId: string | undefined,
-    interaction?: {
-      interactionToken: string;
+    options?: {
+      channelType?: number;
+      interactionToken?: string;
+      isThread?: boolean;
     },
   ): MessagingAdapterState {
     return {
       opaque: {
-        applicationId: interaction ? (this.options.config.applicationId ?? null) : null,
+        applicationId: options?.interactionToken
+          ? (this.options.config.applicationId ?? null)
+          : null,
         channelId,
+        channelType: options?.channelType ?? null,
         guildId: guildId ?? null,
-        interactionToken: interaction?.interactionToken ?? null,
+        interactionToken: options?.interactionToken ?? null,
+        isThread: options?.isThread ?? null,
       },
     };
   }
@@ -880,6 +945,15 @@ class DiscordRestApi implements DiscordApi {
     return (await this.rest.post(Routes.channelMessages(channelId), {
       body: request,
     })) as DiscordMessage;
+  }
+
+  async updateChannelName(
+    channelId: string,
+    request: { name: string },
+  ): Promise<void> {
+    await this.rest.patch(Routes.channel(channelId), {
+      body: request,
+    });
   }
 
   async createInteractionResponse(
@@ -1031,9 +1105,11 @@ function messageToDispatch(message: Message): DiscordMessageCreateDispatch {
     })),
     author: userToDiscordUser(message.author),
     channel_id: message.channelId,
+    channel_type: message.channel.type,
     content: message.content,
     guild_id: message.guildId ?? undefined,
     id: message.id,
+    is_thread: discordChannelIsThread(message.channel),
   };
 }
 
@@ -1044,11 +1120,15 @@ function interactionToDispatch(
     const buttonInteraction = interaction as ButtonInteraction;
     return {
       channel_id: buttonInteraction.channelId,
+      channel_type: buttonInteraction.channel?.type,
       data: {
         custom_id: buttonInteraction.customId,
       },
       guild_id: buttonInteraction.guildId ?? undefined,
       id: buttonInteraction.id,
+      is_thread: buttonInteraction.channel
+        ? discordChannelIsThread(buttonInteraction.channel)
+        : undefined,
       member: buttonInteraction.inGuild()
         ? {
             nick:
@@ -1071,6 +1151,7 @@ function interactionToDispatch(
     const commandInteraction = interaction as ChatInputCommandInteraction;
     return {
       channel_id: commandInteraction.channelId,
+      channel_type: commandInteraction.channel?.type,
       data: {
         name: commandInteraction.commandName,
         options: commandInteraction.options.data.map((option) => ({
@@ -1085,6 +1166,9 @@ function interactionToDispatch(
       },
       guild_id: commandInteraction.guildId ?? undefined,
       id: commandInteraction.id,
+      is_thread: commandInteraction.channel
+        ? discordChannelIsThread(commandInteraction.channel)
+        : undefined,
       member: commandInteraction.inGuild()
         ? {
             nick:
@@ -1111,6 +1195,42 @@ function userToDiscordUser(user: User): DiscordUser {
     id: user.id,
     username: user.username,
   };
+}
+
+function isDiscordThreadConversation(
+  request: MessagingConversationTitleUpdateRequest,
+): boolean {
+  if (request.channel.conversation.kind === "thread") {
+    return true;
+  }
+
+  const opaque = request.routingState?.opaque;
+  if (!opaque || typeof opaque !== "object" || Array.isArray(opaque)) {
+    return false;
+  }
+
+  if (opaque.isThread === true) {
+    return true;
+  }
+
+  return (
+    opaque.channelType === 10 ||
+    opaque.channelType === 11 ||
+    opaque.channelType === 12
+  );
+}
+
+function sanitizeDiscordThreadName(title: string): string {
+  const normalized = title.replace(/\s+/g, " ").trim();
+  return Array.from(normalized || "PwrAgnt thread").slice(0, 100).join("");
+}
+
+function discordChannelIsThread(channel: unknown): boolean {
+  if (!channel || typeof channel !== "object" || !("isThread" in channel)) {
+    return false;
+  }
+  const isThread = (channel as { isThread?: unknown }).isThread;
+  return typeof isThread === "function" && Boolean(isThread.call(channel));
 }
 
 function errorMessage(error: unknown): string {

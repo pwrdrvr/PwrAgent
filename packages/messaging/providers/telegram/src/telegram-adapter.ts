@@ -3,6 +3,8 @@ import { Bot } from "grammy";
 import type {
   MessagingAdapterState,
   MessagingCallbackHandleStore,
+  MessagingConversationTitleUpdateRequest,
+  MessagingConversationTitleUpdateResult,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   MessagingJsonValue,
@@ -67,7 +69,20 @@ export type TelegramMessage = {
     file_name?: string;
     mime_type?: string;
   };
+  forum_topic_closed?: Record<string, never>;
+  forum_topic_created?: {
+    icon_color?: number;
+    icon_custom_emoji_id?: string;
+    name: string;
+  };
+  forum_topic_edited?: {
+    icon_custom_emoji_id?: string;
+    name?: string;
+  };
+  forum_topic_reopened?: Record<string, never>;
   from?: TelegramUser;
+  general_forum_topic_hidden?: Record<string, never>;
+  general_forum_topic_unhidden?: Record<string, never>;
   message_id: number;
   message_thread_id?: number;
   photo?: Array<{
@@ -112,6 +127,12 @@ export type TelegramEditMessageTextRequest = TelegramSendMessageRequest & {
   message_id: number;
 };
 
+export type TelegramEditForumTopicRequest = {
+  chat_id: number | string;
+  message_thread_id: number;
+  name: string;
+};
+
 export type TelegramSendPhotoRequest = {
   caption?: string;
   chat_id: number | string;
@@ -149,6 +170,7 @@ export type TelegramBotApi = {
     text?: string;
   }): Promise<boolean>;
   deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
+  editForumTopic(request: TelegramEditForumTopicRequest): Promise<boolean>;
   editMessageText(request: TelegramEditMessageTextRequest): Promise<TelegramSentMessage>;
   getWebhookInfo(): Promise<{ url: string }>;
   pinChatMessage(request: TelegramPinChatMessageRequest): Promise<boolean>;
@@ -177,6 +199,14 @@ export type TelegramGrammyBotLike = {
       other?: { text?: string },
     ): Promise<boolean>;
     deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
+    editForumTopic(
+      chatId: number | string,
+      messageThreadId: number,
+      other?: Omit<
+        TelegramEditForumTopicRequest,
+        "chat_id" | "message_thread_id"
+      >,
+    ): Promise<boolean>;
     editMessageText(
       chatId: number | string,
       messageId: number,
@@ -223,6 +253,9 @@ export type TelegramProviderAdapter = {
   authorizedActorIds: readonly string[];
   channel: "telegram";
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
+  setConversationTitle(
+    request: MessagingConversationTitleUpdateRequest,
+  ): Promise<MessagingConversationTitleUpdateResult>;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop?(): Promise<void>;
 };
@@ -444,6 +477,54 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     };
   }
 
+  async setConversationTitle(
+    request: MessagingConversationTitleUpdateRequest,
+  ): Promise<MessagingConversationTitleUpdateResult> {
+    const title = sanitizeTelegramTopicName(request.title);
+    const conversation = request.channel.conversation;
+    const target =
+      this.telegramStateFromChannel(conversation) ??
+      this.telegramStateFromSurface(request.routingState);
+
+    if (conversation.kind !== "topic" || !target?.messageThreadId) {
+      return {
+        channel: this.channel,
+        conversation,
+        errorMessage: "Telegram name sync is only available inside forum topics.",
+        outcome: "unsupported",
+        title,
+        updatedAt: this.now(),
+      };
+    }
+
+    try {
+      await this.bot.api.editForumTopic({
+        chat_id: target.chatId,
+        message_thread_id: target.messageThreadId,
+        name: title,
+      });
+      return {
+        channel: this.channel,
+        conversation: {
+          ...conversation,
+          title,
+        },
+        outcome: "updated",
+        title,
+        updatedAt: this.now(),
+      };
+    } catch (error) {
+      return {
+        channel: this.channel,
+        conversation,
+        errorMessage: errorMessage(error),
+        outcome: "failed",
+        title,
+        updatedAt: this.now(),
+      };
+    }
+  }
+
   async handleUpdate(update: TelegramUpdate): Promise<void> {
     if (update.message) {
       await this.handleMessage(update.update_id, update.message);
@@ -464,9 +545,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return;
     }
 
-    if (message.pinned_message || this.isOwnBotUser(message.from)) {
+    const serviceMessageReason = telegramServiceMessageReason(message);
+    if (serviceMessageReason || this.isOwnBotUser(message.from)) {
       this.options.logger?.debug(
-        `telegram inbound ignored update=${updateId} message=${message.message_id} reason=${message.pinned_message ? "pin" : "own_bot"} chat=${message.chat.id}`,
+        `telegram inbound ignored update=${updateId} message=${message.message_id} reason=${serviceMessageReason ?? "own_bot"} chat=${message.chat.id}`,
       );
       return;
     }
@@ -992,6 +1074,14 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
           text: params.text,
         }),
       deleteWebhook: async (params) => await bot.api.deleteWebhook(params),
+      editForumTopic: async (request) =>
+        await bot.api.editForumTopic(
+          request.chat_id,
+          request.message_thread_id,
+          {
+            name: request.name,
+          },
+        ),
       editMessageText: async (request) => {
         const { chat_id, message_id, text, ...other } = request;
         return coerceTelegramSentMessage(
@@ -1051,6 +1141,11 @@ function parseTelegramIdentifier(value: string): number | string {
   return Number.isSafeInteger(numeric) && String(numeric) === value ? numeric : value;
 }
 
+function sanitizeTelegramTopicName(title: string): string {
+  const normalized = title.replace(/\s+/g, " ").trim();
+  return Array.from(normalized || "PwrAgnt thread").slice(0, 128).join("");
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -1059,4 +1154,29 @@ function compactPreview(text: string, limit = 96): string {
   const compact = text.replace(/\s+/g, " ").trim();
   const preview = compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
   return preview.replace(/["\\]/g, "\\$&");
+}
+
+function telegramServiceMessageReason(message: TelegramMessage): string | undefined {
+  if (message.pinned_message) {
+    return "pin";
+  }
+  if (message.forum_topic_created) {
+    return "forum_topic_created";
+  }
+  if (message.forum_topic_edited) {
+    return "forum_topic_edited";
+  }
+  if (message.forum_topic_closed) {
+    return "forum_topic_closed";
+  }
+  if (message.forum_topic_reopened) {
+    return "forum_topic_reopened";
+  }
+  if (message.general_forum_topic_hidden) {
+    return "general_forum_topic_hidden";
+  }
+  if (message.general_forum_topic_unhidden) {
+    return "general_forum_topic_unhidden";
+  }
+  return undefined;
 }
