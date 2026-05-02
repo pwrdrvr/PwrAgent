@@ -987,6 +987,46 @@ describe("TelegramAdapter", () => {
     expect(events).toEqual([]);
   });
 
+  it("ignores Telegram forum topic rename service messages", async () => {
+    const events: MessagingInboundEvent[] = [];
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: ["42"],
+      },
+      pollOnStart: false,
+    });
+
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    await adapter.handleUpdate({
+      update_id: 7,
+      message: {
+        chat: {
+          id: -100777,
+          title: "PwrAgnt topics",
+          type: "supergroup",
+        },
+        forum_topic_edited: {
+          name: "Renamed topic",
+        },
+        from: {
+          first_name: "Ada",
+          id: 42,
+          is_bot: false,
+        },
+        message_id: 106,
+        message_thread_id: 12,
+      },
+    });
+
+    expect(events).toEqual([]);
+  });
+
   it("ignores Telegram messages authored by the configured bot", async () => {
     const events: MessagingInboundEvent[] = [];
     const api = createApi();
@@ -1004,7 +1044,7 @@ describe("TelegramAdapter", () => {
       events.push(event);
     });
     await adapter.handleUpdate({
-      update_id: 7,
+      update_id: 8,
       message: {
         chat: {
           id: 777,
@@ -1016,7 +1056,7 @@ describe("TelegramAdapter", () => {
           is_bot: true,
           username: "huntharo_bot",
         },
-        message_id: 106,
+        message_id: 107,
         text: "Binding: Thread one",
       },
     });
@@ -1041,7 +1081,7 @@ describe("TelegramAdapter", () => {
       events.push(event);
     });
     await adapter.handleUpdate({
-      update_id: 8,
+      update_id: 9,
       message: {
         chat: {
           id: 777,
@@ -1053,7 +1093,7 @@ describe("TelegramAdapter", () => {
           is_bot: true,
           username: "other_bot",
         },
-        message_id: 107,
+        message_id: 108,
         text: "hello from another bot",
       },
     });
