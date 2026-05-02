@@ -4,6 +4,9 @@ import type {
   AppServerBackendKind,
   AppServerPendingRequestNotification,
   AppServerToolRequestUserInputNotification,
+  HandoffThreadWorkspaceRequest,
+  HandoffThreadWorkspaceResponse,
+  LinkedDirectorySummary,
   MessagingBindingRecord,
   MessagingBrowseSessionRecord,
   MessagingActiveTurnSummary,
@@ -19,6 +22,7 @@ import type {
   MessagingPendingIntentRecord,
   MessagingSurfaceIntent,
   MessagingToolUpdateMode,
+  NavigationDirectorySummary,
   NavigationSnapshot,
   NavigationThreadSummary,
   ThreadExecutionMode,
@@ -52,10 +56,15 @@ import {
 } from "./messaging-resume-browser.js";
 import {
   buildBindingStatusIntent,
+  buildHandoffBranchPickerIntent,
+  buildHandoffConfirmationIntent,
+  buildHandoffOverviewIntent,
   buildStatusModelPickerIntent,
   buildStatusReasoningPickerIntent,
+  handoffRequestFromValue,
   nextMessagingToolUpdateMode,
   resolveMessagingToolUpdateMode,
+  type MessagingWorkspaceHandoffContext,
 } from "./messaging-status-card.js";
 import { resolveMessagingThreadState } from "./messaging-thread-state.js";
 import { summarizeToolActivityFromBackendEvent } from "./messaging-tool-activity.js";
@@ -1233,6 +1242,31 @@ export class MessagingController {
       await this.renderBindingStatus(binding, event);
       return;
     }
+    if (actionId === "status:handoff") {
+      await this.presentHandoffOverview(binding, event);
+      return;
+    }
+    if (actionId === "handoff:cancel") {
+      await this.clearActiveHandoffIntent(event);
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
+    if (actionId === "handoff:local-to-worktree") {
+      await this.presentHandoffBranchPicker(binding, event);
+      return;
+    }
+    if (actionId === "handoff:worktree-to-local") {
+      await this.presentHandoffConfirmation(binding, event);
+      return;
+    }
+    if (actionId === "handoff:select-leave-branch") {
+      await this.presentHandoffConfirmation(binding, event);
+      return;
+    }
+    if (actionId === "handoff:confirm") {
+      await this.executeHandoff(binding, event);
+      return;
+    }
     if (actionId === "status:model") {
       await this.presentModelPicker(binding, event);
       return;
@@ -1283,6 +1317,313 @@ export class MessagingController {
       }),
       binding,
     );
+  }
+
+  private async presentHandoffOverview(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    if (!this.options.backend.handoffThreadWorkspace) {
+      await this.deliverHandoffUnavailable(binding, event, "This runtime does not expose workspace handoff through messaging.");
+      return;
+    }
+
+    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const context = handoffContextForBinding(binding, navigation);
+    if (!context) {
+      await this.deliverHandoffUnavailable(binding, event, "This thread does not have enough Git workspace metadata for handoff.");
+      return;
+    }
+
+    await this.deliverAndStoreStatusSubmode(
+      {
+        ...buildHandoffOverviewIntent({
+          id: this.newIntentId("handoff-overview"),
+          binding,
+          context,
+          createdAt: this.now(),
+        }),
+        audit: this.buildHandoffAudit("handoff.overview", binding, event),
+      },
+      binding,
+      event,
+    );
+  }
+
+  private async presentHandoffBranchPicker(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const context = handoffContextForBinding(binding, navigation);
+    if (!context || context.workspaceKind !== "local") {
+      await this.deliverHandoffUnavailable(binding, event, "This thread is not currently in a Local workspace that can move to a worktree.");
+      return;
+    }
+    if (context.leaveLocalBranches.length === 0) {
+      await this.deliverHandoffUnavailable(binding, event, "No safe branch choices are available to leave checked out in Local.");
+      return;
+    }
+
+    await this.deliverAndStoreStatusSubmode(
+      {
+        ...buildHandoffBranchPickerIntent({
+          id: this.newIntentId("handoff-branch"),
+          binding,
+          context,
+          createdAt: this.now(),
+        }),
+        audit: this.buildHandoffAudit("handoff.branch_picker", binding, event),
+      },
+      binding,
+      event,
+    );
+  }
+
+  private async presentHandoffConfirmation(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const context = handoffContextForBinding(binding, navigation);
+    const request = handoffRequestFromValue(event.value);
+    if (!context || !request) {
+      await this.deliverInvalidHandoffSelection(binding, event);
+      return;
+    }
+
+    const validation = validateHandoffRequest(request, context);
+    if (!validation.valid) {
+      await this.deliverHandoffUnavailable(binding, event, validation.reason);
+      return;
+    }
+
+    await this.deliverAndStoreStatusSubmode(
+      {
+        ...buildHandoffConfirmationIntent({
+          id: this.newIntentId("handoff-confirm"),
+          binding,
+          context,
+          createdAt: this.now(),
+          leaveLocalBranch: request.leaveLocalBranch,
+        }),
+        audit: this.buildHandoffAudit(
+          `handoff.confirmation.${request.direction}`,
+          binding,
+          event,
+        ),
+      },
+      binding,
+      event,
+    );
+  }
+
+  private async executeHandoff(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    if (!this.options.backend.handoffThreadWorkspace) {
+      await this.deliverHandoffUnavailable(binding, event, "This runtime does not expose workspace handoff through messaging.");
+      return;
+    }
+
+    const request = handoffRequestFromValue(event.value);
+    if (!request) {
+      await this.deliverInvalidHandoffSelection(binding, event);
+      return;
+    }
+
+    const currentBinding = await this.options.store.getBinding(binding.id);
+    if (
+      !currentBinding ||
+      currentBinding.revokedAt ||
+      currentBinding.backend !== binding.backend ||
+      currentBinding.threadId !== binding.threadId ||
+      !currentBinding.authorizedActorIds.includes(event.actor.platformUserId)
+    ) {
+      await this.deliverHandoffUnavailable(binding, event, "That handoff prompt is stale. Use /status to refresh.");
+      return;
+    }
+
+    const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
+    const context = handoffContextForBinding(currentBinding, navigation);
+    if (!context) {
+      await this.deliverHandoffUnavailable(currentBinding, event, "This thread no longer has enough Git workspace metadata for handoff.");
+      return;
+    }
+    const validation = validateHandoffRequest(request, context);
+    if (!validation.valid) {
+      await this.deliverHandoffUnavailable(currentBinding, event, validation.reason);
+      return;
+    }
+
+    await this.deliver(
+      {
+        ...buildStatusIntent({
+          id: this.newIntentId("handoff-running"),
+          createdAt: this.now(),
+          status: "working",
+          text: `Running workspace handoff: ${formatHandoffDirection(request.direction)}.`,
+        }),
+        audit: this.buildHandoffAudit(
+          `handoff.running.${request.direction}`,
+          currentBinding,
+          event,
+        ),
+      },
+      currentBinding,
+      event,
+    );
+
+    try {
+      const result = await this.options.backend.handoffThreadWorkspace(request);
+      await this.clearActiveHandoffIntent(event);
+      const refreshedNavigation = await this.options.backend.getNavigationSnapshot({
+        backend: "all",
+      });
+      const updatedBinding = await this.updateBindingAfterHandoff(
+        currentBinding,
+        result,
+      );
+      await this.deliver(
+        {
+          ...buildStatusIntent({
+            id: this.newIntentId("handoff-completed"),
+            createdAt: this.now(),
+            status: "completed",
+            text: handoffSuccessText(result),
+          }),
+          audit: this.buildHandoffAudit(
+            `handoff.completed.${request.direction}`,
+            updatedBinding,
+            event,
+          ),
+        },
+        updatedBinding,
+        event,
+      );
+      await this.renderBindingStatus(updatedBinding, event, refreshedNavigation);
+    } catch (error) {
+      await this.deliver(
+        {
+          ...buildErrorIntent({
+            id: this.newIntentId("handoff-failed"),
+            createdAt: this.now(),
+            title: "Handoff failed",
+            body: error instanceof Error ? error.message : String(error),
+            recoverable: true,
+          }),
+          audit: this.buildHandoffAudit(
+            `handoff.failed.${request.direction}`,
+            currentBinding,
+            event,
+          ),
+        },
+        currentBinding,
+        event,
+      );
+    }
+  }
+
+  private async updateBindingAfterHandoff(
+    binding: MessagingBindingRecord,
+    _result: HandoffThreadWorkspaceResponse,
+  ): Promise<MessagingBindingRecord> {
+    // Live navigation now owns status display metadata; keep the binding current
+    // without restoring legacy threadDisplay cache fields that the store strips.
+    return await this.options.store.upsertBinding({
+      ...binding,
+      updatedAt: this.now(),
+    });
+  }
+
+  private async deliverAndStoreStatusSubmode(
+    intent: MessagingSurfaceIntent,
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const pendingIntent = await this.storePendingIntent(intent, binding, event);
+    const result = await this.deliver(intent, binding, event);
+    if (!result.surface) {
+      return;
+    }
+    await this.options.store.upsertPendingIntent({
+      ...pendingIntent,
+      surface: result.surface,
+    });
+    await this.options.store.upsertBinding({
+      ...binding,
+      statusSurface: result.surface,
+      updatedAt: this.now(),
+    });
+  }
+
+  private async clearActiveHandoffIntent(event: MessagingInboundEvent): Promise<void> {
+    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      now: this.now(),
+    });
+    if (pendingIntent && pendingIntent.intent.id.includes("handoff")) {
+      await this.options.store.deletePendingIntent(pendingIntent.id);
+    }
+  }
+
+  private async deliverHandoffUnavailable(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+    body: string,
+  ): Promise<void> {
+    await this.deliver(
+      {
+        ...buildErrorIntent({
+          id: this.newIntentId("handoff-unavailable"),
+          createdAt: this.now(),
+          title: "Handoff unavailable",
+          body,
+          recoverable: true,
+        }),
+        audit: this.buildHandoffAudit("handoff.unavailable", binding, event),
+      },
+      binding,
+      event,
+    );
+  }
+
+  private async deliverInvalidHandoffSelection(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.deliver(
+      {
+        ...buildErrorIntent({
+          id: this.newIntentId("handoff-invalid"),
+          createdAt: this.now(),
+          title: "Invalid handoff selection",
+          body: "That handoff selection is no longer available. Use /status to refresh.",
+          recoverable: true,
+        }),
+        audit: this.buildHandoffAudit("handoff.invalid_selection", binding, event),
+      },
+      binding,
+      event,
+    );
+  }
+
+  private buildHandoffAudit(
+    action: string,
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): NonNullable<MessagingSurfaceIntent["audit"]> {
+    return buildMessagingAuditContext({
+      action,
+      actor: event.actor,
+      backend: binding.backend,
+      bindingId: binding.id,
+      channel: binding.channel,
+      now: this.now(),
+      threadId: binding.threadId,
+    });
   }
 
   private async presentModelPicker(
@@ -1821,6 +2162,9 @@ export class MessagingController {
       id: this.newIntentId("status"),
       binding,
       createdAt: this.now(),
+      handoff: this.options.backend.handoffThreadWorkspace
+        ? handoffContextForBinding(binding, snapshot)
+        : undefined,
       threadState: resolveMessagingThreadState({
         activeTurn,
         binding,
@@ -2219,7 +2563,153 @@ function readBrowseAction(event: MessagingInboundCallbackEvent): string | undefi
 
 function readStatusAction(event: MessagingInboundCallbackEvent): string | undefined {
   const actionId = event.actionId ?? event.interaction.id;
-  return actionId.startsWith("status:") ? actionId : undefined;
+  return actionId.startsWith("status:") || actionId.startsWith("handoff:")
+    ? actionId
+    : undefined;
+}
+
+function handoffContextForBinding(
+  binding: MessagingBindingRecord,
+  navigation: NavigationSnapshot,
+): MessagingWorkspaceHandoffContext | undefined {
+  const thread = findThreadForBinding(navigation, binding);
+  if (!thread) {
+    return undefined;
+  }
+
+  const worktreeDirectory = thread.linkedDirectories.find(
+    (directory) => directory.kind === "worktree" || Boolean(directory.worktreePath),
+  );
+  if (worktreeDirectory) {
+    const repositoryPath = worktreeDirectory.path;
+    const workingDirectoryPath = worktreeDirectory.worktreePath ?? worktreeDirectory.path;
+    const branch = thread.observedGitBranch ?? thread.gitBranch;
+    if (!repositoryPath || !workingDirectoryPath || !branch) {
+      return undefined;
+    }
+    return {
+      backend: binding.backend,
+      branch,
+      leaveLocalBranches: [],
+      projectLabel: worktreeDirectory.label,
+      repositoryPath,
+      threadId: binding.threadId,
+      threadTitle: thread.title,
+      workingDirectoryPath,
+      workspaceKind: "worktree",
+    };
+  }
+
+  const localDirectory =
+    thread.linkedDirectories.find((directory) => directory.kind === "local") ??
+    thread.linkedDirectories[0];
+  if (!localDirectory?.path) {
+    return undefined;
+  }
+  const directorySummary = findNavigationDirectory(navigation, localDirectory);
+  const branch =
+    thread.observedGitBranch ??
+    thread.gitBranch ??
+    directorySummary?.gitStatus?.currentBranch;
+  if (!branch) {
+    return undefined;
+  }
+  const leaveLocalBranches = (
+    directorySummary?.gitStatus?.handoffBranches ??
+    directorySummary?.gitStatus?.branches?.filter((candidate) => candidate !== branch) ??
+    []
+  ).filter(
+    (candidate, index, branches) =>
+      candidate !== branch && branches.indexOf(candidate) === index,
+  );
+  if (leaveLocalBranches.length === 0) {
+    return undefined;
+  }
+
+  return {
+    backend: binding.backend,
+    branch,
+    leaveLocalBranches,
+    projectLabel: localDirectory.label,
+    repositoryPath: localDirectory.path,
+    threadId: binding.threadId,
+    threadTitle: thread.title,
+    workingDirectoryPath: localDirectory.path,
+    workspaceKind: "local",
+  };
+}
+
+function findNavigationDirectory(
+  navigation: NavigationSnapshot,
+  linkedDirectory: LinkedDirectorySummary,
+): NavigationDirectorySummary | undefined {
+  return navigation.directories.find(
+    (directory) =>
+      directory.key === linkedDirectory.id ||
+      directory.path === linkedDirectory.path ||
+      (linkedDirectory.worktreePath && directory.path === linkedDirectory.worktreePath),
+  );
+}
+
+function validateHandoffRequest(
+  request: HandoffThreadWorkspaceRequest,
+  context: MessagingWorkspaceHandoffContext,
+): { valid: true } | { valid: false; reason: string } {
+  const expectedDirection =
+    context.workspaceKind === "local" ? "local-to-worktree" : "worktree-to-local";
+  if (
+    request.backend !== context.backend ||
+    request.threadId !== context.threadId ||
+    request.direction !== expectedDirection ||
+    request.repositoryPath !== context.repositoryPath ||
+    request.sourcePath !== context.workingDirectoryPath
+  ) {
+    return {
+      valid: false,
+      reason: "That handoff prompt is stale. Use /status to refresh.",
+    };
+  }
+  if (context.branch && request.sourceBranch !== context.branch) {
+    return {
+      valid: false,
+      reason: "The thread branch changed. Use /status to refresh before handoff.",
+    };
+  }
+  if (request.direction === "local-to-worktree") {
+    if (!request.leaveLocalBranch) {
+      return {
+        valid: false,
+        reason: "Choose the branch to leave checked out in Local before handoff.",
+      };
+    }
+    if (!context.leaveLocalBranches.includes(request.leaveLocalBranch)) {
+      return {
+        valid: false,
+        reason: "That Local branch choice is no longer available. Use /status to refresh.",
+      };
+    }
+  }
+  return { valid: true };
+}
+
+function formatHandoffDirection(
+  direction: HandoffThreadWorkspaceRequest["direction"],
+): string {
+  return direction === "local-to-worktree"
+    ? "Local to new worktree"
+    : "Worktree to Local";
+}
+
+function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
+  return [
+    `Workspace handoff complete: ${formatHandoffDirection(result.direction)}.`,
+    `Workspace: ${result.workMode === "worktree" ? "Worktree" : "Local"}`,
+    `Target: ${result.targetPath}`,
+    result.branch ? `Branch: ${result.branch}` : undefined,
+    ...result.warnings.map((warning) => `Warning: ${warning}`),
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
 }
 
 function normalizeConversationTitle(title: string | undefined): string | undefined {

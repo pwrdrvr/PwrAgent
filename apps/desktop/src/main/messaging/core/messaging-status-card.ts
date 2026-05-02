@@ -1,14 +1,32 @@
 import type {
+  AppServerBackendKind,
+  HandoffThreadWorkspaceRequest,
   MessagingBindingRecord,
+  MessagingConfirmationIntent,
+  MessagingJsonValue,
   MessagingToolUpdateMode,
   MessagingSingleSelectIntent,
   MessagingStatusIntent,
+  ThreadIdentifier,
 } from "@pwragnt/shared";
 import type { MessagingResolvedThreadState } from "./messaging-thread-state.js";
+
+export type MessagingWorkspaceHandoffContext = {
+  backend: AppServerBackendKind;
+  branch?: string;
+  leaveLocalBranches: string[];
+  projectLabel?: string;
+  repositoryPath: string;
+  threadId: ThreadIdentifier;
+  threadTitle?: string;
+  workingDirectoryPath: string;
+  workspaceKind: "local" | "worktree";
+};
 
 export function buildBindingStatusIntent(params: {
   binding: MessagingBindingRecord;
   createdAt: number;
+  handoff?: MessagingWorkspaceHandoffContext;
   id: string;
   threadState: MessagingResolvedThreadState;
   toolUpdateMode?: MessagingToolUpdateMode;
@@ -103,6 +121,17 @@ export function buildBindingStatusIntent(params: {
         style: "secondary",
         fallbackText: "permissions",
       },
+      ...(params.handoff
+        ? [
+            {
+              id: "status:handoff",
+              label: "Handoff",
+              style: "secondary" as const,
+              fallbackText: "handoff",
+              value: handoffValue(params.handoff),
+            },
+          ]
+        : []),
       {
         id: "status:tool-updates",
         label: `Tools: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
@@ -180,6 +209,234 @@ export function formatMessagingToolUpdateModeLabel(
     case "show_all":
       return "Show All";
   }
+}
+
+export function buildHandoffOverviewIntent(params: {
+  binding: MessagingBindingRecord;
+  context: MessagingWorkspaceHandoffContext;
+  createdAt: number;
+  id: string;
+}): MessagingSingleSelectIntent {
+  const action =
+    params.context.workspaceKind === "local"
+      ? {
+          id: "handoff:local-to-worktree",
+          label: "Handoff to New Worktree",
+          fallbackText: "1",
+          style: "primary" as const,
+          value: handoffValue(params.context),
+        }
+      : {
+          id: "handoff:worktree-to-local",
+          label: "Handoff to Local",
+          fallbackText: "1",
+          style: "primary" as const,
+          value: handoffValue(params.context),
+        };
+
+  return {
+    id: params.id,
+    kind: "single_select",
+    bindingId: params.binding.id,
+    createdAt: params.createdAt,
+    delivery: {
+      mode: params.binding.statusSurface ? "update" : "present",
+      fallback: "present_new",
+    },
+    targetSurface: params.binding.statusSurface,
+    fallbackText: [
+      handoffOverviewText(params.context),
+      `1. ${action.label}`,
+      "Reply with 1, Back, Refresh, or Cancel.",
+    ].join("\n"),
+    prompt: handoffOverviewText(params.context),
+    choices: [
+      action,
+      {
+        id: "status:refresh",
+        label: "Back",
+        fallbackText: "back",
+        style: "secondary",
+      },
+      {
+        id: "status:refresh",
+        label: "Refresh",
+        fallbackText: "refresh",
+        style: "secondary",
+      },
+      {
+        id: "handoff:cancel",
+        label: "Cancel",
+        fallbackText: "cancel",
+        style: "secondary",
+      },
+    ],
+  };
+}
+
+export function buildHandoffBranchPickerIntent(params: {
+  binding: MessagingBindingRecord;
+  context: MessagingWorkspaceHandoffContext;
+  createdAt: number;
+  id: string;
+}): MessagingSingleSelectIntent {
+  const choices = params.context.leaveLocalBranches.map((branch, index) => ({
+    id: "handoff:select-leave-branch",
+    label: `${index + 1}. ${branch}`,
+    fallbackText: String(index + 1),
+    style: "secondary" as const,
+    value: {
+      ...handoffValue(params.context),
+      leaveLocalBranch: branch,
+    },
+  }));
+
+  return {
+    id: params.id,
+    kind: "single_select",
+    bindingId: params.binding.id,
+    createdAt: params.createdAt,
+    delivery: {
+      mode: params.binding.statusSurface ? "update" : "present",
+      fallback: "present_new",
+    },
+    targetSurface: params.binding.statusSurface,
+    fallbackText: [
+      "Choose the branch that should remain checked out in Local.",
+      ...choices.map((choice) => choice.label),
+      "Reply with a number, Back, Refresh, or Cancel.",
+    ].join("\n"),
+    prompt: [
+      "Choose the branch that should remain checked out in Local.",
+      `Moving branch: ${params.context.branch ?? unavailable()}`,
+      `Local: ${params.context.repositoryPath}`,
+    ].join("\n"),
+    choices: [
+      ...choices,
+      {
+        id: "status:handoff",
+        label: "Back",
+        fallbackText: "back",
+        style: "secondary" as const,
+        value: handoffValue(params.context),
+      },
+      {
+        id: "status:refresh",
+        label: "Refresh",
+        fallbackText: "refresh",
+        style: "secondary" as const,
+      },
+      {
+        id: "handoff:cancel",
+        label: "Cancel",
+        fallbackText: "cancel",
+        style: "secondary" as const,
+      },
+    ],
+  };
+}
+
+export function buildHandoffConfirmationIntent(params: {
+  binding: MessagingBindingRecord;
+  context: MessagingWorkspaceHandoffContext;
+  createdAt: number;
+  id: string;
+  leaveLocalBranch?: string;
+}): MessagingConfirmationIntent {
+  const direction =
+    params.context.workspaceKind === "local" ? "local-to-worktree" : "worktree-to-local";
+  const body = [
+    direction === "local-to-worktree"
+      ? "Confirm handoff to a new worktree."
+      : "Confirm handoff to Local.",
+    `Thread: ${params.context.threadTitle ?? params.context.threadId} (${params.context.backend})`,
+    `Project: ${params.context.projectLabel ?? unavailable()}`,
+    `Repository: ${params.context.repositoryPath}`,
+    `Working directory: ${params.context.workingDirectoryPath}`,
+    `Branch: ${params.context.branch ?? unavailable()}`,
+    params.leaveLocalBranch
+      ? `Leave Local on: ${params.leaveLocalBranch}`
+      : undefined,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+
+  return {
+    id: params.id,
+    kind: "confirmation",
+    bindingId: params.binding.id,
+    createdAt: params.createdAt,
+    delivery: {
+      mode: params.binding.statusSurface ? "update" : "present",
+      fallback: "present_new",
+    },
+    targetSurface: params.binding.statusSurface,
+    title: "Confirm Handoff",
+    body,
+    fallbackText: "Reply Confirm, Back, or Cancel.",
+    actions: [
+      {
+        id: "handoff:confirm",
+        label: "Confirm",
+        fallbackText: "confirm",
+        style: "primary",
+        value: {
+          ...handoffValue(params.context),
+          ...(params.leaveLocalBranch
+            ? { leaveLocalBranch: params.leaveLocalBranch }
+            : {}),
+        },
+      },
+      {
+        id: params.context.workspaceKind === "local"
+          ? "handoff:local-to-worktree"
+          : "status:handoff",
+        label: "Back",
+        fallbackText: "back",
+        style: "secondary",
+        value: handoffValue(params.context),
+      },
+      {
+        id: "handoff:cancel",
+        label: "Cancel",
+        fallbackText: "cancel",
+        style: "secondary",
+      },
+    ],
+  };
+}
+
+export function handoffRequestFromValue(
+  value: unknown,
+): HandoffThreadWorkspaceRequest | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (
+    value.direction !== "local-to-worktree" &&
+    value.direction !== "worktree-to-local"
+  ) {
+    return undefined;
+  }
+  if (
+    (value.backend !== "codex" && value.backend !== "grok") ||
+    typeof value.threadId !== "string" ||
+    typeof value.repositoryPath !== "string" ||
+    typeof value.sourcePath !== "string"
+  ) {
+    return undefined;
+  }
+
+  return {
+    backend: value.backend,
+    threadId: value.threadId,
+    direction: value.direction,
+    repositoryPath: value.repositoryPath,
+    sourcePath: value.sourcePath,
+    sourceBranch: typeof value.sourceBranch === "string" ? value.sourceBranch : undefined,
+    leaveLocalBranch:
+      typeof value.leaveLocalBranch === "string" ? value.leaveLocalBranch : undefined,
+  };
 }
 
 export function buildStatusModelPickerIntent(params: {
@@ -287,6 +544,35 @@ function formatBranch(threadState: MessagingResolvedThreadState): string | undef
     return `${threadState.gitBranch} (now ${threadState.observedGitBranch})`;
   }
   return threadState.gitBranch ?? threadState.observedGitBranch;
+}
+
+function handoffValue(
+  context: MessagingWorkspaceHandoffContext,
+): Record<string, MessagingJsonValue> {
+  return {
+    backend: context.backend,
+    threadId: context.threadId,
+    direction:
+      context.workspaceKind === "local" ? "local-to-worktree" : "worktree-to-local",
+    repositoryPath: context.repositoryPath,
+    sourcePath: context.workingDirectoryPath,
+    ...(context.branch ? { sourceBranch: context.branch } : {}),
+  };
+}
+
+function handoffOverviewText(context: MessagingWorkspaceHandoffContext): string {
+  return [
+    "Workspace Handoff",
+    `Project: ${context.projectLabel ?? unavailable()}`,
+    `Repository: ${context.repositoryPath}`,
+    `Working directory: ${context.workingDirectoryPath}`,
+    `Workspace: ${context.workspaceKind === "local" ? "Local" : "Worktree"}`,
+    `Branch: ${context.branch ?? unavailable()}`,
+  ].join("\n");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function unavailable(): string {

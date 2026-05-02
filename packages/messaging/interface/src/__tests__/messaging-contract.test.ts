@@ -11,6 +11,7 @@ import {
   type MessagingCallbackHandleRecord,
   type MessagingInboundMediaEvent,
   type MessagingMessageIntent,
+  type MessagingSingleSelectIntent,
   type MessagingThreadPickerIntent,
 } from "../index";
 
@@ -206,6 +207,61 @@ describe("messaging surface contract", () => {
 
     expect(intent.audit?.actor.platformUserId).toBe("telegram-user-1");
     expect(JSON.stringify(intent.decisions)).not.toContain("telegram-user-1");
+  });
+
+  it("describes workspace handoff as generic single-select actions", () => {
+    const intent = {
+      id: "handoff-overview-1",
+      kind: "single_select",
+      createdAt: 1000,
+      bindingId: "binding-1",
+      prompt: "Workspace Handoff\nRepository: /repo/pwragnt\nBranch: feature/handoff",
+      fallbackText: "Reply with 1, Back, Refresh, or Cancel.",
+      audit: {
+        actor: {
+          platformUserId: "telegram-user-1",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "chat-1",
+            kind: "dm",
+          },
+        },
+        backend: "codex",
+        threadId: "thread-1",
+        action: "handoff.overview",
+        occurredAt: 1000,
+      },
+      choices: [
+        {
+          id: "handoff:local-to-worktree",
+          label: "Handoff to New Worktree",
+          style: "primary",
+          fallbackText: "1",
+          value: {
+            backend: "codex",
+            threadId: "thread-1",
+            direction: "local-to-worktree",
+            repositoryPath: "/repo/pwragnt",
+            sourcePath: "/repo/pwragnt",
+            sourceBranch: "feature/handoff",
+          },
+        },
+        {
+          id: "handoff:cancel",
+          label: "Cancel",
+          style: "secondary",
+          fallbackText: "cancel",
+        },
+      ],
+    } satisfies MessagingSingleSelectIntent;
+
+    expect(intent.choices[0]?.value).toMatchObject({
+      direction: "local-to-worktree",
+      repositoryPath: "/repo/pwragnt",
+    });
+    expect(JSON.stringify(intent)).not.toMatch(/callback_data|custom_id/);
   });
 
   it("marks inbound media as unsupported by default", () => {

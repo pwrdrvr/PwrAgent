@@ -29,6 +29,26 @@ the closest native layout they support: Telegram inline keyboards can honor
 explicit row groupings, and Discord components use action rows with provider
 limits.
 
+## Workspace Handoff
+
+A bound conversation can move the current thread between Local and Worktree
+from `/status` when PwrAgnt has enough repository and Git branch metadata for a
+safe handoff. The status card shows a `Handoff` action only for eligible
+threads.
+
+The handoff mode shows the project repository path, the current working
+directory path, the workspace kind, and the current branch before asking for a
+choice. Local-to-worktree handoff asks which branch should remain checked out
+in Local, then asks for confirmation. Worktree-to-local handoff asks for
+confirmation directly. Both paths call the desktop workspace handoff operation,
+then refresh the binding display and status card after success.
+
+All handoff steps include text fallback, so replying with the shown number,
+label, `confirm`, `back`, `refresh`, or `cancel` follows the same controller
+path as pressing a button. `/resume` still starts or binds threads; the New
+Local / New Handoff split and any low-button-count variation policy are
+deferred.
+
 ## Typing Indicators
 
 Messaging adapters show platform typing indicators while a bound turn is
@@ -171,20 +191,29 @@ Telegram:
 4. Use Projects, select a project, then select a thread.
 5. Verify a pinned status card appears and updates in place.
 6. Use status buttons to change Model, Reasoning, Fast mode, and Permissions.
-7. Send free-form text and verify a PwrAgnt turn starts in the bound thread.
-8. Verify typing continues through an intermediate assistant update and stops at turn completion.
-9. Run a quiet command sequence and verify `Show Some` sends individual tool updates.
-10. Run a noisy command or file-read sequence and verify remaining tool updates batch before the final assistant response.
-11. Cycle Tools through `Show All`, `Show Less`, and `Show None`; verify all, batched, and suppressed behavior respectively.
-12. Trigger a Plan questionnaire and answer with both a button and text fallback.
-13. Trigger an approval request and test accept, session accept, decline, and cancel with both buttons and text.
-14. Verify markdown, inline code, fenced code, long responses, and image output render.
-15. Restart PwrAgnt and verify the same Telegram conversation still routes to the bound thread.
-16. Send `/detach` and verify the status card is unpinned and free-form text asks for `/resume`.
-17. Send a small `.txt` attachment and verify a turn starts with the extracted text.
-18. Send an image attachment and verify a turn starts with normalized image input.
-19. Send an oversized file or voice message and verify it is rejected without model upload.
-20. Verify assistant image and file parts render as Telegram photo/document attachments.
+7. For a bound Local thread with handoff branch metadata, choose Handoff from
+   `/status`, hand off to a new worktree, and verify the refreshed status shows
+   the worktree path.
+8. For a bound worktree thread, choose Handoff from `/status`, hand off to
+   Local, and verify the refreshed status no longer shows a worktree path.
+9. Repeat at least one handoff step by text fallback, such as replying `1` or
+   `confirm`.
+10. Try a stale or ineligible handoff prompt and verify the bot reports a
+   recoverable error without detaching the conversation.
+11. Send free-form text and verify a PwrAgnt turn starts in the bound thread.
+12. Verify typing continues through an intermediate assistant update and stops at turn completion.
+13. Run a quiet command sequence and verify `Show Some` sends individual tool updates.
+14. Run a noisy command or file-read sequence and verify remaining tool updates batch before the final assistant response.
+15. Cycle Tools through `Show All`, `Show Less`, and `Show None`; verify all, batched, and suppressed behavior respectively.
+16. Trigger a Plan questionnaire and answer with both a button and text fallback.
+17. Trigger an approval request and test accept, session accept, decline, and cancel with both buttons and text.
+18. Verify markdown, inline code, fenced code, long responses, and image output render.
+19. Restart PwrAgnt and verify the same Telegram conversation still routes to the bound thread.
+20. Send `/detach` and verify the status card is unpinned and free-form text asks for `/resume`.
+21. Send a small `.txt` attachment and verify a turn starts with the extracted text.
+22. Send an image attachment and verify a turn starts with normalized image input.
+23. Send an oversized file or voice message and verify it is rejected without model upload.
+24. Verify assistant image and file parts render as Telegram photo/document attachments.
 
 Discord:
 
@@ -192,17 +221,26 @@ Discord:
 2. Send `/resume` from an allowlisted Discord user.
 3. Verify a numbered thread picker appears with components.
 4. Choose a thread by component, then repeat by replying `1`.
-5. Send free-form text and verify a PwrAgnt turn starts in the bound thread.
-6. Verify typing continues through an intermediate assistant update and stops at turn completion.
-7. Run quiet and noisy tool sequences and verify the selected Tools mode controls individual, batched, or suppressed generated updates.
-8. Trigger a Plan questionnaire and answer with both a component and text fallback.
-9. Trigger an approval request and test accept, session accept, decline, and cancel.
-10. Verify markdown, inline code, fenced code, long responses, and image output render.
-11. Restart PwrAgnt and verify the same Discord channel still routes to the bound thread.
-12. Send a small `.txt` attachment and verify a turn starts with the extracted text.
-13. Send an image attachment and verify a turn starts with normalized image input.
-14. Send an oversized attachment and verify it is rejected without model upload.
-15. Verify assistant image and file parts render as Discord embeds/uploads.
+5. For a bound Local thread with handoff branch metadata, choose Handoff from
+   `/status`, hand off to a new worktree, and verify the refreshed status shows
+   the worktree path.
+6. For a bound worktree thread, choose Handoff from `/status`, hand off to
+   Local, and verify the refreshed status no longer shows a worktree path.
+7. Repeat at least one handoff step by text fallback, such as replying `1` or
+   `confirm`.
+8. Try a stale or ineligible handoff prompt and verify the bot reports a
+   recoverable error without detaching the conversation.
+9. Send free-form text and verify a PwrAgnt turn starts in the bound thread.
+10. Verify typing continues through an intermediate assistant update and stops at turn completion.
+11. Run quiet and noisy tool sequences and verify the selected Tools mode controls individual, batched, or suppressed generated updates.
+12. Trigger a Plan questionnaire and answer with both a component and text fallback.
+13. Trigger an approval request and test accept, session accept, decline, and cancel.
+14. Verify markdown, inline code, fenced code, long responses, and image output render.
+15. Restart PwrAgnt and verify the same Discord channel still routes to the bound thread.
+16. Send a small `.txt` attachment and verify a turn starts with the extracted text.
+17. Send an image attachment and verify a turn starts with normalized image input.
+18. Send an oversized attachment and verify it is rejected without model upload.
+19. Verify assistant image and file parts render as Discord embeds/uploads.
 
 Discord currently has parity for the shared workflow and button actions, but it
 does not pin or edit status cards yet; status updates degrade to normal
