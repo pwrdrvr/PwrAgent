@@ -46,12 +46,22 @@ export const MESSAGING_DELIVERY_OUTCOMES = [
   "failed",
 ] as const;
 
+export const MESSAGING_TOOL_UPDATE_MODES = [
+  "show_none",
+  "show_less",
+  "show_some",
+  "show_more",
+  "show_all",
+] as const;
+
 export type MessagingSurfaceIntentKind =
   (typeof MESSAGING_SURFACE_INTENT_KINDS)[number];
 export type MessagingInboundEventKind =
   (typeof MESSAGING_INBOUND_EVENT_KINDS)[number];
 export type MessagingDeliveryOutcome =
   (typeof MESSAGING_DELIVERY_OUTCOMES)[number];
+export type MessagingToolUpdateMode =
+  (typeof MESSAGING_TOOL_UPDATE_MODES)[number];
 
 export type MessagingChannelKind =
   | "telegram"
@@ -571,6 +581,7 @@ export type MessagingBindingPreferences = {
   permissionsMode?: MessagingPermissionsMode;
   reasoningEffort?: string;
   serviceTier?: string;
+  toolUpdateMode?: MessagingToolUpdateMode;
   updatedAt: number;
 };
 

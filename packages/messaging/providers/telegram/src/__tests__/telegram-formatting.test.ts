@@ -151,4 +151,45 @@ describe("telegram formatting", () => {
     expect(rendered).toContain("Command Approval");
     expect(rendered).toContain("<pre><code>pnpm test</code></pre>");
   });
+
+  it("renders generated tool update messages as ordinary escaped chat text", () => {
+    const rendered = textForTelegramIntent({
+      id: "tool-update-1",
+      kind: "message",
+      createdAt: 1000,
+      role: "system",
+      parts: [
+        {
+          type: "text",
+          text: "Tool update: npm view <dive>",
+          markdown: "light",
+        },
+      ],
+    });
+
+    expect(rendered).toBe("Tool update: npm view &lt;dive&gt;");
+  });
+
+  it("exposes the tool updates status action through generic keyboard rows", () => {
+    const keyboard = buildTelegramKeyboard(
+      [
+        {
+          id: "status:tool-updates",
+          label: "Tools: Show Some",
+          fallbackText: "tools",
+          style: "secondary",
+        },
+      ],
+      (action) => `tg:${action.id}`,
+    );
+
+    expect(keyboard?.inline_keyboard).toEqual([
+      [
+        {
+          text: "Tools: Show Some",
+          callback_data: "tg:status:tool-updates",
+        },
+      ],
+    ]);
+  });
 });

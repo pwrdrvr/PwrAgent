@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { DesktopChatReplyComposer } from "@pwragnt/shared";
+import type {
+  DesktopChatReplyComposer,
+  MessagingToolUpdateMode,
+} from "@pwragnt/shared";
 import { DESKTOP_CONFIG_PATH_ENV } from "./desktop-settings-env";
 
 type DesktopConfigPathOptions = {
@@ -15,6 +18,7 @@ export type DesktopSettingsConfig = {
     chatReplyComposer?: DesktopChatReplyComposer;
   };
   messaging?: {
+    toolUpdateMode?: MessagingToolUpdateMode;
     telegram?: {
       enabled?: boolean;
       authorizedUserIds?: string[];
@@ -95,6 +99,8 @@ export function mergeDesktopSettingsConfig(
       ...patch.experimental,
     },
     messaging: {
+      toolUpdateMode:
+        patch.messaging?.toolUpdateMode ?? current.messaging?.toolUpdateMode,
       telegram: {
         ...current.messaging?.telegram,
         ...patch.messaging?.telegram,
@@ -179,6 +185,15 @@ export function stringifyDesktopSettingsToml(
     );
   }
 
+  if (config.messaging?.toolUpdateMode) {
+    sections.push(
+      [
+        "[messaging]",
+        `tool_update_mode = ${formatTomlValue(config.messaging.toolUpdateMode)}`,
+      ].join("\n"),
+    );
+  }
+
   const telegram = config.messaging?.telegram;
   if (telegram && hasDefinedValue(telegram)) {
     sections.push(
@@ -251,6 +266,7 @@ function normalizeDesktopConfig(
   tables: Record<string, Record<string, TomlScalar>>,
 ): DesktopSettingsConfig {
   const experimental = tables["experimental"];
+  const messaging = tables["messaging"];
   const telegram = tables["messaging.telegram"];
   const discord = tables["messaging.discord"];
   const codex = tables["models.codex"];
@@ -262,6 +278,7 @@ function normalizeDesktopConfig(
       chatReplyComposer: readComposer(experimental?.chat_reply_composer),
     },
     messaging: {
+      toolUpdateMode: readToolUpdateMode(messaging?.tool_update_mode),
       telegram: {
         enabled: readBoolean(telegram?.enabled),
         authorizedUserIds: readStringArray(telegram?.authorized_user_ids),
@@ -299,11 +316,16 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
 
   const telegram = config.messaging?.telegram;
   const discord = config.messaging?.discord;
+  const toolUpdateMode = config.messaging?.toolUpdateMode;
   if (
+    toolUpdateMode !== undefined ||
     (telegram && hasDefinedValue(telegram))
     || (discord && hasDefinedValue(discord))
   ) {
     pruned.messaging = {};
+    if (toolUpdateMode !== undefined) {
+      pruned.messaging.toolUpdateMode = toolUpdateMode;
+    }
     if (telegram && hasDefinedValue(telegram)) {
       pruned.messaging.telegram = telegram;
     }
@@ -353,6 +375,26 @@ function isDesktopChatReplyComposer(
     || value === "tiptap-chips"
     || value === "tiptap-wysiwyg-markdown-chips"
     || value === "custom-widget-chips"
+  );
+}
+
+function readToolUpdateMode(
+  value: TomlScalar | undefined,
+): MessagingToolUpdateMode | undefined {
+  return typeof value === "string" && isMessagingToolUpdateMode(value)
+    ? value
+    : undefined;
+}
+
+function isMessagingToolUpdateMode(
+  value: string,
+): value is MessagingToolUpdateMode {
+  return (
+    value === "show_none"
+    || value === "show_less"
+    || value === "show_some"
+    || value === "show_more"
+    || value === "show_all"
   );
 }
 

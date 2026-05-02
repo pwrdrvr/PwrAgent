@@ -1,5 +1,6 @@
 import type {
   MessagingBindingRecord,
+  MessagingToolUpdateMode,
   MessagingSingleSelectIntent,
   MessagingStatusIntent,
 } from "@pwragnt/shared";
@@ -10,6 +11,7 @@ export function buildBindingStatusIntent(params: {
   createdAt: number;
   id: string;
   threadState: MessagingResolvedThreadState;
+  toolUpdateMode?: MessagingToolUpdateMode;
 }): MessagingStatusIntent {
   const preferences = params.binding.preferences;
   const projectLabel = params.threadState.projectLabel ?? unavailable();
@@ -35,6 +37,10 @@ export function buildBindingStatusIntent(params: {
     "default";
   const activeTurn = params.threadState.activeTurn;
   const branch = formatBranch(params.threadState);
+  const toolUpdateMode = resolveMessagingToolUpdateMode(
+    params.binding,
+    params.toolUpdateMode,
+  );
 
   return {
     id: params.id,
@@ -60,6 +66,7 @@ export function buildBindingStatusIntent(params: {
       `Fast mode: ${fastMode === undefined ? unavailable() : fastMode ? "on" : "off"}`,
       "Plan mode: unavailable",
       `Permissions: ${permissionsMode === "full-access" ? "Full Access" : "Default Access"}`,
+      `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
       "Context usage: unavailable",
       "Account: unavailable",
       "Rate limits: unavailable",
@@ -97,6 +104,12 @@ export function buildBindingStatusIntent(params: {
         fallbackText: "permissions",
       },
       {
+        id: "status:tool-updates",
+        label: `Tools: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
+        style: "secondary",
+        fallbackText: "tools",
+      },
+      {
         id: "status:compact",
         label: "Compact",
         style: "secondary",
@@ -128,6 +141,45 @@ export function buildBindingStatusIntent(params: {
       },
     ],
   };
+}
+
+const TOOL_UPDATE_MODE_ORDER: MessagingToolUpdateMode[] = [
+  "show_none",
+  "show_less",
+  "show_some",
+  "show_more",
+  "show_all",
+];
+
+export function resolveMessagingToolUpdateMode(
+  binding: MessagingBindingRecord,
+  defaultMode: MessagingToolUpdateMode | undefined,
+): MessagingToolUpdateMode {
+  return binding.preferences?.toolUpdateMode ?? defaultMode ?? "show_some";
+}
+
+export function nextMessagingToolUpdateMode(
+  mode: MessagingToolUpdateMode,
+): MessagingToolUpdateMode {
+  const index = TOOL_UPDATE_MODE_ORDER.indexOf(mode);
+  return TOOL_UPDATE_MODE_ORDER[(index + 1) % TOOL_UPDATE_MODE_ORDER.length]!;
+}
+
+export function formatMessagingToolUpdateModeLabel(
+  mode: MessagingToolUpdateMode,
+): string {
+  switch (mode) {
+    case "show_none":
+      return "Show None";
+    case "show_less":
+      return "Show Less";
+    case "show_some":
+      return "Show Some";
+    case "show_more":
+      return "Show More";
+    case "show_all":
+      return "Show All";
+  }
 }
 
 export function buildStatusModelPickerIntent(params: {

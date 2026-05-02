@@ -159,4 +159,50 @@ describe("discord formatting", () => {
 
     expect(rendered).toContain("```shell\npnpm test\n```");
   });
+
+  it("renders generated batched tool update messages with line breaks", () => {
+    const rendered = textForDiscordIntent({
+      id: "tool-update-batch-1",
+      kind: "message",
+      createdAt: 1000,
+      role: "system",
+      parts: [
+        {
+          type: "text",
+          text: "Tool updates: ran 2 tools\n- pnpm test\n- Failed: tsc",
+          markdown: "light",
+        },
+      ],
+    });
+
+    expect(rendered).toBe("Tool updates: ran 2 tools\n- pnpm test\n- Failed: tsc");
+  });
+
+  it("exposes the tool updates status action through generic components", () => {
+    const components = buildDiscordComponents(
+      [
+        {
+          id: "status:tool-updates",
+          label: "Tools: Show Some",
+          fallbackText: "tools",
+          style: "secondary",
+        },
+      ],
+      (action) => `dc:${action.id}`,
+    );
+
+    expect(components).toEqual([
+      {
+        components: [
+          {
+            custom_id: "dc:status:tool-updates",
+            label: "Tools: Show Some",
+            style: 2,
+            type: 2,
+          },
+        ],
+        type: 1,
+      },
+    ]);
+  });
 });

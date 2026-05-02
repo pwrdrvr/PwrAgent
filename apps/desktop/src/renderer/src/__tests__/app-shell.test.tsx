@@ -59,6 +59,7 @@ describe("App", () => {
         },
       },
       messaging: {
+        toolUpdateMode: { value: "show_some", source: "default" },
         telegram: {
           enabled: { value: false, source: "default" },
           botToken: { configured: false, source: "unset", writable: true },

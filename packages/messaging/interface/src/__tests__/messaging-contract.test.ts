@@ -3,6 +3,7 @@ import {
   MESSAGING_DELIVERY_OUTCOMES,
   MESSAGING_INBOUND_EVENT_KINDS,
   MESSAGING_SURFACE_INTENT_KINDS,
+  MESSAGING_TOOL_UPDATE_MODES,
   layoutMessagingActionRows,
   type MessagingApprovalIntent,
   type MessagingBindingRecord,
@@ -42,6 +43,13 @@ describe("messaging surface contract", () => {
     expect(MESSAGING_DELIVERY_OUTCOMES).toContain("pinned");
     expect(MESSAGING_DELIVERY_OUTCOMES).toContain("unpinned");
     expect(MESSAGING_DELIVERY_OUTCOMES).toContain("unsupported");
+    expect(MESSAGING_TOOL_UPDATE_MODES).toEqual([
+      "show_none",
+      "show_less",
+      "show_some",
+      "show_more",
+      "show_all",
+    ]);
   });
 
   it("describes a thread picker without platform payload fields", () => {
@@ -247,6 +255,7 @@ describe("messaging surface contract", () => {
         model: "gpt-5.4",
         permissionsMode: "full-access",
         reasoningEffort: "high",
+        toolUpdateMode: "show_all",
         updatedAt: 1000,
       },
       statusSurface: {

@@ -5,6 +5,7 @@ import type {
   DesktopSettingsSecretState,
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
+  MessagingToolUpdateMode,
 } from "@pwragnt/shared";
 import {
   mergeDesktopSettingsConfig,
@@ -116,6 +117,9 @@ export class DesktopSettingsService {
         ),
       },
       messaging: {
+        toolUpdateMode: this.resolveToolUpdateMode(
+          config.messaging?.toolUpdateMode,
+        ),
         telegram: {
           enabled: this.resolveBoolean(
             config.messaging?.telegram?.enabled,
@@ -302,6 +306,15 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<string> {
     return {
       value: configValue ?? "",
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveToolUpdateMode(
+    configValue: MessagingToolUpdateMode | undefined,
+  ): DesktopSettingsValue<MessagingToolUpdateMode> {
+    return {
+      value: configValue ?? "show_some",
       source: configValue === undefined ? "default" : "config",
     };
   }

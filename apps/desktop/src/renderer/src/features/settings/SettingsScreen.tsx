@@ -136,6 +136,13 @@ function SettingsSectionBody(props: {
         snapshot={props.snapshot}
         onClearSecret={props.settings.clearSecret}
         onReplaceSecret={props.settings.replaceSecret}
+        onToolUpdateModeChange={async (toolUpdateMode) => {
+          await props.settings.writeConfig({
+            messaging: {
+              toolUpdateMode,
+            },
+          });
+        }}
         onSaveDiscord={async (discord) => {
           await props.settings.writeConfig({
             messaging: {

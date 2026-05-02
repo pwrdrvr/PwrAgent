@@ -29,6 +29,9 @@ describe("DesktopSettingsService", () => {
         "[experimental]",
         'chat_reply_composer = "tiptap-chips"',
         "",
+        "[messaging]",
+        'tool_update_mode = "show_more"',
+        "",
         "[messaging.telegram]",
         "enabled = true",
         'authorized_user_ids = ["111111111", "222222222"]',
@@ -62,6 +65,10 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.fetchedAt).toBe(10);
     expect(snapshot.experimental.chatReplyComposer).toEqual({
       value: "tiptap-chips",
+      source: "config",
+    });
+    expect(snapshot.messaging.toolUpdateMode).toEqual({
+      value: "show_more",
       source: "config",
     });
     expect(snapshot.messaging.telegram.enabled).toEqual({
@@ -169,6 +176,7 @@ describe("DesktopSettingsService", () => {
 
     await service.writeConfigPatch({
       messaging: {
+        toolUpdateMode: "show_less",
         telegram: {
           enabled: true,
           authorizedUserIds: ["111111111"],
@@ -192,6 +200,8 @@ describe("DesktopSettingsService", () => {
     const snapshot = await service.readSettings();
 
     expect(contents).toContain("[messaging.telegram]");
+    expect(contents).toContain("[messaging]");
+    expect(contents).toContain('tool_update_mode = "show_less"');
     expect(contents).toContain('authorized_user_ids = ["111111111"]');
     expect(contents).toContain("[applications.terminal]");
     expect(contents).toContain('preferred_id = "ghostty"');

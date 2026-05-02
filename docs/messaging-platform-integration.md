@@ -38,6 +38,37 @@ fails, is interrupted, or enters a pending user-input break such as a Plan
 questionnaire or approval prompt. After the user answers that prompt, typing can
 resume for the same turn until terminal completion.
 
+## Tool Update Verbosity
+
+PwrAgnt can send generated tool-use progress messages to bound conversations.
+These messages are not assistant-authored responses. They summarize completed
+tool activity with title-only text such as command names, MCP tool names, web
+searches, and edited file names. Raw command output, diffs, and tool arguments
+that look secret are intentionally excluded.
+
+Generated update quality depends on backend tool metadata. Codex
+`commandActions` and Grok `dynamicToolCall` path/query arguments are normalized
+into concise labels such as `Read <file>`, `Listed <directory>`, and
+`Searched <directory>` without forwarding raw argument objects.
+
+The app-level default lives in Settings > Messaging as `Tool usage
+notifications`. Existing configs default to `Show Some`. A bound conversation
+can override the default from its status card with the `Tools: <mode>` action,
+which cycles:
+
+| Mode | Behavior |
+| --- | --- |
+| `Show None` | Suppress generated tool update messages. |
+| `Show Less` | Batch all completed tool updates, flushing every 60 seconds and at turn boundaries. |
+| `Show Some` | Default. Send up to three quiet updates individually, then batch every 30 seconds. |
+| `Show More` | Send up to five quiet updates individually, then batch every 15 seconds. |
+| `Show All` | Send each completed tool update individually. |
+
+Effective mode is resolved as binding override, then Settings > Messaging
+default, then `Show Some` for old state. Pending batches flush before assistant
+messages, approval or questionnaire prompts, status replies, and terminal turn
+status so tool progress does not arrive after the response it explains.
+
 ## Configuration
 
 Messaging is disabled unless a channel has both credentials and authorized actor
@@ -122,12 +153,15 @@ Telegram:
 6. Use status buttons to change Model, Reasoning, Fast mode, and Permissions.
 7. Send free-form text and verify a PwrAgnt turn starts in the bound thread.
 8. Verify typing continues through an intermediate assistant update and stops at turn completion.
-9. Trigger a Plan questionnaire and answer with both a button and text fallback.
-10. Trigger an approval request and test accept, session accept, decline, and cancel with both buttons and text.
-11. Verify markdown, inline code, fenced code, long responses, and image output render.
-12. Restart PwrAgnt and verify the same Telegram conversation still routes to the bound thread.
-13. Send `/detach` and verify the status card is unpinned and free-form text asks for `/resume`.
-14. Send a file or voice message and verify it is rejected without download.
+9. Run a quiet command sequence and verify `Show Some` sends individual tool updates.
+10. Run a noisy command or file-read sequence and verify remaining tool updates batch before the final assistant response.
+11. Cycle Tools through `Show All`, `Show Less`, and `Show None`; verify all, batched, and suppressed behavior respectively.
+12. Trigger a Plan questionnaire and answer with both a button and text fallback.
+13. Trigger an approval request and test accept, session accept, decline, and cancel with both buttons and text.
+14. Verify markdown, inline code, fenced code, long responses, and image output render.
+15. Restart PwrAgnt and verify the same Telegram conversation still routes to the bound thread.
+16. Send `/detach` and verify the status card is unpinned and free-form text asks for `/resume`.
+17. Send a file or voice message and verify it is rejected without download.
 
 Discord:
 
@@ -137,11 +171,12 @@ Discord:
 4. Choose a thread by component, then repeat by replying `1`.
 5. Send free-form text and verify a PwrAgnt turn starts in the bound thread.
 6. Verify typing continues through an intermediate assistant update and stops at turn completion.
-7. Trigger a Plan questionnaire and answer with both a component and text fallback.
-8. Trigger an approval request and test accept, session accept, decline, and cancel.
-9. Verify markdown, inline code, fenced code, long responses, and image output render.
-10. Restart PwrAgnt and verify the same Discord channel still routes to the bound thread.
-11. Send an attachment and verify it is rejected without download.
+7. Run quiet and noisy tool sequences and verify the selected Tools mode controls individual, batched, or suppressed generated updates.
+8. Trigger a Plan questionnaire and answer with both a component and text fallback.
+9. Trigger an approval request and test accept, session accept, decline, and cancel.
+10. Verify markdown, inline code, fenced code, long responses, and image output render.
+11. Restart PwrAgnt and verify the same Discord channel still routes to the bound thread.
+12. Send an attachment and verify it is rejected without download.
 
 Discord currently has parity for the shared workflow and button actions, but it
 does not pin or edit status cards yet; status updates degrade to normal

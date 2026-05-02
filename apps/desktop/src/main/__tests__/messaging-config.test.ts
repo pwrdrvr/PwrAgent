@@ -32,6 +32,7 @@ describe("desktop messaging config", () => {
     });
 
     expect(config).toEqual({
+      toolUpdateDefaultMode: "show_some",
       telegram: {
         channel: "telegram",
         enabled: true,
@@ -92,6 +93,7 @@ describe("desktop messaging config", () => {
     const config = await loadDesktopMessagingConfigFromSettings(service, {});
 
     expect(config).toEqual({
+      toolUpdateDefaultMode: "show_some",
       telegram: {
         channel: "telegram",
         enabled: true,
@@ -149,6 +151,7 @@ describe("desktop messaging config", () => {
         botToken: "[REDACTED]",
         authorizedActorCount: 2,
       },
+      toolUpdateDefaultMode: "show_some",
       discord: {
         channel: "discord",
         enabled: true,

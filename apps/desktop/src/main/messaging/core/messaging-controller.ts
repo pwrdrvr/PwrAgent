@@ -17,6 +17,7 @@ import type {
   MessagingMessageIntent,
   MessagingPendingIntentRecord,
   MessagingSurfaceIntent,
+  MessagingToolUpdateMode,
   NavigationSnapshot,
   NavigationThreadSummary,
   ThreadExecutionMode,
@@ -32,6 +33,8 @@ import {
   buildErrorIntent,
   buildQuestionnaireIntent,
   buildStatusIntent,
+  buildToolUpdateBatchMessageIntent,
+  buildToolUpdateMessageIntent,
 } from "./messaging-renderer.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
@@ -50,8 +53,15 @@ import {
   buildBindingStatusIntent,
   buildStatusModelPickerIntent,
   buildStatusReasoningPickerIntent,
+  nextMessagingToolUpdateMode,
+  resolveMessagingToolUpdateMode,
 } from "./messaging-status-card.js";
 import { resolveMessagingThreadState } from "./messaging-thread-state.js";
+import { summarizeToolActivityFromBackendEvent } from "./messaging-tool-activity.js";
+import {
+  MessagingToolUpdatePolicy,
+  type MessagingToolUpdatePolicyDelivery,
+} from "./messaging-tool-update-policy.js";
 
 const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
@@ -104,6 +114,10 @@ type MessagingControllerLogger = {
   debug?(message: string, data?: Record<string, unknown>): void;
 };
 
+type MessagingToolUpdateDefaultModeResolver =
+  | MessagingToolUpdateMode
+  | (() => MessagingToolUpdateMode | Promise<MessagingToolUpdateMode>);
+
 export type MessagingControllerOptions = {
   adapter: MessagingAdapter;
   authorizedActorIds: string[];
@@ -114,6 +128,7 @@ export type MessagingControllerOptions = {
   now?: () => number;
   pendingIntentTtlMs?: number;
   store: MessagingStore;
+  toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
 };
 
 export class MessagingController {
@@ -125,6 +140,7 @@ export class MessagingController {
   private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly logger: MessagingControllerLogger;
+  private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
 
   constructor(private readonly options: MessagingControllerOptions) {
     this.authorizedActorIds = new Set(options.authorizedActorIds);
@@ -133,6 +149,12 @@ export class MessagingController {
       options.pendingIntentTtlMs ?? DEFAULT_PENDING_INTENT_TTL_MS;
     this.interactionMapper = options.interactionMapper ?? new DeterministicInteractionMapper();
     this.logger = options.logger ?? messagingControllerLog;
+    this.toolUpdatePolicy = new MessagingToolUpdatePolicy({
+      now: this.now,
+      onBatchReady: async (delivery) => {
+        await this.deliverToolUpdateDelivery(delivery);
+      },
+    });
   }
 
   async handleInboundEvent(event: MessagingInboundEvent): Promise<void> {
@@ -224,6 +246,21 @@ export class MessagingController {
           activeTurn,
           event.notification.method,
         );
+      }
+
+      await this.deliverToolActivityForBackendEvent(
+        event,
+        binding,
+        activeTurn?.turnId,
+      );
+      if (
+        isTerminalTurnLifecycle(lifecycle) ||
+        (isThreadStatusIdleEvent(event) && activeTurn)
+      ) {
+        await this.flushToolUpdatesForBinding(binding, {
+          clear: true,
+          turnId: turnIdForBackendEvent(event) ?? activeTurn?.turnId,
+        });
       }
 
       const assistantText = assistantTextForBackendEvent(event);
@@ -430,6 +467,11 @@ export class MessagingController {
         undefined,
         event,
       );
+      return;
+    }
+
+    if (isToolsFallbackText(event.text)) {
+      await this.cycleToolUpdateMode(binding, event);
       return;
     }
 
@@ -717,6 +759,10 @@ export class MessagingController {
       },
       binding,
     );
+  }
+
+  dispose(): void {
+    this.toolUpdatePolicy.dispose();
   }
 
   private async presentResumeBrowser(event: MessagingInboundCommandEvent): Promise<void> {
@@ -1104,6 +1150,10 @@ export class MessagingController {
       await this.togglePermissionsMode(binding, event);
       return;
     }
+    if (actionId === "status:tool-updates") {
+      await this.cycleToolUpdateMode(binding, event);
+      return;
+    }
     if (actionId === "status:stop") {
       await this.stopActiveTurn(binding, event);
       return;
@@ -1424,6 +1474,20 @@ export class MessagingController {
     await this.renderBindingStatus(updatedBinding, event, navigation);
   }
 
+  private async cycleToolUpdateMode(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const currentMode = resolveMessagingToolUpdateMode(
+      binding,
+      await this.resolveToolUpdateDefaultMode(),
+    );
+    const updatedBinding = await this.updateBindingPreferences(binding, {
+      toolUpdateMode: nextMessagingToolUpdateMode(currentMode),
+    });
+    await this.renderBindingStatus(updatedBinding, event);
+  }
+
   private async updateBindingPreferences(
     binding: MessagingBindingRecord,
     patch: Partial<NonNullable<MessagingBindingRecord["preferences"]>>,
@@ -1491,6 +1555,7 @@ export class MessagingController {
         { force: true },
       );
     }
+    await this.flushToolUpdatesForBinding(binding, { clear: true });
     if (statusSurface) {
       await this.deliver(
         {
@@ -1537,6 +1602,22 @@ export class MessagingController {
     return await this.renderBindingStatus(retiredBinding, event, snapshot);
   }
 
+  private async resolveToolUpdateDefaultMode(): Promise<MessagingToolUpdateMode> {
+    const configured = this.options.toolUpdateDefaultMode;
+    if (!configured) {
+      return "show_some";
+    }
+
+    try {
+      return typeof configured === "function" ? await configured() : configured;
+    } catch (error) {
+      this.logger.debug?.("messaging tool update default resolution failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return "show_some";
+    }
+  }
+
   private async retireBindingStatus(
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
@@ -1559,6 +1640,7 @@ export class MessagingController {
               binding,
               navigation,
             }),
+            toolUpdateMode: await this.resolveToolUpdateDefaultMode(),
           }),
           actions: [],
           delivery: {
@@ -1637,6 +1719,7 @@ export class MessagingController {
         binding,
         navigation: snapshot,
       }),
+      toolUpdateMode: await this.resolveToolUpdateDefaultMode(),
     });
     const result = await this.deliver(intent, binding, event);
     if (!result.surface) {
@@ -1848,6 +1931,9 @@ export class MessagingController {
     binding?: MessagingBindingRecord,
     event?: MessagingInboundEvent,
   ): Promise<MessagingDeliveryResult> {
+    if (binding && shouldFlushToolUpdatesBeforeIntent(intent)) {
+      await this.flushToolUpdatesForBinding(binding, { clear: false });
+    }
     const routedIntent = this.withRoutingAudit(intent, binding, event);
     const result = await this.options.adapter.deliver(routedIntent);
     await this.options.store.recordDelivery({
@@ -1875,6 +1961,79 @@ export class MessagingController {
       });
     }
     return result;
+  }
+
+  private async deliverToolActivityForBackendEvent(
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+    activeTurnId?: string,
+  ): Promise<void> {
+    const turnId = turnIdForBackendEvent(event) ?? activeTurnId;
+    if (!turnId) {
+      return;
+    }
+
+    const activity = summarizeToolActivityFromBackendEvent(event);
+    if (!activity) {
+      return;
+    }
+
+    const mode = resolveMessagingToolUpdateMode(
+      binding,
+      await this.resolveToolUpdateDefaultMode(),
+    );
+    const deliveries = this.toolUpdatePolicy.processActivity({
+      activity,
+      bindingId: binding.id,
+      mode,
+      turnId,
+    });
+    for (const delivery of deliveries) {
+      await this.deliverToolUpdateDelivery(delivery, binding);
+    }
+  }
+
+  private async flushToolUpdatesForBinding(
+    binding: MessagingBindingRecord,
+    options: { clear: boolean; turnId?: string },
+  ): Promise<void> {
+    const deliveries = this.toolUpdatePolicy.flush({
+      bindingId: binding.id,
+      clear: options.clear,
+      turnId: options.turnId,
+    });
+    for (const delivery of deliveries) {
+      await this.deliverToolUpdateDelivery(delivery, binding);
+    }
+  }
+
+  private async deliverToolUpdateDelivery(
+    delivery: MessagingToolUpdatePolicyDelivery,
+    knownBinding?: MessagingBindingRecord,
+  ): Promise<void> {
+    const binding =
+      knownBinding?.id === delivery.bindingId
+        ? knownBinding
+        : await this.options.store.getBinding(delivery.bindingId);
+    if (!binding || binding.revokedAt || !this.isChannelInScope(binding.channel)) {
+      return;
+    }
+
+    const intent =
+      delivery.kind === "individual"
+        ? buildToolUpdateMessageIntent({
+            activity: delivery.activities[0]!,
+            bindingId: binding.id,
+            createdAt: this.now(),
+            id: this.newIntentId("tool-update"),
+          })
+        : buildToolUpdateBatchMessageIntent({
+            activities: delivery.activities,
+            bindingId: binding.id,
+            createdAt: this.now(),
+            id: this.newIntentId("tool-update-batch"),
+          });
+    await this.deliver(intent, binding);
   }
 
   private filterBindingsForChannel(
@@ -1977,6 +2136,40 @@ function conversationKindLabel(kind: MessagingBindingRecord["channel"]["conversa
 function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefined {
   const params = event.notification.params as { threadId?: unknown };
   return typeof params.threadId === "string" ? params.threadId : undefined;
+}
+
+function turnIdForBackendEvent(event: AgentEvent): string | undefined {
+  const params = event.notification.params as {
+    turn?: { id?: unknown };
+    turnId?: unknown;
+  };
+  if (typeof params.turnId === "string") {
+    return params.turnId;
+  }
+  return typeof params.turn?.id === "string" ? params.turn.id : undefined;
+}
+
+function isTerminalTurnLifecycle(
+  lifecycle: MessagingActiveTurnSummary | undefined,
+): boolean {
+  return Boolean(
+    lifecycle &&
+      ["completed", "failed", "interrupted"].includes(lifecycle.status),
+  );
+}
+
+function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boolean {
+  if (intent.kind === "activity" || intent.kind === "dismiss") {
+    return false;
+  }
+  if (
+    intent.kind === "message" &&
+    intent.role === "system" &&
+    intent.id.startsWith("tool-update")
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
@@ -2176,6 +2369,10 @@ function parseTextCommandArgs(text: string): string[] {
   }
 
   return trimmed.slice(1).split(/\s+/).slice(1).filter(Boolean);
+}
+
+function isToolsFallbackText(text: string): boolean {
+  return text.trim().toLowerCase() === "tools";
 }
 
 function readBindingTarget(

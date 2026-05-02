@@ -1,5 +1,6 @@
 import type { DiscordMessagingConfig } from "@pwragnt/messaging-provider-discord";
 import type { TelegramMessagingConfig } from "@pwragnt/messaging-provider-telegram";
+import type { MessagingToolUpdateMode } from "@pwragnt/shared";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import {
   DISCORD_APPLICATION_ID_ENV,
@@ -25,6 +26,7 @@ export {
 export type DesktopMessagingConfig = {
   discord?: DiscordMessagingConfig;
   telegram?: TelegramMessagingConfig;
+  toolUpdateDefaultMode?: MessagingToolUpdateMode;
 };
 
 export type DesktopMessagingSettingsSource = Pick<
@@ -41,6 +43,7 @@ export function loadDesktopMessagingConfig(
   const discordAuthorizedActorIds = parseList(env[DISCORD_AUTHORIZED_USER_IDS_ENV]);
 
   return {
+    toolUpdateDefaultMode: "show_some",
     ...(telegramBotToken && telegramAuthorizedActorIds.length > 0
       ? {
           telegram: {
@@ -83,6 +86,7 @@ export async function loadDesktopMessagingConfigFromSettings(
     ?? snapshot.messaging.discord.authorizedUserIds.value;
 
   return {
+    toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
     ...(shouldEnableSettingsChannel(
       snapshot.messaging.telegram.enabled.value,
       envConfig.telegram,
@@ -136,6 +140,7 @@ export function redactDesktopMessagingConfig(
           authorizedActorCount: config.telegram.authorizedActorIds.length,
         }
       : undefined,
+    toolUpdateDefaultMode: config.toolUpdateDefaultMode ?? "show_some",
     discord: config.discord
       ? {
           channel: config.discord.channel,

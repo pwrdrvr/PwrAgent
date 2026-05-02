@@ -11,6 +11,7 @@ import type {
   MessagingInboundEvent,
   MessagingInboundTextEvent,
   MessagingSurfaceIntent,
+  MessagingToolUpdateMode,
   NavigationSnapshot,
   StartThreadRequest,
   StartTurnRequest,
@@ -166,6 +167,16 @@ describe("MessagingController", () => {
         pin: true,
       },
       text: expect.stringContaining("Binding: Thread one"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      text: expect.stringContaining("Tool updates: Show Some"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:tool-updates",
+          label: "Tools: Show Some",
+          fallbackText: "tools",
+        }),
+      ]),
     });
   });
 
@@ -771,6 +782,171 @@ describe("MessagingController", () => {
       expect.stringContaining(
         "messaging typing signaled state=idle reason=status_refresh:thread_status_idle",
       ),
+    );
+  });
+
+  it("delivers quiet completed tool updates as generated system messages", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent(
+      buildToolCompletedEvent("tool-1", "/bin/zsh -lc 'npm view dive'"),
+    );
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "system",
+        parts: [
+          expect.objectContaining({
+            text: "Tool update: npm view dive",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("batches noisy default tool updates and flushes them before turn status", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+
+    for (const index of [1, 2, 3, 4]) {
+      await harness.controller.handleBackendEvent(
+        buildToolCompletedEvent(`tool-${index}`, `pnpm test ${index}`),
+      );
+    }
+
+    expect(harness.delivered.filter((intent) => intent.kind === "message"))
+      .toHaveLength(3);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const batchIndex = harness.delivered.findIndex(
+      (intent) =>
+        intent.kind === "message" &&
+        intent.role === "system" &&
+        intent.parts.some(
+          (part) => part.type === "text" && part.text.includes("Tool updates: ran 1 tool"),
+        ),
+    );
+    const statusIndex = harness.delivered.findIndex(
+      (intent) => intent.kind === "status" && intent.status === "idle",
+    );
+
+    expect(batchIndex).toBeGreaterThanOrEqual(0);
+    expect(statusIndex).toBeGreaterThan(batchIndex);
+  });
+
+  it("flushes queued tool updates before assistant final text", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+
+    for (const index of [1, 2, 3, 4]) {
+      await harness.controller.handleBackendEvent(
+        buildToolCompletedEvent(`tool-${index}`, `pnpm test ${index}`),
+      );
+    }
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [
+              {
+                type: "text",
+                text: "Done.",
+              },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const batchIndex = harness.delivered.findIndex(
+      (intent) =>
+        intent.kind === "message" &&
+        intent.role === "system" &&
+        intent.parts.some(
+          (part) => part.type === "text" && part.text.includes("Tool updates: ran 1 tool"),
+        ),
+    );
+    const assistantIndex = harness.delivered.findIndex(
+      (intent) => intent.kind === "message" && intent.role === "assistant",
+    );
+
+    expect(batchIndex).toBeGreaterThanOrEqual(0);
+    expect(assistantIndex).toBeGreaterThan(batchIndex);
+  });
+
+  it("suppresses generated tool messages in Show None while preserving assistant delivery", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    const binding = await harness.store.findActiveBindingForChannel(buildTextEvent("").channel);
+    await harness.store.upsertBinding({
+      ...binding!,
+      preferences: {
+        toolUpdateMode: "show_none",
+        updatedAt: 1000,
+      },
+      updatedAt: 1000,
+    });
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent(
+      buildToolCompletedEvent("tool-1", "pnpm test"),
+    );
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-1",
+            type: "agentMessage",
+            text: "Done.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "message" && intent.role === "system",
+      ),
+    ).toEqual([]);
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+      }),
     );
   });
 
@@ -1417,6 +1593,56 @@ describe("MessagingController", () => {
     );
   });
 
+  it("uses the desktop tool update default until the binding overrides it", async () => {
+    const harness = await createHarness({
+      toolUpdateDefaultMode: "show_less",
+    });
+    await bindThread(harness);
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Tool updates: Show Less"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:tool-updates" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Tool updates: Show Some"),
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
+    ).resolves.toMatchObject({
+      preferences: {
+        toolUpdateMode: "show_some",
+      },
+    });
+  });
+
+  it("cycles the tool update status action through all modes and wraps", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    for (const expected of [
+      "Show More",
+      "Show All",
+      "Show None",
+      "Show Less",
+      "Show Some",
+    ]) {
+      await harness.controller.handleInboundEvent(
+        buildCallbackEvent({ actionId: "status:tool-updates" }),
+      );
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "status",
+        text: expect.stringContaining(`Tool updates: ${expected}`),
+      });
+    }
+  });
+
   it("stops an active turn through the backend bridge", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -1518,6 +1744,7 @@ async function createHarness(options?: {
   logger?: MessagingControllerOptions["logger"];
   now?: () => number;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
+  toolUpdateDefaultMode?: MessagingToolUpdateMode;
 }): Promise<{
   controller: MessagingController;
   compactThread: ReturnType<typeof vi.fn>;
@@ -1608,6 +1835,7 @@ async function createHarness(options?: {
       logger: options?.logger,
       now: options?.now ?? (() => 1000),
       store,
+      toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
     }),
     compactThread,
     delivered,
@@ -1769,6 +1997,25 @@ function buildTextEvent(text: string): MessagingInboundTextEvent {
     receivedAt: 1000,
     text,
   };
+}
+
+function buildToolCompletedEvent(id: string, command: string): AgentEvent {
+  return {
+    backend: "codex",
+    notification: {
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id,
+          type: "commandExecution",
+          command,
+          status: "completed",
+        },
+      },
+    },
+  } satisfies AgentEvent;
 }
 
 function buildCallbackEvent(params: {
