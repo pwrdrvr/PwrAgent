@@ -12,7 +12,9 @@
     "lint": "pnpm typecheck && pnpm lint:boundaries",
     "lint:boundaries": "depcruise --config .dependency-cruiser.cjs apps/desktop/src/main/messaging packages/messaging",
     "test:desktop-e2e": "pnpm --filter @pwragnt/desktop build && pnpm --filter @pwragnt/desktop test:e2e",
+    "test:desktop-e2e:nice": "node ./scripts/nice-run.mjs pnpm test:desktop-e2e",
     "test": "vitest run --config vitest.workspace.ts",
+    "test:nice": "node ./scripts/nice-run.mjs pnpm test",
     "test:watch": "vitest --config vitest.workspace.ts",
     "typecheck": "pnpm -r --if-present typecheck"
   },
