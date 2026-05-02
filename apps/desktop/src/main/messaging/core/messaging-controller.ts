@@ -227,25 +227,6 @@ export class MessagingController {
       }
 
       const assistantText = assistantTextForBackendEvent(event);
-      if (assistantText && !lifecycle && activeTurn?.status === "working") {
-        const previousTurn = activeTurn;
-        activeTurn = {
-          ...activeTurn,
-          status: "completed",
-          updatedAt: this.now(),
-        };
-        this.setActiveTurn(binding, activeTurn);
-        this.logBindingTurnStateChange(
-          binding,
-          previousTurn,
-          activeTurn,
-          event.notification.method,
-        );
-        await this.signalTurnActivity(binding, activeTurn, {
-          reason: "assistant_final",
-          force: true,
-        });
-      }
       if (assistantText) {
         await this.deliverAssistantMessage(assistantText, event, binding);
       }
@@ -256,7 +237,26 @@ export class MessagingController {
           force: true,
         });
         await this.renderBindingStatus(binding);
-      } else if (!assistantText && activeTurn?.status === "working") {
+      } else if (activeTurn?.status === "waiting" && isTurnWorkActivityEvent(event, activeTurn)) {
+        const previousTurn = activeTurn;
+        activeTurn = {
+          ...activeTurn,
+          status: "working",
+          updatedAt: this.now(),
+        };
+        this.setActiveTurn(binding, activeTurn);
+        this.logBindingTurnStateChange(
+          binding,
+          previousTurn,
+          activeTurn,
+          event.notification.method,
+        );
+        await this.signalTurnActivity(binding, activeTurn, {
+          reason: event.notification.method,
+          force: true,
+        });
+        await this.renderBindingStatus(binding);
+      } else if (activeTurn?.status === "working") {
         await this.signalTurnActivity(binding, activeTurn, {
           reason: event.notification.method,
         });
@@ -516,6 +516,13 @@ export class MessagingController {
         await this.submitApprovalAction(pendingIntent.intent, action.id);
         await this.retireApprovalIntent(pendingIntent, event);
         await this.options.store.deletePendingIntent(pendingIntent.id);
+        const resumedBinding = await this.resumeBindingForPendingIntent(
+          pendingIntent,
+          "pending_request.submitted",
+        );
+        if (resumedBinding) {
+          await this.renderBindingStatus(resumedBinding, event);
+        }
         await this.deliver(
           buildStatusIntent({
             id: this.newIntentId("approval-submitted"),
@@ -597,6 +604,13 @@ export class MessagingController {
     )) {
       await this.retireApprovalIntent(pendingIntent);
       await this.options.store.deletePendingIntent(pendingIntent.id);
+      const resumedBinding = await this.resumeBindingForPendingIntent(
+        pendingIntent,
+        event.notification.method,
+      );
+      if (resumedBinding) {
+        await this.renderBindingStatus(resumedBinding);
+      }
     }
   }
 
@@ -634,6 +648,42 @@ export class MessagingController {
         intentId: pendingIntent.intent.id,
       });
     }
+  }
+
+  private async resumeBindingForPendingIntent(
+    pendingIntent: MessagingPendingIntentRecord,
+    reason: string,
+  ): Promise<MessagingBindingRecord | undefined> {
+    const bindingId = pendingIntent.bindingId;
+    const turnId = pendingIntent.intent.requestContext?.turnId;
+    if (!bindingId || !turnId) {
+      return undefined;
+    }
+
+    const binding = await this.options.store.getBinding(bindingId);
+    const activeTurn = binding ? this.getActiveTurn(binding) : undefined;
+    if (
+      !binding ||
+      binding.revokedAt ||
+      !activeTurn ||
+      activeTurn.turnId !== turnId ||
+      activeTurn.status !== "waiting"
+    ) {
+      return undefined;
+    }
+
+    const resumedTurn: MessagingActiveTurnSummary = {
+      ...activeTurn,
+      status: "working",
+      updatedAt: this.now(),
+    };
+    this.setActiveTurn(binding, resumedTurn);
+    this.logBindingTurnStateChange(binding, activeTurn, resumedTurn, reason);
+    await this.signalTurnActivity(binding, resumedTurn, {
+      force: true,
+      reason,
+    });
+    return binding;
   }
 
   private async deliverAssistantMessage(
@@ -1574,12 +1624,16 @@ export class MessagingController {
       (await this.options.backend.getNavigationSnapshot({
         backend: "all",
       }));
+    const activeTurn = await this.reconcileActiveTurnFromBackendStatus(
+      binding,
+      "status_refresh",
+    );
     const intent = buildBindingStatusIntent({
       id: this.newIntentId("status"),
       binding,
       createdAt: this.now(),
       threadState: resolveMessagingThreadState({
-        activeTurn: this.getActiveTurn(binding),
+        activeTurn,
         binding,
         navigation: snapshot,
       }),
@@ -1598,6 +1652,46 @@ export class MessagingController {
       statusSurface: result.surface,
       updatedAt: this.now(),
     });
+  }
+
+  private async reconcileActiveTurnFromBackendStatus(
+    binding: MessagingBindingRecord,
+    reason: string,
+  ): Promise<MessagingActiveTurnSummary | undefined> {
+    const activeTurn = this.getActiveTurn(binding);
+    if (
+      !activeTurn ||
+      activeTurn.status !== "working" ||
+      !this.options.backend.readThreadStatus
+    ) {
+      return activeTurn;
+    }
+
+    const threadStatus = await this.options.backend.readThreadStatus({
+      backend: binding.backend,
+      threadId: binding.threadId,
+    });
+    if (threadStatus !== "idle") {
+      return activeTurn;
+    }
+
+    const completedTurn: MessagingActiveTurnSummary = {
+      ...activeTurn,
+      status: "completed",
+      updatedAt: this.now(),
+    };
+    this.setActiveTurn(binding, completedTurn);
+    this.logBindingTurnStateChange(
+      binding,
+      activeTurn,
+      completedTurn,
+      `${reason}:thread_status_idle`,
+    );
+    await this.signalTurnActivity(binding, completedTurn, {
+      force: true,
+      reason: `${reason}:thread_status_idle`,
+    });
+    return completedTurn;
   }
 
   private getActiveTurn(
@@ -1631,11 +1725,6 @@ export class MessagingController {
       lastSignaledAt !== undefined &&
       now - lastSignaledAt < TYPING_ACTIVITY_REFRESH_MS
     ) {
-      if (options?.reason !== "item/agentMessage/delta") {
-        this.logger.debug?.(
-          `messaging typing suppressed state=${state} reason=${options?.reason ?? "unknown"} elapsedMs=${now - lastSignaledAt} thread=${binding.threadId} turn=${activeTurn.turnId} binding=${binding.id}`,
-        );
-      }
       return;
     }
     if (state === "active") {
@@ -1972,6 +2061,33 @@ function isThreadStatusIdleEvent(event: AgentEvent): boolean {
     };
   };
   return params.status?.type === "idle";
+}
+
+function isTurnWorkActivityEvent(
+  event: AgentEvent,
+  activeTurn: MessagingActiveTurnSummary,
+): boolean {
+  const params = event.notification.params as {
+    turn?: {
+      id?: unknown;
+    };
+    turnId?: unknown;
+  };
+  const turnId =
+    typeof params.turnId === "string"
+      ? params.turnId
+      : typeof params.turn?.id === "string"
+        ? params.turn.id
+        : undefined;
+  if (turnId !== activeTurn.turnId) {
+    return false;
+  }
+
+  return (
+    event.notification.method.startsWith("item/") ||
+    event.notification.method.startsWith("turn/") ||
+    event.notification.method.startsWith("thread/")
+  );
 }
 
 function turnLifecycleForBackendEvent(

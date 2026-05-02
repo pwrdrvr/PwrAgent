@@ -301,7 +301,11 @@ describe("DesktopMessagingRuntime", () => {
       },
     });
 
-    expect(telegramAdapter.delivered.at(-1)).toMatchObject({
+    expect(
+      telegramAdapter.delivered.find(
+        (intent) => intent.kind === "approval" && intent.decisions.length === 0,
+      ),
+    ).toMatchObject({
       kind: "approval",
       decisions: [],
       delivery: {

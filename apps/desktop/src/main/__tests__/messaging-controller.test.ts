@@ -16,7 +16,10 @@ import type {
   StartTurnRequest,
   SubmitServerRequestRequest,
 } from "@pwragnt/shared";
-import { MessagingController } from "../messaging/core/messaging-controller";
+import {
+  MessagingController,
+  type MessagingControllerOptions,
+} from "../messaging/core/messaging-controller";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import { MessagingStore } from "../messaging/core/messaging-store";
 
@@ -551,7 +554,7 @@ describe("MessagingController", () => {
     });
   });
 
-  it("routes completed assistant item text to active thread bindings", async () => {
+  it("routes assistant item text without completing the active turn", async () => {
     const harness = await createHarness();
     await bindThread(harness);
     await harness.controller.handleInboundEvent(buildTextEvent("who are you"));
@@ -573,11 +576,7 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
-    expect(harness.delivered.at(-2)).toMatchObject({
-      kind: "activity",
-      activity: "typing",
-      state: "idle",
-    });
+    expect(harness.delivered).toHaveLength(1);
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "message",
       role: "assistant",
@@ -591,6 +590,188 @@ describe("MessagingController", () => {
       buildTextEvent("who are you").channel,
     );
     expect(binding).not.toHaveProperty("activeTurn");
+  });
+
+  it("keeps typing active after assistant item text until terminal completion", async () => {
+    let now = 1000;
+    const harness = await createHarness({
+      now: () => now,
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start multi-step work"));
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "item-1",
+            type: "agentMessage",
+            text: "First update.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+      }),
+    ]);
+
+    now += 11_000;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "item-2",
+            type: "reasoning",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "active",
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [
+              {
+                type: "text",
+                text: "First update.",
+              },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+    });
+    expect(harness.delivered.filter((intent) => intent.kind === "message")).toHaveLength(1);
+  });
+
+  it("suppresses high-frequency typing refreshes without logging each skipped delta", async () => {
+    let now = 1000;
+    const logger = {
+      debug: vi.fn<(message: string, data?: Record<string, unknown>) => void>(),
+    };
+    const harness = await createHarness({
+      logger,
+      now: () => now,
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("run noisy command"));
+    harness.delivered.length = 0;
+    logger.debug.mockClear();
+
+    now += 500;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/commandExecution/outputDelta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "call-1",
+          delta: "lots of output",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([]);
+    expect(logger.debug).not.toHaveBeenCalled();
+
+    now += 10_000;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/commandExecution/outputDelta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "call-1",
+          delta: "still working",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "activity",
+        activity: "typing",
+        state: "active",
+      }),
+    ]);
+    expect(logger.debug).toHaveBeenCalledTimes(1);
+    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining("typing signaled"));
+  });
+
+  it("clears typing when status refresh observes an idle backend thread", async () => {
+    let now = 1000;
+    const logger = {
+      debug: vi.fn<(message: string, data?: Record<string, unknown>) => void>(),
+    };
+    const harness = await createHarness({
+      logger,
+      now: () => now,
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+    logger.debug.mockClear();
+
+    now += 1000;
+    harness.readThreadStatus.mockResolvedValue("idle");
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:refresh" }),
+    );
+
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      status: "idle",
+      text: expect.stringContaining("Turn: completed"),
+    });
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "messaging turn state changed reason=status_refresh:thread_status_idle",
+      ),
+    );
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "messaging typing signaled state=idle reason=status_refresh:thread_status_idle",
+      ),
+    );
   });
 
   it("ignores turn completion events that do not include output text", async () => {
@@ -771,6 +952,50 @@ describe("MessagingController", () => {
     });
   });
 
+  it("stops typing while presenting a Plan questionnaire for an active turn", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("plan this"));
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "request-1",
+        questions: [
+          {
+            id: "q1",
+            header: "Mode",
+            question: "How should I proceed?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              {
+                label: "Plan (Recommended)",
+                description: "Stay in planning mode.",
+              },
+            ],
+          },
+        ],
+      },
+    } satisfies AppServerPendingRequestNotification);
+
+    expect(harness.delivered.at(-3)).toMatchObject({
+      kind: "questionnaire",
+    });
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      status: "waiting",
+    });
+  });
+
   it("submits approval callbacks through the backend bridge", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(
@@ -815,6 +1040,47 @@ describe("MessagingController", () => {
     });
   });
 
+  it("resumes typing after submitting an approval response for the waiting turn", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("run a command"));
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        prompt: "Run tests?",
+        command: "pnpm test",
+      },
+    });
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "approval:accept" }),
+    );
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "approval",
+        decisions: [],
+      }),
+      expect.objectContaining({
+        kind: "activity",
+        activity: "typing",
+        state: "active",
+      }),
+      expect.objectContaining({
+        kind: "status",
+        status: "working",
+      }),
+      expect.objectContaining({
+        kind: "status",
+        text: "Approval response sent.",
+      }),
+    ]);
+  });
+
   it("clears approval buttons after approval button callbacks", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(
@@ -851,7 +1117,11 @@ describe("MessagingController", () => {
         decision: "accept",
       },
     });
-    expect(harness.delivered.at(-2)).toMatchObject({
+    expect(
+      harness.delivered.find(
+        (intent) => intent.kind === "approval" && intent.decisions.length === 0,
+      ),
+    ).toMatchObject({
       kind: "approval",
       decisions: [],
       delivery: {
@@ -904,7 +1174,11 @@ describe("MessagingController", () => {
     });
 
     expect(harness.submitServerRequest).not.toHaveBeenCalled();
-    expect(harness.delivered.at(-1)).toMatchObject({
+    expect(
+      harness.delivered.find(
+        (intent) => intent.kind === "approval" && intent.decisions.length === 0,
+      ),
+    ).toMatchObject({
       kind: "approval",
       decisions: [],
       delivery: {
@@ -916,6 +1190,55 @@ describe("MessagingController", () => {
         id: `surface:${approvalIntent?.id}`,
       },
     });
+  });
+
+  it("resumes typing when the backend resolves an approval for the waiting turn", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("run a command"));
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-1",
+        prompt: "Run tests?",
+        command: "pnpm test",
+      },
+    });
+    const approvalIntent = harness.delivered.find((intent) => intent.kind === "approval");
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "approval-1",
+        },
+      },
+    });
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "approval",
+        decisions: [],
+        targetSurface: expect.objectContaining({
+          id: `surface:${approvalIntent?.id}`,
+        }),
+      }),
+      expect.objectContaining({
+        kind: "activity",
+        activity: "typing",
+        state: "active",
+      }),
+      expect.objectContaining({
+        kind: "status",
+        status: "working",
+      }),
+    ]);
   });
 
   it("reports expired approval callbacks with retry guidance", async () => {
@@ -1192,6 +1515,8 @@ describe("MessagingController", () => {
 
 async function createHarness(options?: {
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
+  logger?: MessagingControllerOptions["logger"];
+  now?: () => number;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
 }): Promise<{
   controller: MessagingController;
@@ -1200,6 +1525,7 @@ async function createHarness(options?: {
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
   interruptTurn: ReturnType<typeof vi.fn>;
   listBackends: ReturnType<typeof vi.fn>;
+  readThreadStatus: ReturnType<typeof vi.fn>;
   setThreadExecutionMode: ReturnType<typeof vi.fn>;
   setThreadModelSettings: ReturnType<typeof vi.fn>;
   startThread: ReturnType<typeof vi.fn>;
@@ -1254,6 +1580,7 @@ async function createHarness(options?: {
     fetchedAt: 1000,
     backends: [buildBackendSummary()],
   }));
+  const readThreadStatus = vi.fn(async () => undefined);
   const submitServerRequest = vi.fn(async (request: SubmitServerRequestRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -1265,6 +1592,7 @@ async function createHarness(options?: {
     getNavigationSnapshot,
     interruptTurn,
     listBackends,
+    readThreadStatus,
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,
@@ -1277,7 +1605,8 @@ async function createHarness(options?: {
       adapter,
       authorizedActorIds: ["user-1"],
       backend,
-      now: () => 1000,
+      logger: options?.logger,
+      now: options?.now ?? (() => 1000),
       store,
     }),
     compactThread,
@@ -1285,6 +1614,7 @@ async function createHarness(options?: {
     getNavigationSnapshot,
     interruptTurn,
     listBackends,
+    readThreadStatus,
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,

@@ -1,5 +1,7 @@
 import type {
   AgentEvent,
+  AppServerBackendKind,
+  AppServerThreadStatus,
   CompactThreadRequest,
   CompactThreadResponse,
   InterruptTurnRequest,
@@ -54,6 +56,10 @@ export type MessagingBackendBridge = {
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot>;
+  readThreadStatus?(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<AppServerThreadStatus | undefined>;
   startThread?(request: StartThreadRequest): Promise<StartThreadResponse>;
   startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
   compactThread?(request: CompactThreadRequest): Promise<CompactThreadResponse>;

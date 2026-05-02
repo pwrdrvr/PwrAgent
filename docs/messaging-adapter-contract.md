@@ -64,6 +64,19 @@ Telegram currently uses Bot API long polling, HTML-safe text, inline keyboards,
 and `sendPhoto` for image URLs. Discord uses Gateway events, REST message
 delivery, defensive `allowed_mentions`, components, and image embeds.
 
+## Typing Activity
+
+`activity: "typing"` is a semantic lease signal from the messaging controller.
+Adapters should start or refresh the platform typing indicator when
+`state: "active"` arrives, stop the platform indicator when `state: "idle"`
+arrives, and let the lease expire as a fallback if no idle signal is delivered.
+
+Adapters must not infer agent lifecycle from message content. Assistant message
+delivery can happen while a turn is still working, and pending user-input
+surfaces can happen while a turn is paused for the user. The controller owns
+those lifecycle decisions and translates them into active or idle activity
+intents.
+
 ## Adding A New Adapter
 
 To add Mattermost, Feishu/Lark, Slack, Matrix, or another channel:

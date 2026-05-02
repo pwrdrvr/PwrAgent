@@ -29,6 +29,15 @@ the closest native layout they support: Telegram inline keyboards can honor
 explicit row groupings, and Discord components use action rows with provider
 limits.
 
+## Typing Indicators
+
+Messaging adapters show platform typing indicators while a bound turn is
+actively waiting on the agent. Intermediate assistant messages or status updates
+do not stop typing by themselves; the indicator stops when the turn completes,
+fails, is interrupted, or enters a pending user-input break such as a Plan
+questionnaire or approval prompt. After the user answers that prompt, typing can
+resume for the same turn until terminal completion.
+
 ## Configuration
 
 Messaging is disabled unless a channel has both credentials and authorized actor
@@ -112,12 +121,13 @@ Telegram:
 5. Verify a pinned status card appears and updates in place.
 6. Use status buttons to change Model, Reasoning, Fast mode, and Permissions.
 7. Send free-form text and verify a PwrAgnt turn starts in the bound thread.
-8. Trigger a Plan questionnaire and answer with both a button and text fallback.
-9. Trigger an approval request and test accept, session accept, decline, and cancel with both buttons and text.
-10. Verify markdown, inline code, fenced code, long responses, and image output render.
-11. Restart PwrAgnt and verify the same Telegram conversation still routes to the bound thread.
-12. Send `/detach` and verify the status card is unpinned and free-form text asks for `/resume`.
-13. Send a file or voice message and verify it is rejected without download.
+8. Verify typing continues through an intermediate assistant update and stops at turn completion.
+9. Trigger a Plan questionnaire and answer with both a button and text fallback.
+10. Trigger an approval request and test accept, session accept, decline, and cancel with both buttons and text.
+11. Verify markdown, inline code, fenced code, long responses, and image output render.
+12. Restart PwrAgnt and verify the same Telegram conversation still routes to the bound thread.
+13. Send `/detach` and verify the status card is unpinned and free-form text asks for `/resume`.
+14. Send a file or voice message and verify it is rejected without download.
 
 Discord:
 
@@ -126,11 +136,12 @@ Discord:
 3. Verify a numbered thread picker appears with components.
 4. Choose a thread by component, then repeat by replying `1`.
 5. Send free-form text and verify a PwrAgnt turn starts in the bound thread.
-6. Trigger a Plan questionnaire and answer with both a component and text fallback.
-7. Trigger an approval request and test accept, session accept, decline, and cancel.
-8. Verify markdown, inline code, fenced code, long responses, and image output render.
-9. Restart PwrAgnt and verify the same Discord channel still routes to the bound thread.
-10. Send an attachment and verify it is rejected without download.
+6. Verify typing continues through an intermediate assistant update and stops at turn completion.
+7. Trigger a Plan questionnaire and answer with both a component and text fallback.
+8. Trigger an approval request and test accept, session accept, decline, and cancel.
+9. Verify markdown, inline code, fenced code, long responses, and image output render.
+10. Restart PwrAgnt and verify the same Discord channel still routes to the bound thread.
+11. Send an attachment and verify it is rejected without download.
 
 Discord currently has parity for the shared workflow and button actions, but it
 does not pin or edit status cards yet; status updates degrade to normal

@@ -352,7 +352,7 @@ describe("TelegramAdapter", () => {
     }
   });
 
-  it("does not re-issue Telegram typing after final assistant text and backend noise", async () => {
+  it("continues Telegram typing after assistant text until terminal completion", async () => {
     vi.useFakeTimers();
     try {
       const harness = await createControllerHarness();
@@ -421,7 +421,27 @@ describe("TelegramAdapter", () => {
       } satisfies AgentEvent);
       await vi.advanceTimersByTimeAsync(10_000);
 
-      expect(harness.api.sendChatAction).toHaveBeenCalledTimes(1);
+      expect(harness.api.sendChatAction.mock.calls.length).toBeGreaterThan(1);
+
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [],
+            },
+          },
+        },
+      } satisfies AgentEvent);
+      const callsAfterCompletion = harness.api.sendChatAction.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(harness.api.sendChatAction).toHaveBeenCalledTimes(callsAfterCompletion);
     } finally {
       vi.useRealTimers();
     }

@@ -612,6 +612,63 @@ describe("DiscordAdapter", () => {
     }
   });
 
+  it("stops Discord typing renewal after an idle activity signal", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createApi();
+      const adapter = new DiscordAdapter({
+        api: api as unknown as DiscordApi,
+        config: {
+          channel: "discord",
+          botToken: "discord-token",
+          authorizedActorIds: ["42"],
+        },
+        gateway: createGateway(),
+        now: () => 1000,
+      });
+      const audit = {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "discord" as const,
+          conversation: {
+            id: "channel-1",
+            kind: "channel" as const,
+            parentId: "guild-1",
+          },
+        },
+        occurredAt: 1000,
+      };
+
+      await adapter.deliver({
+        id: "activity-1",
+        kind: "activity",
+        activity: "typing",
+        createdAt: 1000,
+        state: "active",
+        audit,
+      });
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(api.sendTyping.mock.calls.length).toBeGreaterThan(1);
+
+      await adapter.deliver({
+        id: "activity-2",
+        kind: "activity",
+        activity: "typing",
+        createdAt: 1000,
+        state: "idle",
+        audit,
+      });
+      const callsAfterIdle = api.sendTyping.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(api.sendTyping).toHaveBeenCalledTimes(callsAfterIdle);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resolves component custom IDs and acknowledges interactions", async () => {
     const harness = await createControllerHarness();
 
