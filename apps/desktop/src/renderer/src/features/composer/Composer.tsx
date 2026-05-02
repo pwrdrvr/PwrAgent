@@ -1009,24 +1009,27 @@ export function Composer(props: ComposerProps) {
       ? undefined
       : availableAutocompleteKind;
   const autocompleteKind: AutocompleteKind | undefined =
-    displayedAutocompleteKind === "slash" &&
-    parseReviewCommand(draft) &&
-    draft.trim() === "/review"
+    reviewConfig ||
+    (displayedAutocompleteKind === "slash" &&
+      parseReviewCommand(draft) &&
+      draft.trim() === "/review")
       ? undefined
       : displayedAutocompleteKind;
   const hasAutocomplete = Boolean(autocompleteKind);
   const activeAutocompleteIndex =
-    displayedAutocompleteKind === "skills" ? activeSkillIndex : activeSlashIndex;
+    autocompleteKind === "skills" ? activeSkillIndex : activeSlashIndex;
   const autocompleteLength =
-    displayedAutocompleteKind === "skills" ? filteredSkills.length : filteredSlashCommands.length;
+    autocompleteKind === "skills"
+      ? filteredSkills.length
+      : filteredSlashCommands.length;
   const autocompleteListboxId =
-    displayedAutocompleteKind === "skills"
+    autocompleteKind === "skills"
       ? skillListboxId
-      : displayedAutocompleteKind === "slash"
+      : autocompleteKind === "slash"
         ? slashListboxId
         : undefined;
   const activeAutocompleteOptionId =
-    autocompleteListboxId && displayedAutocompleteKind
+    autocompleteListboxId && autocompleteKind
       ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
       : undefined;
   const reviewBranchOptions = useMemo(
@@ -1037,6 +1040,7 @@ export function Composer(props: ComposerProps) {
     [props.directory, props.thread]
   );
   const isBareReviewCommand = draft.trim() === "/review";
+  const isReviewComposerOpen = Boolean(reviewConfig && isBareReviewCommand);
 
   useEffect(() => {
     const previousScopeKey = activeComposerScopeKeyRef.current;
@@ -1101,17 +1105,17 @@ export function Composer(props: ComposerProps) {
   }, [composerImplementation]);
 
   useEffect(() => {
-    if (!displayedAutocompleteKind) {
+    if (!autocompleteKind) {
       return;
     }
 
     autocompleteOptionRefs.current[activeAutocompleteIndex]?.scrollIntoView?.({
       block: "nearest",
     });
-  }, [activeAutocompleteIndex, displayedAutocompleteKind]);
+  }, [activeAutocompleteIndex, autocompleteKind]);
 
   useEffect(() => {
-    if (!displayedAutocompleteKind) {
+    if (!autocompleteKind) {
       return;
     }
 
@@ -1140,7 +1144,7 @@ export function Composer(props: ComposerProps) {
     return () => {
       window.removeEventListener("resize", updateAutocompleteLayout);
     };
-  }, [activeAutocompleteIndex, displayedAutocompleteKind]);
+  }, [activeAutocompleteIndex, autocompleteKind]);
 
   useEffect(() => {
     if (!trigger) {
@@ -1400,6 +1404,27 @@ export function Composer(props: ComposerProps) {
       props.onActiveTurnIdChange?.(undefined);
       setSendError(error instanceof Error ? error.message : String(error));
     }
+  };
+
+  const enterReviewComposer = (): void => {
+    setReviewConfig(
+      createReviewConfig({
+        directory: props.directory,
+        thread: props.thread,
+      })
+    );
+    updateVisibleDraft("/review");
+    setDismissedAutocompleteKey(autocompleteKey);
+    setActiveSkillIndex(0);
+    setActiveSlashIndex(0);
+    setSendError(undefined);
+  };
+
+  const exitReviewComposer = (): void => {
+    setReviewConfig(undefined);
+    clearComposerDraft();
+    setSendError(undefined);
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   const buildTurnPayload = (
@@ -1836,6 +1861,11 @@ export function Composer(props: ComposerProps) {
 
   const applySlashCommand = (command: SlashCommandSuggestion): void => {
     if (!inputRef.current) {
+      return;
+    }
+
+    if (command.id === "review-current") {
+      enterReviewComposer();
       return;
     }
 
@@ -2628,6 +2658,11 @@ export function Composer(props: ComposerProps) {
   const composerPlaceholder = isLaunchpad
     ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`
     : "Reply to this thread";
+  const composerLabel = isReviewComposerOpen
+    ? "Review"
+    : isLaunchpad
+      ? "New thread"
+      : "Reply";
   const handleComposerChange = (
     nextDraft: string,
     nextSkillTokens?: ComposerSkillToken[],
@@ -2745,8 +2780,11 @@ export function Composer(props: ComposerProps) {
         void submitTurn();
       }}
     >
-      <label className="composer__label" htmlFor="thread-composer">
-        {isLaunchpad ? "New thread" : "Reply"}
+      <label
+        className="composer__label"
+        htmlFor={isReviewComposerOpen ? undefined : "thread-composer"}
+      >
+        {composerLabel}
       </label>
 
       {pendingSteer ? (
@@ -2841,7 +2879,134 @@ export function Composer(props: ComposerProps) {
       ) : null}
 
       <div className="composer__input-wrap" ref={inputWrapRef}>
-        {composerImplementation === "custom-widget-chips" ? (
+        {isReviewComposerOpen ? (
+          <fieldset className="composer__review-config" aria-label="Review target">
+            <legend>Review target</legend>
+            <div className="composer__review-options">
+              {REVIEW_TARGET_OPTIONS.map((option) => (
+                <button
+                  key={option.target}
+                  type="button"
+                  aria-pressed={reviewConfig?.target === option.target}
+                  className={`composer__review-option${reviewConfig?.target === option.target ? " is-active" : ""}`}
+                  onClick={() => {
+                    setReviewConfig((current) => ({
+                      ...(current ??
+                        createReviewConfig({
+                          directory: props.directory,
+                          thread: props.thread,
+                        })),
+                      target: option.target,
+                    }));
+                    setSendError(undefined);
+                  }}
+                >
+                  <span>{option.label}</span>
+                  <small>{option.description}</small>
+                </button>
+              ))}
+            </div>
+
+            {reviewConfig?.target === "baseBranch" ? (
+              <label className="composer__review-field">
+                <span>Base branch</span>
+                <input
+                  className="composer__review-input"
+                  list="composer-review-branches"
+                  value={reviewConfig.branch}
+                  onChange={(event) => {
+                    setReviewConfig((current) => ({
+                      ...(current ??
+                        createReviewConfig({
+                          directory: props.directory,
+                          thread: props.thread,
+                        })),
+                      branch: event.target.value,
+                      target: "baseBranch",
+                    }));
+                    setSendError(undefined);
+                  }}
+                />
+                {reviewBranchOptions.length > 0 ? (
+                  <datalist id="composer-review-branches">
+                    {reviewBranchOptions.map((branch) => (
+                      <option key={branch} value={branch} />
+                    ))}
+                  </datalist>
+                ) : null}
+              </label>
+            ) : null}
+
+            {reviewConfig?.target === "commit" ? (
+              <label className="composer__review-field">
+                <span>Commit SHA</span>
+                <input
+                  className="composer__review-input"
+                  value={reviewConfig.commit}
+                  onChange={(event) => {
+                    setReviewConfig((current) => ({
+                      ...(current ??
+                        createReviewConfig({
+                          directory: props.directory,
+                          thread: props.thread,
+                        })),
+                      commit: event.target.value,
+                      target: "commit",
+                    }));
+                    setSendError(undefined);
+                  }}
+                />
+              </label>
+            ) : null}
+
+            {reviewConfig?.target === "custom" ? (
+              <label className="composer__review-field">
+                <span>Instructions</span>
+                <textarea
+                  className="composer__review-input composer__review-input--textarea"
+                  value={reviewConfig.customInstructions}
+                  onChange={(event) => {
+                    setReviewConfig((current) => ({
+                      ...(current ??
+                        createReviewConfig({
+                          directory: props.directory,
+                          thread: props.thread,
+                        })),
+                      customInstructions: event.target.value,
+                      target: "custom",
+                    }));
+                    setSendError(undefined);
+                  }}
+                />
+              </label>
+            ) : null}
+
+            <div className="composer__review-actions">
+              <button
+                type="button"
+                className="composer__secondary-action"
+                onClick={exitReviewComposer}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="composer__primary-action"
+                disabled={!buildConfiguredReviewCommand(reviewConfig)}
+                onClick={() => {
+                  const configuredReviewCommand =
+                    buildConfiguredReviewCommand(reviewConfig);
+                  if (!configuredReviewCommand) {
+                    return;
+                  }
+                  void submitReviewCommand(configuredReviewCommand);
+                }}
+              >
+                Start review
+              </button>
+            </div>
+          </fieldset>
+        ) : composerImplementation === "custom-widget-chips" ? (
           <ComposerRichInput
             ref={inputRef}
             id="thread-composer"
@@ -2951,7 +3116,7 @@ export function Composer(props: ComposerProps) {
           />
         )}
 
-        {displayedAutocompleteKind === "skills" ? (
+        {autocompleteKind === "skills" ? (
           <div
             className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
             role="listbox"
@@ -2995,7 +3160,7 @@ export function Composer(props: ComposerProps) {
               </button>
             ))}
           </div>
-        ) : displayedAutocompleteKind === "slash" ? (
+        ) : autocompleteKind === "slash" ? (
           <div
             className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
             role="listbox"
@@ -3043,138 +3208,6 @@ export function Composer(props: ComposerProps) {
           </div>
         ) : null}
       </div>
-
-      {reviewConfig && isBareReviewCommand ? (
-        <fieldset className="composer__review-config" aria-label="Review target">
-          <legend>Review target</legend>
-          <div className="composer__review-options">
-            {REVIEW_TARGET_OPTIONS.map((option) => (
-              <button
-                key={option.target}
-                type="button"
-                aria-pressed={reviewConfig.target === option.target}
-                className={`composer__review-option${reviewConfig.target === option.target ? " is-active" : ""}`}
-                onClick={() => {
-                  setReviewConfig((current) => ({
-                    ...(current ??
-                      createReviewConfig({
-                        directory: props.directory,
-                        thread: props.thread,
-                      })),
-                    target: option.target,
-                  }));
-                  setSendError(undefined);
-                }}
-              >
-                <span>{option.label}</span>
-                <small>{option.description}</small>
-              </button>
-            ))}
-          </div>
-
-          {reviewConfig.target === "baseBranch" ? (
-            <label className="composer__review-field">
-              <span>Base branch</span>
-              <input
-                className="composer__review-input"
-                list="composer-review-branches"
-                value={reviewConfig.branch}
-                onChange={(event) => {
-                  setReviewConfig((current) => ({
-                    ...(current ??
-                      createReviewConfig({
-                        directory: props.directory,
-                        thread: props.thread,
-                      })),
-                    branch: event.target.value,
-                    target: "baseBranch",
-                  }));
-                  setSendError(undefined);
-                }}
-              />
-              {reviewBranchOptions.length > 0 ? (
-                <datalist id="composer-review-branches">
-                  {reviewBranchOptions.map((branch) => (
-                    <option key={branch} value={branch} />
-                  ))}
-                </datalist>
-              ) : null}
-            </label>
-          ) : null}
-
-          {reviewConfig.target === "commit" ? (
-            <label className="composer__review-field">
-              <span>Commit SHA</span>
-              <input
-                className="composer__review-input"
-                value={reviewConfig.commit}
-                onChange={(event) => {
-                  setReviewConfig((current) => ({
-                    ...(current ??
-                      createReviewConfig({
-                        directory: props.directory,
-                        thread: props.thread,
-                      })),
-                    commit: event.target.value,
-                    target: "commit",
-                  }));
-                  setSendError(undefined);
-                }}
-              />
-            </label>
-          ) : null}
-
-          {reviewConfig.target === "custom" ? (
-            <label className="composer__review-field">
-              <span>Instructions</span>
-              <textarea
-                className="composer__review-input composer__review-input--textarea"
-                value={reviewConfig.customInstructions}
-                onChange={(event) => {
-                  setReviewConfig((current) => ({
-                    ...(current ??
-                      createReviewConfig({
-                        directory: props.directory,
-                        thread: props.thread,
-                      })),
-                    customInstructions: event.target.value,
-                    target: "custom",
-                  }));
-                  setSendError(undefined);
-                }}
-              />
-            </label>
-          ) : null}
-
-          <div className="composer__review-actions">
-            <button
-              type="button"
-              className="composer__secondary-action"
-              onClick={() => {
-                setReviewConfig(undefined);
-                setSendError(undefined);
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="composer__primary-action"
-              disabled={!buildConfiguredReviewCommand(reviewConfig)}
-              onClick={() => {
-                const configuredReviewCommand =
-                  buildConfiguredReviewCommand(reviewConfig);
-                if (!configuredReviewCommand) {
-                  return;
-                }
-                void submitReviewCommand(configuredReviewCommand);
-              }}
-            >
-              Start review
-            </button>
-          </div>
-        </fieldset>
-      ) : null}
 
       {imageAttachments.length > 0 ? (
         <div className="composer__attachments" aria-label="Pasted images">

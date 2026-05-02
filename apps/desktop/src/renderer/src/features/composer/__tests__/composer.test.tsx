@@ -1246,10 +1246,11 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/review" } });
 
-    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
+    expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Reply")).not.toBeInTheDocument();
     expect(startReview).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: /Base branch/i }));
@@ -1313,7 +1314,7 @@ describe("Composer", () => {
     });
   });
 
-  it("inserts slash review commands from autocomplete", async () => {
+  it("opens review composer from slash review autocomplete", async () => {
     render(
       <Composer
         desktopApi={{
@@ -1346,10 +1347,12 @@ describe("Composer", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /\/review/i }));
 
-    expect(textarea).toHaveValue("/review ");
+    expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Reply")).not.toBeInTheDocument();
   });
 
-  it("applies the focused slash command option from the keyboard", async () => {
+  it("opens review composer from the focused slash command option", async () => {
     render(
       <Composer
         desktopApi={{
@@ -1380,7 +1383,39 @@ describe("Composer", () => {
     expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    expect(textarea).toHaveValue("/review ");
+    expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Reply")).not.toBeInTheDocument();
+  });
+
+  it("returns to an empty text entry when review composer is cancelled", async () => {
+    render(
+      <Composer
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/r" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Reply")).toHaveValue("");
+    expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
   });
 
   it("shows thread access in the composer and opens workspace handoff", async () => {
