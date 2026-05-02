@@ -7,6 +7,7 @@ export type ProtocolCaptureEventRecord = {
   backend: "codex" | "grok";
   backendInstance?: string;
   captureId: string;
+  diagnostics?: ProtocolCaptureDiagnostics;
   direction: "inbound" | "outbound";
   kind: "request" | "response" | "notification";
   method?: string;
@@ -15,6 +16,11 @@ export type ProtocolCaptureEventRecord = {
   timestamp: number;
   threadIds: string[];
   raw: string;
+};
+
+export type ProtocolCaptureDiagnostics = {
+  callerReason?: string;
+  ownerId?: string;
 };
 
 export type ProtocolCaptureStringReplacement = {
@@ -116,6 +122,7 @@ export class ProtocolCaptureStore {
 
   async append(params: {
     direction: "inbound" | "outbound";
+    diagnostics?: ProtocolCaptureDiagnostics;
     raw: string;
     envelope: {
       id?: string | number | null;
@@ -129,6 +136,7 @@ export class ProtocolCaptureStore {
       backend: this.params.backend,
       backendInstance: this.params.backendInstance,
       captureId: this.params.captureId,
+      diagnostics: normalizeDiagnostics(params.diagnostics),
       direction: params.direction,
       kind: getEnvelopeKind(params.envelope),
       method: params.envelope.method?.trim() || undefined,
@@ -341,6 +349,21 @@ function parseProtocolCaptureEnvelope(
   }
 
   return parsed as ProtocolCaptureEnvelope;
+}
+
+function normalizeDiagnostics(
+  diagnostics: ProtocolCaptureDiagnostics | undefined,
+): ProtocolCaptureDiagnostics | undefined {
+  const callerReason = diagnostics?.callerReason?.trim();
+  const ownerId = diagnostics?.ownerId?.trim();
+  if (!callerReason && !ownerId) {
+    return undefined;
+  }
+
+  return {
+    ...(callerReason ? { callerReason } : {}),
+    ...(ownerId ? { ownerId } : {}),
+  };
 }
 
 function extractThreadIds(envelope: {

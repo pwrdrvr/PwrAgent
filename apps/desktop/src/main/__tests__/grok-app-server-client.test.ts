@@ -97,6 +97,97 @@ describe("GrokAppServerClient", () => {
     }
   });
 
+  it("coalesces concurrent initialize requests", async () => {
+    let initializeRequestCount = 0;
+    const server = {
+      request: async (method: string): Promise<unknown> => {
+        if (method === "initialize") {
+          initializeRequestCount += 1;
+          await Promise.resolve();
+          return {
+            serverInfo: { name: "@pwragnt/grok-app-server", version: "1.0.0" },
+            methods: ["model/list"],
+          };
+        }
+        if (method === "model/list") {
+          return {
+            data: [
+              {
+                id: "grok-custom-reasoning",
+                label: "Grok Custom Reasoning",
+              },
+            ],
+          };
+        }
+        throw new Error(`Unexpected request ${method}`);
+      },
+      onNotification: () => () => undefined,
+    };
+    const client = new GrokAppServerClient({ server });
+
+    const [initialize, models, initializeAgain] = await Promise.all([
+      client.getInitializeResult(),
+      client.listModels(),
+      client.getInitializeResult(),
+    ]);
+
+    expect(initializeRequestCount).toBe(1);
+    expect(initialize.serverInfo?.name).toBe("@pwragnt/grok-app-server");
+    expect(initializeAgain.serverInfo?.name).toBe("@pwragnt/grok-app-server");
+    expect(models).toMatchObject([
+      {
+        id: "grok-custom-reasoning",
+        label: "Grok Custom Reasoning",
+      },
+    ]);
+
+    await client.close();
+  });
+
+  it("retries initialization when the initialized notification fails", async () => {
+    let initializeRequestCount = 0;
+    let initializedNotificationCount = 0;
+    let threadListRequestCount = 0;
+    const server = {
+      request: async (method: string): Promise<unknown> => {
+        if (method === "initialize") {
+          initializeRequestCount += 1;
+          return {
+            serverInfo: { name: "@pwragnt/grok-app-server", version: "1.0.0" },
+            methods: ["thread/list"],
+          };
+        }
+        if (method === "thread/list") {
+          threadListRequestCount += 1;
+          return { threads: [] };
+        }
+        throw new Error(`Unexpected request ${method}`);
+      },
+      notify: async (method: string): Promise<void> => {
+        if (method !== "initialized") {
+          return;
+        }
+        initializedNotificationCount += 1;
+        if (initializedNotificationCount === 1) {
+          throw new Error("initialized notification failed");
+        }
+      },
+      onNotification: () => () => undefined,
+    };
+    const client = new GrokAppServerClient({ server });
+
+    await expect(client.getInitializeResult()).rejects.toThrow(
+      "initialized notification failed",
+    );
+    await expect(client.listThreads()).resolves.toEqual([]);
+
+    expect(initializeRequestCount).toBe(2);
+    expect(initializedNotificationCount).toBe(2);
+    expect(threadListRequestCount).toBe(1);
+
+    await client.close();
+  });
+
   it("lists threads, reads replay, and forwards turn notifications", async () => {
     const provider = new FakeProvider();
     const server = new CodexAppServer({

@@ -27,7 +27,10 @@ import type {
   BackendModelOption,
   LinkedDirectorySummary,
 } from "@pwragnt/shared";
-import type { JsonRpcObserver } from "../codex-app-server/json-rpc";
+import type {
+  JsonRpcObserver,
+  JsonRpcObserverDiagnostics,
+} from "../codex-app-server/json-rpc";
 import { summarizeToolActivityItems } from "../app-server/thread-activity";
 import { getMainLogger } from "../log";
 import {
@@ -744,6 +747,7 @@ export class GrokAppServerClient {
   private requestCounter = 0;
   private server: GrokServerLike | null;
   private initialized = false;
+  private initializePromise?: Promise<void>;
   private initializeResult: InitializeResult | null = null;
   private readonly notificationListeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
@@ -776,6 +780,7 @@ export class GrokAppServerClient {
     this.unsubscribeRequest?.();
     this.unsubscribeRequest = undefined;
     this.initialized = false;
+    this.initializePromise = undefined;
     this.initializeResult = null;
   }
 
@@ -807,13 +812,13 @@ export class GrokAppServerClient {
   async listThreads(params?: {
     archived?: boolean;
     filter?: string;
-  }): Promise<AppServerThreadSummary[]> {
+  }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
     const result = await this.request("thread/list", {
       archived: params?.archived === true,
       filter: params?.filter,
-    });
+    }, diagnostics);
     return await Promise.all(
       extractThreadSummaryList(result).map(async (thread) => {
         const normalized = normalizeThreadSummary(thread);
@@ -851,10 +856,12 @@ export class GrokAppServerClient {
     return extractSkillsList(result);
   }
 
-  async listModels(): Promise<BackendModelOption[]> {
+  async listModels(
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<BackendModelOption[]> {
     await this.ensureInitialized();
 
-    const result = await this.request("model/list", {});
+    const result = await this.request("model/list", {}, diagnostics);
     return extractModelOptions(result);
   }
 
@@ -1034,15 +1041,24 @@ export class GrokAppServerClient {
       return;
     }
 
-    const result = await this.request("initialize", {
-      protocolVersion: DEFAULT_PROTOCOL_VERSION,
-      clientInfo: { name: "pwragnt-desktop", version: "0.1.0" },
-      capabilities: { experimentalApi: true },
+    this.initializePromise ??= (async () => {
+      const result = await this.request("initialize", {
+        protocolVersion: DEFAULT_PROTOCOL_VERSION,
+        clientInfo: { name: "pwragnt-desktop", version: "0.1.0" },
+        capabilities: { experimentalApi: true },
+      });
+
+      await this.notify("initialized", {});
+      this.initializeResult = (result ?? {}) as InitializeResult;
+      this.initialized = true;
+    })().catch((error) => {
+      this.initialized = false;
+      this.initializeResult = null;
+      this.initializePromise = undefined;
+      throw error;
     });
 
-    this.initializeResult = (result ?? {}) as InitializeResult;
-    await this.notify("initialized", {});
-    this.initialized = true;
+    await this.initializePromise;
   }
 
   private getServer(): GrokServerLike {
@@ -1151,12 +1167,17 @@ export class GrokAppServerClient {
     });
   }
 
-  private async request(method: string, params?: unknown): Promise<unknown> {
+  private async request(
+    method: string,
+    params?: unknown,
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<unknown> {
     const id = `rpc-${++this.requestCounter}`;
     const server = this.getServer();
 
     await this.observe({
       direction: "outbound",
+      diagnostics,
       envelope: {
         jsonrpc: "2.0",
         id,
@@ -1169,6 +1190,7 @@ export class GrokAppServerClient {
       const result = await server.request(method, params);
       await this.observe({
         direction: "inbound",
+        diagnostics,
         envelope: {
           jsonrpc: "2.0",
           id,
@@ -1179,6 +1201,7 @@ export class GrokAppServerClient {
     } catch (error) {
       await this.observe({
         direction: "inbound",
+        diagnostics,
         envelope: {
           jsonrpc: "2.0",
           id,
@@ -1208,6 +1231,7 @@ export class GrokAppServerClient {
 
   private async observe(params: {
     direction: "inbound" | "outbound";
+    diagnostics?: JsonRpcObserverDiagnostics;
     envelope: {
       jsonrpc: "2.0";
       id?: string;
@@ -1229,6 +1253,7 @@ export class GrokAppServerClient {
         direction: params.direction,
         raw: JSON.stringify(params.envelope),
         envelope: params.envelope,
+        diagnostics: params.diagnostics,
       });
     } catch (error) {
       grokClientLog.error("observer failed", {

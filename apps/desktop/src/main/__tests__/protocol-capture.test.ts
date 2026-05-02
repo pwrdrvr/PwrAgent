@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ProtocolCaptureStore, readProtocolCaptureFile } from "../testing/capture-store";
+import { analyzeProtocolCaptureTraffic } from "../testing/protocol-capture-analysis";
 import { createProtocolCaptureObserver, createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 
 async function createTempDir(): Promise<string> {
@@ -94,6 +95,49 @@ describe("ProtocolCaptureStore", () => {
       await fs.readFile(path.join(rootDir, "index.json"), "utf8")
     ) as Record<string, { threadIds: string[] }>;
     expect(index["capture-1"]?.threadIds).toEqual(["thread-1"]);
+  });
+
+  it("captures optional diagnostics without changing the raw JSON-RPC envelope", async () => {
+    const rootDir = await createTempDir();
+    cleanupPaths.push(rootDir);
+    const store = new ProtocolCaptureStore({
+      backend: "grok",
+      captureId: "diagnostic-capture",
+      rootDir
+    });
+    const observer = createProtocolCaptureObserver({
+      backend: "grok",
+      store
+    });
+
+    await observer.onMessage({
+      direction: "outbound",
+      diagnostics: {
+        callerReason: "backend-summary",
+        ownerId: "model-catalog-1",
+      },
+      raw: '{"jsonrpc":"2.0","id":"rpc-1","method":"model/list","params":{}}',
+      envelope: {
+        jsonrpc: "2.0",
+        id: "rpc-1",
+        method: "model/list",
+        params: {},
+      }
+    });
+    await store.close();
+
+    const [line] = (await fs.readFile(
+      path.join(rootDir, "diagnostic-capture.jsonl"),
+      "utf8",
+    )).trim().split("\n").map((entry) => JSON.parse(entry) as Record<string, unknown>);
+
+    expect(line).toMatchObject({
+      diagnostics: {
+        callerReason: "backend-summary",
+        ownerId: "model-catalog-1",
+      },
+      raw: '{"jsonrpc":"2.0","id":"rpc-1","method":"model/list","params":{}}',
+    });
   });
 
   it("creates an env-backed capture session only when recording is enabled", async () => {
@@ -270,5 +314,96 @@ describe("ProtocolCaptureStore", () => {
         }),
       }),
     ]);
+  });
+
+  it("analyzes method counts separately and skips malformed capture rows", async () => {
+    const rootDir = await createTempDir();
+    cleanupPaths.push(rootDir);
+    const capturePath = path.join(rootDir, "startup.jsonl");
+
+    await fs.writeFile(
+      capturePath,
+      [
+        JSON.stringify({
+          backend: "grok",
+          backendInstance: "default",
+          captureId: "startup-grok",
+          diagnostics: {
+            callerReason: "backend-summary",
+            ownerId: "model-catalog-1",
+          },
+          direction: "outbound",
+          kind: "request",
+          method: "initialize",
+          id: "rpc-1",
+          sequence: 1,
+          timestamp: 100,
+          threadIds: [],
+          raw: '{"jsonrpc":"2.0","id":"rpc-1","method":"initialize","params":{}}',
+        }),
+        JSON.stringify({
+          backend: "grok",
+          backendInstance: "default",
+          captureId: "startup-grok",
+          diagnostics: {
+            callerReason: "backend-summary",
+            ownerId: "model-catalog-1",
+          },
+          direction: "outbound",
+          kind: "request",
+          method: "model/list",
+          id: "rpc-2",
+          sequence: 2,
+          timestamp: 120,
+          threadIds: [],
+          raw: '{"jsonrpc":"2.0","id":"rpc-2","method":"model/list","params":{}}',
+        }),
+        JSON.stringify({
+          backend: "grok",
+          backendInstance: "default",
+          captureId: "startup-grok",
+          direction: "outbound",
+          kind: "request",
+          method: "thread/list",
+          id: "rpc-3",
+          sequence: 3,
+          timestamp: 140,
+          threadIds: [],
+          raw: '{"jsonrpc":"2.0","id":"rpc-3","method":"thread/list","params":{}}',
+        }),
+        "{malformed",
+        JSON.stringify({
+          backend: "grok",
+          backendInstance: "default",
+          captureId: "startup-grok",
+          direction: "outbound",
+          kind: "request",
+          method: "thread/list",
+          id: "rpc-4",
+          sequence: 4,
+          timestamp: 150,
+          threadIds: [],
+          raw: '{"jsonrpc":"2.0","id":"rpc-4","method":"thread/list","params":{}}',
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    const analysis = await analyzeProtocolCaptureTraffic({ capturePath });
+
+    expect(analysis.malformedRecordCount).toBe(1);
+    expect(analysis.backendInstances).toEqual(["grok:default"]);
+    expect(analysis.summaries.grok?.requestCounts).toMatchObject({
+      initialize: 1,
+      "model/list": 1,
+      "thread/list": 2,
+    });
+    expect(analysis.summaries.grok?.requests["model/list"]).toMatchObject({
+      count: 1,
+      callerReasons: ["backend-summary"],
+      ownerIds: ["model-catalog-1"],
+      firstAt: 120,
+      lastAt: 120,
+    });
   });
 });

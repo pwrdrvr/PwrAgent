@@ -89,6 +89,10 @@ import {
 } from "./thread-title-generation-service";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import {
+  BackendModelCatalog,
+  type BackendModelCatalogCallerReason,
+} from "./backend-model-catalog";
 
 type InitializeResult = {
   serverInfo?: {
@@ -100,6 +104,7 @@ type InitializeResult = {
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const REPLAY_THREAD_TITLE_ENV = "PWRAGNT_REPLAY_THREAD_TITLE";
+const THREAD_LIST_REUSE_WINDOW_MS = 750;
 const backendRegistryLog = getMainLogger("pwragnt:backend-registry");
 const execFile = promisify(execFileCallback);
 
@@ -114,7 +119,10 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
 type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
-  listThreads(params?: { archived?: boolean; filter?: string }): Promise<AppServerThreadSummary[]>;
+  listThreads(
+    params?: { archived?: boolean; filter?: string },
+    diagnostics?: { callerReason?: string; ownerId?: string },
+  ): Promise<AppServerThreadSummary[]>;
   archiveThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   restoreThread?(params: { threadId: string }): Promise<{ threadId: string }>;
   renameThread?(params: { threadId: string; name: string }): Promise<{ threadId: string }>;
@@ -169,7 +177,10 @@ type BackendClient = {
     target: StartReviewRequest["target"];
     delivery?: StartReviewRequest["delivery"];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }>;
-  listModels?(): Promise<BackendModelOption[]>;
+  listModels?(diagnostics?: {
+    callerReason?: string;
+    ownerId?: string;
+  }): Promise<BackendModelOption[]>;
   readAccount?(): Promise<BackendAccountSummary>;
   readRateLimits?(): Promise<BackendRateLimitSummary[]>;
   interruptTurn(params: {
@@ -649,6 +660,24 @@ type ModelSettings = {
   fastMode?: boolean;
 };
 
+type ThreadListCallerReason =
+  | "archive-cleanup"
+  | "branch-drift"
+  | "ipc-list-threads"
+  | "messaging-navigation-snapshot"
+  | "navigation-snapshot"
+  | "title-generation"
+  | "workspace-handoff"
+  | (string & {});
+
+type ThreadListCacheState = {
+  expiresAt?: number;
+  promise?: Promise<AppServerThreadSummary[]>;
+  threads?: AppServerThreadSummary[];
+};
+
+let threadListCacheSequence = 0;
+
 function isEmptyDirectoryLaunchpadDraft(launchpad: NavigationLaunchpadDraft): boolean {
   return (
     launchpad.prompt.trim().length === 0 &&
@@ -868,8 +897,9 @@ export class DesktopBackendRegistry {
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly createScratchProjectDirectory: () => Promise<string>;
   private readonly threadTitleGenerationService?: ThreadTitleService;
-  private codexDefaultModels?: BackendModelOption[];
-  private codexDefaultModelsPromise?: Promise<BackendModelOption[]>;
+  private readonly modelCatalog: BackendModelCatalog;
+  private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
+  private readonly threadListCache = new Map<string, ThreadListCacheState>();
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
@@ -1017,8 +1047,10 @@ export class DesktopBackendRegistry {
                     : undefined,
                 },
               }));
-
-    void this.readCodexDefaultModelsOnce().catch(() => undefined);
+    this.modelCatalog = new BackendModelCatalog({
+      codex: this.codexDefaultClient,
+      grok: this.grokClient,
+    });
 
     this.subscribeClient("codex", this.codexDefaultClient);
     this.subscribeClient("codex", this.codexFullAccessClient);
@@ -1051,29 +1083,80 @@ export class DesktopBackendRegistry {
   async listThreads(params: {
     archived?: boolean;
     backend?: AppServerBackendKind;
+    callerReason?: ThreadListCallerReason;
     filter?: string;
   } = {}): Promise<AppServerThreadSummary[]> {
+    const cacheKey = this.buildThreadListCacheKey(params);
+    const cached = this.threadListCache.get(cacheKey);
+    const now = Date.now();
+    if (cached?.threads && (cached.expiresAt ?? 0) > now) {
+      logDebug("threadListCache:hit", {
+        backend: params.backend ?? "all",
+        callerReason: params.callerReason ?? null,
+        ownerId: this.threadListCacheOwnerId,
+      });
+      return cached.threads;
+    }
+    if (cached?.promise) {
+      logDebug("threadListCache:coalesced", {
+        backend: params.backend ?? "all",
+        callerReason: params.callerReason ?? null,
+        ownerId: this.threadListCacheOwnerId,
+      });
+      return await cached.promise;
+    }
+
+    const promise = this.readThreadList(params)
+      .then((threads) => {
+        this.threadListCache.set(cacheKey, {
+          expiresAt: Date.now() + THREAD_LIST_REUSE_WINDOW_MS,
+          threads,
+        });
+        return threads;
+      })
+      .catch((error) => {
+        this.threadListCache.delete(cacheKey);
+        throw error;
+      });
+    this.threadListCache.set(cacheKey, { promise });
+    return await promise;
+  }
+
+  private async readThreadList(params: {
+    archived?: boolean;
+    backend?: AppServerBackendKind;
+    callerReason?: ThreadListCallerReason;
+    filter?: string;
+  }): Promise<AppServerThreadSummary[]> {
+    const diagnostics = {
+      callerReason: params.callerReason ?? "thread-list",
+      ownerId: this.threadListCacheOwnerId,
+    };
     if (params.backend === "codex") {
       return await this.listCodexThreads({
         archived: params.archived,
         filter: params.filter,
-      });
+      }, diagnostics);
     }
 
     if (params.backend === "grok") {
       return await this.grokClient.listThreads({
         archived: params.archived,
         filter: params.filter,
-      });
+      }, diagnostics);
     }
 
     const threadLists = await Promise.all([
-      this.listCodexThreads({
+      this.listThreads({
+        backend: "codex",
         archived: params.archived,
+        callerReason: params.callerReason,
         filter: params.filter,
       }),
-      this.grokClient.listThreads({
+      this.listThreads({
+        backend: "grok",
         archived: params.archived,
+        callerReason: params.callerReason,
         filter: params.filter,
       }).catch(() => []),
     ]);
@@ -1111,6 +1194,7 @@ export class DesktopBackendRegistry {
             await this.archiveWithClient(client, request.threadId),
           )
         : await this.archiveWithClient(this.grokClient, request.threadId);
+    this.invalidateThreadListCache(backend);
     const cleanup = thread
       ? await this.archiveThreadWorktrees({
           backend,
@@ -1136,6 +1220,7 @@ export class DesktopBackendRegistry {
             await this.restoreWithClient(client, request.threadId),
           )
         : await this.restoreWithClient(this.grokClient, request.threadId);
+    this.invalidateThreadListCache(backend);
 
     return {
       backend,
@@ -1257,6 +1342,7 @@ export class DesktopBackendRegistry {
             await this.renameWithClient(client, request.threadId, request.name),
           )
         : await this.renameWithClient(this.grokClient, request.threadId, request.name);
+    this.invalidateThreadListCache(backend);
 
     return {
       backend,
@@ -1325,6 +1411,7 @@ export class DesktopBackendRegistry {
       approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
       sandbox: request.sandbox ?? modeSettings.sandbox,
     });
+    this.invalidateThreadListCache(backend);
 
     if (backend === "codex") {
       await this.overlayStore.setThreadExecutionMode({
@@ -1598,7 +1685,11 @@ export class DesktopBackendRegistry {
   async setThreadModelSettings(
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
-    const modelSettings = await this.resolveModelSettings(params.backend, params);
+    const modelSettings = await this.resolveModelSettings(
+      params.backend,
+      params,
+      "settings-refresh",
+    );
     await this.overlayStore.setThreadModelSettings({
       backend: params.backend,
       threadId: params.threadId,
@@ -1621,6 +1712,7 @@ export class DesktopBackendRegistry {
     });
     const thread = await this.findThreadForWorkspaceHandoff({
       backend: params.backend,
+      callerReason: "branch-drift",
       threadId: params.threadId,
     });
     const expectedBranch = resolveExpectedThreadBranch({
@@ -2006,10 +2098,11 @@ export class DesktopBackendRegistry {
   private async resolveModelSettings(
     backend: AppServerBackendKind,
     settings: ModelSettings,
+    callerReason: BackendModelCatalogCallerReason = "thread-start-defaults",
   ): Promise<ModelSettings> {
     return resolveModelSettingsFromOptions(
       backend,
-      await this.getBackendLaunchpadOptions(backend),
+      await this.getBackendLaunchpadOptions(backend, callerReason),
       settings,
     );
   }
@@ -2036,9 +2129,13 @@ export class DesktopBackendRegistry {
     backend: BackendSummary,
     settings: ModelSettings,
   ): Promise<ModelSettings> {
+    const launchpadOptions =
+      backend.launchpadOptions ??
+      (await this.getBackendLaunchpadOptions(backend.kind, "launchpad-defaults"));
+
     return resolveModelSettingsFromOptions(
       backend.kind,
-      backend.launchpadOptions,
+      launchpadOptions,
       settings,
     );
   }
@@ -2071,42 +2168,38 @@ export class DesktopBackendRegistry {
     return await this.overlayStore.setLaunchpadDefaults(resolvedDefaults);
   }
 
-  private readCodexDefaultModelsOnce(): Promise<BackendModelOption[]> {
-    if (this.codexDefaultModels) {
-      return Promise.resolve(this.codexDefaultModels);
-    }
+  private readCodexDefaultModelsOnce(
+    callerReason: BackendModelCatalogCallerReason,
+  ): Promise<BackendModelOption[]> {
+    return this.modelCatalog.readModels("codex", callerReason);
+  }
 
-    this.codexDefaultModelsPromise ??= readClientModels(this.codexDefaultClient)
-      .then((models) => {
-        this.codexDefaultModels = models;
-        return models;
-      })
-      .catch((error) => {
-        this.codexDefaultModelsPromise = undefined;
-        throw error;
-      });
-
-    return this.codexDefaultModelsPromise;
+  private readGrokDefaultModelsOnce(
+    callerReason: BackendModelCatalogCallerReason,
+  ): Promise<BackendModelOption[]> {
+    return this.modelCatalog.readModels("grok", callerReason);
   }
 
   private async getBackendLaunchpadOptions(
     backend: AppServerBackendKind,
+    callerReason: BackendModelCatalogCallerReason,
   ): Promise<BackendLaunchpadOptions | undefined> {
     if (backend === "codex") {
-      const models = await this.readCodexDefaultModelsOnce().catch(() => []);
+      const models = await this.readCodexDefaultModelsOnce(callerReason).catch(() => []);
       return buildLaunchpadOptions(backend, models);
     }
 
-    return buildLaunchpadOptions(
-      backend,
-      await readClientModels(this.grokClient).catch(() => []),
-    );
+    const models = await this.readGrokDefaultModelsOnce(callerReason).catch(() => []);
+    return buildLaunchpadOptions(backend, models);
   }
 
   private subscribeClient(backend: AppServerBackendKind, client: BackendClient): void {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
+        if (this.shouldInvalidateThreadListCacheForNotification(notification.method)) {
+          this.invalidateThreadListCache(backend);
+        }
         await this.emit({ backend, notification });
       }),
     );
@@ -2131,11 +2224,52 @@ export class DesktopBackendRegistry {
       : this.codexDefaultClient;
   }
 
+  private buildThreadListCacheKey(params: {
+    archived?: boolean;
+    backend?: AppServerBackendKind;
+    filter?: string;
+  }): string {
+    return JSON.stringify({
+      archived: params.archived === true,
+      backend: params.backend ?? "all",
+      filter: params.filter?.trim() ?? "",
+    });
+  }
+
+  private invalidateThreadListCache(backend?: AppServerBackendKind): void {
+    if (!backend) {
+      this.threadListCache.clear();
+      return;
+    }
+
+    for (const key of this.threadListCache.keys()) {
+      if (key.includes(`"backend":"${backend}"`) || key.includes('"backend":"all"')) {
+        this.threadListCache.delete(key);
+      }
+    }
+  }
+
+  private shouldInvalidateThreadListCacheForNotification(method: string): boolean {
+    return (
+      method === "thread/archived" ||
+      method === "thread/name/updated" ||
+      method === "thread/started" ||
+      method === "thread/unarchived" ||
+      method === "turn/completed" ||
+      method === "turn/failed"
+    );
+  }
+
   private async listCodexThreads(params: {
     archived?: boolean;
     filter?: string;
-  } = {}): Promise<AppServerThreadSummary[]> {
-    const defaultThreads = await this.codexDefaultClient.listThreads(params).catch(() => []);
+  } = {}, diagnostics?: {
+    callerReason?: string;
+    ownerId?: string;
+  }): Promise<AppServerThreadSummary[]> {
+    const defaultThreads = await this.codexDefaultClient
+      .listThreads(params, diagnostics)
+      .catch(() => []);
     const allThreads = defaultThreads.map((thread) => ({
       ...thread,
       executionMode: "default" as const,
@@ -2167,7 +2301,7 @@ export class DesktopBackendRegistry {
     ] = await Promise.allSettled([
       this.codexDefaultClient.getInitializeResult(),
       this.codexFullAccessClient.getInitializeResult(),
-      this.readCodexDefaultModelsOnce(),
+      this.readCodexDefaultModelsOnce("backend-summary"),
       readClientAccount(this.codexDefaultClient),
       readClientRateLimits(this.codexDefaultClient),
     ]);
@@ -2243,7 +2377,10 @@ export class DesktopBackendRegistry {
   ): Promise<BackendSummary> {
     try {
       const initialize = await client.getInitializeResult();
-      const models = await readClientModels(client).catch(() => []);
+      const models =
+        kind === "grok"
+          ? await this.readGrokDefaultModelsOnce("backend-summary").catch(() => [])
+          : await readClientModels(client).catch(() => []);
       const methods = Array.isArray(initialize.methods)
         ? initialize.methods.filter((method): method is string => typeof method === "string")
         : [];
@@ -2355,12 +2492,14 @@ export class DesktopBackendRegistry {
     const activeThreads = await this.listThreads({
       backend: params.backend,
       archived: false,
+      callerReason: "archive-cleanup",
     }).catch(() => []);
     const archivedThreads = activeThreads.some((thread) => thread.id === params.threadId)
       ? []
       : await this.listThreads({
           backend: params.backend,
           archived: true,
+          callerReason: "archive-cleanup",
         }).catch(() => []);
 
     return [...activeThreads, ...archivedThreads].find(
@@ -2370,11 +2509,13 @@ export class DesktopBackendRegistry {
 
   private async findThreadForWorkspaceHandoff(params: {
     backend: AppServerBackendKind;
+    callerReason?: ThreadListCallerReason;
     threadId: string;
   }): Promise<AppServerThreadSummary | undefined> {
     return await this.listThreads({
       backend: params.backend,
       archived: false,
+      callerReason: params.callerReason ?? "workspace-handoff",
     })
       .then((threads) => threads.find((thread) => thread.id === params.threadId))
       .catch(() => undefined);
@@ -2601,6 +2742,7 @@ export class DesktopBackendRegistry {
     try {
       const currentThread = await this.findThreadForTitleGeneration({
         backend: params.backend,
+        callerReason: "title-generation",
         threadId: params.threadId,
       });
       if (!isEligibleForGeneratedTitle(currentThread, params.prompt)) {
@@ -2643,6 +2785,7 @@ export class DesktopBackendRegistry {
 
       const latestThread = await this.findThreadForTitleGeneration({
         backend: params.backend,
+        callerReason: "title-generation",
         threadId: params.threadId,
       });
       if (latestThread && !isEligibleForGeneratedTitle(latestThread, params.prompt)) {
@@ -2681,11 +2824,13 @@ export class DesktopBackendRegistry {
 
   private async findThreadForTitleGeneration(params: {
     backend: AppServerBackendKind;
+    callerReason?: ThreadListCallerReason;
     threadId: string;
   }): Promise<AppServerThreadSummary | undefined> {
     const activeThreads = await this.listThreads({
       backend: params.backend,
       archived: false,
+      callerReason: params.callerReason ?? "title-generation",
     }).catch(() => []);
     return activeThreads.find((thread) => thread.id === params.threadId);
   }

@@ -90,9 +90,22 @@ function directoryStatusesEqual(
   });
 }
 
+function getNavigationSnapshotRequestKey(
+  request: GetNavigationSnapshotRequest,
+): string {
+  return JSON.stringify({
+    backend: request.backend ?? "all",
+    filter: request.filter ?? "",
+  });
+}
+
 class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
   private focusedDiffServiceApiKey: string | undefined;
+  private readonly pendingNavigationSnapshots = new Map<
+    string,
+    Promise<NavigationSnapshot>
+  >();
   private readonly previousDirectoriesByBackend = new Map<
     AppServerBackendScope,
     NavigationSnapshot["directories"]
@@ -105,6 +118,7 @@ class DesktopAppServerService {
     const threads = await getDesktopBackendRegistry().listThreads({
       backend,
       archived: request.archived,
+      callerReason: "ipc-list-threads",
       filter: request.filter,
     });
 
@@ -271,9 +285,33 @@ class DesktopAppServerService {
   async getNavigationSnapshot(
     request: GetNavigationSnapshotRequest = {},
   ): Promise<NavigationSnapshot> {
+    const requestKey = getNavigationSnapshotRequestKey(request);
+    const pending = this.pendingNavigationSnapshots.get(requestKey);
+    if (pending) {
+      logDebug("getNavigationSnapshot:coalesced", {
+        backend: request.backend ?? "all",
+        filter: request.filter ?? null,
+      });
+      return await pending;
+    }
+
+    const promise = this.readNavigationSnapshot(request).finally(() => {
+      if (this.pendingNavigationSnapshots.get(requestKey) === promise) {
+        this.pendingNavigationSnapshots.delete(requestKey);
+      }
+    });
+    this.pendingNavigationSnapshots.set(requestKey, promise);
+
+    return await promise;
+  }
+
+  private async readNavigationSnapshot(
+    request: GetNavigationSnapshotRequest,
+  ): Promise<NavigationSnapshot> {
     const backend: AppServerBackendScope = request.backend ?? "all";
     const threads = await getDesktopBackendRegistry().listThreads({
       backend: backend === "all" ? undefined : backend,
+      callerReason: "navigation-snapshot",
       filter: request.filter,
     });
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({

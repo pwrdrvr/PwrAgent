@@ -15,6 +15,7 @@ export function createProtocolCaptureObserver(params: {
     onMessage: async (event) => {
       await params.store.append({
         direction: event.direction,
+        diagnostics: event.diagnostics,
         raw: event.raw,
         envelope: event.envelope
       });

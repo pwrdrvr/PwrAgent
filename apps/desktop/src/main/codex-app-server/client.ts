@@ -64,6 +64,7 @@ import {
   JsonRpcConnection,
   type JsonRpcId,
   type JsonRpcObserver,
+  type JsonRpcObserverDiagnostics,
 } from "./json-rpc";
 import {
   createThreadDirectoryEnricher,
@@ -77,6 +78,7 @@ import type {
 } from "../app-server/thread-title-generation-service";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
 const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.4-mini";
 const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
@@ -3204,6 +3206,7 @@ function buildThreadReadPayload(params: {
 
 async function requestWithFallbacks(params: {
   client: JsonRpcConnection;
+  diagnostics?: JsonRpcObserverDiagnostics;
   methods: Array<CodexClientRequestMethod | (string & {})>;
   payloads: unknown[];
   timeoutMs: number;
@@ -3213,7 +3216,12 @@ async function requestWithFallbacks(params: {
   for (const method of params.methods) {
     for (const payload of params.payloads) {
       try {
-        return await params.client.request(method, payload, params.timeoutMs);
+        return await params.client.request(
+          method,
+          payload,
+          params.timeoutMs,
+          params.diagnostics,
+        );
       } catch (error) {
         lastError = error;
         if (!isMethodUnavailableError(error, method)) {
@@ -3249,6 +3257,7 @@ export class CodexAppServerClient {
     string,
     Promise<RawCodexThreadSummary[]>
   >();
+  private readonly archivedThreadMetadataLastRefreshByFilter = new Map<string, number>();
   private initialized = false;
   private initializationPromise: Promise<void> | null = null;
   private initializeResult: InitializeResult | null = null;
@@ -3568,11 +3577,12 @@ export class CodexAppServerClient {
   async listThreads(params?: {
     archived?: boolean;
     filter?: string;
-  }): Promise<AppServerThreadSummary[]> {
+  }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
     await this.ensureInitialized();
 
     const requestParams = {
       client: this.connection,
+      diagnostics,
       methods: ["thread/list"] as CodexClientRequestMethod[],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     };
@@ -3592,7 +3602,7 @@ export class CodexAppServerClient {
       activeThreads: extractThreadsFromValue(activeResult),
       archivedThreads: this.getCachedArchivedThreadMetadata(params?.filter),
     });
-    this.scheduleArchivedThreadMetadataRefresh(params?.filter);
+    this.scheduleArchivedThreadMetadataRefresh(params?.filter, diagnostics);
 
     return await this.enrichThreads(threads);
   }
@@ -3601,9 +3611,23 @@ export class CodexAppServerClient {
     return this.archivedThreadMetadataByFilter.get(buildThreadMetadataCacheKey(filter)) ?? [];
   }
 
-  private scheduleArchivedThreadMetadataRefresh(filter?: string): void {
+  private scheduleArchivedThreadMetadataRefresh(
+    filter?: string,
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): void {
+    const cacheKey = buildThreadMetadataCacheKey(filter);
+    const lastRefreshAt = this.archivedThreadMetadataLastRefreshByFilter.get(cacheKey) ?? 0;
+    const hasCachedMetadata = this.archivedThreadMetadataByFilter.has(cacheKey);
+    if (
+      this.archivedThreadMetadataInFlightByFilter.has(cacheKey) ||
+      (hasCachedMetadata &&
+        Date.now() - lastRefreshAt < ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS)
+    ) {
+      return;
+    }
+
     setTimeout(() => {
-      void this.refreshArchivedThreadMetadata(filter).catch((error) => {
+      void this.refreshArchivedThreadMetadata(filter, diagnostics).catch((error) => {
         codexClientLog.warn("archived thread metadata refresh failed", {
           error: error instanceof Error ? error.message : String(error),
           filter: filter?.trim() || null,
@@ -3614,6 +3638,7 @@ export class CodexAppServerClient {
 
   private async refreshArchivedThreadMetadata(
     filter?: string,
+    diagnostics?: JsonRpcObserverDiagnostics,
   ): Promise<RawCodexThreadSummary[]> {
     const cacheKey = buildThreadMetadataCacheKey(filter);
     const inFlight = this.archivedThreadMetadataInFlightByFilter.get(cacheKey);
@@ -3623,6 +3648,12 @@ export class CodexAppServerClient {
 
     const requestPromise = requestWithFallbacks({
       client: this.connection,
+      diagnostics: diagnostics
+        ? {
+            ...diagnostics,
+            callerReason: `${diagnostics.callerReason ?? "thread-list"}:archived-metadata`,
+          }
+        : undefined,
       methods: ["thread/list"] as CodexClientRequestMethod[],
       payloads: buildThreadDiscoveryPayloads(filter, true),
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -3630,6 +3661,7 @@ export class CodexAppServerClient {
       .then((result) => {
         const threads = extractThreadsFromValue(result);
         this.archivedThreadMetadataByFilter.set(cacheKey, threads);
+        this.archivedThreadMetadataLastRefreshByFilter.set(cacheKey, Date.now());
         return threads;
       })
       .finally(() => {
@@ -3688,12 +3720,15 @@ export class CodexAppServerClient {
     return extractSkillCatalog(result);
   }
 
-  async listModels(): Promise<BackendModelOption[]> {
+  async listModels(
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<BackendModelOption[]> {
     await this.ensureInitialized();
 
     const payload: CodexModelListParams = {};
     const result = await requestWithFallbacks({
       client: this.connection,
+      diagnostics,
       methods: ["model/list"],
       payloads: [payload],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS

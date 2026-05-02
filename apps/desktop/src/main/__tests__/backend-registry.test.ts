@@ -340,6 +340,14 @@ class MockBackendClient {
   listThreadsCallCount = 0;
   listModelsCallCount = 0;
   steerTurnCallCount = 0;
+  lastListModelsDiagnostics?: {
+    callerReason?: string;
+    ownerId?: string;
+  };
+  lastListThreadsDiagnostics?: {
+    callerReason?: string;
+    ownerId?: string;
+  };
   lastListThreadsParams?: {
     filter?: string;
   };
@@ -387,8 +395,9 @@ class MockBackendClient {
   async listThreads(params?: {
     archived?: boolean;
     filter?: string;
-  }): Promise<AppServerThreadSummary[]> {
+  }, diagnostics?: { callerReason?: string; ownerId?: string }): Promise<AppServerThreadSummary[]> {
     this.listThreadsCallCount += 1;
+    this.lastListThreadsDiagnostics = diagnostics;
     this.lastListThreadsParams = params;
     return this.options.threads ?? [];
   }
@@ -424,8 +433,9 @@ class MockBackendClient {
     return this.options.skills ?? [];
   }
 
-  async listModels() {
+  async listModels(diagnostics?: { callerReason?: string; ownerId?: string }) {
     this.listModelsCallCount += 1;
+    this.lastListModelsDiagnostics = diagnostics;
     const error = this.options.modelListErrors?.shift();
     if (error) {
       throw error;
@@ -795,6 +805,12 @@ describe("DesktopBackendRegistry", () => {
 
     expect(codexClient.listModelsCallCount).toBe(1);
     expect(codexFullAccessClient.listModelsCallCount).toBe(0);
+    expect(codexClient.lastListModelsDiagnostics).toMatchObject({
+      callerReason: "backend-summary",
+    });
+    expect(codexClient.lastListModelsDiagnostics?.ownerId).toMatch(
+      /^backend-model-catalog-/,
+    );
     expect(firstResponse.backends[0]?.launchpadOptions?.models).toMatchObject([
       {
         id: "gpt-5.4",
@@ -812,7 +828,191 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("retries Codex model discovery after a transient startup failure", async () => {
+  it("reads Grok models once from the default client and reuses them", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+    });
+    const grokClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Grok App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+      models: [
+        {
+          id: "grok-custom-reasoning",
+          label: "Grok Custom Reasoning",
+          supportsReasoning: true,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: {
+          serverInfo: { name: "Codex App Server", version: "1.0.0" },
+          methods: ["thread/start", "turn/start"],
+        },
+      }),
+      grokClient,
+      overlayStore: createOverlayStoreMock({
+        launchpadDefaults: {
+          backend: "grok",
+          executionMode: "default",
+          workMode: "local",
+        },
+      }),
+      createScratchProjectDirectory: async () => "/tmp/pwragnt-scratch",
+    });
+
+    const firstResponse = await registry.listBackends({ includeUnavailable: true });
+    const secondResponse = await registry.listBackends({ includeUnavailable: true });
+    await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+      preferredBackend: "grok",
+    });
+    await registry.startThread({ backend: "grok" });
+
+    expect(grokClient.listModelsCallCount).toBe(1);
+    expect(grokClient.lastListModelsDiagnostics).toMatchObject({
+      callerReason: "backend-summary",
+    });
+    expect(grokClient.lastListModelsDiagnostics?.ownerId).toMatch(
+      /^backend-model-catalog-/,
+    );
+    expect(firstResponse.backends[1]?.launchpadOptions?.models).toMatchObject([
+      {
+        id: "grok-custom-reasoning",
+        label: "Grok Custom Reasoning",
+      },
+    ]);
+    expect(secondResponse.backends[1]?.launchpadOptions?.models).toMatchObject([
+      {
+        id: "grok-custom-reasoning",
+        label: "Grok Custom Reasoning",
+      },
+    ]);
+    expect(grokClient.lastStartThreadParams?.model).toBe("grok-custom-reasoning");
+
+    await registry.close();
+  });
+
+  it("does not warm model lists during registry construction", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+    });
+    const codexFullAccessClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+    });
+    const grokClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Grok App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+    });
+
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient,
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    expect(codexClient.listModelsCallCount).toBe(0);
+    expect(codexFullAccessClient.listModelsCallCount).toBe(0);
+    expect(grokClient.listModelsCallCount).toBe(0);
+
+    await registry.startThread({ backend: "grok" });
+
+    expect(codexClient.listModelsCallCount).toBe(0);
+    expect(codexFullAccessClient.listModelsCallCount).toBe(0);
+    expect(grokClient.listModelsCallCount).toBe(1);
+    expect(grokClient.lastListModelsDiagnostics).toMatchObject({
+      callerReason: "thread-start-defaults",
+    });
+
+    await registry.close();
+  });
+
+  it("coalesces repeated Grok thread list requests in the startup refresh window", async () => {
+    const grokClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Grok App Server", version: "1.0.0" },
+        methods: ["thread/list"],
+      },
+      threads: [
+        {
+          id: "thread-grok",
+          title: "Grok thread",
+          titleSource: "explicit",
+          source: "grok",
+          linkedDirectories: [],
+        },
+      ],
+    });
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({}),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.listThreads({
+      callerReason: "navigation-snapshot",
+    });
+    await registry.listThreads({
+      backend: "grok",
+      callerReason: "branch-drift",
+    });
+
+    expect(codexClient.listThreadsCallCount).toBe(1);
+    expect(grokClient.listThreadsCallCount).toBe(1);
+    expect(grokClient.lastListThreadsDiagnostics).toMatchObject({
+      callerReason: "navigation-snapshot",
+    });
+    expect(grokClient.lastListThreadsDiagnostics?.ownerId).toMatch(
+      /^backend-thread-list-cache-/,
+    );
+
+    await registry.close();
+  });
+
+  it("invalidates cached backend thread lists after starting a thread", async () => {
+    const grokClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Grok App Server", version: "1.0.0" },
+        methods: ["thread/list", "thread/start"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      codexFullAccessClient: new MockBackendClient({}),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.listThreads({ backend: "grok" });
+    await registry.startThread({ backend: "grok" });
+    await registry.listThreads({ backend: "grok" });
+
+    expect(grokClient.listThreadsCallCount).toBe(2);
+
+    await registry.close();
+  });
+
+  it("retries Codex model discovery after a transient model-list failure", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
@@ -843,18 +1043,15 @@ describe("DesktopBackendRegistry", () => {
       createScratchProjectDirectory: async () => "/tmp/pwragnt-scratch",
     });
 
-    await flushAsync();
     const response = await registry.listBackends({ includeUnavailable: true });
     await registry.startThread({ backend: "codex" });
 
     expect(codexClient.listModelsCallCount).toBe(2);
     expect(codexFullAccessClient.listModelsCallCount).toBe(0);
-    expect(response.backends[0]?.launchpadOptions?.models).toMatchObject([
-      {
-        id: "gpt-5.4",
-        label: "GPT-5.4",
-      },
-    ]);
+    expect(response.backends[0]?.launchpadOptions?.models?.[0]).toMatchObject({
+      id: "gpt-5.5",
+      label: "GPT-5.5",
+    });
     expect(codexClient.lastStartThreadParams?.model).toBe("gpt-5.4");
 
     await registry.close();
