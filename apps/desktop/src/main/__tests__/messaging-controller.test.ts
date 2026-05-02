@@ -731,6 +731,49 @@ describe("MessagingController", () => {
     expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining("typing signaled"));
   });
 
+  it("clears typing when status refresh observes an idle backend thread", async () => {
+    let now = 1000;
+    const logger = {
+      debug: vi.fn<(message: string, data?: Record<string, unknown>) => void>(),
+    };
+    const harness = await createHarness({
+      logger,
+      now: () => now,
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+    logger.debug.mockClear();
+
+    now += 1000;
+    harness.readThreadStatus.mockResolvedValue("idle");
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:refresh" }),
+    );
+
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      status: "idle",
+      text: expect.stringContaining("Turn: completed"),
+    });
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "messaging turn state changed reason=status_refresh:thread_status_idle",
+      ),
+    );
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "messaging typing signaled state=idle reason=status_refresh:thread_status_idle",
+      ),
+    );
+  });
+
   it("ignores turn completion events that do not include output text", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -1482,6 +1525,7 @@ async function createHarness(options?: {
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
   interruptTurn: ReturnType<typeof vi.fn>;
   listBackends: ReturnType<typeof vi.fn>;
+  readThreadStatus: ReturnType<typeof vi.fn>;
   setThreadExecutionMode: ReturnType<typeof vi.fn>;
   setThreadModelSettings: ReturnType<typeof vi.fn>;
   startThread: ReturnType<typeof vi.fn>;
@@ -1536,6 +1580,7 @@ async function createHarness(options?: {
     fetchedAt: 1000,
     backends: [buildBackendSummary()],
   }));
+  const readThreadStatus = vi.fn(async () => undefined);
   const submitServerRequest = vi.fn(async (request: SubmitServerRequestRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -1547,6 +1592,7 @@ async function createHarness(options?: {
     getNavigationSnapshot,
     interruptTurn,
     listBackends,
+    readThreadStatus,
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,
@@ -1568,6 +1614,7 @@ async function createHarness(options?: {
     getNavigationSnapshot,
     interruptTurn,
     listBackends,
+    readThreadStatus,
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,

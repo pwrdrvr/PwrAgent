@@ -1,5 +1,7 @@
 import type {
   AgentEvent,
+  AppServerBackendKind,
+  AppServerThreadStatus,
   CompactThreadRequest,
   CompactThreadResponse,
   GetNavigationSnapshotRequest,
@@ -53,6 +55,18 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         gitStatus: directoryStatuses[directory.key],
       })),
     };
+  }
+
+  async readThreadStatus(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<AppServerThreadStatus | undefined> {
+    const response = await this.registry.readThread({
+      backend: request.backend,
+      limit: 0,
+      threadId: request.threadId,
+    });
+    return response.threadStatus ?? response.replay.threadStatus;
   }
 
   async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {

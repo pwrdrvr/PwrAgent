@@ -1624,12 +1624,16 @@ export class MessagingController {
       (await this.options.backend.getNavigationSnapshot({
         backend: "all",
       }));
+    const activeTurn = await this.reconcileActiveTurnFromBackendStatus(
+      binding,
+      "status_refresh",
+    );
     const intent = buildBindingStatusIntent({
       id: this.newIntentId("status"),
       binding,
       createdAt: this.now(),
       threadState: resolveMessagingThreadState({
-        activeTurn: this.getActiveTurn(binding),
+        activeTurn,
         binding,
         navigation: snapshot,
       }),
@@ -1648,6 +1652,46 @@ export class MessagingController {
       statusSurface: result.surface,
       updatedAt: this.now(),
     });
+  }
+
+  private async reconcileActiveTurnFromBackendStatus(
+    binding: MessagingBindingRecord,
+    reason: string,
+  ): Promise<MessagingActiveTurnSummary | undefined> {
+    const activeTurn = this.getActiveTurn(binding);
+    if (
+      !activeTurn ||
+      activeTurn.status !== "working" ||
+      !this.options.backend.readThreadStatus
+    ) {
+      return activeTurn;
+    }
+
+    const threadStatus = await this.options.backend.readThreadStatus({
+      backend: binding.backend,
+      threadId: binding.threadId,
+    });
+    if (threadStatus !== "idle") {
+      return activeTurn;
+    }
+
+    const completedTurn: MessagingActiveTurnSummary = {
+      ...activeTurn,
+      status: "completed",
+      updatedAt: this.now(),
+    };
+    this.setActiveTurn(binding, completedTurn);
+    this.logBindingTurnStateChange(
+      binding,
+      activeTurn,
+      completedTurn,
+      `${reason}:thread_status_idle`,
+    );
+    await this.signalTurnActivity(binding, completedTurn, {
+      force: true,
+      reason: `${reason}:thread_status_idle`,
+    });
+    return completedTurn;
   }
 
   private getActiveTurn(
