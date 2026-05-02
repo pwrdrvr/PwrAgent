@@ -1311,7 +1311,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/review" } });
 
-    expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
+    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
@@ -1415,6 +1415,42 @@ describe("Composer", () => {
     expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Reply")).not.toBeInTheDocument();
+  });
+
+  it("keeps slash review autocomplete open for the exact command text", async () => {
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          }),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/revie" } });
+    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: "/review" } });
+
+    const commands = screen.getByRole("listbox", { name: "Commands" });
+    expect(commands).toBeInTheDocument();
+    expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
   });
 
   it("opens review composer from the focused slash command option", async () => {
