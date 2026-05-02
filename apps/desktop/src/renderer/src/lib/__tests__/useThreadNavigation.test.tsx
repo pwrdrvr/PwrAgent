@@ -896,6 +896,114 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad).toBeUndefined();
   });
 
+  it("keeps newer launchpad edits when an older update response resolves later", async () => {
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const launchpad = {
+      directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+      directoryKind: "directory" as const,
+      directoryLabel: "PwrAgnt",
+      directoryPath: "/Users/huntharo/github/PwrAgnt",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "local" as const,
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const olderUpdate = createDeferred<{
+      defaults: typeof defaults;
+      launchpad: typeof launchpad;
+    }>();
+    const newerUpdate = createDeferred<{
+      defaults: typeof defaults;
+      launchpad: typeof launchpad;
+    }>();
+    const updateDirectoryLaunchpad = vi
+      .fn()
+      .mockReturnValueOnce(olderUpdate.promise)
+      .mockReturnValueOnce(newerUpdate.promise);
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: "directory:/Users/huntharo/github/PwrAgnt",
+          kind: "directory" as const,
+          label: "PwrAgnt",
+          path: "/Users/huntharo/github/PwrAgnt",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad,
+        },
+      ],
+      launchpadDefaults: defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      updateDirectoryLaunchpad,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.directoryKey).toBe(
+        "directory:/Users/huntharo/github/PwrAgnt"
+      );
+    });
+
+    let firstUpdate: Promise<void> | undefined;
+    let secondUpdate: Promise<void> | undefined;
+    act(() => {
+      firstUpdate = result.current.updateDirectoryLaunchpad(
+        "directory:/Users/huntharo/github/PwrAgnt",
+        { prompt: "older prompt" },
+      );
+      secondUpdate = result.current.updateDirectoryLaunchpad(
+        "directory:/Users/huntharo/github/PwrAgnt",
+        { prompt: "newer prompt" },
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.prompt).toBe("newer prompt");
+    });
+
+    await act(async () => {
+      newerUpdate.resolve({
+        defaults,
+        launchpad: {
+          ...launchpad,
+          prompt: "newer prompt",
+          updatedAt: 3,
+        },
+      });
+      await secondUpdate!;
+    });
+    expect(result.current.selectedLaunchpad?.prompt).toBe("newer prompt");
+
+    await act(async () => {
+      olderUpdate.resolve({
+        defaults,
+        launchpad: {
+          ...launchpad,
+          prompt: "older prompt",
+          updatedAt: 2,
+        },
+      });
+      await firstUpdate!;
+    });
+
+    expect(result.current.selectedLaunchpad?.prompt).toBe("newer prompt");
+  });
+
   it("opens masthead new-thread drafts inside the Workspaces directory", async () => {
     const ensureDirectoryLaunchpad = vi.fn(async () => ({
       launchpad: {
