@@ -120,6 +120,75 @@ test("thread reply Tiptap skill autocomplete filters and commits the reported mu
   }
 });
 
+test("thread reply Tiptap skill insertion preserves rich Markdown blocks", async () => {
+  const app = await launchElectronApp({
+    env: tiptapWysiwygComposerEnv,
+    fixturePath,
+    windowSize: {
+      width: 1180,
+      height: 760,
+    },
+  });
+
+  try {
+    await openSkillAutocompleteThread(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "Reply" });
+    await textbox.focus();
+    await textbox.evaluate((element) => {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.setData(
+        "text/html",
+        [
+          "<p>Here is the code:</p>",
+          '<pre><code class="language-ts">const value = 1;\nreturn value;</code></pre>',
+          "<p>Let's use </p>",
+        ].join(""),
+      );
+      dataTransfer.setData(
+        "text/plain",
+        "Here is the code:\n\n```ts\nconst value = 1;\nreturn value;\n```\n\nLet's use ",
+      );
+      element.dispatchEvent(
+        new ClipboardEvent("paste", {
+          bubbles: true,
+          cancelable: true,
+          clipboardData: dataTransfer,
+        }),
+      );
+    });
+    const closingParagraph = tiptapInput.locator("p", { hasText: "Let's use" }).last();
+    await closingParagraph.click();
+    await app.window.keyboard.press("End");
+    await app.window.keyboard.type(" ");
+
+    const codeBlock = tiptapInput.locator("pre", {
+      hasText: "const value = 1;\nreturn value;",
+    });
+    await expect(codeBlock).toBeVisible();
+    await expect(codeBlock).not.toContainText("```");
+    const seededDraft = await tiptapInput.getAttribute("data-value");
+    expect(seededDraft).toContain("```ts\nconst value = 1;\nreturn value;\n```");
+    expect(seededDraft).toMatch(/Let's use $/);
+
+    await app.window.keyboard.type("$ce:plan");
+    await expect(
+      app.window.getByRole("button", { name: /\$ce:plan/i }),
+    ).toBeVisible();
+    await app.window.keyboard.press("Enter");
+
+    await expect(
+      tiptapInput.locator(".composer-tiptap-input__mention", { hasText: "$ce:plan" }),
+    ).toBeVisible();
+    await expect(codeBlock).toBeVisible();
+    await expect(codeBlock).not.toContainText("```");
+    await expect(tiptapInput).toHaveAttribute("data-value", seededDraft ?? "");
+  } finally {
+    await app.close();
+  }
+});
+
 test("thread reply skill autocomplete filters and commits the reported multi-line draft", async () => {
   const app = await launchElectronApp({
     env: customWidgetComposerEnv,
