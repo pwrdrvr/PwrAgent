@@ -2154,7 +2154,7 @@ export function Composer(props: ComposerProps) {
       props.launchpad.directoryKey,
       {
         imageAttachments:
-          imageAttachments.length > 0 ? imageAttachments : props.launchpad.imageAttachments,
+          imageAttachments.length > 0 ? imageAttachments : undefined,
         prompt: canonicalDraft,
         ...patch,
       },
