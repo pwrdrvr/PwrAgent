@@ -12,3 +12,13 @@ packages/agent-core/.env.local
 .env.local
 excalidraw.log
 .worktrees/
+
+# electron-builder output (signed/notarized DMG + ZIP land here)
+apps/desktop/dist/
+# pnpm deploy stage (release.mjs materializes a flat node_modules tree here)
+apps/desktop/release-stage/
+
+# Release-time secrets — must never land in the repo
+.envrc.release
+*.p12
+AuthKey_*.p8
