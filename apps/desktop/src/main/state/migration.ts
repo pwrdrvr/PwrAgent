@@ -5,6 +5,7 @@ import type BetterSqlite3 from "better-sqlite3";
 import Database from "better-sqlite3";
 import { migrateMessagingStoreData } from "../messaging/core/messaging-migrations.js";
 import { resolveActiveProfilePath, resolvePwragntRoot } from "../profile";
+import { getNativeBinding } from "./native-binding.js";
 import { StateDb } from "./state-db.js";
 
 export type MigrationOutcome =
@@ -68,9 +69,10 @@ export function migrateIfNeeded(options?: {
   xdgStateHome?: string;
 }): MigrationOutcome {
   const dbPath = resolveActiveProfilePath("state/state.db", options);
+  const nativeBinding = getNativeBinding();
 
   if (fs.existsSync(dbPath)) {
-    const db = new Database(dbPath, { readonly: true });
+    const db = new Database(dbPath, { readonly: true, ...(nativeBinding ? { nativeBinding } : {}) });
     try {
       const row = db
         .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
@@ -114,7 +116,7 @@ export function migrateIfNeeded(options?: {
 
   if (fs.existsSync(tmpDbPath)) fs.unlinkSync(tmpDbPath);
 
-  const tmpDb = new Database(tmpDbPath);
+  const tmpDb = new Database(tmpDbPath, nativeBinding ? { nativeBinding } : {});
   try {
     tmpDb.pragma("journal_mode = WAL");
     tmpDb.pragma("synchronous = NORMAL");
@@ -511,7 +513,8 @@ function cleanupSidecars(tmpDbPath: string): void {
 }
 
 function verifyCounts(dbPath: string): Record<string, number> {
-  const db = new Database(dbPath, { readonly: true });
+  const nativeBinding = getNativeBinding();
+  const db = new Database(dbPath, { readonly: true, ...(nativeBinding ? { nativeBinding } : {}) });
   try {
     const tables = [
       "bindings",

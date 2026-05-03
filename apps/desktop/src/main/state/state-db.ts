@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
+import { getNativeBinding } from "./native-binding.js";
 
 const SCHEMA_V1 = `
 CREATE TABLE meta (
@@ -112,7 +113,8 @@ export class StateDb {
 
   static open(dbPath: string, options?: { profileName?: string }): StateDb {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-    const db = new Database(dbPath);
+    const nativeBinding = getNativeBinding();
+    const db = new Database(dbPath, nativeBinding ? { nativeBinding } : {});
 
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");

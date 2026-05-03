@@ -1,53 +1,68 @@
 /**
- * Rebuild native modules (better-sqlite3) for the Electron runtime.
+ * Download the Electron-compatible better-sqlite3 prebuild into a separate
+ * directory (electron-native/) so it can coexist with the system-Node binary.
  *
- * During `pnpm install`, native modules are compiled for system Node. Electron
- * uses a different Node ABI, so we re-download the correct prebuild before
- * running E2E tests.
+ * The app code uses the `nativeBinding` option to load from electron-native/
+ * when running inside Electron, while unit tests use the default Node binary.
  */
 
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { existsSync, mkdirSync, copyFileSync, unlinkSync } from "node:fs";
+import { resolve, dirname, join } from "node:path";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 
-// Resolve the real path to better-sqlite3 (follows pnpm symlinks)
 const betterSqlite3Dir = dirname(require.resolve("better-sqlite3/package.json"));
-
-// Get the Electron version from the installed package
 const electronPkg = require("electron/package.json");
 const electronVersion = electronPkg.version;
 
-// Find prebuild-install binary relative to better-sqlite3
 const prebuildBin = resolve(betterSqlite3Dir, "node_modules", ".bin", "prebuild-install");
 const prebuildFallback = resolve(betterSqlite3Dir, "..", "prebuild-install", "bin.js");
-
 const bin = existsSync(prebuildBin) ? prebuildBin : `node ${prebuildFallback}`;
 
-console.log(`Rebuilding better-sqlite3 for Electron ${electronVersion}...`);
-console.log(`  Package dir: ${betterSqlite3Dir}`);
+const electronNativeDir = join(betterSqlite3Dir, "electron-native");
+const targetBinary = join(electronNativeDir, "better_sqlite3.node");
+const defaultBinary = join(betterSqlite3Dir, "build", "Release", "better_sqlite3.node");
+const backupBinary = join(betterSqlite3Dir, "build", "Release", "better_sqlite3.node.bak");
 
+if (existsSync(targetBinary)) {
+  console.log(`Electron native binary already exists, skipping rebuild.`);
+  process.exit(0);
+}
+
+console.log(`Downloading better-sqlite3 prebuild for Electron ${electronVersion}...`);
+
+// 1. Back up the current Node binary
+if (existsSync(defaultBinary)) {
+  copyFileSync(defaultBinary, backupBinary);
+}
+
+// 2. Download the Electron prebuild (overwrites the default binary)
 try {
   execSync(
     `${bin} --runtime=electron --target=${electronVersion} --arch=${process.arch} --tag-prefix=v --strip`,
     { cwd: betterSqlite3Dir, stdio: "inherit" }
   );
-  console.log("Native module rebuilt for Electron successfully.");
 } catch (err) {
-  console.error("prebuild-install failed, falling back to electron-rebuild...");
-  // Fallback: try @electron/rebuild if prebuild-install fails
-  try {
-    execSync(
-      `npx --yes @electron/rebuild -f -w better-sqlite3 -v ${electronVersion}`,
-      { cwd: resolve(__dirname, ".."), stdio: "inherit" }
-    );
-    console.log("Native module rebuilt via electron-rebuild.");
-  } catch (err2) {
-    console.error("Failed to rebuild native module for Electron:", err2.message);
-    process.exit(1);
+  // Restore backup on failure
+  if (existsSync(backupBinary)) {
+    copyFileSync(backupBinary, defaultBinary);
+    unlinkSync(backupBinary);
   }
+  console.error("Failed to download Electron prebuild:", err.message);
+  process.exit(1);
 }
+
+// 3. Move the Electron binary to electron-native/
+mkdirSync(electronNativeDir, { recursive: true });
+copyFileSync(defaultBinary, targetBinary);
+
+// 4. Restore the Node binary
+if (existsSync(backupBinary)) {
+  copyFileSync(backupBinary, defaultBinary);
+  unlinkSync(backupBinary);
+}
+
+console.log(`Electron native binary placed at ${targetBinary}`);
+console.log(`Node native binary preserved at ${defaultBinary}`);
