@@ -31,7 +31,6 @@ import type {
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import type { MessagingStoreLike } from "../../state/messaging-store-sqlite";
 import type { MessagingAdapter, MessagingBackendBridge } from "./messaging-adapter.js";

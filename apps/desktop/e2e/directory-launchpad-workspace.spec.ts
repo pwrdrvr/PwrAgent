@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import Database from "better-sqlite3";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
@@ -275,15 +276,30 @@ async function createDirectoryLaunchpadFixture(): Promise<{
   };
 }
 
-async function readOverlayState(homeRoot: string): Promise<{
-  directoryLaunchpads?: Record<string, unknown>;
-}> {
-  return JSON.parse(
-    await readFile(
-      path.join(homeRoot, ".local", "state", "pwragnt", "overlay-state.json"),
-      "utf8",
-    ),
+function readOverlayState(homeRoot: string): {
+  directoryLaunchpads: Record<string, unknown>;
+} {
+  const dbPath = path.join(
+    homeRoot,
+    ".pwragnt",
+    "profiles",
+    "default",
+    "state",
+    "state.db",
   );
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const rows = db
+      .prepare("SELECT directory_path, payload FROM directory_launchpads")
+      .all() as Array<{ directory_path: string; payload: string }>;
+    const directoryLaunchpads: Record<string, unknown> = {};
+    for (const row of rows) {
+      directoryLaunchpads[row.directory_path] = JSON.parse(row.payload);
+    }
+    return { directoryLaunchpads };
+  } finally {
+    db.close();
+  }
 }
 
 test("directory launchpad can switch from local checkout to a new worktree", async () => {
