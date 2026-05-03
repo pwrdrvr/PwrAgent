@@ -1887,6 +1887,10 @@ describe("Composer", () => {
           path: "/repo",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "main",
+            branches: ["main", "feature/handoff"],
+          },
         }}
         onHandoffThreadWorkspace={onHandoffThreadWorkspace}
         skills={[]}
@@ -1896,7 +1900,8 @@ describe("Composer", () => {
           titleSource: "explicit",
           source: "codex",
           executionMode: "default",
-          gitBranch: "feature/handoff",
+          gitBranch: "main",
+          observedGitBranch: "HEAD",
           linkedDirectories: [
             {
               id: "dir-1",
@@ -1922,7 +1927,9 @@ describe("Composer", () => {
 
     fireEvent.click(screen.getByLabelText("Workspace mode"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
-    expect(screen.getByRole("dialog", { name: "Handoff to Local" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Handoff to Local" });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Detached HEAD to move");
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
     await waitFor(() => {
@@ -1930,7 +1937,7 @@ describe("Composer", () => {
         direction: "worktree-to-local",
         repositoryPath: "/repo",
         sourcePath: "/repo/.worktrees/pwragnt-feature",
-        sourceBranch: "feature/handoff",
+        sourceBranch: "HEAD",
       });
     });
 

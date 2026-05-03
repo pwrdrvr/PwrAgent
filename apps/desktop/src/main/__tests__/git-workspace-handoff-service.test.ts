@@ -174,6 +174,44 @@ describe("GitWorkspaceHandoffService", () => {
     );
   });
 
+  it("moves a detached worktree head back to local without treating stale branch metadata as truth", async () => {
+    const repoPath = await createRepo();
+    await writeFile(path.join(repoPath, "README.md"), "dirty detached\n", "utf8");
+
+    const service = new GitWorkspaceHandoffService();
+    const detachedResult = await service.handoff({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      strategy: "detached-changes",
+      repositoryPath: repoPath,
+      sourcePath: repoPath,
+      sourceBranch: "feature/handoff",
+      now: 2500,
+    });
+
+    const result = await service.handoff({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "worktree-to-local",
+      repositoryPath: repoPath,
+      sourcePath: detachedResult.targetPath,
+      sourceBranch: "main",
+      now: 2600,
+    });
+
+    expect(result.workMode).toBe("local");
+    expect(result.strategy).toBe("detached-changes");
+    expect(result.branch).toBeUndefined();
+    expect(result.baseSha).toBe(detachedResult.baseSha);
+    expect(await git(repoPath, ["branch", "--show-current"])).toBe("");
+    expect(await git(repoPath, ["rev-parse", "HEAD"])).toBe(detachedResult.baseSha);
+    await expect(readFile(path.join(repoPath, "README.md"), "utf8")).resolves.toBe(
+      "dirty detached\n",
+    );
+    expect(await pathExists(detachedResult.targetPath)).toBe(false);
+  });
+
   it("protects dirty local changes separately when moving a worktree branch to local", async () => {
     const repoPath = await createRepo();
     await git(repoPath, ["switch", "main"]);

@@ -2287,9 +2287,13 @@ export function Composer(props: ComposerProps) {
     (application) => application.canOpenWorkspace,
   );
   const sourceBranch =
-    props.directory?.gitStatus?.currentBranch ??
-    props.thread?.observedGitBranch ??
-    props.thread?.gitBranch;
+    threadWorkspace?.mode === "worktree"
+      ? props.thread?.observedGitBranch ??
+        props.thread?.gitBranch ??
+        props.directory?.gitStatus?.currentBranch
+      : props.directory?.gitStatus?.currentBranch ??
+        props.thread?.observedGitBranch ??
+        props.thread?.gitBranch;
   const branchOptions = getLeaveLocalBranchOptions({
     currentBranch: sourceBranch,
     directory: props.directory,
@@ -3764,8 +3768,10 @@ export function Composer(props: ComposerProps) {
             <dl className="workspace-handoff-dialog__summary">
               <div>
                 <dt>
-                  {handoffDialog === "local-to-worktree" &&
-                  localHandoffStrategy === "detached-changes"
+                  {handoffDialog === "worktree-to-local" && sourceBranch === "HEAD"
+                    ? "Detached HEAD to move"
+                    : handoffDialog === "local-to-worktree" &&
+                        localHandoffStrategy === "detached-changes"
                     ? "Current branch"
                     : "Branch to move"}
                 </dt>
