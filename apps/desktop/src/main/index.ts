@@ -5,6 +5,11 @@ import {
   registerAppMetadataIpcHandlers,
 } from "./ipc/app-metadata";
 import {
+  disposeAppUpdateIpcHandlers,
+  initAutoUpdater,
+  registerAppUpdateIpcHandlers,
+} from "./auto-updater";
+import {
   disposeApplicationIpcHandlers,
   registerApplicationIpcHandlers,
 } from "./ipc/applications";
@@ -91,6 +96,7 @@ export function bootstrapApp(): void {
     registerAgentIpcHandlers();
     registerApplicationIpcHandlers();
     registerAppMetadataIpcHandlers();
+    registerAppUpdateIpcHandlers();
     registerImageNormalizationIpcHandlers();
     registerPreloadLogIpcHandlers();
     registerRendererErrorIpcHandlers();
@@ -112,6 +118,10 @@ export function bootstrapApp(): void {
       startupCpuProfiler,
     });
 
+    // Wire up auto-update *after* the window is created so a slow update
+    // check does not delay first paint. Skips automatically in dev.
+    initAutoUpdater();
+
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         createMainWindow({
@@ -131,6 +141,7 @@ export function bootstrapApp(): void {
     disposeAgentIpcHandlers();
     disposeApplicationIpcHandlers();
     disposeAppMetadataIpcHandlers();
+    disposeAppUpdateIpcHandlers();
     disposeImageNormalizationIpcHandlers();
     disposePreloadLogIpcHandlers();
     disposeSettingsIpcHandlers();

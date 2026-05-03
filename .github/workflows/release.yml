@@ -1,0 +1,70 @@
+name: Release Desktop (macOS arm64)
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "v*.*.*-*" # pre-release tags like v1.0.0-alpha.0
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v1.0.0-alpha.1). Must already exist on the repo."
+        required: true
+        type: string
+
+permissions:
+  contents: write # publish releases to the same repo
+
+jobs:
+  release:
+    name: Build, sign, notarize, publish
+    runs-on: macos-15 # Apple Silicon GH-hosted runner; matches Phase A signing identity
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@v1
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test (unit)
+        run: pnpm test
+
+      - name: Build, sign, notarize, publish
+        env:
+          # Code signing (Developer ID Application: PwrDrvr LLC, T44CNHC4UH).
+          # CSC_LINK is the .p12 base64-encoded; CSC_KEY_PASSWORD is its password.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+
+          # Notarization via App Store Connect API key.
+          # APPLE_API_KEY_BASE64 is the .p8 file base64-encoded; release.mjs
+          # decodes it to a temp file before invoking electron-builder.
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: T44CNHC4UH
+
+          # Publish to the existing private pwrdrvr/PwrAgnt repo.
+          # Phase 1 (solo dogfooding). Phase 2 channel migration is in
+          # docs/desktop-distribution-phase-2-runbook.md.
+          GH_TOKEN: ${{ secrets.RELEASES_PAT || secrets.GITHUB_TOKEN }}
+        run: pnpm --filter @pwragnt/desktop release
+
+      - name: Upload release artifacts (debug retention)
+        uses: actions/upload-artifact@v5
+        if: ${{ !cancelled() }}
+        with:
+          name: desktop-release-artifacts
+          path: |
+            apps/desktop/release-stage/dist/*.dmg
+            apps/desktop/release-stage/dist/*.zip
+            apps/desktop/release-stage/dist/*.blockmap
+            apps/desktop/release-stage/dist/latest-mac.yml
+            apps/desktop/release-stage/dist/builder-debug.yml
+          retention-days: 30
