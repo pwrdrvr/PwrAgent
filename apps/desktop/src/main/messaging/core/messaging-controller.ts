@@ -1085,11 +1085,19 @@ export class MessagingController {
         buildConfirmationIntent({
           id: this.newIntentId("bound"),
           createdAt: this.now(),
+          delivery: session.surface
+            ? {
+                mode: "update",
+                replaceMarkup: true,
+              }
+            : undefined,
           title: "Thread bound",
           body: "Messages in this conversation will route to the selected thread.",
           fallbackText: "Send a message to continue the thread.",
+          targetSurface: session.surface,
         }),
-        updatedBinding,
+        undefined,
+        event,
       );
       await this.renderBindingStatus(updatedBinding, event, navigation);
       return;
@@ -1177,11 +1185,19 @@ export class MessagingController {
       buildConfirmationIntent({
         id: this.newIntentId("new-thread-bound"),
         createdAt: this.now(),
+        delivery: session.surface
+          ? {
+              mode: "update",
+              replaceMarkup: true,
+            }
+          : undefined,
         title: "Thread started",
         body: `Started and bound a new thread for ${project.label}.`,
         fallbackText: "Send a message to continue the new thread.",
+        targetSurface: session.surface,
       }),
-      updatedBinding,
+      undefined,
+      event,
     );
     await this.renderBindingStatus(updatedBinding, event);
   }

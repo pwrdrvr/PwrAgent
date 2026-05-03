@@ -182,6 +182,37 @@ describe("MessagingController", () => {
     });
   });
 
+  it("updates the resume picker and removes actions when selecting a thread", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    const confirmation = [...harness.delivered]
+      .reverse()
+      .find((intent) => intent.kind === "confirmation");
+    expect(confirmation).toMatchObject({
+      kind: "confirmation",
+      title: "Thread bound",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+      targetSurface: expect.objectContaining({
+        id: expect.stringContaining("surface:resume:"),
+      }),
+    });
+  });
+
   it("maps text fallback replies against pending picker actions", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));

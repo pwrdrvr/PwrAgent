@@ -823,6 +823,67 @@ describe("TelegramAdapter", () => {
     });
   });
 
+  it("edits the topic resume picker when a thread is selected", async () => {
+    const harness = await createControllerHarness();
+
+    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.handleUpdate({
+      update_id: 1,
+      message: {
+        chat: {
+          id: -100777,
+          title: "PwrAgnt",
+          type: "supergroup",
+        },
+        date: 1,
+        from: {
+          first_name: "Ada",
+          id: 42,
+          is_bot: false,
+        },
+        message_id: 100,
+        message_thread_id: 55,
+        text: "/resume",
+      },
+    });
+    const callbackData =
+      harness.api.sendMessage.mock.calls.at(-1)?.[0].reply_markup?.inline_keyboard[0]?.[0]
+        ?.callback_data ?? "";
+
+    await harness.adapter.handleUpdate({
+      callback_query: {
+        data: callbackData,
+        from: {
+          id: 42,
+          is_bot: false,
+        },
+        id: "callback-1",
+        message: {
+          chat: {
+            id: -100777,
+            title: "PwrAgnt",
+            type: "supergroup",
+          },
+          message_id: 200,
+          message_thread_id: 55,
+        },
+      },
+      update_id: 2,
+    });
+
+    expect(harness.api.editMessageText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: -100777,
+        message_id: 200,
+        message_thread_id: 55,
+        reply_markup: {
+          inline_keyboard: [],
+        },
+        text: expect.stringContaining("Thread bound"),
+      }),
+    );
+  });
+
   it("resolves persisted callback handles after adapter restart", async () => {
     const harness = await createControllerHarness();
 
