@@ -274,6 +274,8 @@ function pruneOptimisticEntries(
     return optimisticEntries;
   }
 
+  const latestResponseTurnId = latestTranscriptTurnId(response.replay.entries);
+  const latestResponseCreatedAt = latestTranscriptCreatedAt(response.replay.entries);
   return optimisticEntries.filter((entry) => {
     if (entry.type === "message") {
       return !response.replay.messages.some((message) =>
@@ -290,6 +292,15 @@ function pruneOptimisticEntries(
     }
 
     if (entry.type === "activity") {
+      if (
+        latestResponseTurnId &&
+        entry.turn?.id !== latestResponseTurnId &&
+        isCompletedTurnMetadata(entry.turn) &&
+        !isEntryNewerThanHydratedTranscript(entry, latestResponseCreatedAt)
+      ) {
+        return false;
+      }
+
       return !response.replay.entries.some(
         (candidate) =>
           candidate.type === "activity" &&
@@ -299,6 +310,42 @@ function pruneOptimisticEntries(
 
     return !response.replay.entries.some((candidate) => candidate.id === entry.id);
   });
+}
+
+function latestTranscriptCreatedAt(entries: AppServerThreadEntry[]): number | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const createdAt = entries[index]?.createdAt;
+    if (typeof createdAt === "number") {
+      return createdAt;
+    }
+  }
+
+  return undefined;
+}
+
+function isEntryNewerThanHydratedTranscript(
+  entry: AppServerThreadEntry,
+  latestResponseCreatedAt: number | undefined
+): boolean {
+  return (
+    typeof entry.createdAt === "number" &&
+    typeof latestResponseCreatedAt === "number" &&
+    entry.createdAt > latestResponseCreatedAt
+  );
+}
+
+function isCompletedTurnMetadata(
+  turn: AppServerThreadTurnMetadata | undefined
+): boolean {
+  return Boolean(
+    turn &&
+      (turn.status === "completed" ||
+        turn.status === "failed" ||
+        turn.status === "cancelled" ||
+        turn.status === "interrupted" ||
+        typeof turn.durationMs === "number" ||
+        typeof turn.completedAt === "number")
+  );
 }
 
 function activityEntriesMatch(

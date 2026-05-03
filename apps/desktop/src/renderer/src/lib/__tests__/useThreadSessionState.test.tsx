@@ -1469,6 +1469,159 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("drops stale completed live work when a newer turn hydrates without it", async () => {
+    let now = 80_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
+    const oldTurn = {
+      id: "turn-old",
+      status: "completed" as const,
+      durationMs: 197_000,
+    };
+    const newerTurn = {
+      id: "turn-newer",
+      status: "completed" as const,
+      durationMs: 35_000,
+    };
+    const staleLiveActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-tools-turn-old",
+      summary: "Explored 36 items · Used 3 tools",
+      createdAt: 1_500,
+      details: [
+        {
+          id: "old-tool-detail",
+          kind: "read",
+          label: "Read package.json",
+        },
+      ],
+      turn: oldTurn,
+    };
+    const readThread = vi
+      .fn()
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: "assistant-final-old",
+              role: "assistant" as const,
+              phase: "final" as const,
+              text: "Old turn is complete.",
+              createdAt: 2_000,
+              turn: oldTurn,
+            },
+          ],
+          messages: [
+            {
+              id: "assistant-final-old",
+              role: "assistant" as const,
+              text: "Old turn is complete.",
+              createdAt: 2_000,
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }))
+      .mockImplementationOnce(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            {
+              type: "message" as const,
+              id: "user-newer",
+              role: "user" as const,
+              text: "We have the latest grammy version right?",
+              createdAt: 3_000,
+              turn: newerTurn,
+            },
+            {
+              type: "message" as const,
+              id: "assistant-final-newer",
+              role: "assistant" as const,
+              phase: "final" as const,
+              text: "Yes. The repo is on the latest published grammy.",
+              createdAt: 4_000,
+              turn: newerTurn,
+            },
+          ],
+          messages: [
+            {
+              id: "user-newer",
+              role: "user" as const,
+              text: "We have the latest grammy version right?",
+              createdAt: 3_000,
+            },
+            {
+              id: "assistant-final-newer",
+              role: "assistant" as const,
+              text: "Yes. The repo is on the latest published grammy.",
+              createdAt: 4_000,
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }));
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ thread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread,
+        }),
+      {
+        initialProps: {
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Old turn is complete.",
+      ]);
+    });
+
+    act(() => {
+      result.current.upsertLiveTranscriptEntry(staleLiveActivity);
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "activity:Explored 36 items · Used 3 tools",
+      "message:Old turn is complete.",
+    ]);
+
+    rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:We have the latest grammy version right?",
+        "message:Yes. The repo is on the latest published grammy.",
+      ]);
+    });
+  });
+
   it("preserves session-owned live activity across thread switches and hydration", async () => {
     let now = 20_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);
