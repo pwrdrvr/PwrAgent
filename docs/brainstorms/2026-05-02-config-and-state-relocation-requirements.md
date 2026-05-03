@@ -5,6 +5,106 @@ topic: config-and-state-relocation
 
 # Config and State Relocation
 
+## Revision (2026-05-02): Named Profiles
+
+After the original brainstorm landed and Phase 1 of the plan shipped, we redesigned around **named profiles** (Chrome-style) instead of multiple sibling root directories. The original "single env var, multiple roots" decision is **superseded**. The original requirements text below is preserved for context, but the governing requirements are the ones in this revision block.
+
+### What changed and why
+
+The original design solved E2E isolation, dev profiles, and messenger profiles by pointing different `PWRAGNT_HOME` values at different sibling directories (`~/.pwragnt-dev`, `~/.pwragnt-sstk`, etc.). It worked but had three problems:
+
+1. **`$HOME` clutter.** Every long-lived profile becomes a sibling directory in `$HOME`. A user with five messenger personas ends up with `~/.pwragnt`, `~/.pwragnt-sstk`, `~/.pwragnt-giphy`, `~/.pwragnt-personal`, `~/.pwragnt-test`. The "I hate the sprawl" complaint that triggered this work re-emerges in a new form.
+2. **No UX surface for non-developer users.** The original design was dev-only — you had to set an env var to use it. Real users wouldn't.
+3. **Keychain instance_id namespacing was awkward.** It existed only to handle a problem the new design dissolves: secrets are now per-profile by virtue of living in each profile's `state.db`, no service-name prefix needed.
+
+### Revised requirements (these govern)
+
+#### Profile model
+
+- **PR1.** A **profile** is a fully isolated unit of state: config, sqlite DB, projects, and (eventually) credentials. Identified by a `profile_name`.
+- **PR2.** Profile names match `^[a-z0-9][a-z0-9_-]{0,31}$` — lowercase ASCII, hyphens and underscores, must start with alphanumeric, max 32 chars. Reserved names rejected: `con`, `nul`, `aux`, `prn`, `.`, `..`. The validator is the single source of truth; the same regex is enforced in the picker UI, the CLI flag, and the env var.
+- **PR3.** Each profile has a free-form UTF-8 `display_name` shown in the picker. Defaults to `profile_name` if unset.
+- **PR4.** All profiles are equal. There is no privileged "default" profile — `default` is just the conventional name for the first profile and lives under `profiles/default/` like every other profile. (User pick.)
+
+#### On-disk layout
+
+```
+~/.pwragnt/
+├── profiles.toml                          # registry: profiles + display names + last_used
+└── profiles/
+    ├── default/
+    │   ├── config.toml
+    │   ├── state/state.db
+    │   └── projects/
+    └── sstk/
+        ├── config.toml
+        ├── state/state.db
+        └── projects/
+```
+
+- **PR5.** The new root is `~/.pwragnt/`. No top-level config or state files at the root — only `profiles.toml` and `profiles/`.
+- **PR6.** Each profile directory is fully self-contained: deleting `~/.pwragnt/profiles/sstk/` removes everything for that profile, no orphaned data anywhere on the system.
+- **PR7.** `profiles.toml` is the registry. Schema:
+  ```toml
+  last_used = "default"
+
+  [profiles.default]
+  display_name = "Default"
+
+  [profiles.sstk]
+  display_name = "Shutterstock"
+  ```
+
+#### Selection and overrides
+
+- **PR8.** Profile selection precedence (highest first): `--profile <name>` CLI arg → `PWRAGNT_PROFILE=<name>` env var → `last_used` from `profiles.toml` → the literal name `default`.
+- **PR9.** **Auto-create.** If the selected profile name does not exist, the app creates it on launch with the same flow as a fresh install (empty state, registers in `profiles.toml`, sets `display_name = profile_name`). Same as if you'd given it a fresh `PWRAGNT_HOME` under the original design.
+- **PR10.** `PWRAGNT_HOME` is **kept as a root override** (still useful: E2E points it at a tempdir, dev workstations may relocate the entire registry). Default is `~/.pwragnt/`. So in a test you can set both: `PWRAGNT_HOME=/tmp/e2e-run-42 PWRAGNT_PROFILE=test1` to get isolation at both levels.
+
+#### Multi-instance and process model
+
+- **PR11.** Picking another profile from the in-app picker spawns a **new OS process** (`pwragnt --profile <name>`). One process per active profile. Simple, no shared singletons to refactor, no IPC fanout.
+- **PR12.** The application window title includes the profile's `display_name` (and `profile_name` if it differs). This is required, not aesthetic — without it, a user with multiple windows can't tell them apart at a glance. (User pick.)
+- **PR13.** Two processes for the *same* profile are not allowed: a per-profile lockfile at `profiles/<name>/state/instance.lock` prevents accidental concurrent writers. If a user opens "default" twice, the second launch focuses the existing window instead. (Standard Electron `app.requestSingleInstanceLock` pattern, scoped per profile.)
+
+#### Settings UI
+
+- **PR14.** The Settings widget edits the *current window's* profile only. No cross-profile settings UI in this work.
+- **PR15.** A profile picker (Chrome-style) lives in the app menubar (or window-level menu). It lists profiles from `profiles.toml`, shows their `display_name`, and "Open in <profile>" launches the new-process flow. A "Manage profiles…" entry opens a small UI for creating, renaming, and deleting profiles. The menu also exposes the current profile's name as a non-clickable header.
+
+#### Secrets
+
+- **PR16.** Secrets live in a `secrets` table inside each profile's `state.db`, encrypted via Electron's `safeStorage`. (Same as the plan's C1 correction; what changes is that "instance_id namespacing" is gone — namespacing comes from being inside a per-profile DB file.)
+- **PR17.** No native macOS Keychain entries are written by the app. The single `safeStorage` wrap key (which Electron itself stores in the OS Keychain at the app-bundle level) is shared across profiles on a machine — acceptable, same threat model as today.
+
+#### Codex limitation (carried forward)
+
+- **PR18.** Codex thread state lives in `~/.codex/`, outside our control. It is shared across PwrAgnt profiles. The picker UI surfaces this once: a small note in "Manage profiles…" explains that Codex history is not isolated. (Carried from origin §R8.)
+
+### Migration impact
+
+- The old XDG migration target moves from `~/.pwragnt/state/state.db` to `~/.pwragnt/profiles/default/state/state.db`. Same migration logic, deeper destination path.
+- The original `instance_id` field is replaced by `profile_name`, written into `meta` table.
+- `PWRAGNT_HOME` from Phase 1 stays as a root override; `PWRAGNT_PROFILE` is added as the profile selector.
+
+### Phasing under this redesign
+
+- **Phase 1 (shipped, [PR #152](https://github.com/pwrdrvr/PwrAgnt/pull/152)):** `PWRAGNT_HOME` resolver — survives. The resolver's job becomes "compute the root," and a new layer above it computes "compute the profile path within the root."
+- **Phase 2 (next, ships before tomorrow's release):** sqlite + migration. Migration target is `~/.pwragnt/profiles/default/`. `profiles.toml` is created with one entry. No picker UI yet. `--profile` and `PWRAGNT_PROFILE` work for E2E isolation but no in-app way to switch. **This is what tomorrow's users get.**
+- **Phase 3:** E2E harness flips to `PWRAGNT_PROFILE`. Old `PWRAGNT_STATE_ROOT` / `PWRAGNT_CONFIG_PATH` / `GROK_APP_SERVER_STATE_ROOT` / `HOME`-override fixture removed. Specs that read `overlay-state.json` directly migrated to `state.db` reads.
+- **Phase 4:** Profile picker menu, "Open in profile" → new process, "Manage profiles…" UI, window-title injection (PR12). This is the user-facing surface; ships after the core relocation has soaked.
+
+### Out of scope (clarifications under this redesign)
+
+- **Cross-profile shared anything.** Each profile is fully isolated.
+- **Profile-level encryption.** Same threat model as today.
+- **Renaming a profile while it's running.** Manage Profiles UI requires the profile to be inactive (no live process holding its lockfile).
+- **Importing/exporting profiles.** Future work. For now: `cp -R ~/.pwragnt/profiles/sstk ~/.pwragnt/profiles/sstk-copy && edit profiles.toml`.
+
+---
+
+(Original brainstorm content below, preserved for historical context. Where the original conflicts with the revision above, the revision wins.)
+
 ## Problem Frame
 
 Config and local state are spread across XDG locations (`~/.config/pwragnt/`, `~/.local/state/pwragnt/`) plus `~/.pwragnt/projects/`. This is hard to inspect, hard to back up, hard to clean up, and the only existing isolation mechanism (overriding `$HOME`) drags every other XDG-using tool along with it.

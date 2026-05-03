@@ -8,6 +8,81 @@ origin: docs/brainstorms/2026-05-02-config-and-state-relocation-requirements.md
 
 # Config and State Relocation
 
+## Revision (2026-05-02): Named Profiles
+
+**This plan was revised after Phase 1 shipped.** The original "single env var, multiple roots" model is **superseded** by named profiles inside one root. See [origin brainstorm §Revision](../brainstorms/2026-05-02-config-and-state-relocation-requirements.md#revision-2026-05-02-named-profiles) for the full rationale; the short version is below. The original plan content is preserved beneath this block for historical context — where the original conflicts with this revision, the revision governs.
+
+### What this plan now ships
+
+A single root at `~/.pwragnt/` containing a profile registry and per-profile subdirectories:
+
+```
+~/.pwragnt/
+├── profiles.toml                          # registry: profiles + display_name + last_used
+└── profiles/
+    ├── default/
+    │   ├── config.toml
+    │   ├── state/state.db
+    │   └── projects/
+    └── <named>/                           # additional profiles (sstk, dev, etc.)
+        └── …
+```
+
+There is no privileged "default" profile — `default` is just the conventional first profile, structurally identical to any other. Profile selection precedence: `--profile <name>` → `PWRAGNT_PROFILE=<name>` → `last_used` from `profiles.toml` → `default`. `PWRAGNT_HOME` survives as a *root* override (E2E tempdir, full relocation); `PWRAGNT_PROFILE` is the new *profile* selector.
+
+Profile names match `^[a-z0-9][a-z0-9_-]{0,31}$`; reserved names (`con`, `nul`, `aux`, `prn`, `.`, `..`) are rejected. Display name is free-form UTF-8, separate field, used only in the picker UI.
+
+Multi-profile UX is process-per-profile: clicking "Open in profile X" from the picker spawns `pwragnt --profile X` as a new OS process. Window title includes the profile's display name. A per-profile lockfile (`profiles/<name>/state/instance.lock`) prevents two processes from writing to the same profile.
+
+### What changed vs. the original plan
+
+| Topic | Original | Revised |
+| --- | --- | --- |
+| Isolation primitive | Multiple sibling root dirs (`~/.pwragnt-sstk`) | Named profiles in one root (`~/.pwragnt/profiles/sstk/`) |
+| Profile selection | `PWRAGNT_HOME=~/.pwragnt-sstk` | `--profile sstk` or `PWRAGNT_PROFILE=sstk` |
+| Migration target | `~/.pwragnt/state/state.db` | `~/.pwragnt/profiles/default/state/state.db` |
+| Secrets namespacing | `instance_id` in `meta` → `pwragnt-{instance_id}` Keychain prefix (per C1, fell through to in-DB) | Per-profile DB file is the namespace; no `instance_id` field, no Keychain naming concern |
+| User-facing surface | None (env var only) | Profile picker menu + "Open in profile" (Phase 4) |
+| `PWRAGNT_HOME` semantics | THE selector | Root override (still useful for E2E tempdir); `PWRAGNT_PROFILE` is the selector |
+| `app.getPath("userData")` redirect (C4) | `$PWRAGNT_HOME/state/protocol-captures/` | `$PWRAGNT_HOME/profiles/<active>/state/protocol-captures/` |
+| Schema `meta` table | rows include `instance_id` | rows include `profile_name` |
+| C2 deprecation list | `PWRAGNT_STATE_ROOT`, `PWRAGNT_CONFIG_PATH`, `GROK_APP_SERVER_STATE_ROOT` | Same — still removed in Phase 3 |
+| C5 (Playwright `workers: 1`) | Unchanged | Unchanged — still preserved this release |
+
+### Revised phasing
+
+- **Phase 1 (shipped, [PR #152](https://github.com/pwrdrvr/PwrAgnt/pull/152)):** `PWRAGNT_HOME` env-var resolver added across the four path-resolution sites. Survives the redesign — the resolver's job becomes "compute the root," with a new layer above it computing "compute the path within the active profile."
+- **Phase 2 (next; ships before tomorrow's release):** the core relocation. Adds:
+  - `apps/desktop/src/main/profile.ts` — name validation, registry I/O, selection precedence, auto-create. `resolveActiveProfilePath(segment)` is the new top-level helper that callers use.
+  - sqlite + migration into `profiles/default/state/state.db`. Same migration code as the original plan, deeper destination path. `meta.profile_name = 'default'`.
+  - `profiles.toml` registry created on first launch (with one `default` entry).
+  - All four Phase 1 resolvers re-pointed at `resolveActiveProfilePath(...)` instead of `pwragntPath(...)`.
+  - `PWRAGNT_PROFILE` env var honored for E2E auto-create (PR9).
+  - Per-profile lockfile (PR13) — `electron app.requestSingleInstanceLock` keyed on profile.
+  - **No picker UI in this phase.** Profiles work via env/CLI only. Tomorrow's users get a single `default` profile and the cleaner directory layout.
+- **Phase 3:** E2E harness flips to `PWRAGNT_PROFILE=e2e-<runid>` (auto-create). Old escape hatches removed. Specs reading `overlay-state.json` directly migrated to `state.db`.
+- **Phase 4:** the user-facing surface — profile picker menu, "Open in profile" via new-process spawn, "Manage profiles…" widget, window-title injection (PR12). Ships after the core relocation has soaked. This is also where `--profile` becomes a documented user feature rather than a dev knob.
+
+### How the original plan body still applies
+
+Everything below (sqlite schema, PRAGMAs, migration choreography, GC TTLs, the C1–C5 corrections, the risk register) **still applies** with these small substitutions:
+
+- Wherever the old plan says `$PWRAGNT_HOME/state/state.db`, read it as `$PWRAGNT_HOME/profiles/<active>/state/state.db`.
+- Wherever it says `instance_id`, read it as `profile_name`.
+- The `meta` table schema in §Schema gets `profile_name` instead of `instance_id`. No other column changes.
+- The lockfile content is `{ "profile_name": "...", "pid": ..., "started_at": ..., "hostname": "..." }`. Same logic.
+- The `pwragnt migrate-state --rerun` CLI gains an implicit profile selector — it migrates into the active profile's DB.
+- The "two roots with same instance_id" collision case is dropped — replaced by the simpler "two processes on same profile" lockfile case (PR13), which Electron's `requestSingleInstanceLock` handles natively.
+
+### Known limitations carried forward
+
+- **Codex thread state remains shared across profiles** (`~/.codex/`). PR18: surface this in the "Manage profiles…" UI when it lands.
+- **One `safeStorage` wrap key per machine** at the Electron level. Profile-level secret isolation comes from each profile's DB file, not from per-profile keychain entries. Same threat model as today.
+
+---
+
+(Original plan content below, preserved for context. Substitute as noted above.)
+
 ## Overview
 
 Collapse the desktop app's three independent config/state locations (`~/.config/pwragnt/`, `~/.local/state/pwragnt/`, `~/.pwragnt/projects/`) plus a fourth Electron-managed location (`app.getPath("userData")` for protocol captures) into a single root at `~/.pwragnt/`, controlled by one new env var `PWRAGNT_HOME`. Migrate `messaging-state.json` (4.3 MB, full-rewrite) and `overlay-state.json` (200 KB, full-rewrite) into a single sqlite database `state/state.db`. Namespace per-instance secrets so multiple roots can coexist for E2E and dev-profile use cases. Ship with a one-shot migration that retains old files as `.bak.<timestamp>` for recovery.
