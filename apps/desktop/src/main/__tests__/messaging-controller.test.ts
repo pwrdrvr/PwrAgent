@@ -146,6 +146,49 @@ describe("MessagingController", () => {
     });
   });
 
+  it("routes messages to the new thread after rebinding an already-bound conversation", async () => {
+    const harness = await createHarness();
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:codex:old-thread",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: buildCommandEvent("/resume").channel,
+      createdAt: 900,
+      threadId: "old-thread",
+      updatedAt: 900,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragnt",
+          label: "PwrAgnt",
+          path: "/repo/pwragnt",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("continue on the new thread"));
+
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "new-thread-1",
+        input: [
+          {
+            type: "text",
+            text: "continue on the new thread",
+          },
+        ],
+      }),
+    );
+    await expect(harness.store.getBinding("binding:telegram:dm::chat-1:codex:old-thread"))
+      .resolves.toMatchObject({
+        revokedAt: 1000,
+      });
+  });
+
   it("binds a callback-selected thread to the channel", async () => {
     const harness = await createHarness();
 
