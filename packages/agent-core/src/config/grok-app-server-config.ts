@@ -43,9 +43,8 @@ export function defaultGrokAppServerConfigDir(options?: ConfigDirOptions): strin
   const pwragntHome = readPwragntHomeFromOptions(options);
   if (pwragntHome) return path.join(pwragntHome, "grok-app-server");
   const homeDir = options?.homeDir ?? os.homedir();
-  const env = options?.env ?? process.env;
   const xdgConfigHome =
-    options?.xdgConfigHome?.trim() || env.XDG_CONFIG_HOME?.trim();
+    options?.xdgConfigHome?.trim() || process.env.XDG_CONFIG_HOME?.trim();
   return path.join(xdgConfigHome || path.join(homeDir, ".config"), "grok-app-server");
 }
 
@@ -57,9 +56,8 @@ export function defaultGrokAppServerStateDir(options?: StateDirOptions): string 
   const pwragntHome = readPwragntHomeFromOptions(options);
   if (pwragntHome) return path.join(pwragntHome, "grok-app-server");
   const homeDir = options?.homeDir ?? os.homedir();
-  const env = options?.env ?? process.env;
   const xdgStateHome =
-    options?.xdgStateHome?.trim() || env.XDG_STATE_HOME?.trim();
+    options?.xdgStateHome?.trim() || process.env.XDG_STATE_HOME?.trim();
   return path.join(
     xdgStateHome || path.join(homeDir, ".local", "state"),
     "grok-app-server",
