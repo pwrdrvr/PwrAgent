@@ -19,6 +19,9 @@
     "dev:no-messaging": "PWRAGNT_DISABLE_MESSAGING=1 electron-vite dev -- --disable-messaging",
     "derive:replay-fixture": "tsx ./scripts/derive-replay-fixture.ts",
     "export:session-capture": "tsx ./scripts/export-session-capture.ts",
+    "package:dryrun": "node ./scripts/release.mjs --dryrun",
+    "package": "node ./scripts/release.mjs --no-publish",
+    "release": "node ./scripts/release.mjs",
     "pretest:e2e": "pnpm build",
     "preview": "electron-vite preview",
     "test:e2e": "playwright test -c playwright.config.ts",
@@ -35,6 +38,7 @@
     "@tiptap/starter-kit": "^3.22.5",
     "@tiptap/suggestion": "^3.22.5",
     "electron-log": "^5.4.3",
+    "electron-updater": "^6.8.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
@@ -42,13 +46,14 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.55.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
-    "@playwright/test": "^1.55.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^41.2.1",
+    "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
     "tsx": "^4.20.6",
     "vite": "^7.3.2"

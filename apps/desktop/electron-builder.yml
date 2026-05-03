@@ -1,0 +1,80 @@
+appId: com.pwrdrvr.pwragnt
+productName: PwrAgnt
+copyright: "Copyright © 2026 PwrDrvr LLC. All rights reserved."
+
+# Pinned so `pnpm deploy --prod` works — electron lives in devDependencies
+# and is therefore not present in the deploy stage's node_modules.
+# Keep this in sync with apps/desktop/package.json devDependencies.electron.
+electronVersion: 41.2.1
+
+# Bundle layout
+asar: true
+asarUnpack:
+  - "**/*.node"
+compression: normal
+
+# Files included in the .app bundle. Run via apps/desktop/scripts/release.mjs
+# which first runs `pnpm deploy` to materialize a flat node_modules tree, since
+# pnpm's symlinked virtual store interacts poorly with electron-builder's
+# default node_modules walk.
+files:
+  - "out/**/*"
+  - "package.json"
+  - "!**/*.map"
+  - "!**/*.ts"
+  - "!**/*.test.*"
+  - "!**/__tests__/**"
+
+# Electron fuses — ASAR integrity is NOT on by default in electron-builder.
+# Enable it explicitly so the runtime aborts if the .asar is tampered with.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  loadBrowserProcessSpecificV8Snapshot: false
+  grantFileProtocolExtraPrivileges: false
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  # mac.notarize: true reads APPLE_API_KEY/APPLE_API_KEY_ID/APPLE_API_ISSUER
+  # (preferred for CI) or APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID
+  # (acceptable locally) from the environment. Do NOT commit these.
+  notarize: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Helper bundle renames — verify post-build with Activity Monitor that all
+  # four child processes carry the PwrAgnt brand, not "Electron Helper".
+  # Note: the field is helperGPUBundleId (capital GPU) per electron-builder
+  # source; lowercase 'gpu' silently no-ops.
+  helperBundleId: com.pwrdrvr.pwragnt.helper
+  helperRendererBundleId: com.pwrdrvr.pwragnt.helper.Renderer
+  helperGPUBundleId: com.pwrdrvr.pwragnt.helper.GPU
+  helperPluginBundleId: com.pwrdrvr.pwragnt.helper.Plugin
+  extendInfo:
+    NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC. All rights reserved."
+    LSMinimumSystemVersion: "12.0"
+    LSApplicationCategoryType: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+
+dmg:
+  writeUpdateInfo: false
+
+# Phase 1: github provider against the existing private pwrdrvr/PwrAgnt repo.
+# Phase 2 channel migration is documented in
+# docs/desktop-distribution-phase-2-runbook.md.
+publish:
+  provider: github
+  owner: pwrdrvr
+  repo: PwrAgnt
+  private: true
+  releaseType: release
