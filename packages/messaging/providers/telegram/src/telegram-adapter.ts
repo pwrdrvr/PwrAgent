@@ -288,6 +288,7 @@ export type TelegramGrammyBotLike = {
       other?: Omit<TelegramUnpinChatMessageRequest, "chat_id" | "message_id">,
     ): Promise<boolean>;
   };
+  catch?(handler: (error: unknown) => void): void;
   handleUpdate?(update: TelegramUpdate): Promise<void>;
   on?(filter: string, handler: (context: unknown) => void | Promise<void>): void;
   start?(options?: { allowed_updates?: string[] }): Promise<void>;
@@ -353,6 +354,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
     this.listener = listener;
 
+    this.registerBotErrorHandler();
     this.registerBotHandlers();
 
     const webhookInfo = await this.bot.api.getWebhookInfo();
@@ -429,6 +431,26 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
+    try {
+      return await this.deliverSurface(intent);
+    } catch (error) {
+      const target = this.resolveTarget(intent);
+      this.options.logger?.warn?.(
+        `telegram deliver failed kind=${intent.kind} target=${target ? this.compactTypingTarget(target) : "missing"} error=${errorMessage(error)}`,
+      );
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: errorMessage(error),
+        outcome: "failed",
+        surface: intent.targetSurface,
+      };
+    }
+  }
+
+  private async deliverSurface(
+    intent: MessagingSurfaceIntent,
+  ): Promise<MessagingDeliveryResult> {
     const target = this.resolveTarget(intent);
     if (!target) {
       return {
@@ -968,6 +990,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         expiresAt: this.now() + 15 * 60 * 1000,
         handle,
         pendingIntentId: intent.id,
+        browseSessionId: browseSessionIdForIntent(intent),
         surface: intent.targetSurface,
         updatedAt: this.now(),
         value: action.value,
@@ -1306,6 +1329,14 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     });
   }
 
+  private registerBotErrorHandler(): void {
+    this.bot.catch?.((error) => {
+      this.options.logger?.warn?.("telegram bot middleware failed", {
+        error: errorMessage(error),
+      });
+    });
+  }
+
   private get bot(): TelegramBotLike {
     if (this.options.bot) {
       return this.options.bot;
@@ -1446,6 +1477,7 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
         return await bot.api.unpinChatMessage(chat_id, message_id, other);
       },
     },
+    catch: bot.catch?.bind(bot),
     handleUpdate: bot.handleUpdate?.bind(bot),
     on: bot.on?.bind(bot),
     start: bot.start?.bind(bot),
@@ -1472,6 +1504,12 @@ function coerceTelegramSentMessage(
 function parseTelegramIdentifier(value: string): number | string {
   const numeric = Number(value);
   return Number.isSafeInteger(numeric) && String(numeric) === value ? numeric : value;
+}
+
+function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | undefined {
+  return intent.kind === "thread_picker" || intent.kind === "project_picker"
+    ? intent.browseSessionId
+    : undefined;
 }
 
 function sanitizeTelegramTopicName(title: string): string {

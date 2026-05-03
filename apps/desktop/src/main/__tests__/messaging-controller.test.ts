@@ -137,6 +137,56 @@ describe("MessagingController", () => {
       buildCommandEvent("/resume").channel,
     );
     expect(binding).not.toHaveProperty("threadDisplay");
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Project: PwrAgnt"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      text: expect.stringContaining("Directory: /repo/pwragnt"),
+    });
+  });
+
+  it("routes messages to the new thread after rebinding an already-bound conversation", async () => {
+    const harness = await createHarness();
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:codex:old-thread",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: buildCommandEvent("/resume").channel,
+      createdAt: 900,
+      threadId: "old-thread",
+      updatedAt: 900,
+    });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragnt",
+          label: "PwrAgnt",
+          path: "/repo/pwragnt",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(buildTextEvent("continue on the new thread"));
+
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "new-thread-1",
+        input: [
+          {
+            type: "text",
+            text: "continue on the new thread",
+          },
+        ],
+      }),
+    );
+    await expect(harness.store.getBinding("binding:telegram:dm::chat-1:codex:old-thread"))
+      .resolves.toMatchObject({
+        revokedAt: 1000,
+      });
   });
 
   it("binds a callback-selected thread to the channel", async () => {
@@ -179,6 +229,94 @@ describe("MessagingController", () => {
           fallbackText: "tools",
         }),
       ]),
+    });
+  });
+
+  it("updates the resume picker and removes actions when selecting a thread", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    const confirmation = [...harness.delivered]
+      .reverse()
+      .find((intent) => intent.kind === "confirmation");
+    expect(confirmation).toMatchObject({
+      kind: "confirmation",
+      title: "Thread bound",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+      targetSurface: expect.objectContaining({
+        id: expect.stringContaining("surface:resume:"),
+      }),
+    });
+  });
+
+  it("updates the clicked resume picker when multiple pickers are active", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    const firstPicker = harness.delivered.at(-1);
+    if (firstPicker?.kind !== "thread_picker" || !firstPicker.browseSessionId) {
+      throw new Error("Expected first resume picker with a browse session id");
+    }
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    const secondPicker = harness.delivered.at(-1);
+    if (secondPicker?.kind !== "thread_picker") {
+      throw new Error("Expected second resume picker");
+    }
+
+    await harness.store.upsertCallbackHandle({
+      id: "callback:first-picker",
+      actionId: "browse:select-thread",
+      allowedActorIds: ["user-1"],
+      browseSessionId: firstPicker.browseSessionId,
+      channel: buildCommandEvent("/resume").channel,
+      createdAt: 1000,
+      updatedAt: 1000,
+      expiresAt: 2000,
+      handle: "tg:first-picker",
+      value: {
+        backend: "codex",
+        threadId: "thread-1",
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        interactionId: "tg:first-picker",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    const confirmation = [...harness.delivered]
+      .reverse()
+      .find((intent) => intent.kind === "confirmation");
+    expect(confirmation).toMatchObject({
+      kind: "confirmation",
+      targetSurface: expect.objectContaining({
+        id: `surface:${firstPicker.id}`,
+      }),
+    });
+    expect(confirmation).not.toMatchObject({
+      targetSurface: expect.objectContaining({
+        id: `surface:${secondPicker.id}`,
+      }),
     });
   });
 
@@ -291,6 +429,62 @@ describe("MessagingController", () => {
     });
   });
 
+  it("skips duplicate status renders for backend lifecycle echoes", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "running",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([]);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "thread-1",
+          status: {
+            type: "idle",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    expect(harness.delivered).toHaveLength(2);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toHaveLength(2);
+  });
+
   it("stops typing when the backend reports idle without a turn completion event", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -319,6 +513,117 @@ describe("MessagingController", () => {
       kind: "status",
       text: expect.stringContaining("Turn: completed"),
     });
+  });
+
+  it("refreshes the status card when a bound thread is renamed", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    const renamedNavigation = buildNavigationSnapshot();
+    renamedNavigation.threads[0]!.title = "Wood chuck joke";
+    renamedNavigation.threads[0]!.titleSource = "explicit";
+    harness.getNavigationSnapshot.mockResolvedValueOnce(renamedNavigation);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-1",
+          threadName: "Wood chuck joke",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "status",
+        text: expect.stringContaining("Binding: Wood chuck joke (codex)"),
+      }),
+    ]);
+  });
+
+  it("does not restart typing from a stale assistant delivery after idle", async () => {
+    let now = 1000;
+    let resolveAssistantDelivery!: () => void;
+    const assistantDelivery = new Promise<void>((resolve) => {
+      resolveAssistantDelivery = resolve;
+    });
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      now: () => now,
+      deliver: async (intent) => {
+        delivered.push(intent);
+        if (intent.kind === "message" && intent.role === "assistant") {
+          await assistantDelivery;
+        }
+        return {
+          channel: "telegram",
+          deliveredAt: now,
+          outcome: intent.kind === "status" && intent.delivery?.pin ? "pinned" : "presented",
+          surface: {
+            channel: "telegram",
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    delivered.length = 0;
+
+    const assistantEvent = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "item-1",
+            type: "agentMessage",
+            text: "Done.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    await vi.waitFor(() => {
+      expect(delivered).toEqual([
+        expect.objectContaining({
+          kind: "message",
+          role: "assistant",
+        }),
+      ]);
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "thread-1",
+          status: {
+            type: "idle",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    const idleActivityIndex = delivered.findIndex(
+      (intent) => intent.kind === "activity" && intent.state === "idle",
+    );
+    expect(idleActivityIndex).toBeGreaterThanOrEqual(0);
+
+    now += 11_000;
+    resolveAssistantDelivery();
+    await assistantEvent;
+
+    expect(
+      delivered
+        .slice(idleActivityIndex + 1)
+        .filter((intent) => intent.kind === "activity" && intent.state === "active"),
+    ).toEqual([]);
   });
 
   it("recreates the pinned status surface for /status commands", async () => {
@@ -379,7 +684,7 @@ describe("MessagingController", () => {
     });
   });
 
-  it("detaches a bound conversation and unpins the status surface", async () => {
+  it("detaches a bound conversation, clears status actions, and unpins the status surface", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
@@ -390,14 +695,28 @@ describe("MessagingController", () => {
         },
       }),
     );
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/detach").channel,
+    );
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
 
+    expect(harness.delivered.at(-3)).toMatchObject({
+      kind: "status",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+        fallback: "fail",
+      },
+      targetSurface: binding?.statusSurface,
+    });
     expect(harness.delivered.at(-2)).toMatchObject({
       kind: "dismiss",
       delivery: {
         unpin: true,
       },
+      targetSurface: binding?.pinnedStatusSurface,
     });
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/detach").channel),
@@ -1829,6 +2148,68 @@ describe("MessagingController", () => {
     });
   });
 
+  it("pages large local-to-worktree handoff branch lists from the status menu", async () => {
+    const harness = await createHarness();
+    const navigation = buildLocalHandoffNavigationSnapshot();
+    navigation.directories[0]!.gitStatus = {
+      currentBranch: "feature/handoff",
+      handoffBranches: Array.from({ length: 18 }, (_, index) => `branch-${index + 1}`),
+    };
+    harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:handoff" }),
+    );
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: toWorktree.id,
+        value: toWorktree.value,
+      }),
+    );
+
+    const firstPage = harness.delivered.at(-1);
+    if (!firstPage || !("choices" in firstPage)) {
+      throw new Error("Expected handoff branch picker");
+    }
+    expect(firstPage.prompt).toContain("Page 1/3.");
+    expect(
+      firstPage.choices.filter((choice) => choice.id === "handoff:select-leave-branch"),
+    ).toHaveLength(8);
+    expect(firstPage.choices).toContainEqual(
+      expect.objectContaining({
+        id: "handoff:branches:next",
+        value: expect.objectContaining({ pageIndex: 1 }),
+      }),
+    );
+
+    const nextPage = findChoice(firstPage, "handoff:branches:next");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: nextPage.id,
+        value: nextPage.value,
+      }),
+    );
+
+    const secondPage = harness.delivered.at(-1);
+    if (!secondPage || !("choices" in secondPage)) {
+      throw new Error("Expected second handoff branch picker");
+    }
+    expect(secondPage.prompt).toContain("Page 2/3.");
+    expect(secondPage.choices[0]).toMatchObject({
+      id: "handoff:select-leave-branch",
+      label: "9. branch-9",
+    });
+    expect(secondPage.choices).toContainEqual(
+      expect.objectContaining({
+        id: "handoff:branches:previous",
+        value: expect.objectContaining({ pageIndex: 0 }),
+      }),
+    );
+  });
+
   it("runs a worktree-to-local handoff from the status menu", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());
@@ -2384,6 +2765,7 @@ function buildToolCompletedEvent(id: string, command: string): AgentEvent {
 
 function buildCallbackEvent(params: {
   actionId: string;
+  interactionId?: string;
   routingState?: MessagingInboundCallbackEvent["routingState"];
   value?: MessagingInboundCallbackEvent["value"];
 }): MessagingInboundCallbackEvent {
@@ -2404,7 +2786,7 @@ function buildCallbackEvent(params: {
     routingState: params.routingState,
     interaction: {
       channel: "telegram",
-      id: params.actionId,
+      id: params.interactionId ?? params.actionId,
     },
     actionId: params.actionId,
     value: params.value,

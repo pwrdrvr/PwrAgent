@@ -275,6 +275,28 @@ describe("MessagingStore", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("replaces the active binding when a conversation is rebound", async () => {
+    const { store } = await createStore();
+    await store.upsertBinding(buildBinding({ id: "binding-old", threadId: "thread-old" }));
+    await store.upsertBinding(
+      buildBinding({
+        id: "binding-new",
+        threadId: "thread-new",
+        createdAt: 2000,
+        updatedAt: 2000,
+      }),
+    );
+
+    await expect(store.findActiveBindingForChannel(buildBinding().channel)).resolves
+      .toMatchObject({
+        id: "binding-new",
+        threadId: "thread-new",
+      });
+    await expect(store.getBinding("binding-old")).resolves.toMatchObject({
+      revokedAt: 2000,
+    });
+  });
+
   it("removes pending intents for a binding when the binding is revoked", async () => {
     const { store } = await createStore();
     await store.upsertBinding(buildBinding());

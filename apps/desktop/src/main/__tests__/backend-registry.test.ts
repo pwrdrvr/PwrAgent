@@ -1447,6 +1447,45 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("keeps an idle newly started thread visible until the backend list includes it", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/start"] },
+      threads: [],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.startThread({
+      backend: "codex",
+      cwd: "/repo-a",
+    });
+
+    await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        projectKey: "/repo-a",
+        linkedDirectories: [
+          {
+            id: "/repo-a",
+            kind: "local",
+            label: "repo-a",
+            path: "/repo-a",
+          },
+        ],
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("materializes workspace launchpads into a scratch directory instead of the workspace root", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },

@@ -100,6 +100,28 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
+  it("logs inbound controller failures without rejecting the adapter listener", async () => {
+    const { runtime, adapter, bridge } = await createRuntimeHarness();
+    vi.mocked(bridge.getNavigationSnapshot).mockRejectedValueOnce(
+      new Error("navigation failed"),
+    );
+
+    await runtime.start();
+    await expect(adapter.listener?.(buildCommandEvent("/resume"))).resolves
+      .toBeUndefined();
+
+    expect(messagingLog.error).toHaveBeenCalledWith(
+      "messaging controller failed to handle inbound event",
+      expect.objectContaining({
+        channel: "telegram",
+        conversationId: "chat-1",
+        error: expect.any(Error),
+        eventId: "event-command",
+        eventKind: "command",
+      }),
+    );
+  });
+
   it("forwards backend turn completions to bound channel adapters", async () => {
     const { runtime, adapter, emitBackendEvent } = await createRuntimeHarness();
 

@@ -542,6 +542,70 @@ describe("DiscordAdapter", () => {
     expect(api.createMessage).not.toHaveBeenCalled();
   });
 
+  it("pins and unpins Discord status surfaces when requested", async () => {
+    const api = createApi();
+    const adapter = new DiscordAdapter({
+      api: api as unknown as DiscordApi,
+      config: {
+        channel: "discord",
+        botToken: "discord-token",
+        authorizedActorIds: ["42"],
+      },
+      gateway: createGateway(),
+      now: () => 1000,
+    });
+
+    const pinResult = await adapter.deliver({
+      id: "status-1",
+      kind: "status",
+      createdAt: 1000,
+      status: "idle",
+      text: "Binding: active",
+      delivery: {
+        pin: true,
+      },
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "discord",
+          conversation: {
+            id: "channel-1",
+            kind: "channel",
+            parentId: "guild-1",
+          },
+        },
+        occurredAt: 1000,
+      },
+    });
+
+    expect(pinResult.outcome).toBe("pinned");
+    expect(api.pinMessage).toHaveBeenCalledWith("channel-1", "message-1");
+
+    const unpinResult = await adapter.deliver({
+      id: "dismiss-1",
+      kind: "dismiss",
+      createdAt: 1000,
+      delivery: {
+        unpin: true,
+      },
+      targetSurface: {
+        channel: "discord",
+        id: "message-1",
+        state: {
+          opaque: {
+            channelId: "channel-1",
+            messageId: "message-1",
+          },
+        },
+      },
+    });
+
+    expect(unpinResult.outcome).toBe("unpinned");
+    expect(api.unpinMessage).toHaveBeenCalledWith("channel-1", "message-1");
+  });
+
   it("expires Discord typing activity when no idle signal arrives", async () => {
     vi.useFakeTimers();
     try {
@@ -1032,7 +1096,9 @@ function createApi(options: {
   createMessage: ReturnType<typeof vi.fn>;
   deleteApplicationCommand: ReturnType<typeof vi.fn>;
   listApplicationCommands: ReturnType<typeof vi.fn>;
+  pinMessage: ReturnType<typeof vi.fn>;
   sendTyping: ReturnType<typeof vi.fn>;
+  unpinMessage: ReturnType<typeof vi.fn>;
   updateChannelName: ReturnType<typeof vi.fn>;
   updateApplicationCommand: ReturnType<typeof vi.fn>;
   updateInteractionOriginalResponse: ReturnType<typeof vi.fn>;
@@ -1077,7 +1143,9 @@ function createApi(options: {
     listApplicationCommands: vi.fn(
       async (_applicationId: string) => applicationCommands,
     ),
+    pinMessage: vi.fn(async (_channelId: string, _messageId: string) => undefined),
     sendTyping: vi.fn(async (_channelId: string) => undefined),
+    unpinMessage: vi.fn(async (_channelId: string, _messageId: string) => undefined),
     updateChannelName: vi.fn(
       async (_channelId: string, _request: { name: string }) => undefined,
     ),

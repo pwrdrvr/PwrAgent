@@ -1,5 +1,6 @@
 import { app } from "electron";
 import { execFile as execFileCallback } from "node:child_process";
+import path from "node:path";
 import { promisify } from "node:util";
 import { OverlayStore } from "@pwragnt/agent-core";
 import {
@@ -31,6 +32,7 @@ import {
   type HandoffThreadWorkspaceResponse,
   type ListBackendsRequest,
   type ListBackendsResponse,
+  type LinkedDirectorySummary,
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadResponse,
   type NavigationDirectoryGitStatus,
@@ -231,6 +233,45 @@ function hasHandoffWorkspace(
   directories: AppServerThreadSummary["linkedDirectories"] = [],
 ): boolean {
   return directories.some((directory) => directory.id.startsWith("pwragnt-handoff:"));
+}
+
+function buildLocalLinkedDirectory(cwd: string | undefined): LinkedDirectorySummary[] {
+  const normalized = cwd?.trim();
+  if (!normalized) {
+    return [];
+  }
+  const directoryPath = path.resolve(normalized);
+  return [
+    {
+      id: directoryPath,
+      kind: "local",
+      label: path.basename(directoryPath) || directoryPath,
+      path: directoryPath,
+    },
+  ];
+}
+
+function pendingStartedThreadMatchesFilter(
+  thread: AppServerThreadSummary,
+  filter: string | undefined,
+): boolean {
+  const normalized = filter?.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  return [
+    thread.id,
+    thread.title,
+    thread.summary,
+    thread.projectKey,
+    ...thread.linkedDirectories.flatMap((directory) => [
+      directory.label,
+      directory.path,
+      directory.worktreePath,
+    ]),
+  ]
+    .filter(Boolean)
+    .some((value) => value!.toLowerCase().includes(normalized));
 }
 
 function resolveExpectedThreadBranch(params: {
@@ -900,6 +941,7 @@ export class DesktopBackendRegistry {
   private readonly modelCatalog: BackendModelCatalog;
   private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
+  private readonly pendingStartedThreads = new Map<string, AppServerThreadSummary>();
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
@@ -1144,10 +1186,14 @@ export class DesktopBackendRegistry {
     }
 
     if (params.backend === "grok") {
-      return await this.grokClient.listThreads({
-        archived: params.archived,
-        filter: params.filter,
-      }, diagnostics);
+      return this.withPendingStartedThreads(
+        "grok",
+        await this.grokClient.listThreads({
+          archived: params.archived,
+          filter: params.filter,
+        }, diagnostics),
+        params,
+      );
     }
 
     const threadLists = await Promise.all([
@@ -1416,6 +1462,23 @@ export class DesktopBackendRegistry {
       approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
       sandbox: request.sandbox ?? modeSettings.sandbox,
     });
+    const startedAt = Date.now();
+    this.pendingStartedThreads.set(
+      `${backend}:${result.threadId}`,
+      {
+        id: result.threadId,
+        source: backend,
+        title: result.threadId,
+        titleSource: "fallback",
+        projectKey: cwd,
+        createdAt: startedAt,
+        updatedAt: startedAt,
+        executionMode,
+        ...modelSettings,
+        linkedDirectories: buildLocalLinkedDirectory(cwd),
+        gitBranch: cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined,
+      },
+    );
     this.invalidateThreadListCache(backend);
 
     if (backend === "codex") {
@@ -2287,13 +2350,18 @@ export class DesktopBackendRegistry {
       ...thread,
       executionMode: "default" as const,
     }));
+    const threadsWithPending = this.withPendingStartedThreads(
+      "codex",
+      allThreads,
+      params,
+    );
 
     const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
       backend: "codex",
-      threadIds: allThreads.map((thread) => thread.id),
+      threadIds: threadsWithPending.map((thread) => thread.id),
     });
 
-    return allThreads
+    return threadsWithPending
       .map((thread) => {
         const overlay = overlaysByThreadId[thread.id];
         return {
@@ -2302,6 +2370,34 @@ export class DesktopBackendRegistry {
         };
       })
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+  }
+
+  private withPendingStartedThreads(
+    backend: AppServerBackendKind,
+    threads: AppServerThreadSummary[],
+    params: { archived?: boolean; filter?: string } = {},
+  ): AppServerThreadSummary[] {
+    const threadIds = new Set(threads.map((thread) => thread.id));
+    for (const threadId of threadIds) {
+      this.pendingStartedThreads.delete(`${backend}:${threadId}`);
+    }
+    if (params.archived === true) {
+      return threads;
+    }
+
+    const pendingThreads = [...this.pendingStartedThreads.values()].filter(
+      (thread) =>
+        thread.source === backend &&
+        !threadIds.has(thread.id) &&
+        pendingStartedThreadMatchesFilter(thread, params.filter),
+    );
+    if (pendingThreads.length === 0) {
+      return threads;
+    }
+
+    return [...pendingThreads, ...threads].sort(
+      (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
+    );
   }
 
   private async describeCodexBackend(): Promise<BackendSummary> {

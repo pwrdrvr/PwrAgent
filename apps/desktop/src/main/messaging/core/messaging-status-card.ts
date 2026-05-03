@@ -6,9 +6,11 @@ import type {
   MessagingJsonValue,
   MessagingToolUpdateMode,
   MessagingSingleSelectIntent,
+  MessagingSurfaceAction,
   MessagingStatusIntent,
   ThreadIdentifier,
 } from "@pwragnt/shared";
+import { shortenDerivedThreadTitle } from "@pwragnt/shared";
 import type { MessagingResolvedThreadState } from "./messaging-thread-state.js";
 
 export type MessagingWorkspaceHandoffContext = {
@@ -22,6 +24,8 @@ export type MessagingWorkspaceHandoffContext = {
   workingDirectoryPath: string;
   workspaceKind: "local" | "worktree";
 };
+
+export const HANDOFF_BRANCH_PAGE_SIZE = 8;
 
 export function buildBindingStatusIntent(params: {
   binding: MessagingBindingRecord;
@@ -55,6 +59,7 @@ export function buildBindingStatusIntent(params: {
     "default";
   const activeTurn = params.threadState.activeTurn;
   const branch = formatBranch(params.threadState);
+  const bindingTitle = formatStatusBindingTitle(params.threadState, params.binding.threadId);
   const toolUpdateMode = resolveMessagingToolUpdateMode(
     params.binding,
     params.toolUpdateMode,
@@ -73,7 +78,7 @@ export function buildBindingStatusIntent(params: {
     targetSurface: params.binding.statusSurface,
     status: statusForThreadState(params.threadState),
     text: [
-      `Binding: ${params.threadState.title ?? params.binding.threadId} (${params.binding.backend})`,
+      `Binding: ${bindingTitle} (${params.binding.backend})`,
       `Project: ${projectLabel}`,
       `Directory: ${directoryPath}`,
       params.threadState.worktreePath ? `Worktree: ${params.threadState.worktreePath}` : undefined,
@@ -170,6 +175,35 @@ export function buildBindingStatusIntent(params: {
       },
     ],
   };
+}
+
+function formatStatusBindingTitle(
+  threadState: MessagingResolvedThreadState,
+  fallbackThreadId: ThreadIdentifier,
+): string {
+  if (!threadState.title) {
+    return fallbackThreadId;
+  }
+  if (threadState.titleSource === "derived") {
+    return truncateStatusTitle(
+      shortenDerivedThreadTitle(threadState.title) ?? threadState.title,
+    );
+  }
+  return threadState.title;
+}
+
+function truncateStatusTitle(title: string, limit = 32): string {
+  const normalized = title.replace(/\s+/g, " ").trim();
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+
+  const breakpointWindow = normalized.slice(0, limit + 1);
+  const wordBreak = breakpointWindow.lastIndexOf(" ");
+  if (wordBreak >= Math.floor(limit * 0.6)) {
+    return `${normalized.slice(0, wordBreak).trim()}...`;
+  }
+  return `${normalized.slice(0, limit).trim()}...`;
 }
 
 const TOOL_UPDATE_MODE_ORDER: MessagingToolUpdateMode[] = [
@@ -279,17 +313,61 @@ export function buildHandoffBranchPickerIntent(params: {
   context: MessagingWorkspaceHandoffContext;
   createdAt: number;
   id: string;
+  pageIndex?: number;
+  pageSize?: number;
 }): MessagingSingleSelectIntent {
-  const choices = params.context.leaveLocalBranches.map((branch, index) => ({
-    id: "handoff:select-leave-branch",
-    label: `${index + 1}. ${branch}`,
-    fallbackText: String(index + 1),
-    style: "secondary" as const,
-    value: {
-      ...handoffValue(params.context),
-      leaveLocalBranch: branch,
-    },
-  }));
+  const pageSize = Math.max(1, params.pageSize ?? HANDOFF_BRANCH_PAGE_SIZE);
+  const totalBranches = params.context.leaveLocalBranches.length;
+  const totalPages = Math.max(1, Math.ceil(totalBranches / pageSize));
+  const pageIndex = clampPageIndex(params.pageIndex ?? 0, totalPages);
+  const pageStart = pageIndex * pageSize;
+  const pageBranches = params.context.leaveLocalBranches.slice(
+    pageStart,
+    pageStart + pageSize,
+  );
+  const branchChoices = pageBranches.map((branch, index) => {
+    const branchNumber = pageStart + index + 1;
+    return {
+      id: "handoff:select-leave-branch",
+      label: `${branchNumber}. ${branch}`,
+      fallbackText: String(branchNumber),
+      style: "secondary" as const,
+      value: {
+        ...handoffValue(params.context),
+        leaveLocalBranch: branch,
+      },
+    };
+  });
+  const pageActions: MessagingSurfaceAction[] = [
+    ...(pageIndex > 0
+      ? [
+          {
+            id: "handoff:branches:previous",
+            label: "Previous",
+            fallbackText: "previous",
+            style: "secondary" as const,
+            value: {
+              ...handoffValue(params.context),
+              pageIndex: pageIndex - 1,
+            },
+          },
+        ]
+      : []),
+    ...(pageIndex < totalPages - 1
+      ? [
+          {
+            id: "handoff:branches:next",
+            label: "Next",
+            fallbackText: "next",
+            style: "secondary" as const,
+            value: {
+              ...handoffValue(params.context),
+              pageIndex: pageIndex + 1,
+            },
+          },
+        ]
+      : []),
+  ];
 
   return {
     id: params.id,
@@ -303,16 +381,23 @@ export function buildHandoffBranchPickerIntent(params: {
     targetSurface: params.binding.statusSurface,
     fallbackText: [
       "Choose the branch that should remain checked out in Local.",
-      ...choices.map((choice) => choice.label),
+      totalPages > 1 ? `Page ${pageIndex + 1}/${totalPages}.` : undefined,
+      ...branchChoices.map((choice) => choice.label),
       "Reply with a number, Back, Refresh, or Cancel.",
-    ].join("\n"),
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n"),
     prompt: [
       "Choose the branch that should remain checked out in Local.",
+      totalPages > 1 ? `Page ${pageIndex + 1}/${totalPages}.` : undefined,
       `Moving branch: ${params.context.branch ?? unavailable()}`,
       `Local: ${params.context.repositoryPath}`,
-    ].join("\n"),
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n"),
     choices: [
-      ...choices,
+      ...branchChoices,
+      ...pageActions,
       {
         id: "status:handoff",
         label: "Back",
@@ -334,6 +419,13 @@ export function buildHandoffBranchPickerIntent(params: {
       },
     ],
   };
+}
+
+function clampPageIndex(pageIndex: number, totalPages: number): number {
+  if (!Number.isFinite(pageIndex)) {
+    return 0;
+  }
+  return Math.min(Math.max(0, Math.trunc(pageIndex)), totalPages - 1);
 }
 
 export function buildHandoffConfirmationIntent(params: {

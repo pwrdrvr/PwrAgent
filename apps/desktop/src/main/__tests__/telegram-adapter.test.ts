@@ -16,6 +16,7 @@ import type {
 import { TelegramAdapter } from "@pwragnt/messaging-provider-telegram";
 import type {
   TelegramBotApi,
+  TelegramBotLike,
   TelegramEditForumTopicRequest,
   TelegramEditMessageTextRequest,
   TelegramPinChatMessageRequest,
@@ -38,6 +39,50 @@ afterEach(async () => {
 });
 
 describe("TelegramAdapter", () => {
+  it("registers a Telegram bot error handler for polling middleware failures", async () => {
+    const api = createApi();
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    };
+    const catchHandler = vi.fn<(handler: (error: unknown) => void) => void>();
+    const onHandler = vi.fn<
+      (filter: string, handler: (context: unknown) => void | Promise<void>) => void
+    >();
+    const start = vi.fn<(options?: { allowed_updates?: string[] }) => Promise<void>>(
+      async () => {},
+    );
+    const stop = vi.fn<() => void>();
+    const bot: TelegramBotLike = {
+      api: api as unknown as TelegramBotApi,
+      catch: catchHandler,
+      on: onHandler,
+      start,
+      stop,
+    };
+    const adapter = new TelegramAdapter({
+      bot,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+      },
+      logger,
+      now: () => 1000,
+      pollOnStart: false,
+    });
+
+    await adapter.start(async () => {});
+    expect(catchHandler).toHaveBeenCalledTimes(1);
+
+    const handler = catchHandler.mock.calls[0]?.[0];
+    handler?.(new Error("middleware failed"));
+
+    expect(logger.warn).toHaveBeenCalledWith("telegram bot middleware failed", {
+      error: "middleware failed",
+    });
+  });
+
   it("normalizes /resume and renders a thread picker with inline keyboard handles", async () => {
     const harness = await createControllerHarness();
 
@@ -109,6 +154,23 @@ describe("TelegramAdapter", () => {
     expect(callbackData).not.toContain("thread-1");
     expect(secondCallbackData).toMatch(/^tg:/);
     expect(secondCallbackData).not.toBe(callbackData);
+    await expect(
+      harness.store.resolveCallbackHandle({
+        actorId: "42",
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        handle: callbackData ?? "",
+        now: 1000,
+      }),
+    ).resolves.toMatchObject({
+      actionId: "browse:select-thread",
+      browseSessionId: expect.stringMatching(/^browse:/),
+    });
   });
 
   it("signals typing activity without rendering a visible Telegram message", async () => {
@@ -173,6 +235,60 @@ describe("TelegramAdapter", () => {
       }),
     );
     expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("returns failed delivery results instead of throwing Telegram API errors", async () => {
+    const api = createApi();
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    };
+    api.sendMessage.mockRejectedValueOnce(
+      new Error("Call to 'sendMessage' failed! (429: Too Many Requests)"),
+    );
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+      },
+      logger,
+      now: () => 1000,
+    });
+
+    await expect(
+      adapter.deliver({
+        id: "message-1",
+        kind: "message",
+        createdAt: 1000,
+        parts: [
+          {
+            type: "text",
+            text: "Hello",
+          },
+        ],
+        audit: {
+          actor: {
+            platformUserId: "42",
+          },
+          channel: {
+            channel: "telegram",
+            conversation: {
+              id: "777",
+              kind: "dm",
+            },
+          },
+          occurredAt: 1000,
+        },
+      }),
+    ).resolves.toMatchObject({
+      outcome: "failed",
+      errorMessage: "Call to 'sendMessage' failed! (429: Too Many Requests)",
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("telegram deliver failed kind=message"),
+    );
   });
 
   it("renames Telegram forum topics without allowing plain chat renames", async () => {
@@ -821,6 +937,67 @@ describe("TelegramAdapter", () => {
       backend: "codex",
       threadId: "thread-1",
     });
+  });
+
+  it("edits the topic resume picker when a thread is selected", async () => {
+    const harness = await createControllerHarness();
+
+    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.handleUpdate({
+      update_id: 1,
+      message: {
+        chat: {
+          id: -100777,
+          title: "PwrAgnt",
+          type: "supergroup",
+        },
+        date: 1,
+        from: {
+          first_name: "Ada",
+          id: 42,
+          is_bot: false,
+        },
+        message_id: 100,
+        message_thread_id: 55,
+        text: "/resume",
+      },
+    });
+    const callbackData =
+      harness.api.sendMessage.mock.calls.at(-1)?.[0].reply_markup?.inline_keyboard[0]?.[0]
+        ?.callback_data ?? "";
+
+    await harness.adapter.handleUpdate({
+      callback_query: {
+        data: callbackData,
+        from: {
+          id: 42,
+          is_bot: false,
+        },
+        id: "callback-1",
+        message: {
+          chat: {
+            id: -100777,
+            title: "PwrAgnt",
+            type: "supergroup",
+          },
+          message_id: 200,
+          message_thread_id: 55,
+        },
+      },
+      update_id: 2,
+    });
+
+    expect(harness.api.editMessageText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: -100777,
+        message_id: 200,
+        message_thread_id: 55,
+        reply_markup: {
+          inline_keyboard: [],
+        },
+        text: expect.stringContaining("Thread bound"),
+      }),
+    );
   });
 
   it("resolves persisted callback handles after adapter restart", async () => {

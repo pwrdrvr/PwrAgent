@@ -8,6 +8,7 @@ import type {
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
   MessagingBindingRecord,
+  MessagingCallbackHandleRecord,
   MessagingBrowseSessionRecord,
   MessagingActiveTurnSummary,
   MessagingChannelKind,
@@ -236,16 +237,20 @@ export class MessagingController {
     const lifecycle = turnLifecycleForBackendEvent(event, this.now());
     for (const binding of bindings) {
       let activeTurn = this.getActiveTurn(binding);
+      let turnStateChanged = false;
       if (lifecycle) {
         const previousTurn = activeTurn;
         activeTurn = lifecycle;
-        this.setActiveTurn(binding, activeTurn);
-        this.logBindingTurnStateChange(
-          binding,
-          previousTurn,
-          activeTurn,
-          event.notification.method,
-        );
+        turnStateChanged = !isSameActiveTurnState(previousTurn, activeTurn);
+        if (turnStateChanged) {
+          this.setActiveTurn(binding, activeTurn);
+          this.logBindingTurnStateChange(
+            binding,
+            previousTurn,
+            activeTurn,
+            event.notification.method,
+          );
+        }
       } else if (isThreadStatusIdleEvent(event) && activeTurn) {
         const previousTurn = activeTurn;
         activeTurn = {
@@ -253,13 +258,16 @@ export class MessagingController {
           status: "completed",
           updatedAt: this.now(),
         };
-        this.setActiveTurn(binding, activeTurn);
-        this.logBindingTurnStateChange(
-          binding,
-          previousTurn,
-          activeTurn,
-          event.notification.method,
-        );
+        turnStateChanged = !isSameActiveTurnState(previousTurn, activeTurn);
+        if (turnStateChanged) {
+          this.setActiveTurn(binding, activeTurn);
+          this.logBindingTurnStateChange(
+            binding,
+            previousTurn,
+            activeTurn,
+            event.notification.method,
+          );
+        }
       }
 
       await this.deliverToolActivityForBackendEvent(
@@ -268,8 +276,9 @@ export class MessagingController {
         activeTurn?.turnId,
       );
       if (
-        isTerminalTurnLifecycle(lifecycle) ||
-        (isThreadStatusIdleEvent(event) && activeTurn)
+        turnStateChanged &&
+        (isTerminalTurnLifecycle(lifecycle) ||
+          (isThreadStatusIdleEvent(event) && activeTurn))
       ) {
         await this.flushToolUpdatesForBinding(binding, {
           clear: true,
@@ -282,7 +291,12 @@ export class MessagingController {
         await this.deliverAssistantMessage(assistantText, event, binding);
       }
 
-      if (lifecycle || (isThreadStatusIdleEvent(event) && activeTurn)) {
+      if (isThreadNameUpdatedEvent(event)) {
+        await this.renderBindingStatus(binding);
+        continue;
+      }
+
+      if (turnStateChanged && (lifecycle || (isThreadStatusIdleEvent(event) && activeTurn))) {
         await this.signalTurnActivity(binding, activeTurn!, {
           reason: event.notification.method,
           force: true,
@@ -307,8 +321,16 @@ export class MessagingController {
           force: true,
         });
         await this.renderBindingStatus(binding);
-      } else if (activeTurn?.status === "working") {
-        await this.signalTurnActivity(binding, activeTurn, {
+      } else {
+        const latestActiveTurn = this.getActiveTurn(binding);
+        if (latestActiveTurn?.status !== "working") {
+          continue;
+        }
+        const eventTurnId = turnIdForBackendEvent(event);
+        if (eventTurnId && latestActiveTurn.turnId !== eventTurnId) {
+          continue;
+        }
+        await this.signalTurnActivity(binding, latestActiveTurn, {
           reason: event.notification.method,
         });
       }
@@ -940,11 +962,7 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent,
     actionId: string,
   ): Promise<void> {
-    const session = await this.options.store.findActiveBrowseSessionForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
+    const session = await this.findBrowseSessionForCallback(event);
     if (!session) {
       await this.deliver(
         buildErrorIntent({
@@ -1085,17 +1103,56 @@ export class MessagingController {
         buildConfirmationIntent({
           id: this.newIntentId("bound"),
           createdAt: this.now(),
+          delivery: session.surface
+            ? {
+                mode: "update",
+                replaceMarkup: true,
+              }
+            : undefined,
           title: "Thread bound",
           body: "Messages in this conversation will route to the selected thread.",
           fallbackText: "Send a message to continue the thread.",
+          targetSurface: session.surface,
         }),
-        updatedBinding,
+        undefined,
+        event,
       );
       await this.renderBindingStatus(updatedBinding, event, navigation);
       return;
     }
 
     await this.deliverInvalidBrowseSelection(event);
+  }
+
+  private async findBrowseSessionForCallback(
+    event: MessagingInboundCallbackEvent,
+  ): Promise<MessagingBrowseSessionRecord | undefined> {
+    const callbackHandle = await this.resolveCallbackHandleForEvent(event);
+    if (callbackHandle?.browseSessionId) {
+      return await this.options.store.getBrowseSession(callbackHandle.browseSessionId, {
+        now: this.now(),
+      });
+    }
+    if (callbackHandle) {
+      return undefined;
+    }
+
+    return await this.options.store.findActiveBrowseSessionForChannel({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      now: this.now(),
+    });
+  }
+
+  private async resolveCallbackHandleForEvent(
+    event: MessagingInboundCallbackEvent,
+  ): Promise<MessagingCallbackHandleRecord | undefined> {
+    return await this.options.store.resolveCallbackHandle({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      handle: event.interaction.id,
+      now: this.now(),
+    });
   }
 
   private async renderResumeBrowser(
@@ -1172,18 +1229,36 @@ export class MessagingController {
     const updatedBinding = preferences
       ? await this.updateBindingPreferences(binding, preferences)
       : binding;
+    const optimisticNavigation = navigationWithStartedThread({
+      backend: started.backend,
+      directory,
+      executionMode: started.executionMode,
+      navigation,
+      now: this.now(),
+      preferences,
+      project,
+      threadId: started.threadId,
+    });
     await this.options.store.deleteBrowseSession(session.id);
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("new-thread-bound"),
         createdAt: this.now(),
+        delivery: session.surface
+          ? {
+              mode: "update",
+              replaceMarkup: true,
+            }
+          : undefined,
         title: "Thread started",
         body: `Started and bound a new thread for ${project.label}.`,
         fallbackText: "Send a message to continue the new thread.",
+        targetSurface: session.surface,
       }),
-      updatedBinding,
+      undefined,
+      event,
     );
-    await this.renderBindingStatus(updatedBinding, event);
+    await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
   }
 
   private async presentStatus(event: MessagingInboundEvent): Promise<void> {
@@ -1253,6 +1328,17 @@ export class MessagingController {
     }
     if (actionId === "handoff:local-to-worktree") {
       await this.presentHandoffBranchPicker(binding, event);
+      return;
+    }
+    if (
+      actionId === "handoff:branches:next" ||
+      actionId === "handoff:branches:previous"
+    ) {
+      await this.presentHandoffBranchPicker(
+        binding,
+        event,
+        handoffBranchPageIndexFromValue(event.value),
+      );
       return;
     }
     if (actionId === "handoff:worktree-to-local") {
@@ -1353,6 +1439,7 @@ export class MessagingController {
   private async presentHandoffBranchPicker(
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
+    pageIndex = 0,
   ): Promise<void> {
     const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
     const context = handoffContextForBinding(binding, navigation);
@@ -1372,6 +1459,7 @@ export class MessagingController {
           binding,
           context,
           createdAt: this.now(),
+          pageIndex,
         }),
         audit: this.buildHandoffAudit("handoff.branch_picker", binding, event),
       },
@@ -1990,7 +2078,6 @@ export class MessagingController {
       return;
     }
 
-    const statusSurface = binding.pinnedStatusSurface ?? binding.statusSurface;
     const activeTurn = this.getActiveTurn(binding);
     if (activeTurn) {
       await this.signalTurnActivity(
@@ -2004,24 +2091,11 @@ export class MessagingController {
       );
     }
     await this.flushToolUpdatesForBinding(binding, { clear: true });
-    if (statusSurface) {
-      await this.deliver(
-        {
-          id: this.newIntentId("status-dismiss"),
-          kind: "dismiss",
-          bindingId: binding.id,
-          createdAt: this.now(),
-          delivery: {
-            mode: "dismiss",
-            unpin: Boolean(binding.pinnedStatusSurface),
-          },
-          reason: "detached",
-          targetSurface: statusSurface,
-        },
-        binding,
-        event,
-      );
-    }
+    await this.retireBindingStatus(
+      binding,
+      event,
+      await this.options.backend.getNavigationSnapshot({ backend: "all" }),
+    );
 
     await this.options.store.revokeBinding({
       bindingId: binding.id,
@@ -2639,6 +2713,16 @@ function handoffContextForBinding(
   };
 }
 
+function handoffBranchPageIndexFromValue(value: MessagingJsonValue | undefined): number {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return 0;
+  }
+  const pageIndex = value.pageIndex;
+  return typeof pageIndex === "number" && Number.isFinite(pageIndex)
+    ? Math.max(0, Math.trunc(pageIndex))
+    : 0;
+}
+
 function findNavigationDirectory(
   navigation: NavigationSnapshot,
   linkedDirectory: LinkedDirectorySummary,
@@ -2753,6 +2837,22 @@ function isTerminalTurnLifecycle(
     lifecycle &&
       ["completed", "failed", "interrupted"].includes(lifecycle.status),
   );
+}
+
+function isSameActiveTurnState(
+  previous: MessagingActiveTurnSummary | undefined,
+  next: MessagingActiveTurnSummary | undefined,
+): boolean {
+  return Boolean(
+    previous &&
+      next &&
+      previous.turnId === next.turnId &&
+      previous.status === next.status,
+  );
+}
+
+function isThreadNameUpdatedEvent(event: AgentEvent): boolean {
+  return event.notification.method === "thread/name/updated";
 }
 
 function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boolean {
@@ -2949,6 +3049,81 @@ type TurnLifecycleParams = {
     startedAt?: number | null;
   };
 };
+
+function navigationWithStartedThread(params: {
+  backend: AppServerBackendKind;
+  directory?: NavigationDirectorySummary;
+  executionMode?: ThreadExecutionMode;
+  navigation: NavigationSnapshot;
+  now: number;
+  preferences?: MessagingBrowseSessionRecord["preferences"];
+  project: NonNullable<ReturnType<typeof selectProjectFromValue>>;
+  threadId: ThreadIdentifier;
+}): NavigationSnapshot {
+  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+  if (
+    params.navigation.threads.some(
+      (thread) => thread.source === params.backend && thread.id === params.threadId,
+    )
+  ) {
+    return params.navigation;
+  }
+
+  const directoryPath = params.directory?.path ?? params.project.path;
+  const linkedDirectory: LinkedDirectorySummary | undefined = directoryPath
+    ? {
+        id: params.directory?.key ?? directoryPath,
+        kind: "local",
+        label: params.directory?.label ?? params.project.label,
+        path: directoryPath,
+      }
+    : undefined;
+
+  return {
+    ...params.navigation,
+    unchanged: false,
+    threads: [
+      {
+        id: params.threadId,
+        source: params.backend,
+        title: params.threadId,
+        titleSource: "fallback",
+        projectKey: directoryPath,
+        createdAt: params.now,
+        updatedAt: params.now,
+        executionMode: params.executionMode,
+        model: params.preferences?.model ?? params.navigation.launchpadDefaults.model,
+        reasoningEffort:
+          params.preferences?.reasoningEffort ??
+          params.navigation.launchpadDefaults.reasoningEffort,
+        serviceTier:
+          params.preferences?.serviceTier ?? params.navigation.launchpadDefaults.serviceTier,
+        fastMode:
+          params.preferences?.fastMode ?? params.navigation.launchpadDefaults.fastMode,
+        linkedDirectories: linkedDirectory ? [linkedDirectory] : [],
+        inbox: {
+          inInbox: true,
+          reason: "new-thread",
+        },
+      },
+      ...params.navigation.threads,
+    ],
+    directories: params.navigation.directories.map((directory) =>
+      directory.key === params.directory?.key
+        ? {
+            ...directory,
+            threadKeys: directory.threadKeys.includes(threadKey)
+              ? directory.threadKeys
+              : [threadKey, ...directory.threadKeys],
+            latestUpdatedAt: Math.max(directory.latestUpdatedAt ?? 0, params.now),
+          }
+        : directory,
+    ),
+    inboxThreadKeys: params.navigation.inboxThreadKeys.includes(threadKey)
+      ? params.navigation.inboxThreadKeys
+      : [threadKey, ...params.navigation.inboxThreadKeys],
+  };
+}
 
 function parseTextCommand(text: string): string | undefined {
   const trimmed = text.trim();

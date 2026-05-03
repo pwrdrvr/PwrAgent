@@ -194,7 +194,9 @@ export type DiscordApi = DiscordApplicationCommandApi & {
     channelId: string,
     request: DiscordCreateMessageRequest,
   ): Promise<DiscordMessage>;
+  pinMessage(channelId: string, messageId: string): Promise<void>;
   sendTyping(channelId: string): Promise<void>;
+  unpinMessage(channelId: string, messageId: string): Promise<void>;
   updateMessage(
     channelId: string,
     messageId: string,
@@ -306,14 +308,6 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   }
 
   async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
-    if (intent.kind === "dismiss") {
-      return {
-        channel: this.channel,
-        deliveredAt: this.now(),
-        outcome: "unsupported",
-      };
-    }
-
     const target = this.resolveTarget(intent);
     if (!target) {
       return {
@@ -321,6 +315,34 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         deliveredAt: this.now(),
         errorMessage: "Discord delivery target is missing.",
         outcome: "failed",
+      };
+    }
+
+    if (intent.kind === "dismiss") {
+      if (intent.delivery?.unpin && target.messageId) {
+        try {
+          await this.api.unpinMessage(target.channelId, target.messageId);
+          return {
+            channel: this.channel,
+            deliveredAt: this.now(),
+            outcome: "unpinned",
+            surface: intent.targetSurface,
+          };
+        } catch (error) {
+          return {
+            channel: this.channel,
+            deliveredAt: this.now(),
+            errorMessage: errorMessage(error),
+            outcome: "failed",
+            surface: intent.targetSurface,
+          };
+        }
+      }
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "unsupported",
+        surface: intent.targetSurface,
       };
     }
 
@@ -361,10 +383,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
             content: chunks[0] ?? " ",
           },
         );
+        const pinned = await this.pinMessageIfRequested(intent, message, target);
         return {
           channel: this.channel,
           deliveredAt: this.now(),
-          outcome: "updated",
+          outcome: pinned ? "pinned" : "updated",
           surface: this.surfaceForMessage(message, target),
         };
       }
@@ -386,10 +409,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
               files: filesForDiscordRequest(files),
             },
           );
+          const pinned = await this.pinMessageIfRequested(intent, message, target);
           return {
             channel: this.channel,
             deliveredAt: this.now(),
-            outcome: "updated",
+            outcome: pinned ? "pinned" : "updated",
             surface: this.surfaceForMessage(message, target),
           };
         } catch (error) {
@@ -422,11 +446,15 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       }
 
       const lastMessage = messages.at(-1);
+      const pinned = lastMessage
+        ? await this.pinMessageIfRequested(intent, lastMessage, target)
+        : false;
       return {
         channel: this.channel,
         deliveredAt: this.now(),
-        outcome:
-          intent.delivery?.mode === "update" ? "presented_new" : "presented",
+        outcome: pinned
+          ? "pinned"
+          : intent.delivery?.mode === "update" ? "presented_new" : "presented",
         surface: lastMessage ? this.surfaceForMessage(lastMessage, target) : undefined,
       };
     } catch (error) {
@@ -441,6 +469,25 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         outcome: "failed",
         surface: intent.targetSurface,
       };
+    }
+  }
+
+  private async pinMessageIfRequested(
+    intent: MessagingSurfaceIntent,
+    message: DiscordMessage,
+    target: { channelId: string },
+  ): Promise<boolean> {
+    if (!intent.delivery?.pin) {
+      return false;
+    }
+    try {
+      await this.api.pinMessage(message.channel_id || target.channelId, message.id);
+      return true;
+    } catch (error) {
+      this.options.logger?.warn?.(
+        `discord pin failed channel=${message.channel_id || target.channelId} message=${message.id} error=${errorMessage(error)}`,
+      );
+      return false;
     }
   }
 
@@ -1226,6 +1273,16 @@ class DiscordRestApi implements DiscordApi {
     await this.rest.post(`/channels/${channelId}/typing`, {
       body: {},
     });
+  }
+
+  async pinMessage(channelId: string, messageId: string): Promise<void> {
+    await this.rest.put(`/channels/${channelId}/pins/${messageId}`, {
+      body: {},
+    });
+  }
+
+  async unpinMessage(channelId: string, messageId: string): Promise<void> {
+    await this.rest.delete(`/channels/${channelId}/pins/${messageId}`);
   }
 
   async updateApplicationCommand(

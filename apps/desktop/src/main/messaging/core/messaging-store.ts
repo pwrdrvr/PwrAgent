@@ -28,7 +28,18 @@ export class MessagingStore {
     binding: MessagingBindingRecord,
   ): Promise<MessagingBindingRecord> {
     const sanitized = sanitizeBinding(binding);
+    const channelKey = buildMessagingConversationKey(sanitized.channel);
     return await this.withData((data) => {
+      for (const existing of Object.values(data.bindings)) {
+        if (
+          existing.id !== sanitized.id &&
+          !existing.revokedAt &&
+          buildMessagingConversationKey(existing.channel) === channelKey
+        ) {
+          revokeBindingInData(data, existing.id, sanitized.updatedAt);
+        }
+      }
+
       data.bindings[sanitized.id] = sanitized;
       return structuredClone(sanitized);
     });
@@ -44,11 +55,13 @@ export class MessagingStore {
     const channelKey = buildMessagingConversationKey(channel);
     return await this.withReadData((data) =>
       cloneOptional(
-        Object.values(data.bindings).find(
-          (binding) =>
-            !binding.revokedAt &&
-            buildMessagingConversationKey(binding.channel) === channelKey,
-        ),
+        Object.values(data.bindings)
+          .filter(
+            (binding) =>
+              !binding.revokedAt &&
+              buildMessagingConversationKey(binding.channel) === channelKey,
+          )
+          .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)[0],
       ),
     );
   }
@@ -74,35 +87,12 @@ export class MessagingStore {
     revokedAt?: number;
   }): Promise<MessagingBindingRecord | undefined> {
     return await this.withData((data) => {
-      const current = data.bindings[params.bindingId];
-      if (!current) {
-        return undefined;
-      }
-
-      const revoked: MessagingBindingRecord = {
-        ...current,
-        revokedAt: params.revokedAt ?? Date.now(),
-        updatedAt: params.revokedAt ?? Date.now(),
-      };
-      data.bindings[params.bindingId] = revoked;
-
-      for (const [intentId, intent] of Object.entries(data.pendingIntents)) {
-        if (intent.bindingId === params.bindingId) {
-          delete data.pendingIntents[intentId];
-        }
-      }
-      for (const [sessionId, session] of Object.entries(data.browseSessions)) {
-        if (session.bindingId === params.bindingId) {
-          delete data.browseSessions[sessionId];
-        }
-      }
-      for (const [handleId, handle] of Object.entries(data.callbackHandles)) {
-        if (handle.bindingId === params.bindingId) {
-          delete data.callbackHandles[handleId];
-        }
-      }
-
-      return structuredClone(revoked);
+      const revoked = revokeBindingInData(
+        data,
+        params.bindingId,
+        params.revokedAt ?? Date.now(),
+      );
+      return revoked ? structuredClone(revoked) : undefined;
     });
   }
 
@@ -473,6 +463,42 @@ function sanitizeDelivery(delivery: MessagingDeliveryRecord): MessagingDeliveryR
     ...delivery,
     surface: sanitizeSurfaceRef(delivery.surface),
   };
+}
+
+function revokeBindingInData(
+  data: MessagingStoreData,
+  bindingId: string,
+  revokedAt: number,
+): MessagingBindingRecord | undefined {
+  const current = data.bindings[bindingId];
+  if (!current) {
+    return undefined;
+  }
+
+  const revoked: MessagingBindingRecord = {
+    ...current,
+    revokedAt,
+    updatedAt: revokedAt,
+  };
+  data.bindings[bindingId] = revoked;
+
+  for (const [intentId, intent] of Object.entries(data.pendingIntents)) {
+    if (intent.bindingId === bindingId) {
+      delete data.pendingIntents[intentId];
+    }
+  }
+  for (const [sessionId, session] of Object.entries(data.browseSessions)) {
+    if (session.bindingId === bindingId) {
+      delete data.browseSessions[sessionId];
+    }
+  }
+  for (const [handleId, handle] of Object.entries(data.callbackHandles)) {
+    if (handle.bindingId === bindingId) {
+      delete data.callbackHandles[handleId];
+    }
+  }
+
+  return revoked;
 }
 
 function sanitizeSurfaceRef<T extends { state?: MessagingAdapterState }>(
