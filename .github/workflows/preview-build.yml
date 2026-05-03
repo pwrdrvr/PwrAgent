@@ -23,7 +23,8 @@ jobs:
       - name: Compute preview version
         id: version
         run: |
-          base=$(node -p "require('./apps/desktop/package.json').version")
+          raw=$(node -p "require('./apps/desktop/package.json').version")
+          base=$(echo "$raw" | sed 's/-.*//')
           preview="${base}-pr.${{ github.event.pull_request.number }}"
           echo "version=${preview}" >> "$GITHUB_OUTPUT"
           echo "Preview version: ${preview}"
