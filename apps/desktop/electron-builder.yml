@@ -67,6 +67,19 @@ mac:
       arch: [arm64]
 
 dmg:
+  background: build/dmg-background@2x.png
+  window:
+    width: 660
+    height: 400
+  iconSize: 80
+  contents:
+    - x: 180
+      y: 260
+      type: file
+    - x: 480
+      y: 260
+      type: link
+      path: /Applications
   writeUpdateInfo: false
 
 # Phase 1: github provider against the existing private pwrdrvr/PwrAgent repo.
