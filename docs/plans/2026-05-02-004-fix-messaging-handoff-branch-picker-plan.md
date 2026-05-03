@@ -26,12 +26,20 @@ Also update the desktop handoff dialog so it presents the same product choices
 explicitly instead of forcing the current "branch to move / leave Local on"
 flow. The dialog should offer:
 
-- Move dirty non-ignored changes to a new detached-HEAD worktree and leave the
-  current branch checked out where it is.
-- Move the current branch plus dirty non-ignored changes to a new worktree and
-  switch the current checkout to a selected branch.
-- A disabled placeholder for a future model-suggested branch name path that
-  behaves like the detached path but creates a named branch immediately.
+- `Handoff to Detached HEAD`: leave Local on the current branch, create a new
+  detached worktree at the current branch tip, and move dirty non-ignored
+  changes on top.
+- `Handoff to New Branch`: disabled in this PR; future flow keeps Local where it
+  is, creates a new branch in the new worktree, and uses the ephemeral
+  branch-name suggestion call.
+- `Handoff Current Branch`: move the current branch plus dirty non-ignored
+  changes to a new worktree, then switch the current checkout to a selected
+  branch.
+
+For Telegram and Discord, use shorter button labels to avoid heavy repeated
+prefixes: `Detached Worktree`, `New Branch Worktree`, and `Move Branch
+Worktree`. The prompt can carry the full framing: "Choose how to create the new
+worktree."
 
 ## Problem Frame
 
@@ -240,16 +248,16 @@ stateDiagram-v2
     HandoffOverview --> DetachedConfirm: primary local-to-worktree
     DetachedConfirm --> RunningDetached: Confirm
     RunningDetached --> RefreshedStatus: success
-    HandoffOverview --> BranchMovePage: Move branch instead
+    HandoffOverview --> BranchMovePage: Move Branch Worktree
     BranchMovePage --> BranchMovePage: Next / Previous
     BranchMovePage --> BranchMoveConfirm: select branch
     BranchMoveConfirm --> RunningBranchMove: Confirm
     RunningBranchMove --> RefreshedStatus: success
     HandoffOverview --> WorktreeToLocalConfirm: worktree-to-local
     WorktreeToLocalConfirm --> RunningWorktreeToLocal: Confirm
-    DesktopDialog --> DetachedConfirm: Move changes to Detached HEAD
-    DesktopDialog --> BranchMoveConfirm: Move branch + changes
-    DesktopDialog --> SuggestedBranchPlaceholder: disabled future option
+    DesktopDialog --> DetachedConfirm: Handoff to Detached HEAD
+    DesktopDialog --> SuggestedBranchPlaceholder: Handoff to New Branch (disabled)
+    DesktopDialog --> BranchMoveConfirm: Handoff Current Branch
     RunningWorktreeToLocal --> RefreshedStatus: success
     DetachedConfirm --> HandoffOverview: Back
     BranchMovePage --> HandoffOverview: Back
@@ -409,8 +417,10 @@ with a paged secondary branch-moving path.
 - Extend handoff pending state/action values with page index for branch-moving
   selection. Keep state generic JSON, not provider-specific state.
 - Change Local handoff overview to show a primary detached-worktree action when
-  eligible and a secondary `Move branch instead` action that opens the paged
+  eligible and a secondary `Move Branch Worktree` action that opens the paged
   branch picker.
+- Use compact messaging labels: `Detached Worktree`, disabled/follow-up `New
+  Branch Worktree`, and `Move Branch Worktree`.
 - For branch-moving picker pages, render only the current page of branches plus
   Previous/Next as applicable, Back, Refresh, and Cancel.
 - Use page-local numeric fallback for visible branch choices, and show page
@@ -436,7 +446,7 @@ with a paged secondary branch-moving path.
   branch list.
 - Happy path: choosing the detached primary action renders confirmation without
   a branch picker and calls `handoffThreadWorkspace` with the detached strategy.
-- Happy path: choosing `Move branch instead` renders page 1 with eight branch
+- Happy path: choosing `Move Branch Worktree` renders page 1 with eight branch
   choices, `Next`, `Back`, `Refresh`, and `Cancel`.
 - Happy path: pressing `Next` renders page 2 with the next eight branches and
   includes `Previous`.
@@ -524,8 +534,8 @@ branch-moving handoff, and a disabled future suggested-branch placeholder.
 - Add local dialog state for the selected handoff strategy. Default
   Local-to-worktree to detached dirty-change handoff for named Local branches.
 - Render strategy choices as selectable rows inside the existing handoff modal:
-  detached dirty-change handoff, branch-moving handoff, and disabled
-  model-suggested branch placeholder.
+  `Handoff to Detached HEAD`, disabled `Handoff to New Branch`, and `Handoff
+  Current Branch`.
 - Only show `Leave Local on` / `Leave current checkout on` when the
   branch-moving strategy is selected.
 - Submit detached handoff with the explicit detached strategy and source branch
@@ -636,7 +646,7 @@ validation case that exposed the bug.
 - Update manual smoke tests for both Telegram and Discord, but prioritize
   Telegram because the live failure was observed there.
 - Mention that the primary detached path is best for moving uncommitted work out
-  of Local, while `Move branch instead` is the branch-history path.
+  of Local, while `Handoff Current Branch` is the branch-history path.
 - Mention the desktop placeholder for future model-suggested branch naming so it
   is understood as intentionally disabled.
 - No migration is required unless implementation decides to persist a new

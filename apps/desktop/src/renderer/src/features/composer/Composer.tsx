@@ -3788,12 +3788,26 @@ export function Composer(props: ComposerProps) {
                     onClick={() => setLocalHandoffStrategy("detached-changes")}
                   >
                     <span className="workspace-handoff-dialog__strategy-title">
-                      Move changes to Detached HEAD
+                      Handoff to Detached HEAD
                     </span>
                     <span>
-                      Create a detached worktree from the current branch tip. Keep the
-                      current branch checked out here and move dirty tracked and
-                      non-ignored files on top.
+                      Keep Local on the current branch. Create a detached worktree at
+                      the current branch tip and move dirty non-ignored changes on top.
+                    </span>
+                  </button>
+                  <button
+                    aria-checked={localHandoffStrategy === "suggested-branch"}
+                    className="workspace-handoff-dialog__strategy"
+                    disabled
+                    role="radio"
+                    type="button"
+                  >
+                    <span className="workspace-handoff-dialog__strategy-title">
+                      Handoff to New Branch
+                    </span>
+                    <span>
+                      Coming soon: keep Local on this branch and create a suggested
+                      branch in the new worktree.
                     </span>
                   </button>
                   <button
@@ -3805,25 +3819,11 @@ export function Composer(props: ComposerProps) {
                     onClick={() => setLocalHandoffStrategy("move-branch")}
                   >
                     <span className="workspace-handoff-dialog__strategy-title">
-                      Move current branch + changes
+                      Handoff Current Branch
                     </span>
                     <span>
                       Move this branch into the new worktree, then switch this checkout to
                       a selected branch.
-                    </span>
-                  </button>
-                  <button
-                    aria-checked={localHandoffStrategy === "suggested-branch"}
-                    className="workspace-handoff-dialog__strategy"
-                    disabled
-                    role="radio"
-                    type="button"
-                  >
-                    <span className="workspace-handoff-dialog__strategy-title">
-                      Suggest branch name
-                    </span>
-                    <span>
-                      Coming soon: create a branch in the new worktree using a suggested name.
                     </span>
                   </button>
                 </div>

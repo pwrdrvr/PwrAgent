@@ -1638,10 +1638,10 @@ describe("Composer", () => {
     expect(dialog.closest(".workspace-handoff-modal")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("feat/thread-workspace-handoff-plan");
     expect(
-      screen.getByRole("radio", { name: /Move changes to Detached HEAD/ })
+      screen.getByRole("radio", { name: /Handoff to Detached HEAD/ })
     ).toHaveAttribute("aria-checked", "true");
     expect(screen.queryByLabelText("Leave current checkout on")).not.toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Suggest branch name/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /Handoff to New Branch/ })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
     await waitFor(() => {
@@ -1707,7 +1707,7 @@ describe("Composer", () => {
 
     fireEvent.click(screen.getByLabelText("Workspace mode"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
-    fireEvent.click(screen.getByRole("radio", { name: /Move current branch/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
 
     expect(screen.getByLabelText("Leave current checkout on")).toHaveValue("main");
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
