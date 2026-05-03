@@ -34,7 +34,6 @@ type HandoffParams = {
   repositoryPath?: string;
   sourcePath?: string;
   sourceBranch?: string;
-  baseBranch?: string;
   leaveLocalBranch?: string;
   now?: number;
 };
@@ -354,14 +353,8 @@ export class GitWorkspaceHandoffService {
     params: HandoffParams,
     context: HandoffContext,
   ): Promise<HandoffThreadWorkspaceResponse> {
-    const baseBranch = sanitizeBranchName(params.baseBranch ?? "");
-    if (!baseBranch) {
-      throw new Error("Choose a base branch for detached worktree handoff.");
-    }
-
-    const baseCommit = trim(
-      (await runGit(context.repositoryPath, ["rev-parse", "--verify", `${baseBranch}^{commit}`]))
-        .stdout,
+    const baseSha = trim(
+      (await runGit(context.sourcePath, ["rev-parse", "--verify", "HEAD^{commit}"])).stdout,
     );
     const targetPath = this.buildTargetWorktreePath({
       repositoryPath: context.repositoryPath,
@@ -374,7 +367,7 @@ export class GitWorkspaceHandoffService {
 
     const warnings = [
       "Ignored files are not preserved by workspace handoff.",
-      "Committed changes from the current branch are not moved to the detached worktree.",
+      "The new worktree starts detached at the current branch tip.",
     ];
     const sourceStash = await createNamedStashIfDirty({
       path: context.sourcePath,
@@ -385,7 +378,7 @@ export class GitWorkspaceHandoffService {
     }
 
     await mkdir(path.dirname(targetPath), { recursive: true });
-    await runGit(context.repositoryPath, ["worktree", "add", "--detach", targetPath, baseCommit]);
+    await runGit(context.repositoryPath, ["worktree", "add", "--detach", targetPath, baseSha]);
     const appliedSourceStash = await applyVerifyAndDropStash(targetPath, sourceStash);
 
     const linkedDirectory = this.buildLinkedDirectory({
@@ -400,7 +393,7 @@ export class GitWorkspaceHandoffService {
       direction: "local-to-worktree",
       strategy: "detached-changes",
       workMode: "worktree",
-      baseBranch,
+      baseSha,
       repositoryPath: context.repositoryPath,
       targetPath,
       linkedDirectory,

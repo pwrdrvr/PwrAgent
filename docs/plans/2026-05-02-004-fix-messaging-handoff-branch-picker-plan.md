@@ -14,10 +14,9 @@ deepened: 2026-05-02
 Fix the messaging workspace handoff flow so Telegram and Discord do not render
 huge branch-choice dialogs during Local-to-worktree handoff. The default
 messaging path should become more opinionated: when a bound Local thread is on
-a named branch and the repository default branch is known, the primary handoff
-choice should create a new detached worktree from the default branch commit and
-move dirty non-ignored changes there, without asking which branch Local should
-switch to.
+a named branch, the primary handoff choice should create a new detached
+worktree from the current branch tip and move dirty non-ignored changes there,
+without asking which branch Local should switch to.
 
 Keep the existing branch-moving handoff available as a secondary path, but make
 any branch picker paged at about eight choices per page with room for Previous,
@@ -47,9 +46,10 @@ The deeper issue is product behavior, not only rendering. The existing
 branch-moving handoff assumes the user wants to move the current branch to a
 worktree, so it must ask what Local should check out afterward. For messaging,
 the better default is usually simpler: leave the Local branch alone, create a
-new detached worktree from the default branch commit, and move the current dirty
-non-ignored working changes into that worktree. This avoids turning a common
-remote handoff into a branch-management prompt.
+new detached worktree from the current branch tip, and move the current dirty
+non-ignored working changes into that worktree. This keeps committed branch
+context intact while avoiding turning a common remote handoff into a
+branch-management prompt.
 
 ## Requirements Trace
 
@@ -62,16 +62,15 @@ remote handoff into a branch-management prompt.
   controls: Previous when applicable, Next when applicable, Back, Refresh, and
   Cancel.
 - R4. The primary Local-to-worktree messaging path should avoid branch picking
-  when the thread is on a named Local branch and the repository default branch
-  is known.
+  when the thread is on a named Local branch.
 - R5. The primary opinionated path should create a detached worktree at the
-  current commit of the default branch, stash/move dirty non-ignored Local
-  changes into that worktree, and make the thread point at the new worktree.
-- R6. The confirmation copy must state that committed changes on the Local
-  branch are not being moved by the opinionated detached-worktree path.
+  current branch tip, stash/move dirty non-ignored Local changes into that
+  worktree, and make the thread point at the new worktree.
+- R6. The confirmation copy must state that committed changes reachable from the
+  current branch tip are included as the detached worktree base, while ignored
+  files are not moved.
 - R7. The branch-moving path must remain available for cases where the user
-  explicitly wants to move the branch, or where the detached default-branch path
-  is not eligible.
+  explicitly wants to move the branch.
 - R8. The flow must remain channel-neutral. Telegram and Discord providers
   should render generic intents and opaque callback handles; controller logic
   must not branch on provider identity.
@@ -100,9 +99,10 @@ remote handoff into a branch-management prompt.
   longer presents branch-moving as the only Local-to-worktree choice.
 - Out of scope: preserving ignored files. Existing handoff behavior already
   excludes ignored files, and the messaging copy should continue to say so.
-- Out of scope: moving committed branch history when the user chooses the
-  opinionated detached-worktree path. That path only moves dirty non-ignored
-  working changes.
+- Out of scope: switching Local away from the current branch when the user
+  chooses the opinionated detached-worktree path. That path keeps Local on the
+  current branch and moves dirty non-ignored working changes to a detached
+  worktree based on the current branch tip.
 - Out of scope: a generic low-button-count policy for every messaging surface.
   This plan fixes handoff branch lists while reusing existing picker patterns.
 
@@ -188,14 +188,12 @@ remote handoff into a branch-management prompt.
 - **Keep pagination in the handoff/status-card layer, not provider packages.**
   Providers should receive a bounded generic `single_select` or picker-like
   intent. They should not know that a branch list had 56 total entries.
-- **Make copy explicit about what moves.** Detached handoff should say dirty
-  tracked and non-ignored untracked changes move; committed branch history and
-  ignored files do not.
-- **Fail closed when default-branch metadata is missing.** If the default branch
-  cannot be identified, the primary detached path should be unavailable or ask
-  for an explicit base in a future flow. Do not guess across repositories. Treat
-  `main` as the common case named in the request, but implement against the
-  repository's detected default branch.
+- **Make copy explicit about what moves.** Detached handoff should say the new
+  worktree starts at the current branch tip, dirty tracked and non-ignored
+  untracked changes move on top, and ignored files do not.
+- **Fail closed when source branch metadata is missing.** If the source checkout
+  has no named branch or resolvable `HEAD`, the primary detached path should be
+  unavailable rather than guessing across repositories.
 
 ## Open Questions
 
@@ -298,10 +296,10 @@ dirty-change handoff without overloading missing fields.
   branch-moving behavior from detached dirty-change behavior.
 - Keep existing requests without the new field compatible by treating them as
   branch-moving handoff when `leaveLocalBranch` is present.
-- Carry default-branch/base information from navigation metadata into the
-  detached strategy request value used by messaging callbacks.
+- Carry source branch information from navigation metadata into the detached
+  strategy request value used by messaging callbacks.
 - Make validation reject ambiguous detached requests, especially missing
-  repository path, missing source path, or missing default branch/base commit.
+  repository path, missing source path, or missing source branch.
 
 **Patterns to follow:**
 - Existing handoff request validation in
@@ -312,11 +310,11 @@ dirty-change handoff without overloading missing fields.
 **Test scenarios:**
 - Happy path: a detached Local-to-worktree request serializes through messaging
   action values and parses back with direction, strategy, repository path,
-  source path, source branch, and default branch/base.
+  source path, and source branch.
 - Happy path: an existing branch-moving request with `leaveLocalBranch` remains
   valid and is routed as branch-moving handoff.
-- Edge case: a detached request without default branch/base metadata is rejected
-  before calling the Git service.
+- Edge case: a detached request without source branch metadata is rejected before
+  calling the Git service.
 - Error path: a stale callback whose strategy no longer matches current
   workspace metadata is rejected with a refreshable handoff-unavailable message.
 - Integration: IPC/backend registry tests prove the new strategy field crosses
@@ -329,7 +327,7 @@ dirty-change handoff without overloading missing fields.
 - [x] **Unit 2: Support detached dirty-change handoff in the Git service**
 
 **Goal:** Add the main-process Git behavior needed by the opinionated messaging
-default: create a detached worktree from the default branch commit and move dirty
+default: create a detached worktree from the current branch tip and move dirty
 non-ignored changes from Local into it.
 
 **Requirements:** R4, R5, R6, R10
@@ -343,17 +341,16 @@ non-ignored changes from Local into it.
 **Approach:**
 - Add a Local-to-worktree strategy branch that does not switch Local to another
   branch and does not check out the current source branch in the new worktree.
-- Resolve the repository default branch to a commit before mutation, then create
-  the target worktree detached at that commit. In most PwrAgnt repositories this
-  will be `main`, but the service should use the detected default branch rather
-  than hard-coding a branch name.
+- Resolve the source checkout's `HEAD` to a commit before mutation, then create
+  the target worktree detached at that commit. This preserves any committed
+  branch context that dirty working changes may depend on.
 - Stash dirty tracked and non-ignored untracked Local changes, apply them in the
   detached worktree, and drop the stash only after apply succeeds.
 - Leave the Local checkout on its current branch after the dirty changes have
   been moved out. The thread's active workspace metadata should point to the new
   detached worktree.
-- Return warnings that committed branch history was not moved and ignored files
-  were not preserved.
+- Return warnings that the new worktree is detached at the current branch tip
+  and ignored files were not preserved.
 - Preserve existing branch-moving behavior for explicit branch-moving requests.
 
 **Execution note:** Start with temporary Git repository tests. This is easy to
@@ -366,23 +363,19 @@ get subtly wrong with branch occupancy, stash behavior, and detached HEAD state.
   `apps/desktop/src/main/app-server/git-directory-service.ts`
 
 **Test scenarios:**
-- Happy path: Local on `feature`, default branch `main`, dirty tracked file and
-  non-ignored untracked file -> new worktree is detached at `main`, both dirty
-  changes appear in the new worktree, Local remains on `feature` and is clean.
+- Happy path: Local on `feature`, dirty tracked file and non-ignored untracked
+  file -> new worktree is detached at the `feature` tip, both dirty changes
+  appear in the new worktree, Local remains on `feature` and is clean.
 - Happy path: Local has no dirty non-ignored changes -> detached worktree is
   still created and the response warns that no working changes were moved, if
   implementation chooses to allow that case.
 - Edge case: ignored files under Local are not moved, and the response warns
   that ignored files are excluded.
-- Edge case: committed changes reachable only from `feature` do not appear in
-  the detached worktree, and confirmation/success copy makes that explicit.
-- Edge case: dirty changes that depend on committed `feature`-only edits may
-  conflict or produce incomplete context when applied to the default branch
-  commit; the service reports the apply failure or warning without dropping the
-  recovery stash.
+- Edge case: committed changes reachable only from `feature` do appear in the
+  detached worktree because the target starts from the current branch tip.
 - Error path: stash apply conflict leaves the stash recoverable and does not
   drop it.
-- Error path: missing or unresolvable default branch fails before stashing or
+- Error path: missing or unresolvable source `HEAD` fails before stashing or
   creating a worktree.
 - Regression: branch-moving Local-to-worktree with `leaveLocalBranch` still
   switches Local to the chosen branch and checks out the moved branch in the
@@ -390,8 +383,8 @@ get subtly wrong with branch occupancy, stash behavior, and detached HEAD state.
 
 **Verification:**
 - Temporary-repo tests prove the new strategy creates a detached target from the
-  default branch commit, moves only dirty non-ignored changes, and leaves the
-  existing branch-moving strategy intact.
+  current branch tip, moves dirty non-ignored changes, preserves committed
+  branch context, and leaves the existing branch-moving strategy intact.
 
 - [ ] **Unit 3: Rework messaging handoff flow and branch pagination**
 
@@ -426,8 +419,8 @@ with a paged secondary branch-moving path.
   consistent with the current managed status submode behavior.
 - Ensure fallback text says that replying `next`, `previous`, `back`,
   `refresh`, or `cancel` activates the corresponding visible control.
-- For repositories without default branch metadata, skip the detached primary
-  path and send the user to the paged branch-moving path with explanatory copy.
+- When the source branch cannot be resolved, skip the detached primary path and
+  send the user to the paged branch-moving path with explanatory copy.
 
 **Patterns to follow:**
 - Pagination and fallback shape in
@@ -438,8 +431,9 @@ with a paged secondary branch-moving path.
   `apps/desktop/src/main/messaging/core/messaging-status-card.ts`
 
 **Test scenarios:**
-- Happy path: a Local handoff context with default branch and 56 leave-local
-  branches renders overview with the detached primary action and no branch list.
+- Happy path: a Local handoff context with a named source branch and 56
+  leave-local branches renders overview with the detached primary action and no
+  branch list.
 - Happy path: choosing the detached primary action renders confirmation without
   a branch picker and calls `handoffThreadWorkspace` with the detached strategy.
 - Happy path: choosing `Move branch instead` renders page 1 with eight branch
@@ -451,8 +445,8 @@ with a paged secondary branch-moving path.
 - Edge case: exactly eight branches renders one page with no `Next`.
 - Edge case: nine branches renders two pages and never puts all nine branch
   choices on the same prompt.
-- Edge case: no default branch metadata skips detached primary action and opens
-  or explains the branch-moving fallback.
+- Edge case: no source branch metadata skips detached primary action and opens or
+  explains the branch-moving fallback.
 - Error path: stale page callback after branch metadata changes is rejected with
   a refreshable message.
 - Integration: numeric fallback `1` selects only a branch visible on the current
@@ -528,14 +522,13 @@ branch-moving handoff, and a disabled future suggested-branch placeholder.
 
 **Approach:**
 - Add local dialog state for the selected handoff strategy. Default
-  Local-to-worktree to detached dirty-change handoff when a default branch is
-  available.
+  Local-to-worktree to detached dirty-change handoff for named Local branches.
 - Render strategy choices as selectable rows inside the existing handoff modal:
   detached dirty-change handoff, branch-moving handoff, and disabled
   model-suggested branch placeholder.
 - Only show `Leave Local on` / `Leave current checkout on` when the
   branch-moving strategy is selected.
-- Submit detached handoff with the explicit detached strategy and default branch
+- Submit detached handoff with the explicit detached strategy and source branch
   metadata. Submit branch-moving handoff with the explicit branch-moving
   strategy and selected `leaveLocalBranch`.
 - Keep existing worktree-to-local confirmation behavior.
@@ -553,13 +546,12 @@ branch-moving handoff, and a disabled future suggested-branch placeholder.
   detached dirty-change handoff selected by default and the suggested-branch row
   disabled.
 - Happy path: submitting the default selected strategy calls
-  `onHandoffThreadWorkspace` with the detached strategy and default branch/base
+  `onHandoffThreadWorkspace` with the detached strategy and source branch
   metadata, without `leaveLocalBranch`.
 - Happy path: selecting branch-moving handoff reveals the leave-current-checkout
   branch select and submits the branch-moving strategy with `leaveLocalBranch`.
-- Edge case: when default branch metadata is missing, detached strategy is
-  disabled or clearly unavailable, and branch-moving remains selectable when
-  branch choices exist.
+- Edge case: when branch choices are missing, detached strategy remains
+  available for a named Local branch and branch-moving is disabled.
 - Regression: worktree-to-local still renders direct confirmation and submits
   `worktree-to-local` unchanged.
 
@@ -589,8 +581,8 @@ validation case that exposed the bug.
   - unchanged worktree-to-local confirmation.
 - Add a manual Telegram smoke step with a repository that has more than 50
   branches and verify that branch choices are paged.
-- Add copy guidance that committed branch history is not moved by the detached
-  dirty-change path.
+- Add copy guidance that the detached dirty-change path starts from the current
+  branch tip and therefore includes committed branch context.
 
 **Patterns to follow:**
 - Existing messaging handoff manual validation section in
@@ -631,12 +623,12 @@ validation case that exposed the bug.
 
 | Risk | Mitigation |
 |------|------------|
-| Detached handoff surprises users who expected committed branch history to move | Make confirmation copy explicit and keep branch-moving as a secondary path |
+| Detached handoff surprises users who expected the branch itself to move | Make confirmation copy explicit that the new worktree is detached at the branch tip and keep branch-moving as a secondary path |
 | Strategy contract breaks old desktop branch-moving callers | Treat existing `leaveLocalBranch` requests as branch-moving and preserve old tests |
 | Branch pagination state goes stale after repository branch changes | Re-read navigation before confirmation and reject invalid selections with refresh guidance |
 | Provider buttons remain too dense despite pagination | Use eight choices per page and reserve rows for navigation/cancel; provider tests assert bounded output |
 | Git service drops a stash before apply is safely complete | Reuse apply-then-drop behavior and add temporary Git tests for conflict/recovery paths |
-| Dirty changes depend on commits that exist only on the Local branch | Confirmation copy says committed branch history is not moved; stash apply failures keep recovery details |
+| Dirty changes depend on commits that exist only on the Local branch | Start the detached worktree from the current branch tip before applying dirty changes |
 | Desktop and messaging drift into different handoff semantics | Share the explicit strategy contract and cover both surfaces in tests |
 
 ## Documentation / Operational Notes

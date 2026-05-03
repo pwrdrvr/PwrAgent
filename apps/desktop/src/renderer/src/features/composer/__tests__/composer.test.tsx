@@ -1651,7 +1651,6 @@ describe("Composer", () => {
         repositoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
         sourcePath: "/Users/huntharo/pwrdrvr/PwrAgnt",
         sourceBranch: "feat/thread-workspace-handoff-plan",
-        baseBranch: "main",
       });
     });
 

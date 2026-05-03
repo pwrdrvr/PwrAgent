@@ -110,19 +110,21 @@ describe("GitWorkspaceHandoffService", () => {
       repositoryPath: repoPath,
       sourcePath: repoPath,
       sourceBranch: "feature/handoff",
-      baseBranch: "main",
       now: 1500,
     });
 
     expect(result.workMode).toBe("worktree");
     expect(result.strategy).toBe("detached-changes");
     expect(result.branch).toBeUndefined();
-    expect(result.baseBranch).toBe("main");
+    expect(result.baseSha).toMatch(/^[0-9a-f]{40}$/);
     expect(result.linkedDirectory.kind).toBe("worktree");
     expect(result.sourceStash).toMatchObject({ applied: true, dropped: true });
     expect(await git(repoPath, ["branch", "--show-current"])).toBe("feature/handoff");
     expect(await git(result.targetPath, ["branch", "--show-current"])).toBe("");
-    expect(await pathExists(path.join(result.targetPath, "feature.txt"))).toBe(false);
+    expect(await git(result.targetPath, ["rev-parse", "HEAD"])).toBe(result.baseSha);
+    await expect(readFile(path.join(result.targetPath, "feature.txt"), "utf8")).resolves.toBe(
+      "feature\n",
+    );
     await expect(readFile(path.join(result.targetPath, "README.md"), "utf8")).resolves.toBe(
       "dirty local\n",
     );

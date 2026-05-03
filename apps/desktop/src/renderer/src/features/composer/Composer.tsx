@@ -2313,7 +2313,7 @@ export function Composer(props: ComposerProps) {
     setHandoffError(undefined);
     setHandoffDialog(direction);
     if (direction === "local-to-worktree") {
-      setLocalHandoffStrategy(handoffBaseBranch ? "detached-changes" : "move-branch");
+      setLocalHandoffStrategy("detached-changes");
       setLeaveLocalBranch(
         handoffBaseBranch && branchOptions.includes(handoffBaseBranch)
           ? handoffBaseBranch
@@ -2342,9 +2342,6 @@ export function Composer(props: ComposerProps) {
         repositoryPath: threadWorkspace.repositoryPath,
         sourcePath: threadWorkspace.sourcePath,
         sourceBranch,
-        ...(handoffStrategy === "detached-changes" && handoffBaseBranch
-          ? { baseBranch: handoffBaseBranch }
-          : {}),
         ...(handoffDialog === "local-to-worktree" && handoffStrategy === "move-branch"
           ? { leaveLocalBranch: leaveLocalBranch || undefined }
           : {}),
@@ -2385,8 +2382,7 @@ export function Composer(props: ComposerProps) {
     handoffSubmitting ||
     !sourceBranch ||
     (handoffDialog === "local-to-worktree" &&
-      ((localHandoffStrategy === "detached-changes" && !handoffBaseBranch) ||
-        (localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
+      ((localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
         localHandoffStrategy === "suggested-branch"));
 
   const commitActiveAutocomplete = (): void => {
@@ -3786,7 +3782,7 @@ export function Composer(props: ComposerProps) {
                   <button
                     aria-checked={localHandoffStrategy === "detached-changes"}
                     className="workspace-handoff-dialog__strategy"
-                    disabled={handoffSubmitting || !handoffBaseBranch}
+                    disabled={handoffSubmitting}
                     role="radio"
                     type="button"
                     onClick={() => setLocalHandoffStrategy("detached-changes")}
@@ -3795,9 +3791,9 @@ export function Composer(props: ComposerProps) {
                       Move changes to Detached HEAD
                     </span>
                     <span>
-                      Create a new worktree from {handoffBaseBranch ?? "the default branch"}.
-                      Keep the current branch checked out here. Move dirty tracked and
-                      non-ignored files only.
+                      Create a detached worktree from the current branch tip. Keep the
+                      current branch checked out here and move dirty tracked and
+                      non-ignored files on top.
                     </span>
                   </button>
                   <button
@@ -3861,8 +3857,9 @@ export function Composer(props: ComposerProps) {
             {handoffDialog === "local-to-worktree" &&
             localHandoffStrategy === "detached-changes" ? (
               <p className="workspace-handoff-dialog__note">
-                Committed changes on {sourceBranch ?? "the current branch"} are not moved by
-                this option.
+                The new worktree starts at the current tip of{" "}
+                {sourceBranch ?? "this branch"} and receives dirty non-ignored changes on
+                top.
               </p>
             ) : null}
             <p className="workspace-handoff-dialog__note">

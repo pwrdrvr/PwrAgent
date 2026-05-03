@@ -369,7 +369,6 @@ export type HandoffThreadWorkspaceRequest = {
   repositoryPath?: string;
   sourcePath?: string;
   sourceBranch?: string;
-  baseBranch?: string;
   leaveLocalBranch?: string;
 };
 
@@ -380,7 +379,7 @@ export type HandoffThreadWorkspaceResponse = {
   strategy?: ThreadWorkspaceHandoffStrategy;
   workMode: "local" | "worktree";
   branch?: string;
-  baseBranch?: string;
+  baseSha?: string;
   repositoryPath: string;
   targetPath: string;
   linkedDirectory: LinkedDirectorySummary;
