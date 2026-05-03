@@ -22,7 +22,7 @@
     "package:dryrun": "node ./scripts/release.mjs --dryrun",
     "package": "node ./scripts/release.mjs --no-publish",
     "release": "node ./scripts/release.mjs",
-    "pretest:e2e": "pnpm build",
+    "pretest:e2e": "node scripts/rebuild-native-for-electron.mjs && pnpm build",
     "preview": "electron-vite preview",
     "test:e2e": "playwright test -c playwright.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
