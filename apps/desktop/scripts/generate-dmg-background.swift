@@ -60,14 +60,6 @@ NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
 Color.black.setFill()
 rect(0, 0, CGFloat(width), CGFloat(height)).fill()
 
-Color.panel.setFill()
-roundedRect(88, 164, 484, 154, radius: 8).fill()
-
-NSColor(calibratedRed: 0.969, green: 0.953, blue: 0.922, alpha: 0.12).setStroke()
-let shelfBorder = roundedRect(88, 164, 484, 154, radius: 8)
-shelfBorder.lineWidth = 1
-shelfBorder.stroke()
-
 let logoFont = NSFont.systemFont(ofSize: 45, weight: .bold)
 let logoY = CGFloat(height) - 78
 let pwrSize = "Pwr".size(withAttributes: [.font: logoFont])
@@ -87,46 +79,18 @@ _ = drawText(
 
 NSColor(calibratedRed: 0.722, green: 0.690, blue: 0.647, alpha: 0.60).setStroke()
 let arrow = NSBezierPath()
-arrow.move(to: NSPoint(x: 284, y: CGFloat(height) - 222))
-arrow.line(to: NSPoint(x: 378, y: CGFloat(height) - 222))
-arrow.lineWidth = 2
+arrow.move(to: NSPoint(x: 284, y: CGFloat(height) - 230))
+arrow.line(to: NSPoint(x: 382, y: CGFloat(height) - 230))
+arrow.lineWidth = 2.5
 arrow.stroke()
 
 Color.accent.withAlphaComponent(0.82).setFill()
 let arrowHead = NSBezierPath()
-arrowHead.move(to: NSPoint(x: 392, y: CGFloat(height) - 222))
-arrowHead.line(to: NSPoint(x: 377, y: CGFloat(height) - 213))
-arrowHead.line(to: NSPoint(x: 377, y: CGFloat(height) - 231))
+arrowHead.move(to: NSPoint(x: 398, y: CGFloat(height) - 230))
+arrowHead.line(to: NSPoint(x: 380, y: CGFloat(height) - 219))
+arrowHead.line(to: NSPoint(x: 380, y: CGFloat(height) - 241))
 arrowHead.close()
 arrowHead.fill()
-
-NSColor(calibratedRed: 0.722, green: 0.690, blue: 0.647, alpha: 0.22).setStroke()
-let folder = NSBezierPath()
-folder.move(to: NSPoint(x: 438, y: CGFloat(height) - 188))
-folder.line(to: NSPoint(x: 464, y: CGFloat(height) - 188))
-folder.line(to: NSPoint(x: 471, y: CGFloat(height) - 196))
-folder.line(to: NSPoint(x: 520, y: CGFloat(height) - 196))
-folder.line(to: NSPoint(x: 520, y: CGFloat(height) - 250))
-folder.line(to: NSPoint(x: 438, y: CGFloat(height) - 250))
-folder.close()
-folder.lineWidth = 1
-folder.stroke()
-
-let itemLabelFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
-_ = drawText(
-  "PwrAgent",
-  at: NSPoint(x: 180, y: CGFloat(height) - 304),
-  font: itemLabelFont,
-  color: Color.text,
-  centered: true
-)
-_ = drawText(
-  "Applications",
-  at: NSPoint(x: 480, y: CGFloat(height) - 304),
-  font: itemLabelFont,
-  color: Color.text,
-  centered: true
-)
 
 let instructionFont = NSFont.systemFont(ofSize: 12, weight: .medium)
 _ = drawText(

@@ -71,14 +71,14 @@ dmg:
   window:
     width: 660
     height: 400
-  iconSize: 100
-  iconTextSize: 1
+  iconSize: 112
+  iconTextSize: 12
   contents:
-    - x: 180
-      y: 220
+    - x: 170
+      y: 230
       type: file
-    - x: 480
-      y: 220
+    - x: 500
+      y: 230
       type: link
       path: /Applications
   writeUpdateInfo: false
