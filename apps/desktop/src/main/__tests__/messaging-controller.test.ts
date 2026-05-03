@@ -137,6 +137,13 @@ describe("MessagingController", () => {
       buildCommandEvent("/resume").channel,
     );
     expect(binding).not.toHaveProperty("threadDisplay");
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Project: PwrAgnt"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      text: expect.stringContaining("Directory: /repo/pwragnt"),
+    });
   });
 
   it("binds a callback-selected thread to the channel", async () => {

@@ -1208,6 +1208,16 @@ export class MessagingController {
     const updatedBinding = preferences
       ? await this.updateBindingPreferences(binding, preferences)
       : binding;
+    const optimisticNavigation = navigationWithStartedThread({
+      backend: started.backend,
+      directory,
+      executionMode: started.executionMode,
+      navigation,
+      now: this.now(),
+      preferences,
+      project,
+      threadId: started.threadId,
+    });
     await this.options.store.deleteBrowseSession(session.id);
     await this.deliver(
       buildConfirmationIntent({
@@ -1227,7 +1237,7 @@ export class MessagingController {
       undefined,
       event,
     );
-    await this.renderBindingStatus(updatedBinding, event);
+    await this.renderBindingStatus(updatedBinding, event, optimisticNavigation);
   }
 
   private async presentStatus(event: MessagingInboundEvent): Promise<void> {
@@ -2993,6 +3003,81 @@ type TurnLifecycleParams = {
     startedAt?: number | null;
   };
 };
+
+function navigationWithStartedThread(params: {
+  backend: AppServerBackendKind;
+  directory?: NavigationDirectorySummary;
+  executionMode?: ThreadExecutionMode;
+  navigation: NavigationSnapshot;
+  now: number;
+  preferences?: MessagingBrowseSessionRecord["preferences"];
+  project: NonNullable<ReturnType<typeof selectProjectFromValue>>;
+  threadId: ThreadIdentifier;
+}): NavigationSnapshot {
+  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+  if (
+    params.navigation.threads.some(
+      (thread) => thread.source === params.backend && thread.id === params.threadId,
+    )
+  ) {
+    return params.navigation;
+  }
+
+  const directoryPath = params.directory?.path ?? params.project.path;
+  const linkedDirectory: LinkedDirectorySummary | undefined = directoryPath
+    ? {
+        id: params.directory?.key ?? directoryPath,
+        kind: "local",
+        label: params.directory?.label ?? params.project.label,
+        path: directoryPath,
+      }
+    : undefined;
+
+  return {
+    ...params.navigation,
+    unchanged: false,
+    threads: [
+      {
+        id: params.threadId,
+        source: params.backend,
+        title: params.threadId,
+        titleSource: "fallback",
+        projectKey: directoryPath,
+        createdAt: params.now,
+        updatedAt: params.now,
+        executionMode: params.executionMode,
+        model: params.preferences?.model ?? params.navigation.launchpadDefaults.model,
+        reasoningEffort:
+          params.preferences?.reasoningEffort ??
+          params.navigation.launchpadDefaults.reasoningEffort,
+        serviceTier:
+          params.preferences?.serviceTier ?? params.navigation.launchpadDefaults.serviceTier,
+        fastMode:
+          params.preferences?.fastMode ?? params.navigation.launchpadDefaults.fastMode,
+        linkedDirectories: linkedDirectory ? [linkedDirectory] : [],
+        inbox: {
+          inInbox: true,
+          reason: "new-thread",
+        },
+      },
+      ...params.navigation.threads,
+    ],
+    directories: params.navigation.directories.map((directory) =>
+      directory.key === params.directory?.key
+        ? {
+            ...directory,
+            threadKeys: directory.threadKeys.includes(threadKey)
+              ? directory.threadKeys
+              : [threadKey, ...directory.threadKeys],
+            latestUpdatedAt: Math.max(directory.latestUpdatedAt ?? 0, params.now),
+          }
+        : directory,
+    ),
+    inboxThreadKeys: params.navigation.inboxThreadKeys.includes(threadKey)
+      ? params.navigation.inboxThreadKeys
+      : [threadKey, ...params.navigation.inboxThreadKeys],
+  };
+}
 
 function parseTextCommand(text: string): string | undefined {
   const trimmed = text.trim();
