@@ -30,6 +30,8 @@ import type {
   StartThreadResponse,
   StartTurnRequest,
   StartTurnResponse,
+  SteerTurnRequest,
+  SteerTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
 } from "@pwragnt/shared";
@@ -74,6 +76,7 @@ export type MessagingBackendBridge = {
   ): Promise<HandoffThreadWorkspaceResponse>;
   startThread?(request: StartThreadRequest): Promise<StartThreadResponse>;
   startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
+  steerTurn?(request: SteerTurnRequest): Promise<SteerTurnResponse>;
   compactThread?(request: CompactThreadRequest): Promise<CompactThreadResponse>;
   interruptTurn?(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
   listBackends?(request?: ListBackendsRequest): Promise<ListBackendsResponse>;

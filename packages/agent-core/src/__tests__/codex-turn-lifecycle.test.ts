@@ -77,6 +77,38 @@ describe("Codex turn lifecycle", () => {
     expect(provider.runs[1]?.previousResponseId).toBe("resp_first");
   });
 
+  it("rejects a second start while the thread has an active turn", async () => {
+    const provider = new FakeProvider();
+    const { server } = createTestHarness({ provider });
+    await server.request("thread/start", { cwd: "/repo/workspace" });
+    await server.request("turn/start", {
+      threadId: "thread-1",
+      input: [{ type: "text", text: "First turn" }],
+    });
+
+    await expect(
+      server.request("turn/start", {
+        threadId: "thread-1",
+        input: [{ type: "text", text: "Overlapping turn" }],
+      }),
+    ).rejects.toThrow("Thread already has an active turn in progress: thread-1");
+    expect(provider.runs).toHaveLength(1);
+
+    provider.runs[0]?.deferred.resolve({
+      assistantText: "Done",
+      providerResponseId: "resp_done",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await server.request("turn/start", {
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Follow up" }],
+    });
+
+    expect(provider.runs).toHaveLength(2);
+  });
+
   it("steers an active turn with the expected turn id", async () => {
     const provider = new FakeProvider();
     const { server } = createTestHarness({ provider });

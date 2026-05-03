@@ -102,6 +102,26 @@ Images use the shared upload profile setting. The default `medium` profile
 matches desktop paste behavior; `low`, `high`, and `actual` can be set through
 TOML or environment variables while still respecting hard safety caps.
 
+## Turn Admission
+
+Ordinary bound text and media are admitted by desktop messaging core, not by
+individual providers. PwrAgnt waits briefly before starting a turn so clients
+that split long text, code blocks, images, or files can deliver the rest of the
+input. The default wait is 500 ms. Commands, callbacks, approval replies,
+questionnaire replies, and `/resume` navigation bypass this wait.
+
+If a follow-up message arrives while the bound thread already has an active
+turn, PwrAgnt acknowledges it with a quoted preview, keeps the prepared input
+in an in-memory queue, and offers `Steer` and `Cancel` where steering is
+available. `Steer` sends the queued input into the current turn. `Cancel` drops
+it. If the active turn completes first, queued entries are submitted FIFO as
+new turns and their old action buttons are removed best-effort.
+
+Attachments are processed before queueing so provider download handles do not
+need to survive until the active turn finishes. Downloaded bytes, normalized
+image data URLs, and extracted text-file content stay in memory only and are
+not written to `messaging-state.json`.
+
 ## Configuration
 
 Messaging is disabled unless a channel has both credentials and authorized actor
@@ -147,9 +167,14 @@ Discord:
 
 Attachment policy:
 
+- `PWRAGNT_MESSAGING_INPUT_DEBOUNCE_MS`
 - `PWRAGNT_MESSAGING_ATTACHMENT_IMAGE_PROFILE` (`low`, `medium`, `high`, or `actual`)
 - `PWRAGNT_MESSAGING_ATTACHMENT_MAX_BYTES`
 - `PWRAGNT_MESSAGING_ATTACHMENT_MAX_COUNT`
+
+The debounce setting can also be written as `input_debounce_ms` under
+`[messaging]` in the desktop config TOML. Use `0` to disable the pre-start wait
+while keeping active-turn queueing enabled.
 
 The authorized ID variables are comma-separated lists. Bot tokens are redacted
 from runtime logs. Telegram also accepts `TELEGRAM_BOT_TOKEN` and Discord also
@@ -214,6 +239,12 @@ Telegram:
 22. Send an image attachment and verify a turn starts with normalized image input.
 23. Send an oversized file or voice message and verify it is rejected without model upload.
 24. Verify assistant image and file parts render as Telegram photo/document attachments.
+25. Send a long or split code-block request as two quick messages and verify only one turn starts.
+26. Send a text attachment and a follow-up text message inside the debounce window and verify one turn starts with both inputs.
+27. While a turn is active, send a follow-up message and verify the queued notice shows a quoted preview plus Steer and Cancel controls.
+28. Click Steer and verify the follow-up is sent into the active turn and the queued controls disappear.
+29. Repeat with Cancel and verify the queued input is not submitted after the active turn completes.
+30. Repeat without clicking either action and verify completion starts the queued input as the next turn.
 
 Discord:
 
@@ -241,6 +272,12 @@ Discord:
 17. Send an image attachment and verify a turn starts with normalized image input.
 18. Send an oversized attachment and verify it is rejected without model upload.
 19. Verify assistant image and file parts render as Discord embeds/uploads.
+20. Send a long or split code-block request as two quick messages and verify only one turn starts.
+21. Send a text attachment and a follow-up text message inside the debounce window and verify one turn starts with both inputs.
+22. While a turn is active, send a follow-up message and verify the queued notice shows a quoted preview plus Steer and Cancel controls.
+23. Click Steer and verify the follow-up is sent into the active turn and the queued controls disappear.
+24. Repeat with Cancel and verify the queued input is not submitted after the active turn completes.
+25. Repeat without clicking either action and verify completion starts the queued input as the next turn.
 
 Discord currently has parity for the shared workflow and button actions, but it
 does not pin or edit status cards yet; status updates degrade to normal

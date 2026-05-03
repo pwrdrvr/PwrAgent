@@ -17,6 +17,7 @@ import type {
   NavigationSnapshot,
   StartThreadRequest,
   StartTurnRequest,
+  SteerTurnRequest,
   SubmitServerRequestRequest,
 } from "@pwragnt/shared";
 import {
@@ -28,6 +29,15 @@ import { MessagingStore } from "../messaging/core/messaging-store";
 
 const tempDirs: string[] = [];
 
+vi.mock("../messaging/attachment-image-normalization", () => ({
+  normalizeMessagingImageAttachment: vi.fn(async () => ({
+    dataUrl: "data:image/png;base64,AQID",
+    height: 1,
+    mimeType: "image/png",
+    width: 1,
+  })),
+}));
+
 async function createStore(): Promise<MessagingStore> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-controller-"));
   tempDirs.push(tempDir);
@@ -35,9 +45,15 @@ async function createStore(): Promise<MessagingStore> {
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(
     tempDirs.splice(0).map(async (tempDir) => {
-      await rm(tempDir, { recursive: true, force: true });
+      await rm(tempDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 10,
+      });
     }),
   );
 });
@@ -896,6 +912,289 @@ describe("MessagingController", () => {
         ],
       }),
     );
+  });
+
+  it("debounces split text messages into one agent turn", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness({ inputDebounceMs: 500 });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Please review this code block:"));
+    await vi.advanceTimersByTimeAsync(250);
+    await harness.controller.handleInboundEvent(buildTextEvent("```ts\nconst answer = 42;\n```"));
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "Please review this code block:",
+          },
+          {
+            type: "text",
+            text: "```ts\nconst answer = 42;\n```",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("debounces text file attachments with adjacent text", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness({
+      inputDebounceMs: 500,
+      downloadAttachment: vi.fn(async ({ attachment }) => {
+        const data = new TextEncoder().encode("alpha\nbeta");
+        return {
+          data,
+          fileName: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: data.byteLength,
+        };
+      }),
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("Here is the log"),
+      id: "event-media",
+      kind: "media",
+      text: "Here is the log",
+      attachments: [
+        {
+          id: "file-1",
+          kind: "file",
+          name: "debug.log",
+          disposition: "available",
+          mimeType: "text/plain",
+          sizeBytes: 10,
+        },
+      ],
+      disposition: "available",
+    });
+    await harness.controller.handleInboundEvent(buildTextEvent("Please summarize it"));
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: expect.stringContaining("Attached file: `debug.log`"),
+          },
+          {
+            type: "text",
+            text: "Please summarize it",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("debounces image attachments with adjacent text", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness({
+      inputDebounceMs: 500,
+      downloadAttachment: vi.fn(async ({ attachment }) => ({
+        data: new Uint8Array([137, 80, 78, 71]),
+        fileName: attachment.name,
+        mimeType: "image/png",
+        sizeBytes: 4,
+      })),
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("Screenshot attached"),
+      id: "event-image",
+      kind: "media",
+      text: "Screenshot attached",
+      attachments: [
+        {
+          id: "image-1",
+          kind: "image",
+          name: "screen.png",
+          disposition: "available",
+          mimeType: "image/png",
+          sizeBytes: 4,
+        },
+      ],
+      disposition: "available",
+    });
+    await harness.controller.handleInboundEvent(buildTextEvent("Look at the sidebar"));
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "Screenshot attached",
+          },
+          {
+            type: "image",
+            url: "data:image/png;base64,AQID",
+          },
+          {
+            type: "text",
+            text: "Look at the sidebar",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("queues follow-up text while a turn is active and starts it after completion", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildTextEvent("make me a dinner reservation"));
+    await harness.controller.handleInboundEvent(buildTextEvent("Chinese sounds good"));
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    const queuedNotice = harness.delivered
+      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .at(-1);
+    expect(queuedNotice).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("> Chinese sounds good"),
+    });
+    const queuedActions =
+      queuedNotice && "actions" in queuedNotice && Array.isArray(queuedNotice.actions)
+        ? queuedNotice.actions
+        : [];
+    expect(
+      queuedActions.some((action) => action.id.startsWith("queued-turn:cancel:")),
+    ).toBe(true);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "Chinese sounds good",
+          },
+        ],
+      }),
+    );
+    expect(harness.delivered.at(-3)).toMatchObject({
+      kind: "confirmation",
+      body: "Queued message sent as the next turn.",
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+    });
+  });
+
+  it("queues input when backend admission rejects a concurrent turn start", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.startTurn.mockRejectedValueOnce(
+      new Error("thread already has an active turn in progress"),
+    );
+
+    await harness.controller.handleInboundEvent(buildTextEvent("second turn"));
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Message queued",
+      body: expect.stringContaining("> second turn"),
+    });
+  });
+
+  it("steers queued follow-ups into the active turn and removes queued actions", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
+    await harness.controller.handleInboundEvent(buildTextEvent("also check the logs"));
+    const queuedNotice = harness.delivered
+      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .at(-1);
+    if (!queuedNotice || !("actions" in queuedNotice)) {
+      throw new Error("Queued notice was not delivered");
+    }
+    const queuedActions = Array.isArray(queuedNotice.actions)
+      ? queuedNotice.actions
+      : [];
+    const steerAction = queuedActions.find((action) =>
+      action.id.startsWith("queued-turn:steer:"),
+    );
+    expect(steerAction?.disabled).toBe(false);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: steerAction!.id,
+      }),
+    );
+
+    expect(harness.steerTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [
+        {
+          type: "text",
+          text: "also check the logs",
+        },
+      ],
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: "Queued message was sent as a steering message.",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
   });
 
   it("routes completed assistant output to active thread bindings", async () => {
@@ -2386,6 +2685,7 @@ async function createHarness(options?: {
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
   handoff?: false;
+  inputDebounceMs?: number;
   logger?: MessagingControllerOptions["logger"];
   now?: () => number;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
@@ -2403,6 +2703,7 @@ async function createHarness(options?: {
   setThreadModelSettings: ReturnType<typeof vi.fn>;
   startThread: ReturnType<typeof vi.fn>;
   startTurn: ReturnType<typeof vi.fn>;
+  steerTurn: ReturnType<typeof vi.fn>;
   submitServerRequest: ReturnType<typeof vi.fn>;
   store: MessagingStore;
 }> {
@@ -2443,6 +2744,11 @@ async function createHarness(options?: {
     backend: request.backend,
     threadId: request.threadId,
     turnId: "turn-1",
+  }));
+  const steerTurn = vi.fn(async (request: SteerTurnRequest) => ({
+    backend: request.backend,
+    threadId: request.threadId,
+    turnId: request.expectedTurnId,
   }));
   const compactThread = vi.fn(async (request) => ({
     ...request,
@@ -2506,6 +2812,7 @@ async function createHarness(options?: {
     setThreadModelSettings,
     startThread,
     startTurn,
+    steerTurn,
     submitServerRequest,
   };
 
@@ -2514,6 +2821,7 @@ async function createHarness(options?: {
       adapter,
       authorizedActorIds: ["user-1"],
       backend,
+      inputDebounceMs: options?.inputDebounceMs ?? 0,
       logger: options?.logger,
       now: options?.now ?? (() => 1000),
       store,
@@ -2530,6 +2838,7 @@ async function createHarness(options?: {
     setThreadModelSettings,
     startThread,
     startTurn,
+    steerTurn,
     submitServerRequest,
     store,
   };

@@ -84,6 +84,7 @@ export class DesktopMessagingRuntime {
         authorizedActorIds,
         backend: this.options.backendBridge,
         channel: adapter.channel,
+        inputDebounceMs: config.inputDebounceMs,
         store,
         toolUpdateDefaultMode: async () =>
           (await this.loadConfig()).toolUpdateDefaultMode ?? "show_some",

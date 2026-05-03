@@ -350,6 +350,12 @@ export class CodexAppServer {
     if (!thread) {
       throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
     }
+    const activeRun = this.state.getActiveRunForThread(threadId);
+    if (activeRun) {
+      throw new AppServerProtocolError(
+        `Thread already has an active turn in progress: ${threadId}`,
+      );
+    }
     const effectiveThread =
       params.model !== undefined ||
       params.serviceTier !== undefined ||

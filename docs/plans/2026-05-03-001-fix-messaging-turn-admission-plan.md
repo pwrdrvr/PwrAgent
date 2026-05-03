@@ -1,7 +1,7 @@
 ---
 title: fix: Add messaging turn admission debouncing and queued follow-ups
 type: fix
-status: active
+status: completed
 date: 2026-05-03
 origin: docs/brainstorms/2026-04-30-messaging-platform-integration-requirements.md
 deepened: 2026-05-03
@@ -281,7 +281,7 @@ flowchart TB
     U5 --> U7["Unit 7: Docs and smoke checklist"]
 ```
 
-- [ ] **Unit 1: Add the General Messaging Input Debounce Setting**
+- [x] **Unit 1: Add the General Messaging Input Debounce Setting**
 
 **Goal:** Make the debounce delay configurable through the same settings path as
 other general messaging behavior.
@@ -341,7 +341,7 @@ other general messaging behavior.
 - Messaging runtime receives a concrete debounce value from settings/env without
   any Telegram- or Discord-specific configuration.
 
-- [ ] **Unit 2: Introduce Turn Admission State and Input Bundles**
+- [x] **Unit 2: Introduce Turn Admission State and Input Bundles**
 
 **Goal:** Create a controller-owned abstraction for coalesced inbound input,
 active/start-in-progress state, and queued follow-up entries.
@@ -391,7 +391,7 @@ active/start-in-progress state, and queued follow-up entries.
 - There is one controller path for "ordinary user input becomes turn input,"
   shared by text and media.
 
-- [ ] **Unit 3: Route Bound Text and Media Through Debounced Start**
+- [x] **Unit 3: Route Bound Text and Media Through Debounced Start**
 
 **Goal:** Replace direct `startTurn()` calls in `handleText()` and `handleMedia()`
 with debounced, attachment-aware turn admission.
@@ -452,7 +452,7 @@ with debounced, attachment-aware turn admission.
 - Split platform input before a turn starts produces one agent turn with all
   accepted content.
 
-- [ ] **Unit 4: Add Queued Follow-Up Notices with Steer and Cancel**
+- [x] **Unit 4: Add Queued Follow-Up Notices with Steer and Cancel**
 
 **Goal:** When ordinary input arrives during an active or starting turn,
 acknowledge it, queue it, and offer action buttons to steer or cancel.
@@ -525,7 +525,7 @@ acknowledge it, queue it, and offer action buttons to steer or cancel.
 - Follow-up messages no longer call `startTurn()` while an active turn is
   running, and users can deliberately steer or cancel the queued input.
 
-- [ ] **Unit 5: Flush Queued Input After Terminal Turn Events and Retire Buttons**
+- [x] **Unit 5: Flush Queued Input After Terminal Turn Events and Retire Buttons**
 
 **Goal:** Automatically submit queued follow-up input when a turn completes,
 fails, or is interrupted, while retiring stale action buttons.
@@ -585,7 +585,7 @@ fails, or is interrupted, while retiring stale action buttons.
 - Terminal lifecycle events advance the queue without creating overlapping
   turns or leaving stale buttons behind.
 
-- [ ] **Unit 6: Add a Backend and Agent-Core Overlap Safety Net**
+- [x] **Unit 6: Add a Backend and Agent-Core Overlap Safety Net**
 
 **Goal:** Ensure non-messaging callers cannot start a second active turn on the
 same thread while another run is active.
@@ -633,7 +633,7 @@ same thread while another run is active.
 - Even if messaging admission regresses, agent-core will not intentionally run
   two active turns for the same thread.
 
-- [ ] **Unit 7: Update Messaging Documentation and Manual Smoke Coverage**
+- [x] **Unit 7: Update Messaging Documentation and Manual Smoke Coverage**
 
 **Goal:** Document the new admission behavior, setting, and manual verification
 steps for Telegram and Discord.
