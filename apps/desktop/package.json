@@ -1,8 +1,12 @@
 {
   "name": "@pwragnt/desktop",
   "productName": "PwrAgnt",
-  "version": "0.1.0",
+  "version": "1.0.0-alpha.0",
   "private": true,
+  "description": "Thread-centric coding agent desktop app",
+  "author": "PwrDrvr LLC",
+  "license": "UNLICENSED",
+  "copyright": "Copyright © 2026 PwrDrvr LLC. All rights reserved.",
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {

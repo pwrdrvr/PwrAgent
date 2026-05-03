@@ -22,7 +22,7 @@ export function App() {
     return (
       <div className="app-shell app-shell--fatal-settings">
         <main className="app-main">
-          <SettingsScreen settings={settings} />
+          <SettingsScreen desktopApi={desktopApi} settings={settings} />
         </main>
       </div>
     );
@@ -32,7 +32,7 @@ export function App() {
     return (
       <div className="app-shell app-shell--fatal-settings">
         <main className="app-main">
-          <SettingsScreen settings={settings} />
+          <SettingsScreen desktopApi={desktopApi} settings={settings} />
         </main>
       </div>
     );
@@ -219,6 +219,7 @@ function DesktopAppShell(props: {
       {mainView === "settings" ? (
         <div className="app-shell__settings-layer">
           <SettingsScreen
+            desktopApi={desktopApi}
             settings={settings}
             onClose={() => setMainView("thread")}
           />

@@ -993,12 +993,15 @@ export class DesktopBackendRegistry {
       ? resolveGrokApiKeyForLiveClient()
       : undefined;
 
+    const clientVersion =
+      typeof app?.getVersion === "function" ? app.getVersion() : "0.0.0";
     this.codexDefaultClient =
       options?.codexClient ??
       replayClients?.codexDefaultClient ??
       new CodexAppServerClient({
         command: codexCommand,
         connectionObserver: codexDefaultObserver,
+        clientVersion,
       });
     this.codexFullAccessClient =
       options?.codexFullAccessClient ??
@@ -1007,6 +1010,7 @@ export class DesktopBackendRegistry {
         args: buildCodexClientArgs("full-access"),
         command: codexCommand,
         connectionObserver: codexFullAccessObserver,
+        clientVersion,
       });
     this.grokClient =
       options?.grokClient ??

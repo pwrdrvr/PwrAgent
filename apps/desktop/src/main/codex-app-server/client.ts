@@ -108,6 +108,7 @@ type CodexClientOptions = {
   connectionObserver?: JsonRpcObserver;
   requestTimeoutMs?: number;
   sessionIndexPath?: string;
+  clientVersion?: string;
 };
 
 type InitializeResult = {
@@ -4248,7 +4249,11 @@ export class CodexAppServerClient {
 
       try {
         const initializeParams: CodexInitializeParams = {
-          clientInfo: { name: "pwragnt-desktop", title: "PwrAgnt", version: "0.1.0" },
+          clientInfo: {
+            name: "pwragnt-desktop",
+            title: "PwrAgnt",
+            version: this.options.clientVersion ?? "0.0.0",
+          },
           capabilities: { experimentalApi: false }
         };
         const result = await this.connection.request("initialize", initializeParams);

@@ -8,6 +8,8 @@ const registerAgentIpcHandlersMock = vi.fn();
 const disposeAgentIpcHandlersMock = vi.fn();
 const registerApplicationIpcHandlersMock = vi.fn();
 const disposeApplicationIpcHandlersMock = vi.fn();
+const registerAppMetadataIpcHandlersMock = vi.fn();
+const disposeAppMetadataIpcHandlersMock = vi.fn();
 const registerImageNormalizationIpcHandlersMock = vi.fn();
 const disposeImageNormalizationIpcHandlersMock = vi.fn();
 const registerPreloadLogIpcHandlersMock = vi.fn();
@@ -24,6 +26,8 @@ const disposeDesktopMessagingRuntimeMock = vi.fn();
 const setApplicationMenuMock = vi.fn();
 const buildFromTemplateMock = vi.fn(() => ({ kind: "menu" }));
 const setNameMock = vi.fn();
+const setAboutPanelOptionsMock = vi.fn();
+const getVersionMock = vi.fn(() => "1.0.0-alpha.0");
 const whenReadyMock = vi.fn(() => Promise.resolve());
 const getAllWindowsMock = vi.fn(() => []);
 const startupProfilerInstance = {
@@ -37,6 +41,9 @@ const StartupCpuProfilerMock = vi.fn(function StartupCpuProfiler() {
 vi.mock("electron", () => ({
   app: {
     setName: setNameMock,
+    setAboutPanelOptions: setAboutPanelOptionsMock,
+    getVersion: getVersionMock,
+    showAboutPanel: vi.fn(),
     whenReady: whenReadyMock,
     on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       appEventHandlers.set(event, handler);
@@ -72,6 +79,11 @@ vi.mock("../ipc/agent-ipc", () => ({
 vi.mock("../ipc/applications", () => ({
   registerApplicationIpcHandlers: registerApplicationIpcHandlersMock,
   disposeApplicationIpcHandlers: disposeApplicationIpcHandlersMock,
+}));
+
+vi.mock("../ipc/app-metadata", () => ({
+  registerAppMetadataIpcHandlers: registerAppMetadataIpcHandlersMock,
+  disposeAppMetadataIpcHandlers: disposeAppMetadataIpcHandlersMock,
 }));
 
 vi.mock("../ipc/image-normalization", () => ({
