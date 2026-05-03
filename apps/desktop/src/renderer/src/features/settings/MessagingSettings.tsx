@@ -324,6 +324,7 @@ function NumberField(props: {
       <span className="settings-source">{props.source}</span>
       <span className="settings-number">
         <input
+          aria-label={props.label}
           className="settings-input"
           disabled={props.disabled}
           max={props.max}
