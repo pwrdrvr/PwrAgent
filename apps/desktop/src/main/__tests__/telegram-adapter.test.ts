@@ -237,6 +237,60 @@ describe("TelegramAdapter", () => {
     expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("returns failed delivery results instead of throwing Telegram API errors", async () => {
+    const api = createApi();
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    };
+    api.sendMessage.mockRejectedValueOnce(
+      new Error("Call to 'sendMessage' failed! (429: Too Many Requests)"),
+    );
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+      },
+      logger,
+      now: () => 1000,
+    });
+
+    await expect(
+      adapter.deliver({
+        id: "message-1",
+        kind: "message",
+        createdAt: 1000,
+        parts: [
+          {
+            type: "text",
+            text: "Hello",
+          },
+        ],
+        audit: {
+          actor: {
+            platformUserId: "42",
+          },
+          channel: {
+            channel: "telegram",
+            conversation: {
+              id: "777",
+              kind: "dm",
+            },
+          },
+          occurredAt: 1000,
+        },
+      }),
+    ).resolves.toMatchObject({
+      outcome: "failed",
+      errorMessage: "Call to 'sendMessage' failed! (429: Too Many Requests)",
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("telegram deliver failed kind=message"),
+    );
+  });
+
   it("renames Telegram forum topics without allowing plain chat renames", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({

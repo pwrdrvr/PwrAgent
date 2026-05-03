@@ -431,6 +431,26 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
+    try {
+      return await this.deliverSurface(intent);
+    } catch (error) {
+      const target = this.resolveTarget(intent);
+      this.options.logger?.warn?.(
+        `telegram deliver failed kind=${intent.kind} target=${target ? this.compactTypingTarget(target) : "missing"} error=${errorMessage(error)}`,
+      );
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: errorMessage(error),
+        outcome: "failed",
+        surface: intent.targetSurface,
+      };
+    }
+  }
+
+  private async deliverSurface(
+    intent: MessagingSurfaceIntent,
+  ): Promise<MessagingDeliveryResult> {
     const target = this.resolveTarget(intent);
     if (!target) {
       return {

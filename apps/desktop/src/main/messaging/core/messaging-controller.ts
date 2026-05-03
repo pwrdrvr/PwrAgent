@@ -237,16 +237,20 @@ export class MessagingController {
     const lifecycle = turnLifecycleForBackendEvent(event, this.now());
     for (const binding of bindings) {
       let activeTurn = this.getActiveTurn(binding);
+      let turnStateChanged = false;
       if (lifecycle) {
         const previousTurn = activeTurn;
         activeTurn = lifecycle;
-        this.setActiveTurn(binding, activeTurn);
-        this.logBindingTurnStateChange(
-          binding,
-          previousTurn,
-          activeTurn,
-          event.notification.method,
-        );
+        turnStateChanged = !isSameActiveTurnState(previousTurn, activeTurn);
+        if (turnStateChanged) {
+          this.setActiveTurn(binding, activeTurn);
+          this.logBindingTurnStateChange(
+            binding,
+            previousTurn,
+            activeTurn,
+            event.notification.method,
+          );
+        }
       } else if (isThreadStatusIdleEvent(event) && activeTurn) {
         const previousTurn = activeTurn;
         activeTurn = {
@@ -254,13 +258,16 @@ export class MessagingController {
           status: "completed",
           updatedAt: this.now(),
         };
-        this.setActiveTurn(binding, activeTurn);
-        this.logBindingTurnStateChange(
-          binding,
-          previousTurn,
-          activeTurn,
-          event.notification.method,
-        );
+        turnStateChanged = !isSameActiveTurnState(previousTurn, activeTurn);
+        if (turnStateChanged) {
+          this.setActiveTurn(binding, activeTurn);
+          this.logBindingTurnStateChange(
+            binding,
+            previousTurn,
+            activeTurn,
+            event.notification.method,
+          );
+        }
       }
 
       await this.deliverToolActivityForBackendEvent(
@@ -269,8 +276,9 @@ export class MessagingController {
         activeTurn?.turnId,
       );
       if (
-        isTerminalTurnLifecycle(lifecycle) ||
-        (isThreadStatusIdleEvent(event) && activeTurn)
+        turnStateChanged &&
+        (isTerminalTurnLifecycle(lifecycle) ||
+          (isThreadStatusIdleEvent(event) && activeTurn))
       ) {
         await this.flushToolUpdatesForBinding(binding, {
           clear: true,
@@ -283,7 +291,7 @@ export class MessagingController {
         await this.deliverAssistantMessage(assistantText, event, binding);
       }
 
-      if (lifecycle || (isThreadStatusIdleEvent(event) && activeTurn)) {
+      if (turnStateChanged && (lifecycle || (isThreadStatusIdleEvent(event) && activeTurn))) {
         await this.signalTurnActivity(binding, activeTurn!, {
           reason: event.notification.method,
           force: true,
@@ -2814,6 +2822,18 @@ function isTerminalTurnLifecycle(
   return Boolean(
     lifecycle &&
       ["completed", "failed", "interrupted"].includes(lifecycle.status),
+  );
+}
+
+function isSameActiveTurnState(
+  previous: MessagingActiveTurnSummary | undefined,
+  next: MessagingActiveTurnSummary | undefined,
+): boolean {
+  return Boolean(
+    previous &&
+      next &&
+      previous.turnId === next.turnId &&
+      previous.status === next.status,
   );
 }
 
