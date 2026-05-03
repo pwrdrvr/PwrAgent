@@ -7,14 +7,14 @@ topic: desktop-settings-config
 
 ## Problem Frame
 
-PwrAgnt needs a durable desktop app configuration system and a settings screen that makes important app-level behavior editable without scattering preferences across composer controls, runtime-only environment variables, or provider-specific setup paths.
+PwrAgent needs a durable desktop app configuration system and a settings screen that makes important app-level behavior editable without scattering preferences across composer controls, runtime-only environment variables, or provider-specific setup paths.
 
 The immediate users are desktop app users configuring experimental UI behavior, messaging integration credentials, and model provider setup. The settings surface should make the current app configuration understandable, editable, and inspectable while keeping thread-specific controls in the composer where they already belong.
 
 ## Requirements
 
 **Config Contract**
-- R1. The desktop app uses a PwrAgnt desktop TOML config file as the user-editable source of truth for app-level settings.
+- R1. The desktop app uses a PwrAgent desktop TOML config file as the user-editable source of truth for app-level settings.
 - R2. Environment variables override TOML config values at runtime, and the settings screen clearly distinguishes overridden values from values currently controlled by the config file.
 - R3. The config system supports the initial settings groups for Experimental, Messaging, and Models without forcing messaging bot runtime integration in the same release.
 - R4. The config system preserves the existing Grok app-server config direction: `~/.config/grok-app-server/config.toml` is already the current source of truth for Grok app-server runtime keys, while the desktop settings work defines the desktop app's own configuration surface.
@@ -44,7 +44,7 @@ The immediate users are desktop app users configuring experimental UI behavior, 
 **Messaging Settings**
 - R17. Messaging includes separate Telegram and Discord groups.
 - R18. Telegram settings include Enabled, Bot Token, Authorized User IDs, and Authorized Supergroups.
-- R19. Discord settings include Enabled, Bot Token, Application ID, Authorized User IDs, and Authorized Guilds. Message Content Intent is configured in Discord's Developer Portal, not in PwrAgnt.
+- R19. Discord settings include Enabled, Bot Token, Application ID, Authorized User IDs, and Authorized Guilds. Message Content Intent is configured in Discord's Developer Portal, not in PwrAgent.
 - R20. Authorized User IDs, Authorized Supergroups, and Authorized Guilds are editable as list fields and support comma-separated environment variable values.
 - R21. Discord's stored concept for server-level authorization is Guilds, while the UI may label the field as Servers / Guilds if that improves readability.
 - R22. Bot tokens are treated as secrets and stored in the OS keychain, with TOML storing only non-secret settings and whatever non-secret metadata is needed to locate the keychain item.

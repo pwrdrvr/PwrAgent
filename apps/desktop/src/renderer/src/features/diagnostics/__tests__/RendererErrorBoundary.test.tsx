@@ -11,13 +11,13 @@ function ThrowingChild() {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  delete (window as Window & { pwragnt?: unknown }).pwragnt;
+  delete (window as Window & { pwragent?: unknown }).pwragent;
 });
 
 describe("RendererErrorBoundary", () => {
   it("renders a fallback and reports component stack diagnostics", async () => {
     const reportRendererError = vi.fn(async () => undefined);
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         reportRendererError,

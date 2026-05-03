@@ -279,11 +279,16 @@ textarea,
 
 .sidebar__brand {
   margin: 0;
-  color: var(--accent-bright);
+  color: var(--text-primary);
   font-size: 17px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1;
+  letter-spacing: -0.01em;
   text-transform: none;
+}
+
+.sidebar__brand-accent {
+  color: var(--accent);
 }
 
 .runtime-identity {
@@ -342,10 +347,10 @@ textarea,
 }
 
 .runtime-identity__icon {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
   color: var(--accent-bright);
-  font-family: var(--font-mono);
-  font-size: 10px;
   opacity: 0.9;
 }
 

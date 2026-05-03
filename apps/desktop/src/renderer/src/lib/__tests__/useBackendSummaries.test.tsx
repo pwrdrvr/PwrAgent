@@ -1,6 +1,6 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "@pwragnt/shared";
+import type { AgentEvent } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import {
   BACKEND_SUMMARIES_REFRESH_EVENT,

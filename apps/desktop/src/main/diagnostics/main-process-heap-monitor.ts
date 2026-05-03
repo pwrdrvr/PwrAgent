@@ -4,7 +4,7 @@ import type { HeapMonitorConfig } from "./heap-monitor-config";
 import type { HeapSession, HeapSessionEvent, HeapSessionSample } from "./heap-session";
 import { getMainLogger } from "../log";
 
-const defaultHeapLogger = getMainLogger("pwragnt:heap");
+const defaultHeapLogger = getMainLogger("pwragent:heap");
 
 type Logger = Pick<Console, "info" | "warn" | "error">;
 

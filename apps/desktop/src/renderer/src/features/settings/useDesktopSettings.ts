@@ -7,7 +7,7 @@ import type {
   DesktopSettingsSnapshot,
   ReplaceDesktopSettingsSecretRequest,
   WriteDesktopSettingsConfigRequest,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 

@@ -10,7 +10,7 @@ async function createComposerDraftPersistenceFixture(): Promise<{
   fixturePath: string;
   repoDir: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-composer-drafts-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-composer-drafts-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
   const fixturePath = path.join(rootDir, "composer-draft-persistence.fixture.json");
   await mkdir(repoDir, { recursive: true });
@@ -21,9 +21,9 @@ async function createComposerDraftPersistenceFixture(): Promise<{
     "git",
     [
       "-c",
-      "user.name=PwrAgnt Tests",
+      "user.name=PwrAgent Tests",
       "-c",
-      "user.email=pwragnt-tests@example.invalid",
+      "user.email=pwragent-tests@example.invalid",
       "commit",
       "--allow-empty",
       "-m",

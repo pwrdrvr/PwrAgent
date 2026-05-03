@@ -72,7 +72,7 @@ vi.mock("../codex-app-server/stdio-transport", () => {
 });
 
 async function createTempDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-codex-recording-"));
+  return await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-codex-recording-"));
 }
 
 async function waitFor(

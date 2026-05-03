@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentEvent } from "@pwragnt/shared";
+import type { AgentEvent } from "@pwragent/shared";
 import {
   formatToolActivityLine,
   summarizeToolActivityFromBackendEvent,

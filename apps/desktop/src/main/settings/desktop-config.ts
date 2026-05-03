@@ -6,8 +6,8 @@ import type {
   DesktopMessagingImageProfile,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
-} from "@pwragnt/shared";
-import { isDesktopWorktreeStorageLocation } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { isDesktopWorktreeStorageLocation } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
 
 type DesktopConfigPathOptions = {
@@ -71,7 +71,7 @@ export function defaultDesktopConfigDir(
   const xdgConfigHome =
     options?.xdgConfigHome?.trim() || env.XDG_CONFIG_HOME?.trim();
 
-  return path.join(xdgConfigHome || path.join(homeDir, ".config"), "pwragnt");
+  return path.join(xdgConfigHome || path.join(homeDir, ".config"), "pwragent");
 }
 
 export function userHomeWorktreesRoot(homeDir?: string): string {

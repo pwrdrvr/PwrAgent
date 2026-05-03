@@ -1,6 +1,6 @@
 # Messaging Platform Integration
 
-PwrAgnt can run messaging adapters from the Electron main process so an
+PwrAgent can run messaging adapters from the Electron main process so an
 allowlisted Telegram or Discord user can choose a thread, bind the current
 conversation, and send free-form text into that thread. The workflow logic is
 shared; Telegram and Discord only own transport, formatting, callback handles,
@@ -18,7 +18,7 @@ The supported command surface is:
 
 Telegram registers these commands at startup with `setMyCommands`. Telegram
 clients can cache command menus, so if old OpenClaw commands still appear,
-restart or reopen the bot menu after starting PwrAgnt.
+restart or reopen the bot menu after starting PwrAgent.
 
 ## Button Layout
 
@@ -32,7 +32,7 @@ limits.
 ## Workspace Handoff
 
 A bound conversation can move the current thread between Local and Worktree
-from `/status` when PwrAgnt has enough repository and Git branch metadata for a
+from `/status` when PwrAgent has enough repository and Git branch metadata for a
 safe handoff. The status card shows a `Handoff` action only for eligible
 threads.
 
@@ -75,7 +75,7 @@ persisted as restart-safe managed messages.
 
 ## Tool Update Verbosity
 
-PwrAgnt can send generated tool-use progress messages to bound conversations.
+PwrAgent can send generated tool-use progress messages to bound conversations.
 These messages are not assistant-authored responses. They summarize completed
 tool activity with title-only text such as command names, MCP tool names, web
 searches, and edited file names. Raw command output, diffs, and tool arguments
@@ -107,7 +107,7 @@ status so tool progress does not arrive after the response it explains.
 ## Attachments
 
 Bound, authorized conversations can send supported attachments into the active
-thread. PwrAgnt accepts bounded text-like files (`.txt`, `.md`, `.csv`, `.json`,
+thread. PwrAgent accepts bounded text-like files (`.txt`, `.md`, `.csv`, `.json`,
 `.jsonl`, `.toml`, `.yaml`, `.yml`, logs, and similar UTF-8 text), images, GIFs
 as still images for model input, and PDFs when bounded text can be extracted.
 Unsupported binaries, audio/video, archives, OCR-only PDFs, and oversized files
@@ -162,7 +162,7 @@ shows when this runtime override is active.
 Default 1Password item:
 
 - Vault: `Private`
-- Item: `PwrAgnt Messaging`
+- Item: `PwrAgent Messaging`
 
 Override those defaults when needed:
 
@@ -232,7 +232,7 @@ Run the desktop app with the desired environment variables configured.
 
 Telegram:
 
-1. Start PwrAgnt with `pnpm dev:op`; if the bot has a webhook configured, PwrAgnt clears it before long polling.
+1. Start PwrAgent with `pnpm dev:op`; if the bot has a webhook configured, PwrAgent clears it before long polling.
 2. Confirm `/resume`, `/threads`, `/status`, `/detach`, and `/bind` are registered in the Telegram command menu.
 3. Send `/resume` from an allowlisted Telegram user.
 4. Use Projects, select a project, then select a thread.
@@ -247,7 +247,7 @@ Telegram:
    `confirm`.
 10. Try a stale or ineligible handoff prompt and verify the bot reports a
    recoverable error without detaching the conversation.
-11. Send free-form text and verify a PwrAgnt turn starts in the bound thread.
+11. Send free-form text and verify a PwrAgent turn starts in the bound thread.
 12. Verify typing continues through an intermediate assistant update and stops at turn completion.
 13. With streaming disabled, trigger a long response and verify no live response message is created or edited before the final answer appears once.
 14. Enable Streaming Responses, trigger a long response, and verify Telegram creates then edits one in-progress response before the final answer appears once.
@@ -257,7 +257,7 @@ Telegram:
 18. Trigger a Plan questionnaire and answer with both a button and text fallback.
 19. Trigger an approval request and test accept, session accept, decline, and cancel with both buttons and text.
 20. Verify markdown, inline code, fenced code, long responses, and image output render.
-21. Restart PwrAgnt and verify the same Telegram conversation still routes to the bound thread.
+21. Restart PwrAgent and verify the same Telegram conversation still routes to the bound thread.
 22. Send `/detach` and verify the status card is unpinned and free-form text asks for `/resume`.
 23. Send a small `.txt` attachment and verify a turn starts with the extracted text.
 24. Send an image attachment and verify a turn starts with normalized image input.
@@ -285,7 +285,7 @@ Discord:
    `confirm`.
 8. Try a stale or ineligible handoff prompt and verify the bot reports a
    recoverable error without detaching the conversation.
-9. Send free-form text and verify a PwrAgnt turn starts in the bound thread.
+9. Send free-form text and verify a PwrAgent turn starts in the bound thread.
 10. Verify typing continues through an intermediate assistant update and stops at turn completion.
 11. With streaming disabled, trigger a long response and verify no live response message is created or edited before the final answer appears once.
 12. Enable Streaming Responses, trigger a long response, and verify Discord creates then edits one in-progress response before the final answer appears once.
@@ -293,7 +293,7 @@ Discord:
 14. Trigger a Plan questionnaire and answer with both a component and text fallback.
 15. Trigger an approval request and test accept, session accept, decline, and cancel.
 16. Verify markdown, inline code, fenced code, long responses, and image output render.
-17. Restart PwrAgnt and verify the same Discord channel still routes to the bound thread.
+17. Restart PwrAgent and verify the same Discord channel still routes to the bound thread.
 18. Send a small `.txt` attachment and verify a turn starts with the extracted text.
 19. Send an image attachment and verify a turn starts with normalized image input.
 20. Send an oversized attachment and verify it is rejected without model upload.
@@ -312,10 +312,10 @@ messages until those adapter capabilities are added.
 ## Chat SDK Decision
 
 Vercel Chat SDK is not the runtime boundary for this MVP. The current direction
-is a PwrAgnt-owned semantic surface with direct adapters because markdown,
+is a PwrAgent-owned semantic surface with direct adapters because markdown,
 image/media behavior, callback limits, and voice-friendly text fallback are core
 requirements. Chat SDK can be reconsidered later as an adapter implementation
-detail if it matures without changing PwrAgnt workflow logic.
+detail if it matures without changing PwrAgent workflow logic.
 
 ## Related Docs
 

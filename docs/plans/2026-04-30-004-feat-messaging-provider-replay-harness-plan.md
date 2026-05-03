@@ -18,7 +18,7 @@ without relying only on hand-built mocks or manual live smoke tests.
 The recommended pattern is not to point Telegram Web or Discord clients at a
 fake backend. Telegram and Discord consumer clients talk to their own platform
 infrastructure, not to the Bot API or bot REST endpoints directly. Instead, the
-harness should record and replay the provider boundary that PwrAgnt actually
+harness should record and replay the provider boundary that PwrAgent actually
 owns:
 
 - inbound platform events that our providers normalize into
@@ -155,8 +155,8 @@ before attempting live platform UI automation.
   grammY `src/core/client.ts` and `src/bot.ts`.
 - Discord Developer Documentation covers REST, Gateway events, message
   components, and interactions at https://discord.com/developers/docs.
-- discord.js REST and Gateway abstractions are the SDK layer PwrAgnt already
-  depends on through `@pwragnt/messaging-provider-discord`.
+- discord.js REST and Gateway abstractions are the SDK layer PwrAgent already
+  depends on through `@pwragent/messaging-provider-discord`.
 
 ## Key Technical Decisions
 
@@ -187,7 +187,7 @@ before attempting live platform UI automation.
 
 - Can we point Telegram Web at a fake backend for E2E? No. Telegram clients
   communicate with Telegram infrastructure; our bot talks to the Bot API. A
-  fake Bot API can test PwrAgnt and grammY calls, but it does not become a
+  fake Bot API can test PwrAgent and grammY calls, but it does not become a
   Telegram consumer client.
 - Does the pattern work for Discord too? Yes, with asymmetry. Discord REST
   requests can be captured and replayed similarly. Gateway events should start
@@ -227,7 +227,7 @@ flowchart TB
   Fixture --> ProviderTests["provider replay tests"]
   Fixture --> DesktopE2E["Electron messaging E2E"]
   ProviderTests --> AssertApi["assert platform request shape"]
-  DesktopE2E --> AssertWorkflow["assert PwrAgnt workflow behavior"]
+  DesktopE2E --> AssertWorkflow["assert PwrAgent workflow behavior"]
 ```
 
 ## Implementation Units
@@ -545,7 +545,7 @@ captures without confusing replay tests with live platform smoke tests.
 - **Integration coverage:** Unit tests alone cannot prove that a replayed
   messaging event starts a desktop turn and receives backend output. Electron
   E2E should cover that cross-layer handoff.
-- **Unchanged invariants:** PwrAgnt workflow logic still targets
+- **Unchanged invariants:** PwrAgent workflow logic still targets
   `MessagingSurfaceIntent` and `MessagingInboundEvent`; no thread/project/status
   flow should import Telegram or Discord test helpers.
 

@@ -15,7 +15,7 @@ origin: docs/brainstorms/2026-05-02-desktop-release-packaging-requirements.md
 
 ## Overview
 
-Stand up the first-ever PwrAgnt user-facing macOS release pipeline: a branded, code-signed,
+Stand up the first-ever PwrAgent user-facing macOS release pipeline: a branded, code-signed,
 notarized, ASAR-archived Electron app, owned by PwrDrvr LLC, distributed outside the Mac
 App Store as a downloadable DMG, with auto-update via `electron-updater`. Apple Silicon
 only at v1.0; Intel x64 deferred to demand. The plan honors every decision recorded in the
@@ -25,8 +25,8 @@ phased implementation, and explicit acceptance criteria.
 
 The phrase "eject from the default Electron runner" is a useful framing of the user
 intent but not literally what happens: Electron itself is **not** forked. `electron-builder`
-takes the stock Electron binary, renames it (`Electron.app` → `PwrAgnt.app`,
-`Electron Helper (Renderer)` → `PwrAgnt Helper (Renderer)`, etc.), rewrites `Info.plist`
+takes the stock Electron binary, renames it (`Electron.app` → `PwrAgent.app`,
+`Electron Helper (Renderer)` → `PwrAgent Helper (Renderer)`, etc.), rewrites `Info.plist`
 including `CFBundleIdentifier` and `NSHumanReadableCopyright`, applies the `.icns` icon,
 hardens the runtime, signs with the PwrDrvr LLC Developer ID, submits to Apple's
 notarization service, staples the ticket, and packages the result as a DMG (and a ZIP for
@@ -41,7 +41,7 @@ Key carry-forward decisions (see origin):
   with the LLC's legal posture.
 - **Distribution = outside Mac App Store**, signed + notarized + stapled DMG.
 - **Auto-update = `electron-updater`**. **Phase 1** points at the existing private
-  `pwrdrvr/PwrAgnt` GitHub repo (solo dogfooding); **Phase 2** distribution channel
+  `pwrdrvr/PwrAgent` GitHub repo (solo dogfooding); **Phase 2** distribution channel
   decision deferred until just before any external test users join.
 - **Architecture = Apple Silicon (arm64) only at v1.0.**
 - **No monetization scaffolding now**, just clean account/identity boundaries so a future
@@ -51,7 +51,7 @@ Key carry-forward decisions (see origin):
 
 ## Problem Statement
 
-PwrAgnt is preparing its first user-facing macOS release. This is a first-time Electron
+PwrAgent is preparing its first user-facing macOS release. This is a first-time Electron
 shipment for the developer, and the decisions are coupled in non-obvious ways:
 
 - **Legal posture**: copyright, ownership, and liability must clearly attach to PwrDrvr
@@ -70,7 +70,7 @@ shipment for the developer, and the decisions are coupled in non-obvious ways:
   it in is widely discouraged; the right Phase 1 choice for a solo developer is
   environment-variable injection at launch, with a Phase 2 migration plan to remove the
   token entirely.
-- **pnpm + ASAR**: PwrAgnt is a pnpm workspace; pnpm's symlinked virtual store interacts
+- **pnpm + ASAR**: PwrAgent is a pnpm workspace; pnpm's symlinked virtual store interacts
   poorly with electron-builder's default `node_modules` walk into the ASAR archive. This
   is the single biggest packaging risk and must be solved before notarization is even
   attempted.
@@ -159,13 +159,13 @@ LICENSE                            # Proprietary boilerplate (PwrDrvr LLC)
 
 #### Bundle Identifier and Signing Identity
 
-- `appId: com.pwrdrvr.pwragnt`
-- `mac.helperBundleId: com.pwrdrvr.pwragnt.helper`
-- `mac.helperRendererBundleId: com.pwrdrvr.pwragnt.helper.Renderer`
-- `mac.helperGPUBundleId: com.pwrdrvr.pwragnt.helper.GPU` (note the capital `GPU` —
+- `appId: com.pwrdrvr.pwragent`
+- `mac.helperBundleId: com.pwrdrvr.pwragent.helper`
+- `mac.helperRendererBundleId: com.pwrdrvr.pwragent.helper.Renderer`
+- `mac.helperGPUBundleId: com.pwrdrvr.pwragent.helper.GPU` (note the capital `GPU` —
   electron-builder's TypeScript field is literally `helperGPUBundleId`, lowercase `gpu`
   silently no-ops)
-- `mac.helperPluginBundleId: com.pwrdrvr.pwragnt.helper.Plugin`
+- `mac.helperPluginBundleId: com.pwrdrvr.pwragent.helper.Plugin`
 - Signing identity resolves automatically from Keychain when env var
   `CSC_NAME="Developer ID Application: PwrDrvr LLC (T44CNHC4UH)"` matches an installed
   cert. Team ID is `T44CNHC4UH`.
@@ -189,7 +189,7 @@ LICENSE                            # Proprietary boilerplate (PwrDrvr LLC)
 ```
 
 **Deliberately omits `com.apple.security.cs.disable-library-validation`** based on 2026
-best-practice findings. PwrAgnt has zero native modules (verified during repo research:
+best-practice findings. PwrAgent has zero native modules (verified during repo research:
 no `.node` files anywhere outside `node_modules`, no `keytar`/`better-sqlite3`/`sharp`/
 `node-pre-gyp`/`node-gyp` deps). If a future native dep forces the issue, add the key and
 re-notarize. The entitlements file is reused for `entitlementsInherit`.
@@ -203,11 +203,11 @@ Default `build.minify` is **false** for all three targets — the existing
 // apps/desktop/electron.vite.config.ts
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ["@pwragnt/shared", "@pwragnt/agent-core"] })],
+    plugins: [externalizeDepsPlugin({ exclude: ["@pwragent/shared", "@pwragent/agent-core"] })],
     build: { minify: "esbuild", sourcemap: false },
   },
   preload: {
-    plugins: [externalizeDepsPlugin({ exclude: ["@pwragnt/shared"] })],
+    plugins: [externalizeDepsPlugin({ exclude: ["@pwragent/shared"] })],
     build: {
       minify: "esbuild",
       sourcemap: false,
@@ -229,8 +229,8 @@ crash reporting is added later (out of scope for this plan), upload sourcemaps s
 #### electron-builder.yml (annotated)
 
 ```yaml
-appId: com.pwrdrvr.pwragnt
-productName: PwrAgnt
+appId: com.pwrdrvr.pwragent
+productName: PwrAgent
 copyright: "Copyright © 2026 PwrDrvr LLC. All rights reserved."
 
 # Bundle layout
@@ -269,10 +269,10 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist  # Same content
   # Helper bundle renames — verify post-build with Activity Monitor
-  helperBundleId: com.pwrdrvr.pwragnt.helper
-  helperRendererBundleId: com.pwrdrvr.pwragnt.helper.Renderer
-  helperGPUBundleId: com.pwrdrvr.pwragnt.helper.GPU
-  helperPluginBundleId: com.pwrdrvr.pwragnt.helper.Plugin
+  helperBundleId: com.pwrdrvr.pwragent.helper
+  helperRendererBundleId: com.pwrdrvr.pwragent.helper.Renderer
+  helperGPUBundleId: com.pwrdrvr.pwragent.helper.GPU
+  helperPluginBundleId: com.pwrdrvr.pwragent.helper.Plugin
   extendInfo:
     NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC. All rights reserved."
     LSMinimumSystemVersion: "12.0"   # macOS Monterey baseline; reasonable in 2026
@@ -287,13 +287,13 @@ dmg:
   writeUpdateInfo: false           # latest-mac.yml is generated from the .zip
   # Optional cosmetic; defer if not ready: background, contents layout
 
-# Phase 1: github provider against the existing private pwrdrvr/PwrAgnt repo.
+# Phase 1: github provider against the existing private pwrdrvr/PwrAgent repo.
 # Phase 2: this block migrates to a public release repo, public source repo, or
 # generic provider against R2/CloudFront. See Phase H runbook.
 publish:
   provider: github
   owner: pwrdrvr
-  repo: PwrAgnt
+  repo: PwrAgent
   private: true
   releaseType: release
 ```
@@ -314,7 +314,7 @@ Phase 2. The Phase 2 migration removes the token entirely (public artifacts, no 
 needed).
 
 If at Phase 1 the env-var ergonomics prove unbearable in practice, a fine-grained PAT
-(scopes: `Contents: Read`, `Metadata: Read`; expiry 90 days; restricted to `pwrdrvr/PwrAgnt`
+(scopes: `Contents: Read`, `Metadata: Read`; expiry 90 days; restricted to `pwrdrvr/PwrAgent`
 only) can be baked via Vite `define` as a fallback. Document this fallback path in the
 implementation but do not start there.
 
@@ -322,7 +322,7 @@ implementation but do not start there.
 
 Three options:
 
-1. **`pnpm deploy --filter @pwragnt/desktop --prod` to a staging dir** — pnpm walks the
+1. **`pnpm deploy --filter @pwragent/desktop --prod` to a staging dir** — pnpm walks the
    workspace symlinks and produces a self-contained, flat `node_modules` tree. Run
    electron-builder against the staged dir. This is the recommended path: clean separation,
    does not affect dev workflow, is the documented pnpm+Electron pattern in 2026.
@@ -334,9 +334,9 @@ Three options:
 
 ```
 1. pnpm install --frozen-lockfile             # ensure devDeps for the build
-2. pnpm --filter @pwragnt/desktop build       # electron-vite build → out/
-3. pnpm deploy --filter @pwragnt/desktop --prod /tmp/pwragnt-deploy
-4. cp -r /tmp/pwragnt-deploy/{out,package.json,build} <stage>
+2. pnpm --filter @pwragent/desktop build       # electron-vite build → out/
+3. pnpm deploy --filter @pwragent/desktop --prod /tmp/pwragent-deploy
+4. cp -r /tmp/pwragent-deploy/{out,package.json,build} <stage>
 5. cd <stage> && electron-builder --mac --arm64 --publish always
 ```
 
@@ -393,7 +393,7 @@ contains all six values above.
       - Add `"author": "PwrDrvr LLC"`
       - Add `"description"` matching root
       - Add `"license": "UNLICENSED"`
-      - Confirm `"productName": "PwrAgnt"` (already set)
+      - Confirm `"productName": "PwrAgent"` (already set)
       - Add `"copyright": "Copyright © 2026 PwrDrvr LLC. All rights reserved."` at the top
         level (electron-builder reads this if `electron-builder.yml` does not override).
 - [ ] **B3.** Add `LICENSE` at repo root with proprietary boilerplate:
@@ -421,16 +421,16 @@ contains all six values above.
         version: app.getVersion(),
       });
       ```
-      Without this the macOS App menu's "About PwrAgnt" item shows Electron's defaults.
+      Without this the macOS App menu's "About PwrAgent" item shows Electron's defaults.
 - [ ] **B5.** Replace hardcoded version in
       [`apps/desktop/src/main/codex-app-server/client.ts:4251`](apps/desktop/src/main/codex-app-server/client.ts:4251):
       `version: "0.1.0"` → `version: app.getVersion()`. Without this every release reports
       itself as `0.1.0` to the Codex App Server.
 - [ ] **B6.** Replace the placeholder Help menu in
       [`apps/desktop/src/main/index.ts:48-58`](apps/desktop/src/main/index.ts:48). Today
-      it links to `https://github.com/pwrdrvr/PwrAgnt`, which 404s for non-collaborators.
-      Replace with a marketing landing URL (e.g. `https://pwragnt.com` or a holding page
-      under `pwrdrvr.com`) and add structured items: `About PwrAgnt` (calls
+      it links to `https://github.com/pwrdrvr/PwrAgent`, which 404s for non-collaborators.
+      Replace with a marketing landing URL (e.g. `https://pwragent.com` or a holding page
+      under `pwrdrvr.com`) and add structured items: `About PwrAgent` (calls
       `app.showAboutPanel()`), `Documentation`, `Report an Issue`. If no marketing URL is
       ready by release, **remove** the broken link rather than ship it.
 - [ ] **B7.** Add a Settings → About row in
@@ -468,8 +468,8 @@ with the PwrDrvr LLC copyright; Settings → About shows the right version.
 **Owner:** code. **Dependencies:** B5 (so the embedded version comes from `app.getVersion()`).
 **Estimated effort:** 1–2 days.
 
-- [ ] **C1.** `pnpm --filter @pwragnt/desktop add -D electron-builder@latest`
-- [ ] **C2.** `pnpm --filter @pwragnt/desktop add electron-updater@latest` (production
+- [ ] **C1.** `pnpm --filter @pwragent/desktop add -D electron-builder@latest`
+- [ ] **C2.** `pnpm --filter @pwragent/desktop add electron-updater@latest` (production
       dep — needed at runtime in Phase F).
 - [ ] **C3.** Create [`apps/desktop/electron-builder.yml`](apps/desktop/electron-builder.yml)
       with the full configuration in §Architecture above.
@@ -493,12 +493,12 @@ with the PwrDrvr LLC copyright; Settings → About shows the right version.
       (`build/icon.icns`, `build/entitlements.mac.plist`, `build/dmg-background.png` if
       added).
 
-**Acceptance:** `pnpm --filter @pwragnt/desktop package:dryrun` produces a `.app` under
-`apps/desktop/dist/mac-arm64/PwrAgnt.app` that:
-- Has `Info.plist` `CFBundleName: PwrAgnt`, `CFBundleIdentifier: com.pwrdrvr.pwragnt`,
+**Acceptance:** `pnpm --filter @pwragent/desktop package:dryrun` produces a `.app` under
+`apps/desktop/dist/mac-arm64/PwrAgent.app` that:
+- Has `Info.plist` `CFBundleName: PwrAgent`, `CFBundleIdentifier: com.pwrdrvr.pwragent`,
   `NSHumanReadableCopyright: Copyright © 2026 PwrDrvr LLC. All rights reserved.`
-- Has helper bundles named `PwrAgnt Helper`, `PwrAgnt Helper (Renderer)`,
-  `PwrAgnt Helper (GPU)`, `PwrAgnt Helper (Plugin)`
+- Has helper bundles named `PwrAgent Helper`, `PwrAgent Helper (Renderer)`,
+  `PwrAgent Helper (GPU)`, `PwrAgent Helper (Plugin)`
 - Launches and renders the UI when right-clicked → Open (signing not yet wired)
 
 #### Phase D — pnpm + ASAR Compatibility (parallel with A; depends on C)
@@ -511,7 +511,7 @@ risk of debugging the pnpm symlink graph.
 - [ ] **D2.** Add a `package` smoke test that boots the packaged `.app` headlessly (or
       using the existing Playwright e2e harness pointed at the packaged binary instead of
       the dev binary) and confirms the app reaches first-paint without throwing.
-- [ ] **D3.** Inspect the produced ASAR with `npx asar list dist/mac-arm64/PwrAgnt.app/Contents/Resources/app.asar`
+- [ ] **D3.** Inspect the produced ASAR with `npx asar list dist/mac-arm64/PwrAgent.app/Contents/Resources/app.asar`
       and confirm:
       - `out/main/index.js` is present
       - `node_modules/electron-log/` and other prod deps are present (not just symlinks)
@@ -519,7 +519,7 @@ risk of debugging the pnpm symlink graph.
       - No source maps (per Phase C minify config)
 
 **Acceptance:** the unsigned `.app` produced by `package:dryrun` launches successfully on
-the dev Mac and renders the PwrAgnt UI end-to-end (composer, sidebar, settings).
+the dev Mac and renders the PwrAgent UI end-to-end (composer, sidebar, settings).
 
 #### Phase E — Sign + Notarize End-to-End Locally (gated on A complete)
 
@@ -537,27 +537,27 @@ notarization.
       export APPLE_API_ISSUER=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
       export APPLE_TEAM_ID=YOURTEAMID
       ```
-- [ ] **E3.** Run `pnpm --filter @pwragnt/desktop package` (signed but unpublished). Watch
+- [ ] **E3.** Run `pnpm --filter @pwragent/desktop package` (signed but unpublished). Watch
       the build log for: signing each helper bundle individually, then the main `.app`,
       then submission to notarytool, the `Waiting for notarization status...` poll, and
       `stapler staple`.
 - [ ] **E4.** Verify the produced `.app`:
-      - `codesign -dv --verbose=4 dist/mac-arm64/PwrAgnt.app` reports
+      - `codesign -dv --verbose=4 dist/mac-arm64/PwrAgent.app` reports
         `Authority=Developer ID Application: PwrDrvr LLC (TEAMID)`
-      - `spctl -a -vv dist/mac-arm64/PwrAgnt.app` reports
+      - `spctl -a -vv dist/mac-arm64/PwrAgent.app` reports
         `accepted, source=Notarized Developer ID`
-      - `stapler validate dist/mac-arm64/PwrAgnt.app` reports
+      - `stapler validate dist/mac-arm64/PwrAgent.app` reports
         `The validate action worked!`
-- [ ] **E5.** Mount the `.dmg`, drag PwrAgnt to Applications, **fully quit** the dev
+- [ ] **E5.** Mount the `.dmg`, drag PwrAgent to Applications, **fully quit** the dev
       instance, and double-click to launch. Confirm:
-      - One-time `"PwrAgnt is an app downloaded from the Internet. Are you sure you want
+      - One-time `"PwrAgent is an app downloaded from the Internet. Are you sure you want
         to open it?"` dialog with an **Open** button (not "Cannot be opened…" — that
         means notarization or stapling failed).
       - First-launch over a network-disconnected Mac (turn off Wi-Fi) succeeds — proves
         the staple worked.
-      - Activity Monitor shows `PwrAgnt`, `PwrAgnt Helper (Renderer)`,
-        `PwrAgnt Helper (GPU)` — **no** `Electron Helper`. (Origin success criterion.)
-      - About PwrAgnt menu shows `Copyright © 2026 PwrDrvr LLC. All rights reserved.`
+      - Activity Monitor shows `PwrAgent`, `PwrAgent Helper (Renderer)`,
+        `PwrAgent Helper (GPU)` — **no** `Electron Helper`. (Origin success criterion.)
+      - About PwrAgent menu shows `Copyright © 2026 PwrDrvr LLC. All rights reserved.`
         and the correct version.
 - [ ] **E6.** Save the notarization submission ID; if anything goes wrong run
       `xcrun notarytool log <submission-id> --key ...` to fetch the JSON failure log.
@@ -577,7 +577,7 @@ notarized, because Squirrel.Mac validates the new binary's Developer ID before s
       import { autoUpdater } from "electron-updater";
       import { getMainLogger } from "./log";
 
-      const log = getMainLogger("pwragnt:updater");
+      const log = getMainLogger("pwragent:updater");
 
       export function initAutoUpdater(): void {
         if (process.env.NODE_ENV !== "production") return;
@@ -606,14 +606,14 @@ notarized, because Squirrel.Mac validates the new binary's Developer ID before s
       ```bash
       # Solo Phase 1 launch — set GH_TOKEN before opening the app
       export GH_TOKEN=ghp_fine_grained_pat_here
-      open /Applications/PwrAgnt.app
+      open /Applications/PwrAgent.app
       ```
       Plus a `LaunchAgent` plist alternative for users who don't want to launch via
       Terminal.
 - [ ] **F5.** End-to-end smoke test:
       1. Bump version to `0.2.0` in
          [`apps/desktop/package.json`](apps/desktop/package.json), tag and run
-         `pnpm release` locally → publishes to `pwrdrvr/PwrAgnt` releases.
+         `pnpm release` locally → publishes to `pwrdrvr/PwrAgent` releases.
       2. Install the `.dmg` to `/Applications`, launch with `GH_TOKEN` set.
       3. Bump to `0.2.1`, run `pnpm release` again.
       4. Re-launch the installed `0.2.0` and confirm it detects the update, downloads,
@@ -643,9 +643,9 @@ re-signing or re-quarantine prompt."
             - uses: actions/checkout@v4
             - uses: pwrdrvr/configure-nodejs@v1
             - run: pnpm install --frozen-lockfile
-            - run: pnpm --filter @pwragnt/desktop typecheck
+            - run: pnpm --filter @pwragent/desktop typecheck
             - run: pnpm test
-            - run: pnpm --filter @pwragnt/desktop release
+            - run: pnpm --filter @pwragent/desktop release
               env:
                 CSC_LINK: ${{ secrets.CSC_LINK }}
                 CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -663,13 +663,13 @@ re-signing or re-quarantine prompt."
       to handle base64-encoded `APPLE_API_KEY` if needed (decode to a temp `.p8` file
       before invoking electron-builder).
 - [ ] **G4.** Cut a `v0.2.0` tag against this branch, push, and verify the workflow:
-      builds, signs, notarizes, staples, publishes to `pwrdrvr/PwrAgnt` releases. Cycle
+      builds, signs, notarizes, staples, publishes to `pwrdrvr/PwrAgent` releases. Cycle
       time target: ≤ 12 minutes.
 - [ ] **G5.** Document the release ritual in
       [`docs/desktop-release-runbook.md`](docs/desktop-release-runbook.md):
       ```bash
       # Cut a release
-      pnpm --filter @pwragnt/desktop version patch    # bump and commit
+      pnpm --filter @pwragent/desktop version patch    # bump and commit
       git push --follow-tags                          # push commit + tag
       # Watch GH Actions → Release Desktop (macOS arm64)
       ```
@@ -687,13 +687,13 @@ runbook; the actual migration is a future task.
       covering each of the three Phase 2 channel options, with the exact
       `electron-builder.yml` `publish:` block change for each:
       - **Open-source the source repo**: change nothing in `publish:`; the existing
-        `provider: github, owner: pwrdrvr, repo: PwrAgnt, private: false` flips when the
+        `provider: github, owner: pwrdrvr, repo: PwrAgent, private: false` flips when the
         repo's visibility flips. Drop the `GH_TOKEN` requirement at runtime.
-      - **Public release repo**: create `pwrdrvr/PwrAgnt-Releases` (or similar); change
-        `repo: PwrAgnt-Releases, private: false`. Mirror the existing v0.x.0 releases
+      - **Public release repo**: create `pwrdrvr/PwrAgent-Releases` (or similar); change
+        `repo: PwrAgent-Releases, private: false`. Mirror the existing v0.x.0 releases
         into it via `gh release` so existing installs keep finding the feed.
       - **Generic provider on R2/CloudFront**: provision the bucket + worker; change
-        `publish:` to `provider: generic, url: https://updates.pwragnt.com/${channel}`.
+        `publish:` to `provider: generic, url: https://updates.pwragent.com/${channel}`.
         Set up a "bridge release" mechanism (one final release pushed to **both** old and
         new channels) so existing installs find the new feed once.
 - [ ] **H2.** Document the **decision deadline**: "Phase 2 channel must be chosen and
@@ -742,17 +742,17 @@ runtime change in user-facing code paths *except* for the auto-updater initializ
 git push --follow-tags
   → GitHub Actions (release.yml on macos-14)
     → pnpm install + typecheck + test
-    → pnpm --filter @pwragnt/desktop release  (apps/desktop/scripts/release.mjs)
+    → pnpm --filter @pwragent/desktop release  (apps/desktop/scripts/release.mjs)
       → electron-vite build (out/main, out/preload, out/renderer)
-      → pnpm deploy --filter @pwragnt/desktop --prod  (flat node_modules in stage dir)
+      → pnpm deploy --filter @pwragent/desktop --prod  (flat node_modules in stage dir)
       → electron-builder --mac --arm64 --publish always
         → @electron/osx-sign  (sign main + each helper bundle individually with PwrDrvr LLC cert)
         → @electron/notarize  (xcrun notarytool submit + wait + staple)
         → DMG and ZIP packaging
         → @electron/publisher-github  (upload artifacts + latest-mac.yml to private repo release)
-  → User's installed PwrAgnt.app
+  → User's installed PwrAgent.app
     → electron-updater.checkForUpdatesAndNotify()
-      → GitHub REST API: GET /repos/pwrdrvr/PwrAgnt/releases/latest (Authorization: token <GH_TOKEN>)
+      → GitHub REST API: GET /repos/pwrdrvr/PwrAgent/releases/latest (Authorization: token <GH_TOKEN>)
       → fetch latest-mac.yml + ZIP
       → Squirrel.Mac validates the ZIP's Developer ID matches the running app's
       → quitAndInstall on next user-initiated quit
@@ -793,17 +793,17 @@ Two cross-layer surprises this surfaces, each addressed in a numbered task:
 ### State Lifecycle Risks
 
 - **`safeStorage`-encrypted Telegram/Discord tokens become unreadable after the first
-  signed build.** The bundle ID (`com.pwrdrvr.pwragnt`) and signing identity (PwrDrvr LLC)
+  signed build.** The bundle ID (`com.pwrdrvr.pwragent`) and signing identity (PwrDrvr LLC)
   combination is what macOS Keychain uses to scope `safeStorage`'s symmetric key. Existing
-  dev-mode encrypted tokens at `~/.local/state/pwragnt/settings-secrets.json` will fail to
+  dev-mode encrypted tokens at `~/.local/state/pwragent/settings-secrets.json` will fail to
   decrypt. The store at
   [`apps/desktop/src/main/settings/desktop-secret-store.ts`](apps/desktop/src/main/settings/desktop-secret-store.ts)
   returns `undefined` on decrypt failure; the user is prompted to re-enter the bot tokens
   in Settings. **Documented in Phase B10 release notes.** Not a code change required.
 - **Auto-update state**: electron-updater stores download state in
   `app.getPath("userData")`, which is the **default** Electron userData dir
-  (`~/Library/Application Support/PwrAgnt`). PwrAgnt's primary state is at
-  `~/.local/state/pwragnt/` (XDG-style, see
+  (`~/Library/Application Support/PwrAgent`). PwrAgent's primary state is at
+  `~/.local/state/pwragent/` (XDG-style, see
   [`desktop-state-root.ts:20`](apps/desktop/src/main/app-server/desktop-state-root.ts:20)),
   so the two are independent. No conflict. But: the productName change creates the
   Application Support dir for the first time on a signed install — fresh. No legacy
@@ -832,9 +832,9 @@ actual signed artifact:
    button (NOT the Sequoia "cannot be opened…" wall).
 2. **Fresh install on an offline Apple Silicon Mac**: same flow, but Wi-Fi off. Expect
    the same friendly dialog — proves stapling worked.
-3. **Activity Monitor smoke**: launch, open `Activity Monitor`, filter by "PwrAgnt".
-   Expect exactly the four processes (`PwrAgnt`, `PwrAgnt Helper (Renderer)`,
-   `PwrAgnt Helper (GPU)`, optionally `PwrAgnt Helper (Plugin)` — only spawned for
+3. **Activity Monitor smoke**: launch, open `Activity Monitor`, filter by "PwrAgent".
+   Expect exactly the four processes (`PwrAgent`, `PwrAgent Helper (Renderer)`,
+   `PwrAgent Helper (GPU)`, optionally `PwrAgent Helper (Plugin)` — only spawned for
    plugin features, may not appear). Expect ZERO occurrences of the string "Electron".
 4. **Auto-update round-trip**: described in Phase F5.
 5. **Cross-version migration of `safeStorage` secrets**: install dev build, configure
@@ -850,21 +850,21 @@ Helper" regression automatically.
 
 ### Functional Requirements
 
-- [ ] [R1] All four helper processes are renamed `PwrAgnt Helper (...)` in Activity
+- [ ] [R1] All four helper processes are renamed `PwrAgent Helper (...)` in Activity
       Monitor; no "Electron" string appears.
-- [ ] [R1] App display name in Dock, Menu bar, About panel, and window title is "PwrAgnt".
-- [ ] [R2] `defaults read /Applications/PwrAgnt.app/Contents/Info.plist CFBundleIdentifier`
-      reports `com.pwrdrvr.pwragnt`.
+- [ ] [R1] App display name in Dock, Menu bar, About panel, and window title is "PwrAgent".
+- [ ] [R2] `defaults read /Applications/PwrAgent.app/Contents/Info.plist CFBundleIdentifier`
+      reports `com.pwrdrvr.pwragent`.
 - [ ] [R3] `defaults read .../Info.plist NSHumanReadableCopyright` reports
       `Copyright © 2026 PwrDrvr LLC. All rights reserved.`
 - [ ] [R3] `package.json` `author` is `PwrDrvr LLC` at root and in `apps/desktop/`.
-- [ ] [R3] About panel (App menu → About PwrAgnt) shows the same copyright.
+- [ ] [R3] About panel (App menu → About PwrAgent) shows the same copyright.
 - [ ] [R3] Settings → About row shows app name, version, and copyright.
 - [ ] [R3] `LICENSE` file exists at repo root with proprietary boilerplate.
-- [ ] [R4] `codesign -dv --verbose=4 PwrAgnt.app` reports
+- [ ] [R4] `codesign -dv --verbose=4 PwrAgent.app` reports
       `Authority=Developer ID Application: PwrDrvr LLC (TEAMID)`.
-- [ ] [R5] `spctl -a -vv PwrAgnt.app` reports `accepted, source=Notarized Developer ID`.
-- [ ] [R5] `stapler validate PwrAgnt.app` succeeds.
+- [ ] [R5] `spctl -a -vv PwrAgent.app` reports `accepted, source=Notarized Developer ID`.
+- [ ] [R5] `stapler validate PwrAgent.app` succeeds.
 - [ ] [R6] No App Store target is configured anywhere.
 - [ ] [R7] `electron-builder.yml` `mac.target` lists only `arch: [arm64]`.
 - [ ] [R7] DMG file size is in the ~80–130MB range (sanity check that universal didn't
@@ -969,7 +969,7 @@ Helper" regression automatically.
 - **Code-source-protection** (electron-vite has a documented "source code protection"
   feature using V8 bytecode caching): low-priority because ASAR integrity already
   prevents tampering and obfuscation only delays — does not prevent — extraction.
-- **`docs/solutions/` seeding**: this release is the first time PwrAgnt accumulates
+- **`docs/solutions/` seeding**: this release is the first time PwrAgent accumulates
   Electron-shipping institutional knowledge. Strong candidate to backfill solution docs
   for: helper-bundle rebranding gotcha, the 2026 minimal entitlements set, pnpm + ASAR
   integration, and Squirrel.Mac signing-identity invariant.
@@ -1054,6 +1054,6 @@ Helper" regression automatically.
 
 ### Related Work
 
-- [PR #149: composer drafts across navigation](https://github.com/pwrdrvr/PwrAgnt/pull/149) —
+- [PR #149: composer drafts across navigation](https://github.com/pwrdrvr/PwrAgent/pull/149) —
   recent in-flight; unrelated but indicative of current branch hygiene.
 - (none directly related to packaging — this plan introduces the entire pipeline)

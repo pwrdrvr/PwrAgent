@@ -1,5 +1,5 @@
 {
-  "name": "@pwragnt/messaging-interface",
+  "name": "@pwragent/messaging-interface",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@pwragnt/shared": "workspace:*"
+    "@pwragent/shared": "workspace:*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

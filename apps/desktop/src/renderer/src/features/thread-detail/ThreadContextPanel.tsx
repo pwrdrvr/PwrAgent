@@ -14,7 +14,7 @@ import type {
   BackendSummary,
   NavigationThreadSummary,
   WorktreeSnapshotSummary,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 

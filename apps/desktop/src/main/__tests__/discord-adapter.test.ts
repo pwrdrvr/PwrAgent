@@ -7,24 +7,24 @@ import { MessagingStore } from "../messaging/core/messaging-store";
 import type {
   MessagingInboundEvent,
   MessagingSurfaceIntent,
-} from "@pwragnt/messaging-interface";
+} from "@pwragent/messaging-interface";
 import type {
   NavigationSnapshot,
   StartTurnRequest,
-} from "@pwragnt/shared";
-import { DiscordAdapter } from "@pwragnt/messaging-provider-discord";
+} from "@pwragent/shared";
+import { DiscordAdapter } from "@pwragent/messaging-provider-discord";
 import type {
   DiscordApi,
   DiscordApplicationCommand,
   DiscordCreateMessageRequest,
   DiscordInteractionResponseRequest,
-} from "@pwragnt/messaging-provider-discord";
-import { DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES } from "@pwragnt/messaging-provider-discord";
+} from "@pwragent/messaging-provider-discord";
+import { DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES } from "@pwragent/messaging-provider-discord";
 import type {
   DiscordGatewayConnection,
   DiscordGatewayEvent,
   DiscordGatewayListener,
-} from "@pwragnt/messaging-provider-discord";
+} from "@pwragent/messaging-provider-discord";
 
 const tempDirs: string[] = [];
 
@@ -41,7 +41,7 @@ describe("DiscordAdapter", () => {
     const api = createApi({
       applicationCommands: [
         createApplicationCommand("cmd-resume", {
-          description: "Choose a PwrAgnt thread to control from this conversation.",
+          description: "Choose a PwrAgent thread to control from this conversation.",
           name: "resume",
           options: [
             {
@@ -52,11 +52,11 @@ describe("DiscordAdapter", () => {
           ],
         }),
         createApplicationCommand("cmd-status", {
-          description: "Show the current PwrAgnt thread binding and controls.",
+          description: "Show the current PwrAgent thread binding and controls.",
           name: "status",
         }),
         createApplicationCommand("cmd-detach", {
-          description: "Detach this conversation from its current PwrAgnt thread.",
+          description: "Detach this conversation from its current PwrAgent thread.",
           name: "detach",
         }),
       ],
@@ -88,7 +88,7 @@ describe("DiscordAdapter", () => {
           name: "resume",
         }),
         createApplicationCommand("cmd-status", {
-          description: "Show the current PwrAgnt thread binding and controls.",
+          description: "Show the current PwrAgent thread binding and controls.",
           name: "status",
         }),
         createApplicationCommand("cmd-legacy", {
@@ -1178,7 +1178,7 @@ async function createControllerHarness(options: {
   startTurn: ReturnType<typeof vi.fn>;
   store: MessagingStore;
 }> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-discord-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-discord-"));
   tempDirs.push(tempDir);
   const store = new MessagingStore(path.join(tempDir, "messaging-state.json"));
   const api = createApi();

@@ -10,7 +10,7 @@ type PreloadLogRequest = {
   message?: string;
 };
 
-const preloadLog = getMainLogger("pwragnt:preload");
+const preloadLog = getMainLogger("pwragent:preload");
 
 export function registerPreloadLogIpcHandlers(): void {
   ipcMain.removeAllListeners(PRELOAD_LOG_CHANNEL);

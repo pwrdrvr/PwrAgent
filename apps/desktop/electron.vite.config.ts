@@ -23,11 +23,11 @@ export default defineConfig(({ command }) => {
       plugins: [
         externalizeDepsPlugin({
           exclude: [
-            "@pwragnt/shared",
-            "@pwragnt/agent-core",
-            "@pwragnt/messaging-interface",
-            "@pwragnt/messaging-provider-discord",
-            "@pwragnt/messaging-provider-telegram"
+            "@pwragent/shared",
+            "@pwragent/agent-core",
+            "@pwragent/messaging-interface",
+            "@pwragent/messaging-provider-discord",
+            "@pwragent/messaging-provider-telegram"
           ]
         })
       ],
@@ -58,7 +58,7 @@ export default defineConfig(({ command }) => {
       },
       plugins: [
         externalizeDepsPlugin({
-          exclude: ["@pwragnt/shared"]
+          exclude: ["@pwragent/shared"]
         })
       ]
     },

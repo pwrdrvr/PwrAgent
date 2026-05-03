@@ -13,8 +13,8 @@ import type {
   NavigationSnapshot,
   NavigationThreadSummary,
   ThreadExecutionMode,
-} from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 
 export type BrowseMode = "inbox" | "recents" | "directories";

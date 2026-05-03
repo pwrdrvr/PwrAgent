@@ -279,9 +279,9 @@ the stale row state.
 - Optional modify: `apps/desktop/e2e/fixtures/README.md`
 
 **Approach:**
-- Use `pnpm --filter @pwragnt/desktop export:session-capture` to export the
+- Use `pnpm --filter @pwragent/desktop export:session-capture` to export the
   target Codex session from the runtime protocol capture root.
-- Use `pnpm --filter @pwragnt/desktop derive:replay-fixture` with a sequence
+- Use `pnpm --filter @pwragent/desktop derive:replay-fixture` with a sequence
   window covering active status, `turn/started`, live activity, premature idle,
   `turn/completed`, and the later idle `thread/read`.
 - Label replay steps for the assertions: list seed, thread open/read,
@@ -490,7 +490,7 @@ survives premature idle, and clears after terminal completion plus idle read.
 ## Verification Plan
 
 - Run focused renderer tests:
-  `pnpm --filter @pwragnt/desktop test -- useThreadSessionState`
+  `pnpm --filter @pwragent/desktop test -- useThreadSessionState`
 - Run focused main-process normalization tests for Codex read status extraction.
 - Run focused E2E:
   `pnpm test:desktop-e2e -- stale-thinking-indicator`

@@ -8,7 +8,7 @@ import type {
   DesktopCodexCandidateSource,
   DesktopCodexDiscoveryCandidate,
   DesktopCodexDiscoverySnapshot,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { CODEX_COMMAND_ENV } from "./desktop-settings-env";
 
 const execFile = promisify(execFileCallback);

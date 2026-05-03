@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { AppServerThreadImagePart } from "@pwragnt/shared";
+import type { AppServerThreadImagePart } from "@pwragent/shared";
 import { TranscriptImage } from "./TranscriptImage";
 
 type TranscriptImageLightboxProps = {

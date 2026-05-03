@@ -15,13 +15,13 @@ Rework the Directories lens from a tall grouped-thread list into a compact proje
 
 ## Problem Frame
 
-The origin requirements define a denser Directories experience that stays visually aligned with Recents, replaces detached thread counts with a needs-attention signal, and turns `+` into a durable project-scoped launchpad rather than an immediate create-thread action (see origin: `docs/brainstorms/2026-04-18-directories-launchpad-requirements.md`). The current desktop code does not have a place to represent a non-thread draft: [`apps/desktop/src/renderer/src/features/navigation/DirectoriesList.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/features/navigation/DirectoriesList.tsx) derives grouped sections directly from thread summaries, [`apps/desktop/src/renderer/src/lib/useThreadNavigation.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/lib/useThreadNavigation.ts) only selects real threads, and [`apps/desktop/src/renderer/src/features/composer/Composer.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/features/composer/Composer.tsx) only knows how to submit turns against an existing thread id.
+The origin requirements define a denser Directories experience that stays visually aligned with Recents, replaces detached thread counts with a needs-attention signal, and turns `+` into a durable project-scoped launchpad rather than an immediate create-thread action (see origin: `docs/brainstorms/2026-04-18-directories-launchpad-requirements.md`). The current desktop code does not have a place to represent a non-thread draft: [`apps/desktop/src/renderer/src/features/navigation/DirectoriesList.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/features/navigation/DirectoriesList.tsx) derives grouped sections directly from thread summaries, [`apps/desktop/src/renderer/src/lib/useThreadNavigation.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/lib/useThreadNavigation.ts) only selects real threads, and [`apps/desktop/src/renderer/src/features/composer/Composer.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/features/composer/Composer.tsx) only knows how to submit turns against an existing thread id.
 
 At the same time, the current stack already has most of the infrastructure the launchpad needs:
-- [`packages/agent-core/src/persistence/overlay-store.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/packages/agent-core/src/persistence/overlay-store.ts) persists desktop-only state keyed outside the backing app server
-- [`packages/agent-core/src/domain/navigation-state.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/packages/agent-core/src/domain/navigation-state.ts) already materializes navigation snapshots from thread summaries plus overlay data
-- [`apps/desktop/src/main/app-server/backend-registry.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/main/app-server/backend-registry.ts) already owns thread creation, execution-mode routing, and request/response orchestration
-- [`apps/desktop/src/main/codex-app-server/client.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/main/codex-app-server/client.ts) already resolves Git roots, worktrees, and thread-level branch metadata
+- [`packages/agent-core/src/persistence/overlay-store.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/packages/agent-core/src/persistence/overlay-store.ts) persists desktop-only state keyed outside the backing app server
+- [`packages/agent-core/src/domain/navigation-state.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/packages/agent-core/src/domain/navigation-state.ts) already materializes navigation snapshots from thread summaries plus overlay data
+- [`apps/desktop/src/main/app-server/backend-registry.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/main/app-server/backend-registry.ts) already owns thread creation, execution-mode routing, and request/response orchestration
+- [`apps/desktop/src/main/codex-app-server/client.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/main/codex-app-server/client.ts) already resolves Git roots, worktrees, and thread-level branch metadata
 
 This plan extends those boundaries rather than replacing them.
 
@@ -46,17 +46,17 @@ This plan extends those boundaries rather than replacing them.
 
 ### Relevant Code and Patterns
 
-- [`docs/design/desktop-style-guide.md`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/docs/design/desktop-style-guide.md) explicitly calls for calm, dense sidebar rows and warns against ad hoc grouped-card styling.
-- [`docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md) already establishes directory view as an alternate lens over thread-first navigation, not a replacement object model.
-- [`apps/desktop/src/renderer/src/features/navigation/DirectoriesList.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/features/navigation/DirectoriesList.tsx) currently groups threads client-side and is the main renderer entry point that needs restructuring.
-- [`apps/desktop/src/renderer/src/features/navigation/Sidebar.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/features/navigation/Sidebar.tsx) already owns the browse-lens switch and current sidebar creation affordances.
-- [`apps/desktop/src/renderer/src/lib/useThreadNavigation.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/lib/useThreadNavigation.ts) is the current selection, snapshot refresh, and optimistic-thread boundary.
-- [`apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx) and [`apps/desktop/src/renderer/src/features/composer/Composer.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/features/composer/Composer.tsx) define the current thread-detail and reply workflow that the launchpad needs to mirror.
-- [`packages/shared/src/contracts/navigation.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/packages/shared/src/contracts/navigation.ts) and [`packages/shared/src/contracts/agent.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/packages/shared/src/contracts/agent.ts) are the shared contract boundaries for navigation snapshots and desktop IPC.
-- [`packages/agent-core/src/persistence/migrations.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/packages/agent-core/src/persistence/migrations.ts) and [`packages/agent-core/src/persistence/overlay-store.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/packages/agent-core/src/persistence/overlay-store.ts) are the persistence path for desktop-owned state and already handle versioned overlay migrations.
-- [`apps/desktop/src/main/ipc/app-server.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/main/ipc/app-server.ts) currently builds navigation snapshots from `listThreads()` plus overlay reconciliation, which is the natural place to add directory summaries.
-- [`docs/plans/2026-04-16-004-feat-codex-access-mode-toggle-plan.md`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/docs/plans/2026-04-16-004-feat-codex-access-mode-toggle-plan.md) already established execution-mode persistence in the overlay store and current renderer exposure for existing threads.
-- [`docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md) confirms `model/list` is part of the longer-term protocol surface, which matters for how aggressively this plan should promise model/reasoning UI.
+- [`docs/design/desktop-style-guide.md`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/docs/design/desktop-style-guide.md) explicitly calls for calm, dense sidebar rows and warns against ad hoc grouped-card styling.
+- [`docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md) already establishes directory view as an alternate lens over thread-first navigation, not a replacement object model.
+- [`apps/desktop/src/renderer/src/features/navigation/DirectoriesList.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/features/navigation/DirectoriesList.tsx) currently groups threads client-side and is the main renderer entry point that needs restructuring.
+- [`apps/desktop/src/renderer/src/features/navigation/Sidebar.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/features/navigation/Sidebar.tsx) already owns the browse-lens switch and current sidebar creation affordances.
+- [`apps/desktop/src/renderer/src/lib/useThreadNavigation.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/lib/useThreadNavigation.ts) is the current selection, snapshot refresh, and optimistic-thread boundary.
+- [`apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx) and [`apps/desktop/src/renderer/src/features/composer/Composer.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/features/composer/Composer.tsx) define the current thread-detail and reply workflow that the launchpad needs to mirror.
+- [`packages/shared/src/contracts/navigation.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/packages/shared/src/contracts/navigation.ts) and [`packages/shared/src/contracts/agent.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/packages/shared/src/contracts/agent.ts) are the shared contract boundaries for navigation snapshots and desktop IPC.
+- [`packages/agent-core/src/persistence/migrations.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/packages/agent-core/src/persistence/migrations.ts) and [`packages/agent-core/src/persistence/overlay-store.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/packages/agent-core/src/persistence/overlay-store.ts) are the persistence path for desktop-owned state and already handle versioned overlay migrations.
+- [`apps/desktop/src/main/ipc/app-server.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/main/ipc/app-server.ts) currently builds navigation snapshots from `listThreads()` plus overlay reconciliation, which is the natural place to add directory summaries.
+- [`docs/plans/2026-04-16-004-feat-codex-access-mode-toggle-plan.md`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/docs/plans/2026-04-16-004-feat-codex-access-mode-toggle-plan.md) already established execution-mode persistence in the overlay store and current renderer exposure for existing threads.
+- [`docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md) confirms `model/list` is part of the longer-term protocol surface, which matters for how aggressively this plan should promise model/reasoning UI.
 
 ### Institutional Learnings
 
@@ -161,9 +161,9 @@ flowchart TB
 **Execution note:** Start with migration and aggregation tests before changing the renderer shape.
 
 **Patterns to follow:**
-- [`packages/shared/src/contracts/navigation.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/packages/shared/src/contracts/navigation.ts)
-- [`packages/agent-core/src/persistence/migrations.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/packages/agent-core/src/persistence/migrations.ts)
-- [`packages/agent-core/src/domain/navigation-state.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/packages/agent-core/src/domain/navigation-state.ts)
+- [`packages/shared/src/contracts/navigation.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/packages/shared/src/contracts/navigation.ts)
+- [`packages/agent-core/src/persistence/migrations.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/packages/agent-core/src/persistence/migrations.ts)
+- [`packages/agent-core/src/domain/navigation-state.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/packages/agent-core/src/domain/navigation-state.ts)
 
 **Test scenarios:**
 - Happy path: a persisted launchpad draft rehydrates after restart with prompt text, execution mode, branch choice, and worktree/local preference intact.
@@ -209,10 +209,10 @@ flowchart TB
 - Extend backend metadata enough to expose launchpad setup options when available. Use current backend defaults as the floor, but avoid shipping made-up lists for unsupported backends.
 
 **Patterns to follow:**
-- [`apps/desktop/src/main/ipc/app-server.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/main/ipc/app-server.ts)
-- [`apps/desktop/src/main/ipc/agent-ipc.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/main/ipc/agent-ipc.ts)
-- [`apps/desktop/src/main/app-server/backend-registry.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/main/app-server/backend-registry.ts)
-- [`apps/desktop/src/main/codex-app-server/client.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/main/codex-app-server/client.ts)
+- [`apps/desktop/src/main/ipc/app-server.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/main/ipc/app-server.ts)
+- [`apps/desktop/src/main/ipc/agent-ipc.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/main/ipc/agent-ipc.ts)
+- [`apps/desktop/src/main/app-server/backend-registry.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/main/app-server/backend-registry.ts)
+- [`apps/desktop/src/main/codex-app-server/client.ts`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/main/codex-app-server/client.ts)
 
 **Test scenarios:**
 - Happy path: a Git directory summary reports its current branch plus `ahead/behind` counts when an upstream branch exists.
@@ -254,9 +254,9 @@ flowchart TB
 - Keep Git status informational in the expanded row only: branch text, sync status when known, and `+` entrypoint. Do not add branch-switching actions here.
 
 **Patterns to follow:**
-- [`apps/desktop/src/renderer/src/features/navigation/Sidebar.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/features/navigation/Sidebar.tsx)
-- [`apps/desktop/src/renderer/src/features/navigation/RecentsList.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/features/navigation/RecentsList.tsx)
-- [`docs/design/desktop-style-guide.md`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/docs/design/desktop-style-guide.md)
+- [`apps/desktop/src/renderer/src/features/navigation/Sidebar.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/features/navigation/Sidebar.tsx)
+- [`apps/desktop/src/renderer/src/features/navigation/RecentsList.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/features/navigation/RecentsList.tsx)
+- [`docs/design/desktop-style-guide.md`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/docs/design/desktop-style-guide.md)
 
 **Test scenarios:**
 - Happy path: the collapsed directory row shows label plus needs-attention badge and no detached raw thread-count label.
@@ -300,9 +300,9 @@ flowchart TB
 - Leave current thread-specific execution-mode switching in the context rail for existing threads so sticky launchpad defaults are not confused with retroactive thread edits.
 
 **Patterns to follow:**
-- [`apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx)
-- [`apps/desktop/src/renderer/src/features/composer/Composer.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/features/composer/Composer.tsx)
-- [`apps/desktop/src/renderer/src/features/thread-detail/ThreadContextPanel.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/features/thread-detail/ThreadContextPanel.tsx)
+- [`apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx)
+- [`apps/desktop/src/renderer/src/features/composer/Composer.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/features/composer/Composer.tsx)
+- [`apps/desktop/src/renderer/src/features/thread-detail/ThreadContextPanel.tsx`](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/features/thread-detail/ThreadContextPanel.tsx)
 
 **Test scenarios:**
 - Happy path: editing a launchpad prompt autosaves it, navigating away, and reopening the launchpad restores the draft unchanged.
@@ -343,12 +343,12 @@ flowchart TB
 
 ## Sources & References
 
-- **Origin document:** [docs/brainstorms/2026-04-18-directories-launchpad-requirements.md](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/docs/brainstorms/2026-04-18-directories-launchpad-requirements.md)
-- Related requirements: [docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md)
-- Related design: [docs/design/desktop-style-guide.md](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/docs/design/desktop-style-guide.md)
-- Related plan: [docs/plans/2026-04-16-004-feat-codex-access-mode-toggle-plan.md](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/docs/plans/2026-04-16-004-feat-codex-access-mode-toggle-plan.md)
-- Related plan: [docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md)
-- Related code: [apps/desktop/src/renderer/src/features/navigation/DirectoriesList.tsx](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/features/navigation/DirectoriesList.tsx)
-- Related code: [apps/desktop/src/renderer/src/lib/useThreadNavigation.ts](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/renderer/src/lib/useThreadNavigation.ts)
-- Related code: [apps/desktop/src/main/app-server/backend-registry.ts](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/apps/desktop/src/main/app-server/backend-registry.ts)
-- Related code: [packages/agent-core/src/persistence/overlay-store.ts](/Users/huntharo/.codex/worktrees/c913/PwrAgnt/packages/agent-core/src/persistence/overlay-store.ts)
+- **Origin document:** [docs/brainstorms/2026-04-18-directories-launchpad-requirements.md](/Users/huntharo/.codex/worktrees/c913/PwrAgent/docs/brainstorms/2026-04-18-directories-launchpad-requirements.md)
+- Related requirements: [docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md](/Users/huntharo/.codex/worktrees/c913/PwrAgent/docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md)
+- Related design: [docs/design/desktop-style-guide.md](/Users/huntharo/.codex/worktrees/c913/PwrAgent/docs/design/desktop-style-guide.md)
+- Related plan: [docs/plans/2026-04-16-004-feat-codex-access-mode-toggle-plan.md](/Users/huntharo/.codex/worktrees/c913/PwrAgent/docs/plans/2026-04-16-004-feat-codex-access-mode-toggle-plan.md)
+- Related plan: [docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md](/Users/huntharo/.codex/worktrees/c913/PwrAgent/docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md)
+- Related code: [apps/desktop/src/renderer/src/features/navigation/DirectoriesList.tsx](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/features/navigation/DirectoriesList.tsx)
+- Related code: [apps/desktop/src/renderer/src/lib/useThreadNavigation.ts](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/renderer/src/lib/useThreadNavigation.ts)
+- Related code: [apps/desktop/src/main/app-server/backend-registry.ts](/Users/huntharo/.codex/worktrees/c913/PwrAgent/apps/desktop/src/main/app-server/backend-registry.ts)
+- Related code: [packages/agent-core/src/persistence/overlay-store.ts](/Users/huntharo/.codex/worktrees/c913/PwrAgent/packages/agent-core/src/persistence/overlay-store.ts)

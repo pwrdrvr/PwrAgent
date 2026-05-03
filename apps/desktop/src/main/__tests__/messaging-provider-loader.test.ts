@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { MessagingSurfaceIntent } from "@pwragnt/messaging-interface";
+import type { MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingStore } from "../messaging/core/messaging-store";
 import type { DesktopMessagingConfig } from "../messaging/messaging-config";
 import type {

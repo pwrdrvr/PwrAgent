@@ -134,7 +134,7 @@
             "type": "commandExecution",
             "toolName": "shell_command",
             "status": "inProgress",
-            "command": "/bin/zsh -lc 'pnpm --filter @pwragnt/desktop typecheck'"
+            "command": "/bin/zsh -lc 'pnpm --filter @pwragent/desktop typecheck'"
           }
         }
       }
@@ -152,7 +152,7 @@
             "type": "commandExecution",
             "toolName": "shell_command",
             "status": "inProgress",
-            "command": "/bin/zsh -lc 'pnpm --filter @pwragnt/desktop exec vitest run --environment jsdom src/renderer/src/features/composer/__tests__/composer.test.tsx'"
+            "command": "/bin/zsh -lc 'pnpm --filter @pwragent/desktop exec vitest run --environment jsdom src/renderer/src/features/composer/__tests__/composer.test.tsx'"
           }
         }
       }
@@ -170,7 +170,7 @@
             "type": "commandExecution",
             "toolName": "shell_command",
             "status": "completed",
-            "command": "/bin/zsh -lc 'pnpm --filter @pwragnt/desktop exec vitest run --environment jsdom src/renderer/src/features/composer/__tests__/composer.test.tsx'",
+            "command": "/bin/zsh -lc 'pnpm --filter @pwragent/desktop exec vitest run --environment jsdom src/renderer/src/features/composer/__tests__/composer.test.tsx'",
             "exitCode": 0,
             "durationMs": 3038
           }
@@ -190,7 +190,7 @@
             "type": "commandExecution",
             "toolName": "shell_command",
             "status": "completed",
-            "command": "/bin/zsh -lc 'pnpm --filter @pwragnt/desktop typecheck'",
+            "command": "/bin/zsh -lc 'pnpm --filter @pwragent/desktop typecheck'",
             "exitCode": 0,
             "durationMs": 9410
           }
@@ -236,7 +236,7 @@
             "type": "commandExecution",
             "toolName": "shell_command",
             "status": "inProgress",
-            "command": "/bin/zsh -lc 'pnpm --filter @pwragnt/desktop test:e2e -- directory-launchpad-skills.spec.ts'"
+            "command": "/bin/zsh -lc 'pnpm --filter @pwragent/desktop test:e2e -- directory-launchpad-skills.spec.ts'"
           }
         }
       }
@@ -254,7 +254,7 @@
             "type": "commandExecution",
             "toolName": "shell_command",
             "status": "failed",
-            "command": "/bin/zsh -lc 'pnpm --filter @pwragnt/desktop test:e2e -- directory-launchpad-skills.spec.ts'",
+            "command": "/bin/zsh -lc 'pnpm --filter @pwragent/desktop test:e2e -- directory-launchpad-skills.spec.ts'",
             "exitCode": 1,
             "durationMs": 17563
           }

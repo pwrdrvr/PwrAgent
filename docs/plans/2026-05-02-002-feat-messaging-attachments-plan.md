@@ -17,7 +17,7 @@ This extends the existing text/button messaging MVP. Today inbound media is inte
 
 ## Problem Frame
 
-Remote agent control from Telegram and Discord needs attachments to behave like normal chat input. A user should be able to attach a small text file, CSV, JSON, YAML, TOML, image, or GIF from a messaging app and have PwrAgnt route it into the bound thread without shipping raw unbounded media to a model.
+Remote agent control from Telegram and Discord needs attachments to behave like normal chat input. A user should be able to attach a small text file, CSV, JSON, YAML, TOML, image, or GIF from a messaging app and have PwrAgent route it into the bound thread without shipping raw unbounded media to a model.
 
 The trust boundary is different from desktop paste. Messaging attachments arrive from external services, can be large, can have misleading MIME types, can be short-lived CDN URLs, and can include content types the model cannot consume. The generic controller should therefore own validation, caps, normalization, text extraction, audit logging, and user-visible rejection. Provider adapters should only expose platform metadata, opaque download handles, and provider upload/rendering capabilities.
 
@@ -178,7 +178,7 @@ flowchart TB
 - Happy path: a media event carries text plus two attachments without any Telegram or Discord fields at the top level.
 - Happy path: an attachment descriptor can include filename, declared MIME, size, dimensions, and opaque state.
 - Edge case: an adapter can still emit a media event with rejected/unsupported disposition when it lacks download support.
-- Regression: provider packages continue importing only `@pwragnt/messaging-interface`, not desktop or agent-core modules.
+- Regression: provider packages continue importing only `@pwragent/messaging-interface`, not desktop or agent-core modules.
 
 **Verification:**
 - Generic contracts can describe Telegram and Discord attachment payloads without platform-specific branches in controller code.

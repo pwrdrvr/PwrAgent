@@ -36,9 +36,9 @@
           "executionMode": "default",
           "linkedDirectories": [
             {
-              "id": "pwragnt-fixture",
-              "label": "PwrAgnt",
-              "path": "/Users/huntharo/github/PwrAgnt",
+              "id": "pwragent-fixture",
+              "label": "PwrAgent",
+              "path": "/Users/huntharo/github/PwrAgent",
               "kind": "local"
             }
           ],
@@ -95,7 +95,7 @@
       "method": "skills/list",
       "result": [
         {
-          "cwd": "/Users/huntharo/github/PwrAgnt",
+          "cwd": "/Users/huntharo/github/PwrAgent",
           "skills": [
             {
               "name": "adversarial-document-reviewer",

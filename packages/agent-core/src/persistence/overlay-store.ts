@@ -13,8 +13,8 @@ import type {
   ThreadExecutionMode,
   ThreadOverlayState,
   WorktreeSnapshotSummary,
-} from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import {
   buildNavigationSnapshot,
   buildNavigationSnapshotHash,
@@ -196,7 +196,7 @@ export class OverlayStore {
             return false;
           }
 
-          if (directory.id.startsWith("pwragnt-handoff:")) {
+          if (directory.id.startsWith("pwragent-handoff:")) {
             return false;
           }
 
@@ -538,5 +538,5 @@ export class OverlayStore {
 function hasHandoffWorkspace(
   directories: ThreadOverlayState["extraLinkedDirectories"] = [],
 ): boolean {
-  return directories.some((directory) => directory.id.startsWith("pwragnt-handoff:"));
+  return directories.some((directory) => directory.id.startsWith("pwragent-handoff:"));
 }

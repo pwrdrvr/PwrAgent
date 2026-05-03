@@ -6,7 +6,7 @@ import type {
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
   NavigationThreadSummary
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 
 function mergeItems<T extends { id: string }>(

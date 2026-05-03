@@ -41,7 +41,7 @@ describe("analyzeCodexThreadProtocolCapture", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: "019da321-9801-70f1-a2ba-103afa135831",
-          cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
           gitBranch: "main",
         }),
       ]),
@@ -49,7 +49,7 @@ describe("analyzeCodexThreadProtocolCapture", () => {
   });
 
   it("reports chronological thread message and tool order from thread/read and notifications", async () => {
-    const captureDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-protocol-"));
+    const captureDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-protocol-"));
     const capturePath = path.join(captureDir, "temporal-order.jsonl");
     try {
       await fs.writeFile(

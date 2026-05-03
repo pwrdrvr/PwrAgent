@@ -2,7 +2,7 @@ import type {
   AppServerReviewFinding,
   AppServerThreadReviewEntry,
   DesktopApplicationsSnapshot,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";

@@ -1,4 +1,4 @@
-import type { AppServerSkillSummary } from "@pwragnt/shared";
+import type { AppServerSkillSummary } from "@pwragent/shared";
 
 export type SkillMentionPart =
   | {

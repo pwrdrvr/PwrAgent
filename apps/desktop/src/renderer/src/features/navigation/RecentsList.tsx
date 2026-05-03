@@ -1,5 +1,5 @@
-import type { NavigationThreadSummary } from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import { ThreadRow } from "./ThreadRow";
 
 type RecentsListProps = {

@@ -260,7 +260,7 @@ flowchart TB
 - Happy path: a replayed turn-lifecycle fixture shows turn-start and turn-complete state changes without leaving stale pending UI behind.
 - Edge case: replaying the seeded scenarios on CI yields the same visible state as local runs, with no dependence on live services or recorded timing.
 - Error path: if a seeded fixture is missing the live step that drives the intended UI state, the corresponding E2E spec fails with a targeted expectation rather than a generic timeout.
-- Integration: each seeded spec runs through the real Electron shell, replay backend, preload bridge, renderer state subscriptions, and transcript/composer UI without mocking `window.pwragnt`.
+- Integration: each seeded spec runs through the real Electron shell, replay backend, preload bridge, renderer state subscriptions, and transcript/composer UI without mocking `window.pwragent`.
 
 **Verification:**
 - The repo contains at least two additional replay-backed Electron regressions seeded from live Computer Use captures, and the full replay-backed suite passes both locally and in CI.
@@ -292,12 +292,12 @@ flowchart TB
 
 ## Sources & References
 
-- **Origin document:** [docs/brainstorms/2026-04-18-desktop-integration-test-replay-harness-requirements.md](/Users/huntharo/.codex/worktrees/ef86/PwrAgnt/docs/brainstorms/2026-04-18-desktop-integration-test-replay-harness-requirements.md)
-- Related plan: [docs/plans/2026-04-18-001-feat-desktop-replay-harness-plan.md](/Users/huntharo/.codex/worktrees/ef86/PwrAgnt/docs/plans/2026-04-18-001-feat-desktop-replay-harness-plan.md)
-- Related code: [.github/workflows/ci.yml](/Users/huntharo/.codex/worktrees/ef86/PwrAgnt/.github/workflows/ci.yml)
-- Related code: [apps/desktop/playwright.config.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgnt/apps/desktop/playwright.config.ts)
-- Related code: [apps/desktop/scripts/export-session-capture.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgnt/apps/desktop/scripts/export-session-capture.ts)
-- Related code: [apps/desktop/scripts/derive-replay-fixture.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgnt/apps/desktop/scripts/derive-replay-fixture.ts)
+- **Origin document:** [docs/brainstorms/2026-04-18-desktop-integration-test-replay-harness-requirements.md](/Users/huntharo/.codex/worktrees/ef86/PwrAgent/docs/brainstorms/2026-04-18-desktop-integration-test-replay-harness-requirements.md)
+- Related plan: [docs/plans/2026-04-18-001-feat-desktop-replay-harness-plan.md](/Users/huntharo/.codex/worktrees/ef86/PwrAgent/docs/plans/2026-04-18-001-feat-desktop-replay-harness-plan.md)
+- Related code: [.github/workflows/ci.yml](/Users/huntharo/.codex/worktrees/ef86/PwrAgent/.github/workflows/ci.yml)
+- Related code: [apps/desktop/playwright.config.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgent/apps/desktop/playwright.config.ts)
+- Related code: [apps/desktop/scripts/export-session-capture.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgent/apps/desktop/scripts/export-session-capture.ts)
+- Related code: [apps/desktop/scripts/derive-replay-fixture.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgent/apps/desktop/scripts/derive-replay-fixture.ts)
 - External docs: [Playwright CI](https://playwright.dev/docs/ci)
 - External docs: [Playwright Electron API](https://playwright.dev/docs/api/class-electron)
 - External docs: [Electron automated testing](https://www.electronjs.org/docs/latest/tutorial/automated-testing)

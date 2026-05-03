@@ -6,7 +6,7 @@
 
 This runbook covers cutting v1.x desktop releases. Apple Silicon (arm64) only;
 distribution is outside the Mac App Store via signed/notarized DMG with auto-
-update through `electron-updater` against the private `pwrdrvr/PwrAgnt` repo.
+update through `electron-updater` against the private `pwrdrvr/PwrAgent` repo.
 
 ---
 
@@ -38,7 +38,7 @@ packaging plan as Phase A.
    - `APPLE_API_KEY_ID` — the Key ID
    - `APPLE_API_ISSUER` — the Issuer ID
    - `RELEASES_PAT` (optional) — fine-grained PAT scoped to `Contents: Read & Write`
-     on `pwrdrvr/PwrAgnt`. Falls back to `GITHUB_TOKEN` if absent.
+     on `pwrdrvr/PwrAgent`. Falls back to `GITHUB_TOKEN` if absent.
 
 `APPLE_TEAM_ID` is hardcoded in `.github/workflows/release.yml` to `T44CNHC4UH`
 since it is not a secret.
@@ -49,7 +49,7 @@ since it is not a secret.
 
 ```bash
 # 1. Bump the version. Use semver pre-release tags during alpha/beta:
-pnpm --filter @pwragnt/desktop version 1.0.0-alpha.1
+pnpm --filter @pwragent/desktop version 1.0.0-alpha.1
 
 # 2. Push the tag (the version command commits and tags automatically).
 git push --follow-tags
@@ -67,7 +67,7 @@ typecheck + tests, and then `apps/desktop/scripts/release.mjs` which:
    helper bundle individually, signs the main `.app`, submits to Apple's
    notarization service via `notarytool`, staples the ticket, builds the DMG
    and ZIP, generates `latest-mac.yml`, and uploads everything to a GitHub
-   Release on `pwrdrvr/PwrAgnt`.
+   Release on `pwrdrvr/PwrAgent`.
 
 Cycle time target: ≤ 12 minutes.
 
@@ -86,20 +86,20 @@ export APPLE_API_KEY=$HOME/Secrets/AuthKey_XXXXXXXXXX.p8
 export APPLE_API_KEY_ID=XXXXXXXXXX
 export APPLE_API_ISSUER=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
 export APPLE_TEAM_ID=T44CNHC4UH
-export GH_TOKEN=ghp_xxx_fine_grained_PAT_with_Contents_Read_Write_on_pwrdrvr_PwrAgnt
+export GH_TOKEN=ghp_xxx_fine_grained_PAT_with_Contents_Read_Write_on_pwrdrvr_PwrAgent
 EOF
 source .envrc.release
 
 # 2. Run the orchestrator. Three modes:
-pnpm --filter @pwragnt/desktop package:dryrun  # unsigned, no publish
-pnpm --filter @pwragnt/desktop package         # signed + notarized, no publish
-pnpm --filter @pwragnt/desktop release         # signed + notarized + publish
+pnpm --filter @pwragent/desktop package:dryrun  # unsigned, no publish
+pnpm --filter @pwragent/desktop package         # signed + notarized, no publish
+pnpm --filter @pwragent/desktop release         # signed + notarized + publish
 ```
 
 Verify the produced `.app`:
 
 ```bash
-APP=apps/desktop/release-stage/dist/mac-arm64/PwrAgnt.app
+APP=apps/desktop/release-stage/dist/mac-arm64/PwrAgent.app
 
 # Identity must be PwrDrvr LLC
 codesign -dv --verbose=4 "$APP"
@@ -123,11 +123,11 @@ npx --yes @electron/fuses read --app "$APP"
 
 The v1.x binary does NOT bake a `GH_TOKEN`. During Phase 1 (solo dogfooding,
 just the developer running the binary on their own Mac with access to the
-private `pwrdrvr/PwrAgnt` repo) the token is read from `process.env.GH_TOKEN`
+private `pwrdrvr/PwrAgent` repo) the token is read from `process.env.GH_TOKEN`
 at runtime. The cleanest one-liner is to launch via Terminal:
 
 ```bash
-GH_TOKEN=ghp_fine_grained_PAT open /Applications/PwrAgnt.app
+GH_TOKEN=ghp_fine_grained_PAT open /Applications/PwrAgent.app
 ```
 
 Or persist it in `~/.zshrc` (or equivalent) so opening from Spotlight / dock

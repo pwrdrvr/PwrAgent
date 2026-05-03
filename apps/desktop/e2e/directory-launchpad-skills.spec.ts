@@ -20,7 +20,7 @@ async function createDirectoryLaunchpadSkillsFixture(): Promise<{
   fixturePath: string;
   repoDir: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-launchpad-skills-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-skills-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
   await mkdir(repoDir, { recursive: true });
   const generatedSkills = Array.from({ length: 24 }, (_, index) => {
@@ -43,9 +43,9 @@ async function createDirectoryLaunchpadSkillsFixture(): Promise<{
     "git",
     [
       "-c",
-      "user.name=PwrAgnt Tests",
+      "user.name=PwrAgent Tests",
       "-c",
-      "user.email=pwragnt-tests@example.invalid",
+      "user.email=pwragent-tests@example.invalid",
       "commit",
       "--allow-empty",
       "-m",
@@ -865,7 +865,7 @@ test("directory launchpad Tiptap composer select all delete clears chips without
 
 test("directory launchpad Tiptap composer deletes a persisted skill chip with repeated backspace", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
-  const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-tiptap-saved-"));
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-tiptap-saved-"));
   const stateRoot = path.join(homeDir, ".local", "state", "pwragnt");
   await seedPersistedDirectoryLaunchpad({
     repoDir: fixture.repoDir,
@@ -1217,7 +1217,7 @@ test("directory launchpad types at the clicked text caret between skill chips", 
 
 test("directory launchpad deletes a persisted skill chip with repeated backspace", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
-  const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-saved-launchpad-"));
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-saved-launchpad-"));
   const stateRoot = path.join(homeDir, ".local", "state", "pwragnt");
   await seedPersistedDirectoryLaunchpad({
     repoDir: fixture.repoDir,

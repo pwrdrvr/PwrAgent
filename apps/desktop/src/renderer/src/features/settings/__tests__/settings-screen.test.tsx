@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DesktopSettingsSnapshot } from "@pwragnt/shared";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared";
 import { SettingsScreen } from "../SettingsScreen";
 import type { DesktopSettingsState } from "../useDesktopSettings";
 
@@ -14,7 +14,7 @@ function createSnapshot(
 ): DesktopSettingsSnapshot {
   return {
     fetchedAt: 1,
-    configPath: "/tmp/pwragnt/config.toml",
+    configPath: "/tmp/pwragent/config.toml",
     runtime: {
       messaging: {
         disabled: false,
@@ -340,7 +340,7 @@ describe("SettingsScreen", () => {
         settings={createSettingsState(
           createSnapshot({
             configError: "line 3: expected a key",
-            configPath: "/tmp/pwragnt/config.toml",
+            configPath: "/tmp/pwragent/config.toml",
           }),
         )}
         onClose={() => undefined}
@@ -349,7 +349,7 @@ describe("SettingsScreen", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("Settings config did not load");
     expect(screen.getByRole("alert")).toHaveTextContent("line 3: expected a key");
-    expect(screen.getByRole("alert")).toHaveTextContent("/tmp/pwragnt/config.toml");
+    expect(screen.getByRole("alert")).toHaveTextContent("/tmp/pwragent/config.toml");
     expect(screen.queryByRole("radio", { name: "TipTap with chips" })).not.toBeInTheDocument();
   });
 });

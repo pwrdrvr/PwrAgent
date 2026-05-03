@@ -3,7 +3,7 @@
 This fixture is seeded from an existing protocol capture rather than a fresh
 interactive run.
 
-- Source checkout: `/Users/huntharo/github/PwrAgnt/apps/desktop`
+- Source checkout: `/Users/huntharo/github/PwrAgent/apps/desktop`
 - Capture root: `apps/desktop/.local/protocol-captures`
 - Capture id: `2026-04-30T02-23-08-345Z-codex-full-access`
 - Thread id: `019dde61-c9d6-70d2-9023-28669e27a63b`

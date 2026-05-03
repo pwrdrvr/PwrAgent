@@ -8,8 +8,8 @@ import type {
   DesktopSettingsValue,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
-} from "@pwragnt/shared";
-import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
 import {
   mergeDesktopSettingsConfig,
   readDesktopSettingsConfig,

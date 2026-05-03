@@ -39,7 +39,7 @@ The desktop style guide defines:
 To launch the desktop app with live threads and real user state, run from the **repo root** (or worktree root):
 
 ```bash
-pnpm --filter @pwragnt/desktop dev:no-messaging
+pnpm --filter @pwragent/desktop dev:no-messaging
 ```
 
 - Do **not** override `HOME` or set `NODE_ENV` — the app needs the real user data directory to load saved threads and Keychain secrets.
@@ -65,10 +65,10 @@ pnpm --filter @pwragnt/desktop dev:no-messaging
 ## Release Notes
 
 - The first signed v1.x build is signed under the PwrDrvr LLC Developer ID
-  (Team ID `T44CNHC4UH`) with bundle id `com.pwrdrvr.pwragnt`. macOS Keychain
+  (Team ID `T44CNHC4UH`) with bundle id `com.pwrdrvr.pwragent`. macOS Keychain
   scopes `safeStorage` keys by signing identity + bundle id, so any pre-v1.0
   development build's encrypted secrets at
-  `~/.local/state/pwragnt/settings-secrets.json` (Telegram / Discord bot
+  `~/.local/state/pwragent/settings-secrets.json` (Telegram / Discord bot
   tokens) WILL fail to decrypt under the new signed build. The
   `desktop-secret-store` returns `undefined` on decrypt failure and prompts the
   user to re-enter the secret in Settings — no crash, no stale ciphertext

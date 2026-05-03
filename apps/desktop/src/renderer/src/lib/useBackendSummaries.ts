@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { BackendSummary } from "@pwragnt/shared";
+import type { BackendSummary } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 
 type BackendSummaryState = {
@@ -8,7 +8,7 @@ type BackendSummaryState = {
 };
 
 export const BACKEND_SUMMARIES_REFRESH_EVENT =
-  "pwragnt:backend-summaries-refresh";
+  "pwragent:backend-summaries-refresh";
 
 export function useBackendSummaries(desktopApi?: DesktopApi): BackendSummaryState {
   const [state, setState] = useState<BackendSummaryState>({

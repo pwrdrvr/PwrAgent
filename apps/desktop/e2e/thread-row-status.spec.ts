@@ -8,7 +8,7 @@ async function createThreadRowStatusFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-thread-row-status-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-row-status-"));
   const fixturePath = path.join(rootDir, "thread-row-status.fixture.json");
 
   await writeFile(

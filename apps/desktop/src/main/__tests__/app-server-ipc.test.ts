@@ -9,7 +9,7 @@ import type {
   RenameThreadRequest,
   RestoreWorktreeRequest,
   RestoreThreadRequest,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const listThreads = vi.fn(async (request?: {
@@ -111,7 +111,7 @@ const handoffThreadWorkspace = vi.fn(async (request: HandoffThreadWorkspaceReque
   repositoryPath: request.repositoryPath ?? "/repo",
   targetPath: "/repo/.worktrees/app-feature-handoff",
   linkedDirectory: {
-    id: "pwragnt-handoff:codex:thread-1",
+    id: "pwragent-handoff:codex:thread-1",
     label: "app",
     path: request.repositoryPath ?? "/repo",
     worktreePath: "/repo/.worktrees/app-feature-handoff",
@@ -166,7 +166,7 @@ const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
 
 vi.mock("electron", () => ({
   app: {
-    getPath: vi.fn(() => "/tmp/pwragnt-userdata"),
+    getPath: vi.fn(() => "/tmp/pwragent-userdata"),
   },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {

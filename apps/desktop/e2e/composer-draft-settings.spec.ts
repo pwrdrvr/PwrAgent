@@ -8,7 +8,7 @@ async function createComposerDraftSettingsFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-composer-draft-settings-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-composer-draft-settings-"));
   const fixturePath = path.join(rootDir, "composer-draft-settings.fixture.json");
   await mkdir(rootDir, { recursive: true });
   await writeFile(

@@ -2,8 +2,8 @@ import type {
   DesktopChatReplyComposer,
   DesktopMessagingImageProfile,
   DesktopWorktreeStorageLocation,
-} from "@pwragnt/shared";
-import { isDesktopWorktreeStorageLocation } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { isDesktopWorktreeStorageLocation } from "@pwragent/shared";
 
 export const CHAT_REPLY_COMPOSER_ENV =
   "PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER";

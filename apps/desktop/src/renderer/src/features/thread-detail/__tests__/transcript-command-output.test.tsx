@@ -5,7 +5,7 @@ import { TranscriptCommandOutput } from "../TranscriptCommandOutput";
 
 describe("TranscriptCommandOutput", () => {
   afterEach(() => {
-    delete (window as Window & { pwragnt?: unknown }).pwragnt;
+    delete (window as Window & { pwragent?: unknown }).pwragent;
     vi.restoreAllMocks();
   });
 
@@ -88,7 +88,7 @@ describe("TranscriptCommandOutput", () => {
 
   it("copies command text and full output", () => {
     const copyText = vi.fn(async () => undefined);
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         copyText,

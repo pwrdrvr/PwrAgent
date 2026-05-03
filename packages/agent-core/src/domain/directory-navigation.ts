@@ -4,8 +4,8 @@ import type {
   NavigationDirectoryGitStatus,
   NavigationDirectorySummary,
   NavigationThreadSummary,
-} from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 
 type DirectoryDescriptor = Pick<
   NavigationDirectorySummary,
@@ -54,7 +54,7 @@ function pathFromDirectoryKey(directoryKey: string): string | undefined {
 
 function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescriptor {
   const scratchWorkspaceRootMatch = directory.path.match(
-    /^(.*[\\/]\.pwragnt[\\/]projects)$/,
+    /^(.*[\\/]\.pwragent[\\/]projects)$/,
   );
   if (scratchWorkspaceRootMatch) {
     return {
@@ -66,7 +66,7 @@ function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescript
   }
 
   const scratchWorkspaceMatch = directory.path.match(
-    /^(.*[\\/]\.pwragnt[\\/]projects)[\\/][^\\/]+$/,
+    /^(.*[\\/]\.pwragent[\\/]projects)[\\/][^\\/]+$/,
   );
   if (scratchWorkspaceMatch) {
     return {

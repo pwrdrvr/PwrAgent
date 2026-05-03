@@ -8,7 +8,7 @@ async function createNewThreadTranscriptFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-new-thread-sync-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-new-thread-sync-"));
   const fixturePath = path.join(rootDir, "new-thread-transcript-sync.fixture.json");
 
   await writeFile(
@@ -253,7 +253,7 @@ async function createNewThreadFocusFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-new-thread-focus-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-new-thread-focus-"));
   const fixturePath = path.join(rootDir, "new-thread-focus.fixture.json");
 
   await writeFile(
@@ -475,9 +475,9 @@ test("does not move focus back to a new thread after the user selects another th
     await app.window.evaluate(() => {
       const api = (
         window as typeof window & {
-          pwragnt: { getNavigationSnapshot: () => Promise<unknown> };
+          pwragent: { getNavigationSnapshot: () => Promise<unknown> };
         }
-      ).pwragnt;
+      ).pwragent;
       const originalGetNavigationSnapshot = api.getNavigationSnapshot.bind(api);
       let calls = 0;
       let releaseRefresh: (() => void) | undefined;

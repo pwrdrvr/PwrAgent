@@ -32,9 +32,9 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 async function createRepo(): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "pwragnt-handoff-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-"));
   cleanupPaths.push(root);
-  const repoPath = path.join(root, "PwrAgnt");
+  const repoPath = path.join(root, "PwrAgent");
   await mkdir(repoPath);
   await git(repoPath, ["init", "-b", "main"]);
   await git(repoPath, ["config", "user.email", "test@example.com"]);

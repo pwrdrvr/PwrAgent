@@ -55,14 +55,14 @@ The desired behavior is a middle path: default to a compact but useful summary, 
 
 ### Institutional Learnings
 
-- `docs/plans/2026-04-30-001-feat-messaging-platform-integration-plan.md` established that messaging workflow logic should target the PwrAgnt semantic surface, while adapters own platform rendering limits.
+- `docs/plans/2026-04-30-001-feat-messaging-platform-integration-plan.md` established that messaging workflow logic should target the PwrAgent semantic surface, while adapters own platform rendering limits.
 - `docs/plans/2026-04-30-002-feat-messaging-command-surfaces-plan.md` established pinned status cards as the right place for bound-conversation controls.
 - `docs/plans/2026-04-30-003-feat-desktop-settings-config-plan.md` established that app-level Messaging configuration belongs in Desktop Settings, while composer/status surfaces can own thread or binding-level controls.
 - No `docs/solutions/` learnings exist yet for messaging tool-update behavior.
 
 ### External References
 
-- External research is not needed for this slice. The work is fully inside PwrAgnt's existing messaging contract, controller, store, and adapter-rendering patterns.
+- External research is not needed for this slice. The work is fully inside PwrAgent's existing messaging contract, controller, store, and adapter-rendering patterns.
 
 ## Key Technical Decisions
 

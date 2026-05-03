@@ -10,13 +10,13 @@ origin: docs/brainstorms/2026-04-19-codex-desktop-protocol-parity-requirements.m
 
 ## Overview
 
-Improve transcript parity with Codex Desktop by preserving and rendering command output as first-class transcript data. The immediate observed failure is thread `019ddaa3-60c1-7160-95f3-14744bdfabb7`: PwrAgnt shows only a single `npm view dive` line, while Codex Desktop exposes a command block with the shell command, captured output, duration, and success state.
+Improve transcript parity with Codex Desktop by preserving and rendering command output as first-class transcript data. The immediate observed failure is thread `019ddaa3-60c1-7160-95f3-14744bdfabb7`: PwrAgent shows only a single `npm view dive` line, while Codex Desktop exposes a command block with the shell command, captured output, duration, and success state.
 
 The fix should not move transcript items or loosen the ordering work already landed. It should enrich the existing activity entries where command items occur, then render richer command details inside the existing work groups.
 
 ## Problem Frame
 
-The protocol and rollout surfaces already contain the missing information, but PwrAgnt currently normalizes command activity down to a summary label:
+The protocol and rollout surfaces already contain the missing information, but PwrAgent currently normalizes command activity down to a summary label:
 
 - The live protocol capture `apps/desktop/.local/protocol-captures/2026-04-29T19-05-24-712Z-codex-full-access.jsonl` includes `item/commandExecution/outputDelta` for `npm view dive`, followed by `item/completed` with `aggregatedOutput`, `exitCode: 0`, and `durationMs: 373`.
 - The rollout for the same thread stores the command invocation as a `function_call` and the full captured terminal result as `function_call_output`.
@@ -37,7 +37,7 @@ The protocol and rollout surfaces already contain the missing information, but P
 ## Scope Boundaries
 
 - This plan does not redesign transcript ordering. It assumes the current positional grouping rules remain the source of truth.
-- This plan does not require pixel-perfect Codex Desktop visuals. The target is behavioral parity and a comparable inspection affordance using PwrAgnt's desktop style.
+- This plan does not require pixel-perfect Codex Desktop visuals. The target is behavioral parity and a comparable inspection affordance using PwrAgent's desktop style.
 - This plan does not make `thread/read` the sole source of transcript truth. It explicitly treats live protocol capture and rollout restoration as required sources for command details that `thread/read` can omit.
 - This plan does not add arbitrary terminal emulation. Output should be rendered as text with ANSI handling or safe plain-text fallback, not as a live pseudo-terminal.
 - This plan does not expose absolute local paths in persisted replay fixtures beyond existing fixture conventions.

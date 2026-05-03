@@ -11,7 +11,7 @@ deepened: 2026-05-02
 
 ## Overview
 
-Add a channel-neutral messaging handoff flow that lets a bound Telegram or Discord conversation move its current PwrAgnt thread between Local and Worktree from the `/status` surface.
+Add a channel-neutral messaging handoff flow that lets a bound Telegram or Discord conversation move its current PwrAgent thread between Local and Worktree from the `/status` surface.
 
 The first slice should add a `Handoff` action to the status card, then repaint the managed status surface into a handoff mode that explains the current project directory, current working directory, current branch, and valid handoff direction. It should call the existing desktop `handoffThreadWorkspace` operation rather than reimplementing Git movement in messaging code.
 
@@ -67,7 +67,7 @@ This matters most when the user is away from the desktop but still controlling r
 
 ### Institutional Learnings
 
-- `docs/plans/2026-04-29-001-feat-thread-workspace-handoff-plan.md` established that handoff is a main-process transaction that preserves dirty non-ignored changes through named stashes and updates PwrAgnt overlay metadata after Git succeeds.
+- `docs/plans/2026-04-29-001-feat-thread-workspace-handoff-plan.md` established that handoff is a main-process transaction that preserves dirty non-ignored changes through named stashes and updates PwrAgent overlay metadata after Git succeeds.
 - `docs/plans/2026-04-30-002-feat-messaging-command-surfaces-plan.md` established the current messaging status-card pattern: managed status surfaces should repaint in place when possible, keep text fallback, and keep Telegram/Discord differences behind adapters.
 - `docs/brainstorms/2026-04-19-codex-desktop-protocol-parity-requirements.md` requires anchored thread/worktree identity and forbids silently re-homing a thread just because the same branch exists elsewhere.
 - No `docs/solutions/` directory exists in this worktree yet.

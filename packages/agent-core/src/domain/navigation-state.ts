@@ -8,8 +8,8 @@ import type {
   NavigationThreadSummary,
   NavigationLaunchpadDefaults,
   ThreadOverlayState,
-} from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import { deriveInboxState, rankInboxThreadKeys } from "./inbox";
 import { buildDirectorySummaries } from "./directory-navigation";
 
@@ -18,7 +18,7 @@ function dedupeLinkedDirectories(
 ): LinkedDirectorySummary[] {
   let overlayWorkspace: LinkedDirectorySummary | undefined;
   for (const directory of directories) {
-    if (directory.id.startsWith("pwragnt-handoff:")) {
+    if (directory.id.startsWith("pwragent-handoff:")) {
       overlayWorkspace = directory;
     }
   }
@@ -41,7 +41,7 @@ function dedupeLinkedDirectories(
 }
 
 function hasHandoffWorkspace(directories: LinkedDirectorySummary[]): boolean {
-  return directories.some((directory) => directory.id.startsWith("pwragnt-handoff:"));
+  return directories.some((directory) => directory.id.startsWith("pwragent-handoff:"));
 }
 
 export function materializeNavigationThreads(params: {

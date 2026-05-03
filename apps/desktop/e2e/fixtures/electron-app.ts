@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ThreadExecutionMode } from "@pwragnt/shared";
+import type { ThreadExecutionMode } from "@pwragent/shared";
 import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
@@ -46,7 +46,7 @@ export async function launchElectronApp(params: {
     height: number;
   };
 }): Promise<LaunchResult> {
-  const homeRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-desktop-e2e-home-"));
+  const homeRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-desktop-e2e-home-"));
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) {

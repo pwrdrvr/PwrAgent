@@ -2,7 +2,7 @@ import type {
   DesktopApplicationDiscoveryCandidate,
   DesktopApplicationKind,
   DesktopSettingsSnapshot,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export function ApplicationsSettings(props: {
   saving: boolean;

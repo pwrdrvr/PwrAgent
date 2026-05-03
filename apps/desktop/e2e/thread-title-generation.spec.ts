@@ -11,7 +11,7 @@ async function createThreadTitleGenerationFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-thread-title-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-title-"));
   const fixturePath = path.join(rootDir, "thread-title-generation.fixture.json");
 
   await writeFile(

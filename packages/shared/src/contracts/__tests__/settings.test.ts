@@ -7,7 +7,7 @@ describe("desktop settings contracts", () => {
   it("represents read snapshots without raw secret values", () => {
     const snapshot: DesktopSettingsSnapshot = {
       fetchedAt: 1,
-      configPath: "/tmp/pwragnt/config.toml",
+      configPath: "/tmp/pwragent/config.toml",
       runtime: {
         messaging: {
           disabled: false,

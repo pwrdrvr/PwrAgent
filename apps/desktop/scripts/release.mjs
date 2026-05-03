@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PwrAgnt desktop release orchestrator.
+ * PwrAgent desktop release orchestrator.
  *
  * Why this script exists:
  *   - electron-builder's default node_modules walk does not understand pnpm's
@@ -81,7 +81,7 @@ function maybeDecodeAppleApiKey() {
 
 // 2. Build (electron-vite -> apps/desktop/out/).
 step("electron-vite build");
-runChecked("pnpm", ["--filter", "@pwragnt/desktop", "build"], { cwd: repoRoot });
+runChecked("pnpm", ["--filter", "@pwragent/desktop", "build"], { cwd: repoRoot });
 
 // 3. Materialize a self-contained, flat node_modules under stage.
 step("pnpm deploy --prod -> release-stage");
@@ -91,7 +91,7 @@ if (existsSync(stageDir)) {
 mkdirSync(stageDir, { recursive: true });
 runChecked(
   "pnpm",
-  ["deploy", "--filter", "@pwragnt/desktop", "--prod", "--legacy", stageDir],
+  ["deploy", "--filter", "@pwragent/desktop", "--prod", "--legacy", stageDir],
   { cwd: repoRoot },
 );
 

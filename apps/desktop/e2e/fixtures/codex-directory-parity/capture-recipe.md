@@ -34,8 +34,8 @@ but `raw.capture.jsonl` preserves the real Codex protocol evidence.
 
 ```bash
 PWRAGNT_PROTOCOL_CAPTURE=true \
-PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragnt-protocol-captures \
-pnpm --filter @pwragnt/desktop preview
+PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragent-protocol-captures \
+pnpm --filter @pwragent/desktop preview
 ```
 
 ## Computer Use Steps
@@ -66,8 +66,8 @@ Stop once the `search-product` directory contents match Codex Desktop.
 ## Promotion Commands
 
 ```bash
-pnpm --filter @pwragnt/desktop export:session-capture -- \
-  --capture-root /tmp/pwragnt-protocol-captures \
+pnpm --filter @pwragent/desktop export:session-capture -- \
+  --capture-root /tmp/pwragent-protocol-captures \
   --capture-id <capture-id> \
   --output /tmp/codex-directory-parity.raw.capture.jsonl
 ```

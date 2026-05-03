@@ -22,9 +22,9 @@ The current desktop startup issue has moved from obvious refresh churn to a narr
 - whether the work is app-owned JavaScript, Electron/Chromium internals, or both
 - which codepaths deserve the first optimization pass
 
-The repo already has a strong diagnostics precedent in the existing heap-monitoring path under [`apps/desktop/src/main/diagnostics/`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/src/main/diagnostics), plus bootstrap coverage in [`apps/desktop/src/main/__tests__/app-bootstrap.test.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/src/main/__tests__/app-bootstrap.test.ts). This plan should reuse that shape rather than inventing a second unrelated diagnostics subsystem.
+The repo already has a strong diagnostics precedent in the existing heap-monitoring path under [`apps/desktop/src/main/diagnostics/`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/src/main/diagnostics), plus bootstrap coverage in [`apps/desktop/src/main/__tests__/app-bootstrap.test.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/src/main/__tests__/app-bootstrap.test.ts). This plan should reuse that shape rather than inventing a second unrelated diagnostics subsystem.
 
-This is a follow-up to the completed startup stability work in [`docs/plans/2026-04-19-001-fix-desktop-startup-thread-stability-plan.md`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/docs/plans/2026-04-19-001-fix-desktop-startup-thread-stability-plan.md). That work reduced redundant startup activity, but the remaining issue now needs direct CPU evidence.
+This is a follow-up to the completed startup stability work in [`docs/plans/2026-04-19-001-fix-desktop-startup-thread-stability-plan.md`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/docs/plans/2026-04-19-001-fix-desktop-startup-thread-stability-plan.md). That work reduced redundant startup activity, but the remaining issue now needs direct CPU evidence.
 
 ## Requirements Trace
 
@@ -53,20 +53,20 @@ This is a follow-up to the completed startup stability work in [`docs/plans/2026
 
 ### Relevant Code and Patterns
 
-- [`apps/desktop/src/main/window.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/src/main/window.ts) already owns the main window lifecycle, attaches renderer diagnostics, and is the natural place to attach renderer CPU profiling before and through first load.
-- [`apps/desktop/src/main/index.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/src/main/index.ts) is the earliest stable app bootstrap boundary after `app.whenReady()`, and is the right seam for starting main-process profiling before window creation and IPC registration.
-- [`apps/desktop/src/main/diagnostics/heap-monitor-config.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/src/main/diagnostics/heap-monitor-config.ts) shows the existing opt-in env-config pattern for diagnostics flags and tuning.
-- [`apps/desktop/src/main/diagnostics/heap-session.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/src/main/diagnostics/heap-session.ts) shows the repo’s current pattern for repo-local diagnostics session directories, manifests, append-only logs, and artifact registration.
-- [`apps/desktop/src/main/diagnostics/renderer-heap-monitor.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/src/main/diagnostics/renderer-heap-monitor.ts) already uses `webContents.debugger`, including attach/detach handling, and is the best local pattern for renderer-owned CPU capture.
-- [`apps/desktop/src/main/diagnostics/main-process-heap-monitor.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/src/main/diagnostics/main-process-heap-monitor.ts) shows the repo’s pattern for a main-process diagnostics sidecar with bounded timers and on-disk session logging.
-- [`apps/desktop/src/main/__tests__/app-bootstrap.test.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/src/main/__tests__/app-bootstrap.test.ts) already mocks `BrowserWindow`, `webContents.debugger`, and diagnostics bootstrap, which gives this work an existing integration-test seam.
-- [`apps/desktop/package.json`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/package.json) and the existing scripts under [`apps/desktop/scripts/`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/scripts) show the preferred pattern for small repo-local analysis CLIs using `tsx`.
-- [`README.md`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/README.md) already documents heap diagnostics, so startup CPU profiling should extend the same operational section instead of creating a separate doc.
+- [`apps/desktop/src/main/window.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/src/main/window.ts) already owns the main window lifecycle, attaches renderer diagnostics, and is the natural place to attach renderer CPU profiling before and through first load.
+- [`apps/desktop/src/main/index.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/src/main/index.ts) is the earliest stable app bootstrap boundary after `app.whenReady()`, and is the right seam for starting main-process profiling before window creation and IPC registration.
+- [`apps/desktop/src/main/diagnostics/heap-monitor-config.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/src/main/diagnostics/heap-monitor-config.ts) shows the existing opt-in env-config pattern for diagnostics flags and tuning.
+- [`apps/desktop/src/main/diagnostics/heap-session.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/src/main/diagnostics/heap-session.ts) shows the repo’s current pattern for repo-local diagnostics session directories, manifests, append-only logs, and artifact registration.
+- [`apps/desktop/src/main/diagnostics/renderer-heap-monitor.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/src/main/diagnostics/renderer-heap-monitor.ts) already uses `webContents.debugger`, including attach/detach handling, and is the best local pattern for renderer-owned CPU capture.
+- [`apps/desktop/src/main/diagnostics/main-process-heap-monitor.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/src/main/diagnostics/main-process-heap-monitor.ts) shows the repo’s pattern for a main-process diagnostics sidecar with bounded timers and on-disk session logging.
+- [`apps/desktop/src/main/__tests__/app-bootstrap.test.ts`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/src/main/__tests__/app-bootstrap.test.ts) already mocks `BrowserWindow`, `webContents.debugger`, and diagnostics bootstrap, which gives this work an existing integration-test seam.
+- [`apps/desktop/package.json`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/package.json) and the existing scripts under [`apps/desktop/scripts/`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/scripts) show the preferred pattern for small repo-local analysis CLIs using `tsx`.
+- [`README.md`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/README.md) already documents heap diagnostics, so startup CPU profiling should extend the same operational section instead of creating a separate doc.
 
 ### Institutional Learnings
 
-- [`docs/plans/2026-04-18-001-feat-desktop-heap-diagnostics-plan.md`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/docs/plans/2026-04-18-001-feat-desktop-heap-diagnostics-plan.md) established a good local rule: diagnostics are main-process-owned, opt-in, file-backed, and must not destabilize startup when off or when capture fails.
-- [`docs/plans/2026-04-19-001-fix-desktop-startup-thread-stability-plan.md`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/docs/plans/2026-04-19-001-fix-desktop-startup-thread-stability-plan.md) already reduced known churn sources. The remaining startup CPU work should now be evidence-first rather than another hypothesis-only pass.
+- [`docs/plans/2026-04-18-001-feat-desktop-heap-diagnostics-plan.md`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/docs/plans/2026-04-18-001-feat-desktop-heap-diagnostics-plan.md) established a good local rule: diagnostics are main-process-owned, opt-in, file-backed, and must not destabilize startup when off or when capture fails.
+- [`docs/plans/2026-04-19-001-fix-desktop-startup-thread-stability-plan.md`](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/docs/plans/2026-04-19-001-fix-desktop-startup-thread-stability-plan.md) already reduced known churn sources. The remaining startup CPU work should now be evidence-first rather than another hypothesis-only pass.
 - No relevant `docs/solutions/` artifact exists yet for startup CPU profiling or `.cpuprofile` analysis in this repo.
 
 ### External References
@@ -345,11 +345,11 @@ renderer:
 
 ## Sources & References
 
-- Related plan: [2026-04-19-001-fix-desktop-startup-thread-stability-plan.md](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/docs/plans/2026-04-19-001-fix-desktop-startup-thread-stability-plan.md)
-- Related plan: [2026-04-18-001-feat-desktop-heap-diagnostics-plan.md](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/docs/plans/2026-04-18-001-feat-desktop-heap-diagnostics-plan.md)
-- Related code: [window.ts](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/src/main/window.ts)
-- Related code: [index.ts](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/src/main/index.ts)
-- Related code: [heap-session.ts](/Users/huntharo/.codex/worktrees/2f1c/PwrAgnt/apps/desktop/src/main/diagnostics/heap-session.ts)
+- Related plan: [2026-04-19-001-fix-desktop-startup-thread-stability-plan.md](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/docs/plans/2026-04-19-001-fix-desktop-startup-thread-stability-plan.md)
+- Related plan: [2026-04-18-001-feat-desktop-heap-diagnostics-plan.md](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/docs/plans/2026-04-18-001-feat-desktop-heap-diagnostics-plan.md)
+- Related code: [window.ts](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/src/main/window.ts)
+- Related code: [index.ts](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/src/main/index.ts)
+- Related code: [heap-session.ts](/Users/huntharo/.codex/worktrees/2f1c/PwrAgent/apps/desktop/src/main/diagnostics/heap-session.ts)
 - External docs: [Electron Debugger API](https://www.electronjs.org/docs/latest/api/debugger/)
 - External docs: [Electron contentTracing](https://www.electronjs.org/docs/latest/api/content-tracing/)
 - External docs: [Node inspector CPU profiler](https://nodejs.org/download/release/v24.1.0/docs/api/inspector.html)

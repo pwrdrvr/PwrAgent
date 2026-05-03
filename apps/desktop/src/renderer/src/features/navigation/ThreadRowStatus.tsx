@@ -1,5 +1,5 @@
-import type { NavigationThreadSummary } from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 
 export type ThreadRowStatusKind = "thinking" | "unread";

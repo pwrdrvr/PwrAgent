@@ -14,7 +14,7 @@ import type {
   NavigationLaunchpadDraft,
   ThreadOverlayState,
   WorktreeSnapshotSummary,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 
@@ -260,7 +260,7 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
-  } as unknown as InstanceType<typeof import("@pwragnt/agent-core").OverlayStore>;
+  } as unknown as InstanceType<typeof import("@pwragent/agent-core").OverlayStore>;
 }
 
 class MockBackendClient {
@@ -796,7 +796,7 @@ describe("DesktopBackendRegistry", () => {
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore: createOverlayStoreMock(),
-      createScratchProjectDirectory: async () => "/tmp/pwragnt-scratch",
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
     });
 
     const firstResponse = await registry.listBackends({ includeUnavailable: true });
@@ -864,7 +864,7 @@ describe("DesktopBackendRegistry", () => {
           workMode: "local",
         },
       }),
-      createScratchProjectDirectory: async () => "/tmp/pwragnt-scratch",
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
     });
 
     const firstResponse = await registry.listBackends({ includeUnavailable: true });
@@ -1040,7 +1040,7 @@ describe("DesktopBackendRegistry", () => {
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore: createOverlayStoreMock(),
-      createScratchProjectDirectory: async () => "/tmp/pwragnt-scratch",
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
     });
 
     const response = await registry.listBackends({ includeUnavailable: true });
@@ -1192,10 +1192,10 @@ describe("DesktopBackendRegistry", () => {
     });
 
     const workspace = await registry.ensureDirectoryLaunchpad({
-      directoryKey: "workspace:/Users/test/.pwragnt/projects",
+      directoryKey: "workspace:/Users/test/.pwragent/projects",
       directoryKind: "workspace",
       directoryLabel: "Workspaces",
-      directoryPath: "/Users/test/.pwragnt/projects",
+      directoryPath: "/Users/test/.pwragent/projects",
     });
 
     expect(workspace.defaults.workMode).toBe("worktree");
@@ -1422,7 +1422,7 @@ describe("DesktopBackendRegistry", () => {
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore: createOverlayStoreMock(),
-      createScratchProjectDirectory: async () => "/Users/test/.pwragnt/projects/2026-04-16-a1b2c3",
+      createScratchProjectDirectory: async () => "/Users/test/.pwragent/projects/2026-04-16-a1b2c3",
     });
 
     const response = await registry.startThread({
@@ -1435,7 +1435,7 @@ describe("DesktopBackendRegistry", () => {
       executionMode: "default",
     });
     expect(codexClient.lastStartThreadParams).toEqual({
-      cwd: "/Users/test/.pwragnt/projects/2026-04-16-a1b2c3",
+      cwd: "/Users/test/.pwragent/projects/2026-04-16-a1b2c3",
       model: "gpt-5.5",
       reasoningEffort: "medium",
       serviceTier: undefined,
@@ -1499,16 +1499,16 @@ describe("DesktopBackendRegistry", () => {
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore: createOverlayStoreMock(),
-      createScratchProjectDirectory: async () => "/Users/test/.pwragnt/projects/2026-05-02-a1b2c3",
+      createScratchProjectDirectory: async () => "/Users/test/.pwragent/projects/2026-05-02-a1b2c3",
     });
 
     await registry.materializeDirectoryLaunchpad({
-      directoryKey: "workspace:/Users/test/.pwragnt/projects",
+      directoryKey: "workspace:/Users/test/.pwragent/projects",
       launchpad: {
-        directoryKey: "workspace:/Users/test/.pwragnt/projects",
+        directoryKey: "workspace:/Users/test/.pwragent/projects",
         directoryKind: "workspace",
         directoryLabel: "Workspaces",
-        directoryPath: "/Users/test/.pwragnt/projects",
+        directoryPath: "/Users/test/.pwragent/projects",
         backend: "codex",
         executionMode: "default",
         prompt: "",
@@ -1521,7 +1521,7 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(codexClient.lastStartThreadParams?.cwd).toBe(
-      "/Users/test/.pwragnt/projects/2026-05-02-a1b2c3",
+      "/Users/test/.pwragent/projects/2026-05-02-a1b2c3",
     );
 
     await registry.close();
@@ -1540,16 +1540,16 @@ describe("DesktopBackendRegistry", () => {
       }),
       grokClient,
       overlayStore: createOverlayStoreMock(),
-      createScratchProjectDirectory: async () => "/Users/test/.pwragnt/projects/2026-05-02-d4e5f6",
+      createScratchProjectDirectory: async () => "/Users/test/.pwragent/projects/2026-05-02-d4e5f6",
     });
 
     await registry.materializeDirectoryLaunchpad({
-      directoryKey: "workspace:/Users/test/.pwragnt/projects",
+      directoryKey: "workspace:/Users/test/.pwragent/projects",
       launchpad: {
-        directoryKey: "workspace:/Users/test/.pwragnt/projects",
+        directoryKey: "workspace:/Users/test/.pwragent/projects",
         directoryKind: "workspace",
         directoryLabel: "Workspaces",
-        directoryPath: "/Users/test/.pwragnt/projects",
+        directoryPath: "/Users/test/.pwragent/projects",
         backend: "grok",
         executionMode: "default",
         prompt: "",
@@ -1561,7 +1561,7 @@ describe("DesktopBackendRegistry", () => {
     });
 
     expect(grokClient.lastStartThreadParams?.cwd).toBe(
-      "/Users/test/.pwragnt/projects/2026-05-02-d4e5f6",
+      "/Users/test/.pwragent/projects/2026-05-02-d4e5f6",
     );
 
     await registry.close();
@@ -1905,7 +1905,7 @@ describe("DesktopBackendRegistry", () => {
         {
           id: "thread-title",
           title:
-            "# AGENTS.md instructions for /Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moj56ty6",
+            "# AGENTS.md instructions for /Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-moj56ty6",
           titleSource: "derived",
           linkedDirectories: [],
           source: "codex",
@@ -2537,7 +2537,7 @@ describe("DesktopBackendRegistry", () => {
       repositoryPath: "/repo/app",
       targetPath: "/repo/app/.worktrees/app-feature-handoff",
       linkedDirectory: {
-        id: "pwragnt-handoff:codex:thread-1",
+        id: "pwragent-handoff:codex:thread-1",
         label: "app",
         path: "/repo/app",
         worktreePath: "/repo/app/.worktrees/app-feature-handoff",
@@ -2595,7 +2595,7 @@ describe("DesktopBackendRegistry", () => {
       observedGitBranch: "feature/handoff",
       extraLinkedDirectories: [
         expect.objectContaining({
-          id: "pwragnt-handoff:codex:thread-1",
+          id: "pwragent-handoff:codex:thread-1",
           kind: "worktree",
         }),
       ],
@@ -2611,7 +2611,7 @@ describe("DesktopBackendRegistry", () => {
       titleSource: "explicit",
       linkedDirectories: [
         {
-          id: "pwragnt-handoff:codex:thread-1",
+          id: "pwragent-handoff:codex:thread-1",
           label: "app",
           path: "/repo/app",
           worktreePath: "/repo/app/.worktrees/app-main-detached",
@@ -2634,7 +2634,7 @@ describe("DesktopBackendRegistry", () => {
       repositoryPath: "/repo/app",
       targetPath: "/repo/app",
       linkedDirectory: {
-        id: "pwragnt-handoff:codex:thread-1",
+        id: "pwragent-handoff:codex:thread-1",
         label: "app",
         path: "/repo/app",
         kind: "local" as const,
@@ -2680,7 +2680,7 @@ describe("DesktopBackendRegistry", () => {
       observedGitBranch: "HEAD",
       extraLinkedDirectories: [
         expect.objectContaining({
-          id: "pwragnt-handoff:codex:thread-1",
+          id: "pwragent-handoff:codex:thread-1",
           kind: "local",
         }),
       ],
@@ -2716,7 +2716,7 @@ describe("DesktopBackendRegistry", () => {
           observedGitBranch: "feat/thread-workspace-handoff-plan",
           extraLinkedDirectories: [
             {
-              id: "pwragnt-handoff:codex:thread-1",
+              id: "pwragent-handoff:codex:thread-1",
               kind: "worktree",
               label: "app",
               path: "/repo/app",

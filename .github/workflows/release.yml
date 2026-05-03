@@ -50,11 +50,11 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: T44CNHC4UH
 
-          # Publish to the existing private pwrdrvr/PwrAgnt repo.
+          # Publish to the existing private pwrdrvr/PwrAgent repo.
           # Phase 1 (solo dogfooding). Phase 2 channel migration is in
           # docs/desktop-distribution-phase-2-runbook.md.
           GH_TOKEN: ${{ secrets.RELEASES_PAT || secrets.GITHUB_TOKEN }}
-        run: pnpm --filter @pwragnt/desktop release
+        run: pnpm --filter @pwragent/desktop release
 
       - name: Upload release artifacts (debug retention)
         uses: actions/upload-artifact@v5

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTemporaryTestDirectory } from "@pwragnt/agent-core";
+import { createTemporaryTestDirectory } from "@pwragent/agent-core";
 import { resolveHeapMonitorConfig } from "../diagnostics/heap-monitor-config";
 import { createHeapSession } from "../diagnostics/heap-session";
 

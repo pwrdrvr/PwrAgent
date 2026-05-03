@@ -125,7 +125,7 @@ export async function createTemporaryTestDirectory(): Promise<{
   path: string;
   cleanup: () => Promise<void>;
 }> {
-  const tempPath = await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-agent-core-"));
+  const tempPath = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-agent-core-"));
   return {
     path: tempPath,
     cleanup: async () => {

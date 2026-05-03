@@ -17,7 +17,7 @@ import {
 
 const execFile = promisify(execFileCallback);
 const SIPS_PATH = "/usr/bin/sips";
-const imageUploadLog = getMainLogger("pwragnt:image-upload");
+const imageUploadLog = getMainLogger("pwragent:image-upload");
 
 type ImageFallbackDependencies = {
   createImageFromBuffer: (buffer: Buffer) => Electron.NativeImage;
@@ -128,7 +128,7 @@ async function convertWithSips(params: {
   fileName?: string;
   inputBuffer: Buffer;
 }): Promise<ImageUploadFallbackResponse> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-image-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-"));
   const extension = extensionForFileName(params.fileName) ?? ".heic";
   const inputPath = path.join(tempDir, `input${extension}`);
   const outputPath = path.join(tempDir, "output.png");

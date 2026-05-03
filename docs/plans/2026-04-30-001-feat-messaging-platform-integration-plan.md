@@ -11,15 +11,15 @@ deepened: 2026-04-30
 
 ## Overview
 
-Add a PwrAgnt-owned messaging integration layer that lets Telegram and Discord conversations enumerate projects and threads, bind a channel or DM to a thread, send free-form text into the bound agent thread, and complete rich workflows such as thread/project selection, Plan questionnaires, approvals, status updates, markdown responses, code formatting, images, and button-driven navigation.
+Add a PwrAgent-owned messaging integration layer that lets Telegram and Discord conversations enumerate projects and threads, bind a channel or DM to a thread, send free-form text into the bound agent thread, and complete rich workflows such as thread/project selection, Plan questionnaires, approvals, status updates, markdown responses, code formatting, images, and button-driven navigation.
 
-The core design is deliberately not a Chat SDK wrapper. PwrAgnt should define a semantic conversation surface and channel binding model, then implement Telegram and Discord as direct adapters behind that boundary. The same workflow/controller code must remain reusable for future Mattermost, Feishu/Lark, Slack, Matrix, mobile, or voice-call style adapters (see origin: `docs/brainstorms/2026-04-30-messaging-platform-integration-requirements.md`).
+The core design is deliberately not a Chat SDK wrapper. PwrAgent should define a semantic conversation surface and channel binding model, then implement Telegram and Discord as direct adapters behind that boundary. The same workflow/controller code must remain reusable for future Mattermost, Feishu/Lark, Slack, Matrix, mobile, or voice-call style adapters (see origin: `docs/brainstorms/2026-04-30-messaging-platform-integration-requirements.md`).
 
 ## Problem Frame
 
 The product goal is remote agent control from messaging surfaces, eventually good enough for CarPlay/Siri voice-driven use. That means buttons are helpful but optional: every interactive surface must have a text fallback, and free-form responses during pending interactions must be interpreted against the pending intent before being routed as ordinary agent input.
 
-Existing PwrAgnt code already has the agent-side control plane: thread listing, directory/project navigation, `thread/start`, `turn/start`, `turn/steer`, `submitServerRequest`, Plan questionnaires, MCP interactions, markdown, images, and transcript rendering. The missing piece is a channel-agnostic surface controller plus channel adapters that can translate those existing workflows into messaging platforms without leaking platform IDs, callback formats, or markdown dialect rules into workflow logic.
+Existing PwrAgent code already has the agent-side control plane: thread listing, directory/project navigation, `thread/start`, `turn/start`, `turn/steer`, `submitServerRequest`, Plan questionnaires, MCP interactions, markdown, images, and transcript rendering. The missing piece is a channel-agnostic surface controller plus channel adapters that can translate those existing workflows into messaging platforms without leaking platform IDs, callback formats, or markdown dialect rules into workflow logic.
 
 ## Requirements Trace
 
@@ -80,11 +80,11 @@ Existing PwrAgnt code already has the agent-side control plane: thread listing, 
 - **Use direct platform APIs for the MVP, not Chat SDK.** Telegram can be implemented against Bot API methods with `fetch`; Discord should use Gateway plus REST directly or with a minimal WebSocket helper only if native runtime support is inadequate. Chat SDK remains prior art, not an abstraction boundary.
 - **Prefer local pull transports for MVP.** Telegram long polling and Discord Gateway avoid requiring a public HTTPS endpoint or tunnel for local desktop validation. Webhook support can be added later under adapter transport policy without changing the semantic surface.
 - **Treat adapter state as opaque and compact.** Core workflow code stores adapter-returned routing and surface handles but does not parse Telegram message IDs, Discord interaction tokens, callback payloads, or permission details.
-- **Use callback indirection for interactive controls.** Channel callback payloads should contain only short opaque handles. Full pending intent state lives in the PwrAgnt messaging store with TTL, binding, actor, and surface context.
+- **Use callback indirection for interactive controls.** Channel callback payloads should contain only short opaque handles. Full pending intent state lives in the PwrAgent messaging store with TTL, binding, actor, and surface context.
 - **Make text fallback deterministic-first, model-second.** Exact option IDs, labels, numbers, yes/no/cancel synonyms, and Back/Next/Submit words should resolve without a model. A lightweight mapper can handle ambiguous voice-dictated phrasing only when a pending intent exists and the deterministic mapper is uncertain.
 - **Authorize before binding and before sensitive actions.** First release should require an explicit allowlist of stable platform user IDs and should reject attempts from unauthorized senders even if they are in the same channel. Usernames/display names may be logged or shown after redaction, but they must not be the primary authorization key. Approval decisions must carry acting-user audit context.
 - **Do not store secrets in binding state.** Channel tokens stay in env/config; binding state stores channel type, authorized actor identity, opaque routing state, thread binding, pending intent handles, and audit metadata.
-- **Use explicit PwrAgnt-prefixed config for first-release adapters.** Prefer `PWRAGNT_MESSAGING_TELEGRAM_BOT_TOKEN`, `PWRAGNT_MESSAGING_DISCORD_BOT_TOKEN`, `PWRAGNT_MESSAGING_DISCORD_APPLICATION_ID`, and per-channel authorized actor lists. If compatibility aliases are added for locally configured bots, they should be read as fallback only and normalized into redacted runtime config.
+- **Use explicit PwrAgent-prefixed config for first-release adapters.** Prefer `PWRAGNT_MESSAGING_TELEGRAM_BOT_TOKEN`, `PWRAGNT_MESSAGING_DISCORD_BOT_TOKEN`, `PWRAGNT_MESSAGING_DISCORD_APPLICATION_ID`, and per-channel authorized actor lists. If compatibility aliases are added for locally configured bots, they should be read as fallback only and normalized into redacted runtime config.
 
 ## Open Questions
 
@@ -95,7 +95,7 @@ Existing PwrAgnt code already has the agent-side control plane: thread listing, 
 - **What persistence model should store bindings and pending intents?** A versioned JSON `MessagingStore` following `OverlayStore` patterns, stored under the desktop state root as `messaging-state.json` for the first runtime.
 - **Which transports should Telegram and Discord use first?** Telegram long polling and Discord Gateway plus REST. Webhooks are deferred because local desktop validation should not depend on a public endpoint.
 - **What is the first authorization policy?** A local allowlist of stable platform user IDs plus explicit bind confirmation. Unbound conversations may browse only after authorization; bound conversations may control only their stored thread binding. Usernames are display metadata, not authority.
-- **What should first-release config look like?** PwrAgnt-prefixed environment variables for secrets and allowlists, with optional non-secret local config later. This avoids coupling the new runtime to OpenClaw or generic bot env var names.
+- **What should first-release config look like?** PwrAgent-prefixed environment variables for secrets and allowlists, with optional non-secret local config later. This avoids coupling the new runtime to OpenClaw or generic bot env var names.
 - **How should the light mapper behave first?** Deterministic matching first, optional low-latency model-backed disambiguation only for pending intents, and pass-through to the bound thread when the response is a new instruction.
 - **How should future iOS reuse this?** The iOS app can either implement the adapter interface as a normal channel or consume the same semantic surface from a richer remote-view protocol later; this plan does not choose the remote-view shape.
 
@@ -374,7 +374,7 @@ flowchart TB
 **Approach:**
 - Add config loading for enabled channels, credentials, and authorized platform users. Use environment variables for secrets in the MVP and allow non-secret defaults from a local config file if needed.
 - Require authorized actors to be configured by stable platform user IDs. Optional usernames/display names can help operators identify entries, but they must not authorize control by themselves.
-- Normalize first-release config around PwrAgnt-prefixed env names, while allowing explicitly documented fallback aliases only when they are useful for local migration from an existing bot setup.
+- Normalize first-release config around PwrAgent-prefixed env names, while allowing explicitly documented fallback aliases only when they are useful for local migration from an existing bot setup.
 - Resolve messaging state as a sibling of `overlay-state.json` under the existing desktop state root.
 - Build a desktop backend bridge around `getDesktopBackendRegistry()` rather than routing through renderer IPC.
 - Subscribe to backend events in the runtime and route thread notifications to the messaging controller so bound conversations receive assistant responses, status, pending input, and errors.
@@ -491,7 +491,7 @@ flowchart TB
 - Security: `allowed_mentions` prevents agent output from pinging everyone, roles, or arbitrary users unless a future explicit policy allows it.
 - Security: a Discord sender with a matching display name but different user id is rejected.
 - Security: inbound Discord attachments are not downloaded or forwarded into an agent turn in the MVP.
-- Integration: after restart, a persisted Discord channel/thread binding routes free-form text to the same PwrAgnt thread.
+- Integration: after restart, a persisted Discord channel/thread binding routes free-form text to the same PwrAgent thread.
 
 **Verification:**
 - Discord can complete bind, picker navigation, free-form turn routing, approval/questionnaire actions, markdown/code rendering, and image response delivery against mocked Gateway/REST tests plus manual smoke validation.
@@ -567,15 +567,15 @@ flowchart TB
 ## Documentation / Operational Notes
 
 - Messaging should be disabled by default unless channel credentials and authorized users are configured.
-- The MVP should use PwrAgnt-prefixed environment variables for bot tokens, application secrets, and authorized actor allowlists; non-secret adapter options may live in local config later.
+- The MVP should use PwrAgent-prefixed environment variables for bot tokens, application secrets, and authorized actor allowlists; non-secret adapter options may live in local config later.
 - Logs must redact tokens, callback handles where they could be sensitive, raw payloads, and user-provided media URLs when needed.
 - Adapter health should be visible in development logs first; a renderer settings/status surface can be planned later if the runtime proves useful.
 - Manual smoke validation should be treated as required for Telegram and Discord because mocked tests cannot prove platform permissions, message rendering, or mobile/voice ergonomics.
 
 ## Alternative Approaches Considered
 
-- **Use Vercel Chat SDK as the runtime abstraction:** rejected for MVP. It has relevant adapter ideas, but the origin requirements call out maturity concerns around markdown and media behavior, and the strategic need is a PwrAgnt-owned semantic surface.
-- **Port OpenClaw's channel/plugin shape directly:** rejected. OpenClaw proves the broad channel horizon and intent direction, but PwrAgnt should not inherit channel-coupled Codex plugin behavior.
+- **Use Vercel Chat SDK as the runtime abstraction:** rejected for MVP. It has relevant adapter ideas, but the origin requirements call out maturity concerns around markdown and media behavior, and the strategic need is a PwrAgent-owned semantic surface.
+- **Port OpenClaw's channel/plugin shape directly:** rejected. OpenClaw proves the broad channel horizon and intent direction, but PwrAgent should not inherit channel-coupled Codex plugin behavior.
 - **Start with text-only Telegram/Discord:** rejected. A text-only MVP would not validate the hard parts: binding, navigation, approval/questionnaire workflows, markdown/code/media rendering, and voice-friendly fallback.
 - **Build webhook-first:** deferred. Webhooks are useful for hosted always-on deployment, but local desktop validation is simpler with Telegram long polling and Discord Gateway.
 - **Build a first-party iOS app first:** deferred. The messaging surface solves remote conversation control now and can inform whether iOS should be a normal adapter or richer remote-view client.

@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 function createTempRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragnt-settings-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-"));
   tempRoots.push(root);
   return root;
 }

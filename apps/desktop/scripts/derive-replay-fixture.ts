@@ -163,7 +163,7 @@ function parseRedactions(values: string[] | undefined): StringReplacement[] | un
 
 function printUsage(): void {
   console.log(`Usage:
-  pnpm --filter @pwragnt/desktop derive:replay-fixture -- \\
+  pnpm --filter @pwragent/desktop derive:replay-fixture -- \\
     --input /path/to/raw.capture.jsonl \\
     --output-dir apps/desktop/e2e/fixtures/example \\
     --scenario example-scenario \\

@@ -6,7 +6,7 @@ import type {
   NavigationDirectorySummary,
   NavigationThreadSummary,
   ThreadExecutionMode,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
 import type { BrowseMode } from "../../lib/useThreadNavigation";
@@ -261,7 +261,7 @@ export function Sidebar(props: SidebarProps) {
       />
       <header className="sidebar__masthead">
         <div className="sidebar__identity">
-          <p className="eyebrow sidebar__brand">PwrAgnt</p>
+          <p className="sidebar__brand">Pwr<span className="sidebar__brand-accent">Agent</span></p>
 
           {props.runtimeIdentity ? (
             <div className="runtime-identity" aria-label="Runtime identity">
@@ -296,20 +296,19 @@ export function Sidebar(props: SidebarProps) {
             type="button"
             onClick={props.onOpenSettings}
           >
-            <span aria-hidden="true">⚙</span>
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
-          <div className="sidebar__new-thread">
-            <button
-              className="button button--primary"
-              disabled={!hasCreateThreadOptions || Boolean(props.creatingThread)}
-              type="button"
-              onClick={() => {
-                void props.onCreateThread();
-              }}
-            >
-              {props.creatingThread ? "Opening..." : "New thread"}
-            </button>
-          </div>
+          <button
+            aria-label="New thread"
+            className="sidebar__icon-button"
+            disabled={!hasCreateThreadOptions || Boolean(props.creatingThread)}
+            type="button"
+            onClick={() => {
+              void props.onCreateThread();
+            }}
+          >
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+          </button>
         </div>
       </header>
 
@@ -580,7 +579,11 @@ function RuntimeIdentityButton(props: {
       }}
     >
       <span aria-hidden="true" className="runtime-identity__icon">
-        {props.valueKind === "cwd" ? "/" : "#"}
+        {props.valueKind === "cwd" ? (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/></svg>
+        ) : (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+        )}
       </span>
       <span className="runtime-identity__text">{props.label}</span>
     </button>

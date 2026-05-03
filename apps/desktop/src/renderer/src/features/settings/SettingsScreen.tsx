@@ -1,7 +1,7 @@
 import type {
   DesktopChatReplyComposer,
   DesktopSettingsSnapshot,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";

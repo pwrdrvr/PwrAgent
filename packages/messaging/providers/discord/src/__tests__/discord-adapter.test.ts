@@ -1,4 +1,4 @@
-import type { MessagingAuditContext } from "@pwragnt/messaging-interface";
+import type { MessagingAuditContext } from "@pwragent/messaging-interface";
 import { describe, expect, it, vi } from "vitest";
 import {
   DiscordAdapter,
@@ -301,7 +301,7 @@ function createApi(overrides: Partial<DiscordApi> = {}): DiscordApi {
 
 function applicationCommand(): DiscordApplicationCommand {
   return {
-    description: "Choose a PwrAgnt thread to control from this conversation.",
+    description: "Choose a PwrAgent thread to control from this conversation.",
     id: "command-1",
     name: "resume",
     type: 1,

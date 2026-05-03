@@ -1,4 +1,4 @@
-import type { MessagingChannelKind } from "@pwragnt/messaging-interface";
+import type { MessagingChannelKind } from "@pwragent/messaging-interface";
 import { getMainLogger } from "../log";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import type { DesktopMessagingConfig } from "./messaging-config";
@@ -24,7 +24,7 @@ export type DesktopMessagingProviderRegistry = Record<
   }
 >;
 
-const messagingLog = getMainLogger("pwragnt:messaging");
+const messagingLog = getMainLogger("pwragent:messaging");
 const providerModuleCache = new Map<
   DesktopMessagingProviderId,
   Promise<DesktopMessagingProviderModule>
@@ -92,7 +92,7 @@ async function loadMessagingProviderModule(
 const defaultMessagingProviderRegistry: DesktopMessagingProviderRegistry = {
   discord: {
     async load() {
-      const module = await import("@pwragnt/messaging-provider-discord");
+      const module = await import("@pwragent/messaging-provider-discord");
       return {
         createAdapter({ config, logger }) {
           return config.discord
@@ -104,7 +104,7 @@ const defaultMessagingProviderRegistry: DesktopMessagingProviderRegistry = {
   },
   telegram: {
     async load() {
-      const module = await import("@pwragnt/messaging-provider-telegram");
+      const module = await import("@pwragent/messaging-provider-telegram");
       return {
         createAdapter({ config, logger, store }) {
           return config.telegram

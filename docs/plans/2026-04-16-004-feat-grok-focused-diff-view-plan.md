@@ -39,7 +39,7 @@ The current desktop diff renderer only compresses unchanged context within a uni
 - `apps/desktop/src/renderer/src/features/thread-detail/TranscriptDiff.tsx` already parses unified diffs into rows and supports a simple full-versus-condensed toggle.
 - `apps/desktop/src/renderer/src/features/thread-detail/TranscriptActivity.tsx` is the current expansion boundary for transcript activity details; it is the natural place to trigger focused analysis when a write detail becomes visible.
 - `apps/desktop/src/main/ipc/app-server.ts`, `apps/desktop/src/preload/index.ts`, `apps/desktop/src/shared/ipc.ts`, and `apps/desktop/src/renderer/src/lib/desktop-api.ts` define the established main/preload/renderer bridge pattern.
-- `apps/desktop/src/main/grok-app-server/client.ts` already knows how to load Grok configuration through `@pwragnt/agent-core`; the focused-diff service should follow that pattern rather than inventing a separate config path.
+- `apps/desktop/src/main/grok-app-server/client.ts` already knows how to load Grok configuration through `@pwragent/agent-core`; the focused-diff service should follow that pattern rather than inventing a separate config path.
 - `packages/agent-core/src/providers/xai-responses-client.ts` is the existing xAI Responses API wrapper; it is the right reuse point if the focused-diff service needs prompt-cache-related request fields or headers.
 - `apps/desktop/src/renderer/src/features/thread-detail/__tests__/transcript-list.test.tsx` already covers transcript diff behavior and should stay the renderer contract anchor.
 

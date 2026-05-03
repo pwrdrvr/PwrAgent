@@ -6,13 +6,13 @@ import type {
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
 } from "./core/messaging-adapter";
-import type { AgentEvent, AppServerPendingRequestNotification } from "@pwragnt/shared";
+import type { AgentEvent, AppServerPendingRequestNotification } from "@pwragent/shared";
 import type {
   MessagingChannelKind,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   MessagingSurfaceIntent,
-} from "@pwragnt/messaging-interface";
+} from "@pwragent/messaging-interface";
 import { getMainLogger } from "../log";
 import { getDesktopMessagingStore } from "./desktop-messaging-store";
 import {
@@ -44,7 +44,7 @@ export type DesktopMessagingConfigLoader = () =>
   | DesktopMessagingConfig
   | Promise<DesktopMessagingConfig>;
 
-const messagingLog = getMainLogger("pwragnt:messaging");
+const messagingLog = getMainLogger("pwragent:messaging");
 
 export class DesktopMessagingRuntime {
   private adapters: DesktopMessagingAdapter[] = [];

@@ -7,8 +7,8 @@ source: openclaw/docs/brainstorms/2026-04-27-codex-conversation-ui-intent-interf
 # OpenClaw Codex Conversation UI Intent Interface Source
 
 This file is a repo-local copy of the OpenClaw brainstorm that informed the
-PwrAgnt messaging platform integration requirements. It is retained as source
-context only; the PwrAgnt design should not inherit OpenClaw's channel-coupled
+PwrAgent messaging platform integration requirements. It is retained as source
+context only; the PwrAgent design should not inherit OpenClaw's channel-coupled
 implementation shape.
 
 ## Problem Frame

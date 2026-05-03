@@ -38,15 +38,15 @@
             {
               "id": "worktree-dir",
               "kind": "worktree",
-              "label": "PwrAgnt",
-              "path": "/repo/PwrAgnt",
-              "worktreePath": "/repo/PwrAgnt/.worktrees/feature-context-tooltips"
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent",
+              "worktreePath": "/repo/PwrAgent/.worktrees/feature-context-tooltips"
             },
             {
               "id": "local-dir",
               "kind": "local",
               "label": "LocalCheckout",
-              "path": "/repo/PwrAgnt"
+              "path": "/repo/PwrAgent"
             }
           ],
           "inbox": {

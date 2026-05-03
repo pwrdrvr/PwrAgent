@@ -5,10 +5,10 @@ import {
   GrokProvider,
   loadLocalEnv,
   resolveGrokAppServerRuntimeConfig,
-} from "@pwragnt/agent-core";
+} from "@pwragent/agent-core";
 import {
   shortenDerivedThreadTitle,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type {
   AppServerNotification,
   AppServerPendingRequestNotification,
@@ -26,7 +26,7 @@ import type {
   AppServerReviewTarget,
   BackendModelOption,
   LinkedDirectorySummary,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type {
   JsonRpcObserver,
   JsonRpcObserverDiagnostics,
@@ -39,7 +39,7 @@ import {
 } from "../app-server/thread-directory-enricher";
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
-const grokClientLog = getMainLogger("pwragnt:grok-client");
+const grokClientLog = getMainLogger("pwragent:grok-client");
 
 type InitializeResult = {
   serverInfo?: {
@@ -1044,7 +1044,7 @@ export class GrokAppServerClient {
     this.initializePromise ??= (async () => {
       const result = await this.request("initialize", {
         protocolVersion: DEFAULT_PROTOCOL_VERSION,
-        clientInfo: { name: "pwragnt-desktop", version: "0.1.0" },
+        clientInfo: { name: "pwragent-desktop", version: "0.1.0" },
         capabilities: { experimentalApi: true },
       });
 

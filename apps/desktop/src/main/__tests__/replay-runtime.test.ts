@@ -172,7 +172,7 @@ describe("replay-runtime", () => {
 });
 
 function writeFixture(fixture: unknown): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwragnt-replay-runtime-"));
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-replay-runtime-"));
   tempDirs.push(tempDir);
 
   const fixturePath = path.join(tempDir, "replay.fixture.json");

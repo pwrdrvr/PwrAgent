@@ -21,9 +21,9 @@ This plan deliberately avoids the larger storage redesign. The current fix shoul
 
 The concrete evidence from the protocol capture and logs is:
 
-- `thread-eksfk3v0` was started through the Grok app server with a `cwd`/`projectKey` ending in `.worktrees/launchpad-pwragnt-main-moohzbj1`.
+- `thread-eksfk3v0` was started through the Grok app server with a `cwd`/`projectKey` ending in `.worktrees/launchpad-pwragent-main-moohzbj1`.
 - Later Grok `thread/list` responses returned the same `projectKey`, so `GrokAppServerClient` built a single linked directory from the worktree path.
-- `messaging-resume-browser.ts` formats thread picker labels from `thread.linkedDirectories[0].label`; because the Grok linked directory label was the basename of the worktree path, Telegram showed `Messaging - Streaming Response... (launchpad-pwragnt-main-moohzbj1)` instead of `PwrAgnt`.
+- `messaging-resume-browser.ts` formats thread picker labels from `thread.linkedDirectories[0].label`; because the Grok linked directory label was the basename of the worktree path, Telegram showed `Messaging - Streaming Response... (launchpad-pwragent-main-moohzbj1)` instead of `PwrAgent`.
 - The persisted Grok thread exists under the shared Grok state root, so the cross-instance visibility problem is not inherently separate state roots. The deeper issue is that each embedded `AppServerSessionState` hydrates from `GrokRolloutStore` only in its constructor. A second already-running desktop process keeps serving its stale in-memory map even after another process writes a new thread to disk.
 
 Codex does not have the same symptoms because its thread listing path is backed by the Codex session store and the desktop already uses Git-aware thread directory enrichment for Codex summaries.
@@ -136,7 +136,7 @@ flowchart TB
 
 **Approach:**
 - Add a Grok client test that stubs a worktree cwd ending in a launchpad worktree name and expects `listThreads()` to return a linked directory labeled with the primary repo, not the worktree basename.
-- Add a messaging resume browser test where a Grok thread with a worktree linked directory renders as `Messaging - Streaming Responses (PwrAgnt)`.
+- Add a messaging resume browser test where a Grok thread with a worktree linked directory renders as `Messaging - Streaming Responses (PwrAgent)`.
 - Strengthen the enricher test to cover the same launchpad worktree shape seen in the capture.
 
 **Execution note:** Start test-first. These tests should fail against current `GrokAppServerClient` behavior before the enrichment wiring changes.
@@ -147,8 +147,8 @@ flowchart TB
 - `apps/desktop/src/main/__tests__/messaging-resume-browser.test.ts`
 
 **Test scenarios:**
-- Happy path: Grok `thread/list` summary with worktree cwd -> linked directory has `kind: "worktree"`, `label: "PwrAgnt"`, primary repo `path`, and worktree `worktreePath`.
-- Happy path: messaging thread picker fallback text includes `Messaging - Streaming Responses (PwrAgnt)` for a Grok thread with worktree metadata.
+- Happy path: Grok `thread/list` summary with worktree cwd -> linked directory has `kind: "worktree"`, `label: "PwrAgent"`, primary repo `path`, and worktree `worktreePath`.
+- Happy path: messaging thread picker fallback text includes `Messaging - Streaming Responses (PwrAgent)` for a Grok thread with worktree metadata.
 - Edge case: missing cwd or non-Git cwd still falls back to the existing local-directory behavior without throwing.
 
 **Verification:**
@@ -188,7 +188,7 @@ flowchart TB
 - Integration: `/resume` navigation built from Grok summaries groups the thread under the primary project directory.
 
 **Verification:**
-- Grok thread picker labels and project picker grouping match Codex for worktree-backed PwrAgnt threads.
+- Grok thread picker labels and project picker grouping match Codex for worktree-backed PwrAgent threads.
 
 - [x] **Unit 3: Add failing live cross-instance Grok visibility coverage**
 
@@ -285,8 +285,8 @@ flowchart TB
 - `apps/desktop/src/main/testing/protocol-capture.ts`
 
 **Test scenarios:**
-- Happy path: `/resume` recents includes a Grok worktree thread with `(PwrAgnt)` suffix.
-- Happy path: `/resume --projects` groups the Grok worktree thread under `PwrAgnt`, not under the launchpad worktree basename.
+- Happy path: `/resume` recents includes a Grok worktree thread with `(PwrAgent)` suffix.
+- Happy path: `/resume --projects` groups the Grok worktree thread under `PwrAgent`, not under the launchpad worktree basename.
 - Integration: combined Codex plus Grok navigation keeps both sources visible and sorted by recency.
 - Edge case: if Grok is temporarily unavailable, existing Codex resume behavior is unchanged.
 

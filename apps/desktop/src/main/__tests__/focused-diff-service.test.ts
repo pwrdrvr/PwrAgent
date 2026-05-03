@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createTemporaryTestDirectory } from "@pwragnt/agent-core";
+import { createTemporaryTestDirectory } from "@pwragent/agent-core";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { parseUnifiedDiff, summarizeHunksForFocus } from "../../shared/diff-focus";
 import { defaultGrokAppServerConfigPath } from "../../../../../packages/agent-core/src/config/grok-app-server-config.js";

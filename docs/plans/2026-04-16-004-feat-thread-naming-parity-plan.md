@@ -16,7 +16,7 @@ Make thread naming behave the way Codex actually behaves instead of the way the 
 
 The desktop currently treats `title/name` as the only real thread title and treats `summary/preview` as secondary metadata. In the inspected Codex implementation, that is not how thread identity works. A fresh thread starts with no `name`, and the first durable label is the first user message, which is stored as both `first_user_message` and the initial metadata `title`. Codex only surfaces a distinct `name` when the thread is explicitly renamed. The app-server then suppresses `name` when it matches `first_user_message`, which means the default Codex thread-row label is effectively "first user message as preview," not a hidden model-generated title.
 
-That matters for PwrAgnt because the desktop currently converts Codex `preview` into `summary` and falls back to `"Untitled thread"` for `title`, so meaningful Codex threads remain visually untitled. Grok currently has the same conceptual gap in a different form: it stores an explicit `threadName` plus a synthesized summary from recent messages, but it does not separately model the first user message as the default thread label. If the product is truly thread-first, "unnamed but already has a clear derived title" needs to be a first-class state across both backends.
+That matters for PwrAgent because the desktop currently converts Codex `preview` into `summary` and falls back to `"Untitled thread"` for `title`, so meaningful Codex threads remain visually untitled. Grok currently has the same conceptual gap in a different form: it stores an explicit `threadName` plus a synthesized summary from recent messages, but it does not separately model the first user message as the default thread label. If the product is truly thread-first, "unnamed but already has a clear derived title" needs to be a first-class state across both backends.
 
 ## Requirements Trace
 
@@ -73,7 +73,7 @@ That matters for PwrAgnt because the desktop currently converts Codex `preview` 
 
 - Does Codex send a hidden synthetic prompt to name the thread? Based on the inspected open-source `codex-rs` app-server and state code, no evidence of a hidden naming prompt was found. The default label comes from the first visible user message, and explicit names come from `thread/name/set` or persisted `ThreadNameUpdated` events.
 - Is the missing behavior primarily an app-server protocol catch-up or a desktop normalization bug? For Codex, it is primarily a desktop normalization bug. For Grok, it is a server-plus-client parity gap.
-- Should PwrAgnt wait for Grok persistence before fixing the UI behavior? No. The semantic split can ship against in-memory Grok state first, and the persistence branch can adopt the same fields afterward.
+- Should PwrAgent wait for Grok persistence before fixing the UI behavior? No. The semantic split can ship against in-memory Grok state first, and the persistence branch can adopt the same fields afterward.
 
 ### Deferred to Implementation
 

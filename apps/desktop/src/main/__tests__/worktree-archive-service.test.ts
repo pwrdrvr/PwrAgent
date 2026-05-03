@@ -32,7 +32,7 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 describe("WorktreeArchiveService", () => {
   it("snapshots tracked and untracked worktree changes, removes the worktree, and restores it", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragnt-worktree-archive-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-archive-"));
     const repoPath = path.join(root, "repo");
     const worktreePath = path.join(root, "repo-feature");
     await mkdir(repoPath);
@@ -94,7 +94,7 @@ describe("WorktreeArchiveService", () => {
   });
 
   it("resolves the primary repository when the repository path points at the worktree", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pwragnt-worktree-archive-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-archive-"));
     const repoPath = path.join(root, "repo");
     const worktreePath = path.join(root, "repo-feature");
     await mkdir(repoPath);

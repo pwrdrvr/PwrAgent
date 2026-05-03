@@ -68,7 +68,7 @@ Messaging should therefore be a desktop main-process integration:
 
 - No `docs/solutions/` directory exists yet for messaging integration learnings.
 - `docs/plans/2026-04-30-001-feat-messaging-platform-integration-plan.md` and `docs/plans/2026-04-30-002-feat-messaging-command-surfaces-plan.md` captured useful product behavior, but their agent-core ownership decision should be superseded by this plan.
-- `docs/brainstorms/2026-04-30-openclaw-codex-conversation-ui-intent-interface-source.md` remains useful prior art for command surfaces, managed messages, pinning, and fallback UX. Its plugin/server split should not drive PwrAgnt's package boundaries.
+- `docs/brainstorms/2026-04-30-openclaw-codex-conversation-ui-intent-interface-source.md` remains useful prior art for command surfaces, managed messages, pinning, and fallback UX. Its plugin/server split should not drive PwrAgent's package boundaries.
 
 ### External References
 
@@ -84,7 +84,7 @@ Messaging should therefore be a desktop main-process integration:
 ## Key Technical Decisions
 
 - **Desktop owns messaging.** Messaging runtime, workflow controller, binding store, adapters, fallback mapper, and platform setup live under `apps/desktop/src/main/messaging`. The desktop app hosts the gateway and uses its existing registry state.
-- **`agent-core` owns app-server/model behavior only.** Remove messaging exports and implementation from `packages/agent-core`. No Telegram/Discord/channel modules should import from `@pwragnt/agent-core` after this refactor except for unrelated app-server APIs that remain valid.
+- **`agent-core` owns app-server/model behavior only.** Remove messaging exports and implementation from `packages/agent-core`. No Telegram/Discord/channel modules should import from `@pwragent/agent-core` after this refactor except for unrelated app-server APIs that remain valid.
 - **Create isolated messaging packages.** Add `packages/messaging/interface`, `packages/messaging/providers/telegram`, and `packages/messaging/providers/discord` as separate pnpm workspace packages. Provider packages import only the interface package, their own files, and their platform SDK dependencies.
 - **Use package boundaries as enforcement.** Each messaging package gets its own `package.json`, `tsconfig.json`, `rootDir`, `exports`, and test targets. Provider packages should not be able to import arbitrary `apps/desktop` or `packages/agent-core` source by relative path.
 - **Use `grammy` inside the Telegram provider.** Add `grammy` to `packages/messaging/providers/telegram/package.json`. Use long polling for local desktop by default and keep webhook support as a later transport mode. Let grammY own update dispatch, Bot API calls, command registration, callback query handling, and error boundaries.
@@ -100,7 +100,7 @@ Messaging should therefore be a desktop main-process integration:
 ### Resolved During Planning
 
 - **Should `agent-core` contain messaging logic?** No. Move it to `apps/desktop/src/main/messaging` because the desktop app is the integration host and state owner.
-- **Should Telegram/Discord remain hand-written API clients?** No for normal transport. Use `grammy` and `discord.js`; keep tiny formatting/policy helpers where they express PwrAgnt rendering choices.
+- **Should Telegram/Discord remain hand-written API clients?** No for normal transport. Use `grammy` and `discord.js`; keep tiny formatting/policy helpers where they express PwrAgent rendering choices.
 - **Should messaging spin up independent app servers?** No. Messaging mirrors the desktop app's already-running app-server backends through `DesktopBackendRegistry`.
 - **Should a settings screen be added now?** No. 1Password/env config remains the setup surface for this PR.
 - **Should provider code live directly in `apps/desktop`?** No. The desktop app should own orchestration, but provider implementations should be isolated packages under `packages/messaging/providers/*`.
@@ -110,7 +110,7 @@ Messaging should therefore be a desktop main-process integration:
 
 - Whether any current shared messaging types are still needed in `packages/shared` after moving desktop-internal workflow types.
 - Exact file move strategy: pure move versus recreate under `apps/desktop/src/main/messaging/core` and `packages/messaging/interface` and delete old files after tests pass.
-- Exact workspace/package naming, with `@pwragnt/messaging-interface`, `@pwragnt/messaging-provider-telegram`, and `@pwragnt/messaging-provider-discord` as the planned default unless implementation reveals a repo naming constraint.
+- Exact workspace/package naming, with `@pwragent/messaging-interface`, `@pwragent/messaging-provider-telegram`, and `@pwragent/messaging-provider-discord` as the planned default unless implementation reveals a repo naming constraint.
 - Exact Electron packaging behavior for dynamic provider imports. Use literal specifiers first; if electron-vite packaging cannot retain provider chunks, add an explicit provider manifest or packaging include rule.
 - Whether Discord should initially support free-form guild channel text or limit MVP text entry to DMs/mentions unless the bot has Discord's privileged message content intent enabled in the Developer Portal.
 - Whether the current JSON messaging store format can be preserved as-is under the desktop module or needs a version migration after moving ownership.
@@ -122,9 +122,9 @@ Messaging should therefore be a desktop main-process integration:
 ```mermaid
 flowchart TB
     Config["Desktop messaging config"] --> Loader["Configured provider loader"]
-    Loader -->|if telegram enabled| TelegramPkg["@pwragnt/messaging-provider-telegram"]
-    Loader -->|if discord enabled| DiscordPkg["@pwragnt/messaging-provider-discord"]
-    Interface["@pwragnt/messaging-interface"] --> TelegramPkg
+    Loader -->|if telegram enabled| TelegramPkg["@pwragent/messaging-provider-telegram"]
+    Loader -->|if discord enabled| DiscordPkg["@pwragent/messaging-provider-discord"]
+    Interface["@pwragent/messaging-interface"] --> TelegramPkg
     Interface --> DiscordPkg
     TelegramPkg --> Runtime["Desktop messaging runtime"]
     DiscordPkg --> Runtime
@@ -192,7 +192,7 @@ flowchart TB
 - Test: `packages/messaging/interface/src/__tests__/messaging-interface.test.ts`
 
 **Approach:**
-- Create a package named `@pwragnt/messaging-interface`.
+- Create a package named `@pwragent/messaging-interface`.
 - Move or recreate provider-facing DTOs here: provider lifecycle, inbound events, outbound semantic surface intents, delivery results, provider capabilities, opaque routing/surface state, callback/action envelopes, actor identity, and audit-safe metadata.
 - Keep app-server/navigation DTO dependencies minimal. Prefer importing stable shared contracts only when needed for thread identifiers or content parts; avoid depending on desktop or agent-core modules.
 - Configure `tsconfig.json` with `composite`, explicit `rootDir`, narrow `include`, and declaration output if package references are adopted.
@@ -283,8 +283,8 @@ flowchart TB
 - Node dynamic `import()` with explicit package specifiers
 
 **Test scenarios:**
-- Happy path: Telegram config causes exactly one dynamic import of `@pwragnt/messaging-provider-telegram` and starts one provider instance.
-- Happy path: Discord config causes exactly one dynamic import of `@pwragnt/messaging-provider-discord` and starts one provider instance.
+- Happy path: Telegram config causes exactly one dynamic import of `@pwragent/messaging-provider-telegram` and starts one provider instance.
+- Happy path: Discord config causes exactly one dynamic import of `@pwragent/messaging-provider-discord` and starts one provider instance.
 - Edge case: no provider config starts the runtime without importing Telegram or Discord provider modules.
 - Edge case: disabling Discord while Telegram is configured imports only Telegram.
 - Error path: a provider import failure logs the provider id and keeps other configured providers running.
@@ -352,9 +352,9 @@ flowchart TB
 - Use grammY long polling for local desktop by default.
 - Continue deleting or clearing an existing webhook before local polling if needed, but treat that as a Telegram transport setup policy.
 - Use grammY context APIs for messages, callback queries, command registration, replies, edits, pins, and unpins.
-- Keep PwrAgnt formatting policy in local helpers: markdown-to-Telegram conversion, chunking, media/image policy, button layout, callback-handle allocation.
+- Keep PwrAgent formatting policy in local helpers: markdown-to-Telegram conversion, chunking, media/image policy, button layout, callback-handle allocation.
 - Ignore Telegram service updates such as pin notifications deliberately, not by blanket-dropping all bot-originated events.
-- Import only `@pwragnt/messaging-interface` and local provider files from PwrAgnt packages.
+- Import only `@pwragent/messaging-interface` and local provider files from PwrAgent packages.
 
 **Patterns to follow:**
 - Current `apps/desktop/src/main/messaging/telegram-adapter.ts` behavior tests
@@ -370,7 +370,7 @@ flowchart TB
 - Regression: callback payloads remain short handles and do not embed thread ids, tokens, or full workflow state.
 
 **Verification:**
-- Telegram adapter code uses grammY for platform transport and Bot API calls; PwrAgnt logic remains in desktop workflow/formatting helpers.
+- Telegram adapter code uses grammY for platform transport and Bot API calls; PwrAgent logic remains in desktop workflow/formatting helpers.
 
 - [x] **Unit 6: Implement the Discord provider package with discord.js**
 
@@ -400,7 +400,7 @@ flowchart TB
 - Use discord.js message edit/pin APIs where available; degrade to new messages when permissions or channel type prevent edits/pins.
 - Gate free-form guild channel text behind explicit config and Discord Message Content intent documentation. DMs, mentions, slash commands, and component interactions should be the lower-friction MVP path.
 - Delete or quarantine the local Gateway implementation once discord.js covers the needed lifecycle.
-- Import only `@pwragnt/messaging-interface` and local provider files from PwrAgnt packages.
+- Import only `@pwragent/messaging-interface` and local provider files from PwrAgent packages.
 
 **Patterns to follow:**
 - Current `apps/desktop/src/main/messaging/discord-adapter.ts` behavior tests
@@ -416,7 +416,7 @@ flowchart TB
 - Regression: the adapter does not use the deleted hand-written Gateway class.
 
 **Verification:**
-- Discord adapter behavior is driven by discord.js, with PwrAgnt-specific formatting and workflow still isolated.
+- Discord adapter behavior is driven by discord.js, with PwrAgent-specific formatting and workflow still isolated.
 
 - [x] **Unit 7: Remove hand-rolled platform transports and tighten boundaries**
 
@@ -439,7 +439,7 @@ flowchart TB
 
 **Approach:**
 - Remove raw clients that duplicate library responsibilities.
-- Keep small local type guards only when needed to normalize library events into PwrAgnt desktop events.
+- Keep small local type guards only when needed to normalize library events into PwrAgent desktop events.
 - Keep formatting helpers separate from transport helpers so adapter rendering policy remains testable.
 - Ensure dependency direction is one-way: adapters depend on desktop messaging workflow contracts, not the reverse.
 - Add import-boundary checks through package boundaries and TypeScript config rather than relying on convention in a shared directory.
@@ -453,7 +453,7 @@ flowchart TB
 - Error path: unknown library event shapes are ignored or logged without throwing.
 
 **Verification:**
-- Platform transport ownership is delegated to grammY/discord.js, and the remaining code expresses PwrAgnt policy only.
+- Platform transport ownership is delegated to grammY/discord.js, and the remaining code expresses PwrAgent policy only.
 
 - [ ] **Unit 8: Update package metadata, docs, and setup guidance**
 
@@ -484,9 +484,9 @@ flowchart TB
 ## System-Wide Impact
 
 - **Interaction graph:** Messaging will sit beside renderer IPC as another consumer of `DesktopBackendRegistry`. It must not become a parallel app-server owner.
-- **Error propagation:** Adapter/library errors should be logged through `pwragnt:messaging`, converted to failed delivery results when possible, and isolated per adapter/binding.
+- **Error propagation:** Adapter/library errors should be logged through `pwragent:messaging`, converted to failed delivery results when possible, and isolated per adapter/binding.
 - **State lifecycle risks:** Moving store ownership requires preserving existing `messaging-state.json` data or adding a clear migration if the shape changes.
-- **Package boundary risks:** Provider packages must not reach back into desktop internals or `agent-core`. Enforce this with workspace package dependencies, package exports, TypeScript `rootDir`/project references, and tests that import providers only through `@pwragnt/messaging-interface`.
+- **Package boundary risks:** Provider packages must not reach back into desktop internals or `agent-core`. Enforce this with workspace package dependencies, package exports, TypeScript `rootDir`/project references, and tests that import providers only through `@pwragent/messaging-interface`.
 - **Startup lifecycle:** Provider packages should be imported, constructed, and started only when configured. Adding many future providers should not add startup side effects for unconfigured providers.
 - **API surface parity:** Renderer and messaging should observe the same thread events. If an agent response is visible in Telegram but not the desktop renderer, or vice versa, the event source is wrong.
 - **Integration coverage:** Unit tests should prove fake registry events deliver to messaging, and fake messaging input calls registry methods. Live manual Telegram/Discord smoke tests remain necessary because bot libraries and platform permissions are external.

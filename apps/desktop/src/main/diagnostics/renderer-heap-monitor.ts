@@ -4,7 +4,7 @@ import type { HeapSession, HeapSessionEvent, HeapSessionSample } from "./heap-se
 import { getMainLogger } from "../log";
 
 const CHROME_DEBUGGER_PROTOCOL_VERSION = "1.3";
-const defaultHeapLogger = getMainLogger("pwragnt:heap");
+const defaultHeapLogger = getMainLogger("pwragent:heap");
 
 type RendererHeapUsage = {
   usedSize: number;
@@ -52,7 +52,7 @@ export class RendererHeapMonitor {
       type: "debugger-detached",
       detail: { reason },
     });
-    this.logger.warn("[pwragnt:heap] debugger detached", {
+    this.logger.warn("[pwragent:heap] debugger detached", {
       reason,
       sessionDirectory: this.session.directoryPath,
     });
@@ -112,7 +112,7 @@ export class RendererHeapMonitor {
           deltaThresholdBytes: this.config.deltaThresholdBytes,
         },
       });
-      this.logger.info("[pwragnt:heap] monitoring started", {
+      this.logger.info("[pwragent:heap] monitoring started", {
         sessionDirectory: this.session.directoryPath,
         intervalMs: this.config.intervalMs,
         settleDelayMs: this.config.settleDelayMs,
@@ -134,7 +134,7 @@ export class RendererHeapMonitor {
         type: "monitor-start-failed",
         detail: { error: serializeError(error) },
       });
-      this.logger.error("[pwragnt:heap] monitoring failed to start", error);
+      this.logger.error("[pwragent:heap] monitoring failed to start", error);
       this.pauseSampling();
     }
   }
@@ -160,7 +160,7 @@ export class RendererHeapMonitor {
           throw error;
         }
 
-        this.logger.warn("[pwragnt:heap] renderer target destroyed during stop", {
+        this.logger.warn("[pwragent:heap] renderer target destroyed during stop", {
           reason,
           sessionDirectory: this.session.directoryPath,
         });
@@ -174,7 +174,7 @@ export class RendererHeapMonitor {
       type: "monitor-stopped",
       detail: { reason },
     });
-    this.logger.info("[pwragnt:heap] monitoring stopped", {
+    this.logger.info("[pwragent:heap] monitoring stopped", {
       reason,
       sessionDirectory: this.session.directoryPath,
     });
@@ -248,7 +248,7 @@ export class RendererHeapMonitor {
         type: "sample-failed",
         detail: { error: serializeError(error) },
       });
-      this.logger.error("[pwragnt:heap] heap sample failed", error);
+      this.logger.error("[pwragent:heap] heap sample failed", error);
     }
   }
 
@@ -302,7 +302,7 @@ export class RendererHeapMonitor {
         deltaBytes: options.deltaBytes,
       },
     });
-    this.logger.warn("[pwragnt:heap] capturing heap snapshot", {
+    this.logger.warn("[pwragent:heap] capturing heap snapshot", {
       filename: options.filename,
       deltaBytes: options.deltaBytes,
       sessionDirectory: this.session.directoryPath,
@@ -331,7 +331,7 @@ export class RendererHeapMonitor {
           error: serializeError(error),
         },
       });
-      this.logger.error("[pwragnt:heap] heap snapshot failed", error);
+      this.logger.error("[pwragent:heap] heap snapshot failed", error);
     } finally {
       this.snapshotInFlight = false;
     }

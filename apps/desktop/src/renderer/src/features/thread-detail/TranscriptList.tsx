@@ -16,7 +16,7 @@ import type {
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
   DesktopApplicationsSnapshot
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ThinkingScanner } from "./ThinkingScanner";
 import { PendingQuestionnaire } from "./PendingQuestionnaire";

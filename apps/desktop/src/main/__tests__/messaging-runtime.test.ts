@@ -6,13 +6,13 @@ import type {
   AgentEvent,
   NavigationSnapshot,
   StartTurnRequest,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type {
   MessagingChannelKind,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   MessagingSurfaceIntent,
-} from "@pwragnt/messaging-interface";
+} from "@pwragent/messaging-interface";
 import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import type {
   DesktopMessagingAdapter,
@@ -422,7 +422,7 @@ describe("DesktopMessagingRuntime", () => {
       }),
     );
     expect(adapter.delivered.at(-1)).toMatchObject({
-      body: "This channel user is not authorized to control PwrAgnt.",
+      body: "This channel user is not authorized to control PwrAgent.",
       kind: "error",
       title: "Not authorized",
     });
@@ -627,7 +627,7 @@ async function createRuntimeHarness(): Promise<{
 }
 
 async function prepareRuntimeStore(): Promise<void> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-runtime-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-runtime-"));
   tempDirs.push(tempDir);
   vi.stubEnv("PWRAGNT_HOME", tempDir);
   const { initializeAppState, resetAppStateForTests } = await import(

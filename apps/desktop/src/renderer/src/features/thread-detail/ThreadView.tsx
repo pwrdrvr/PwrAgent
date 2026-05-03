@@ -22,7 +22,7 @@ import type {
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
   ThreadExecutionMode,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";

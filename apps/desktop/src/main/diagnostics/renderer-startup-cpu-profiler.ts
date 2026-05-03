@@ -61,7 +61,7 @@ export class RendererStartupCpuProfiler {
     logger?: Logger;
     now?: () => Date;
   }) {
-    this.logger = options.logger ?? getMainLogger("pwragnt:startup-cpu");
+    this.logger = options.logger ?? getMainLogger("pwragent:startup-cpu");
     this.now = options.now ?? (() => new Date());
     this.session = options.session;
     this.target = options.target;

@@ -27,7 +27,7 @@ ids and timing.
 5. Export the capture by session id and derive the terminal window:
 
    ```bash
-   pnpm --filter @pwragnt/desktop derive:replay-fixture -- \
+   pnpm --filter @pwragent/desktop derive:replay-fixture -- \
      --input /path/to/2026-04-30T17-19-20-090Z-codex-full-access.jsonl \
      --output-dir apps/desktop/e2e/fixtures/stale-thinking-indicator \
      --scenario stale-thinking-indicator \

@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AgentEvent } from "@pwragnt/shared";
+import type { AgentEvent } from "@pwragent/shared";
 
 export type MessagingToolActivityStatus = "completed" | "failed" | "cancelled";
 

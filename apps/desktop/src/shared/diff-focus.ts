@@ -1,4 +1,4 @@
-import type { FocusedDiffHunkSummary } from "@pwragnt/shared";
+import type { FocusedDiffHunkSummary } from "@pwragent/shared";
 
 export const LOCAL_DIFF_CONTEXT_RADIUS = 1;
 export const MIN_FOCUSED_DIFF_HUNK_COUNT = 4;

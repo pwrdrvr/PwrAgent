@@ -1,7 +1,7 @@
 import type {
   DesktopSettingsSecretName,
   DesktopSettingsSecretStorageState,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export interface DesktopSecretStore {
   describe(): DesktopSettingsSecretStorageState;

@@ -59,7 +59,7 @@ const COMMAND_INTEGRATION_TYPES = [
 export const DISCORD_APPLICATION_COMMANDS: DiscordApplicationCommandBody[] = [
   {
     contexts: COMMAND_CONTEXTS,
-    description: "Choose a PwrAgnt thread to control from this conversation.",
+    description: "Choose a PwrAgent thread to control from this conversation.",
     integration_types: COMMAND_INTEGRATION_TYPES,
     name: "resume",
     options: [
@@ -74,14 +74,14 @@ export const DISCORD_APPLICATION_COMMANDS: DiscordApplicationCommandBody[] = [
   },
   {
     contexts: COMMAND_CONTEXTS,
-    description: "Show the current PwrAgnt thread binding and controls.",
+    description: "Show the current PwrAgent thread binding and controls.",
     integration_types: COMMAND_INTEGRATION_TYPES,
     name: "status",
     type: ApplicationCommandType.ChatInput,
   },
   {
     contexts: COMMAND_CONTEXTS,
-    description: "Detach this conversation from its current PwrAgnt thread.",
+    description: "Detach this conversation from its current PwrAgent thread.",
     integration_types: COMMAND_INTEGRATION_TYPES,
     name: "detach",
     type: ApplicationCommandType.ChatInput,

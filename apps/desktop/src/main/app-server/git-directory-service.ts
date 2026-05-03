@@ -11,8 +11,8 @@ import type {
   NavigationDirectoryGitStatus,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
-} from "@pwragnt/shared";
-import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
 
 const execFile = promisify(execFileCallback);

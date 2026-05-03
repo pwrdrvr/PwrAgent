@@ -1,10 +1,10 @@
-# PwrAgnt UI Theme
+# PwrAgent UI Theme
 
-This document is the durable source of truth for PwrAgnt's visual theme. It pairs with [docs/design/desktop-style-guide.md](design/desktop-style-guide.md): the style guide covers desktop product layout and component behavior, while this document covers the theme thesis, palette, token usage, and visual anti-patterns.
+This document is the durable source of truth for PwrAgent's visual theme. It pairs with [docs/design/desktop-style-guide.md](design/desktop-style-guide.md): the style guide covers desktop product layout and component behavior, while this document covers the theme thesis, palette, token usage, and visual anti-patterns.
 
 ## Theme Thesis
 
-PwrAgnt uses a **Tangerine Terminal** theme:
+PwrAgent uses a **Tangerine Terminal** theme:
 
 - absolute black app canvas
 - near-black structural surfaces

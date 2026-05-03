@@ -13,7 +13,7 @@ import type {
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 const execFile = promisify(execFileCallback);
 

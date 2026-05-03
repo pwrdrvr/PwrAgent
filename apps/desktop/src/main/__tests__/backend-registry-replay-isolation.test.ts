@@ -142,7 +142,7 @@ function createOverlayStoreMock() {
       executionMode,
       extraLinkedDirectories: [],
     }),
-  } as unknown as InstanceType<typeof import("@pwragnt/agent-core").OverlayStore>;
+  } as unknown as InstanceType<typeof import("@pwragent/agent-core").OverlayStore>;
 }
 
 beforeEach(() => {
@@ -240,7 +240,7 @@ describe("DesktopBackendRegistry replay isolation", () => {
 });
 
 function writeFixture(fixture: unknown): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwragnt-registry-replay-"));
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-registry-replay-"));
   tempDirs.push(tempDir);
 
   const fixturePath = path.join(tempDir, "replay.fixture.json");

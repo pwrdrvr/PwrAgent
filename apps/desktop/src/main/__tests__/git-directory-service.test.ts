@@ -13,13 +13,13 @@ function runGit(cwd: string, args: string[]): string {
 }
 
 async function createFixtureRepo(): Promise<string> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-git-directory-service-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-git-directory-service-"));
   execFileSync("git", ["init", rootDir], { stdio: "ignore" });
   execFileSync("git", ["-C", rootDir, "checkout", "-B", "main"], { stdio: "ignore" });
-  execFileSync("git", ["-C", rootDir, "config", "user.name", "PwrAgnt Tests"], {
+  execFileSync("git", ["-C", rootDir, "config", "user.name", "PwrAgent Tests"], {
     stdio: "ignore",
   });
-  execFileSync("git", ["-C", rootDir, "config", "user.email", "pwragnt-tests@example.invalid"], {
+  execFileSync("git", ["-C", rootDir, "config", "user.email", "pwragent-tests@example.invalid"], {
     stdio: "ignore",
   });
   execFileSync("git", ["-C", rootDir, "commit", "--allow-empty", "-m", "Seed fixture repo"], {
@@ -213,7 +213,7 @@ describe("GitDirectoryService", () => {
       service.prepareLaunchpadWorkspace({
         directoryKind: "workspace",
         directoryLabel: "Workspaces",
-        directoryPath: "/Users/test/.pwragnt/projects",
+        directoryPath: "/Users/test/.pwragent/projects",
         workMode: "local",
       }),
     ).resolves.toEqual({

@@ -7,7 +7,7 @@ import { analyzeProtocolCaptureTraffic } from "../testing/protocol-capture-analy
 import { createProtocolCaptureObserver, createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 
 async function createTempDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-protocol-capture-"));
+  return await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-protocol-capture-"));
 }
 
 describe("ProtocolCaptureStore", () => {
@@ -283,7 +283,7 @@ describe("ProtocolCaptureStore", () => {
           params: {
             archived: false,
             limit: 100,
-            cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+            cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
           },
         }),
       })}\n`,
@@ -307,7 +307,7 @@ describe("ProtocolCaptureStore", () => {
         envelope: expect.objectContaining({
           method: "thread/list",
           params: expect.objectContaining({
-            cwd: "/repo-user/pwrdrvr/PwrAgnt",
+            cwd: "/repo-user/pwrdrvr/PwrAgent",
           }),
         }),
       }),

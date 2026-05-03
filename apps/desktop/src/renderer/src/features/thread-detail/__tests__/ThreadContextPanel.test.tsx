@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { BackendSummary, NavigationThreadSummary } from "@pwragnt/shared";
+import type { BackendSummary, NavigationThreadSummary } from "@pwragent/shared";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 
 afterEach(() => {
@@ -90,38 +90,38 @@ describe("ThreadContextPanel", () => {
             {
               id: "worktree-dir",
               kind: "worktree",
-              label: "PwrAgnt",
-              path: "/Users/huntharo/github/PwrAgnt",
+              label: "PwrAgent",
+              path: "/Users/huntharo/github/PwrAgent",
               worktreePath:
-                "/Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-molpnvyk",
+                "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-molpnvyk",
             },
             {
               id: "local-dir",
               kind: "local",
               label: "LocalOnly",
-              path: "/Users/huntharo/github/PwrAgnt",
+              path: "/Users/huntharo/github/PwrAgent",
             },
           ],
         }}
       />
     );
 
-    fireEvent.mouseEnter(screen.getByLabelText("Path for PwrAgnt"));
+    fireEvent.mouseEnter(screen.getByLabelText("Path for PwrAgent"));
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "/Users/huntharo/github/PwrAgnt"
+      "/Users/huntharo/github/PwrAgent"
     );
 
-    fireEvent.mouseLeave(screen.getByLabelText("Path for PwrAgnt"));
-    fireEvent.mouseEnter(screen.getByLabelText("Path for worktree PwrAgnt"));
+    fireEvent.mouseLeave(screen.getByLabelText("Path for PwrAgent"));
+    fireEvent.mouseEnter(screen.getByLabelText("Path for worktree PwrAgent"));
     expect(screen.getByRole("tooltip")).toHaveTextContent("/Users/huntharo/github");
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "launchpad-pwragnt-main-molpnvyk"
+      "launchpad-pwragent-main-molpnvyk"
     );
 
-    fireEvent.mouseLeave(screen.getByLabelText("Path for worktree PwrAgnt"));
+    fireEvent.mouseLeave(screen.getByLabelText("Path for worktree PwrAgent"));
     fireEvent.mouseEnter(screen.getByLabelText("Path for local LocalOnly"));
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "/Users/huntharo/github/PwrAgnt"
+      "/Users/huntharo/github/PwrAgent"
     );
   });
 

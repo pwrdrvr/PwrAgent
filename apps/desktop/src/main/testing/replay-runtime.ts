@@ -11,7 +11,7 @@ import type {
   AppServerThreadSummary,
   AppServerTurnInputItem,
   ThreadExecutionMode,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { ReplayClient } from "./replay-client";
 import type { ReplayFixture, ReplayStepOverride } from "./replay-fixture";
 import { validateReplayFixture } from "./replay-fixture";

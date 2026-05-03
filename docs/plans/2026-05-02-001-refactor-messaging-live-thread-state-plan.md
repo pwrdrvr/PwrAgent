@@ -22,7 +22,7 @@ The desktop renderer shows renamed threads from the desktop navigation state. Me
 - `apps/desktop/src/main/messaging/core/messaging-controller.ts` writes `threadDisplay` during browse binding, new-thread binding, and sync-name confirmation.
 - `apps/desktop/src/main/messaging/core/messaging-store.ts` persists those values in `messaging-state.json`.
 
-That makes the messaging store an accidental duplicate of desktop thread state. The binding store should identify which platform conversation is bound to which PwrAgnt thread, not remember what that PwrAgnt thread looked like when the binding was created.
+That makes the messaging store an accidental duplicate of desktop thread state. The binding store should identify which platform conversation is bound to which PwrAgent thread, not remember what that PwrAgent thread looked like when the binding was created.
 
 ## Requirements Trace
 

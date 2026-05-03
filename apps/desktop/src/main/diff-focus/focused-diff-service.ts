@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import type { XaiAiSdkObjectResult } from "@pwragnt/agent-core";
+import type { XaiAiSdkObjectResult } from "@pwragent/agent-core";
 import type {
   FocusedDiffAnalysisRequest,
   FocusedDiffAnalysisResponse,
   FocusedDiffHunkDecision,
   FocusedDiffHunkSummary,
   FocusedDiffReasonCode
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import {
   getFocusedDiffEligibility,
   parseUnifiedDiff,

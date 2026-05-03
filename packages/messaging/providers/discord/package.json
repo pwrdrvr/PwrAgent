@@ -1,5 +1,5 @@
 {
-  "name": "@pwragnt/messaging-provider-discord",
+  "name": "@pwragent/messaging-provider-discord",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@pwragnt/messaging-interface": "workspace:*",
+    "@pwragent/messaging-interface": "workspace:*",
     "discord.js": "^14.25.1"
   },
   "devDependencies": {

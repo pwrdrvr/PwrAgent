@@ -3,7 +3,7 @@ import type { RendererErrorReport } from "../../shared/renderer-error";
 import { RENDERER_ERROR_REPORT_CHANNEL } from "../../shared/ipc";
 import { getMainLogger } from "../log";
 
-const rendererErrorLog = getMainLogger("pwragnt:renderer:error");
+const rendererErrorLog = getMainLogger("pwragent:renderer:error");
 
 export function registerRendererErrorIpcHandlers(): void {
   ipcMain.removeHandler(RENDERER_ERROR_REPORT_CHANNEL);

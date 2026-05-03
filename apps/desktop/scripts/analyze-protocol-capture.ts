@@ -67,7 +67,7 @@ function optionalString(values: string[] | undefined): string | undefined {
 
 function printUsage(): void {
   console.log(`Usage:
-  pnpm --filter @pwragnt/desktop analyze:protocol-capture -- \\
+  pnpm --filter @pwragent/desktop analyze:protocol-capture -- \\
     --input .local/protocol-captures/2026-05-02T14-34-22-432Z-grok-default.jsonl
 
 Optional:

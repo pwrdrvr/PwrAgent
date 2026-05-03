@@ -13,7 +13,7 @@ import {
 import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
-import type { AppServerSkillSummary } from "@pwragnt/shared";
+import type { AppServerSkillSummary } from "@pwragent/shared";
 import { buildSkillTooltip, findSkillTrigger } from "../../lib/skill-mentions";
 import type {
   ComposerRichInputHandle,

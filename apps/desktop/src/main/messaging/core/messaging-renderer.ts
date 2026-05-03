@@ -9,7 +9,7 @@ import type {
   MessagingMessageIntent,
   MessagingThreadPickerIntent,
   NavigationSnapshot,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import {
   formatToolActivityLine,
   type MessagingToolActivity,

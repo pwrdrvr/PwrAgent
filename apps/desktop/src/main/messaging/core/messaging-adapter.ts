@@ -34,7 +34,7 @@ import type {
   SteerTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export type MessagingConversationTitleUpdateRequest = {
   actor?: MessagingActorIdentity;

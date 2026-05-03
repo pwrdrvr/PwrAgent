@@ -69,7 +69,7 @@ export function createProtocolLogObserver(
   options: ProtocolLogObserverOptions,
 ): JsonRpcObserver {
   const logger =
-    options.logger ?? getMainLogger(`pwragnt:${options.backend}:protocol`);
+    options.logger ?? getMainLogger(`pwragent:${options.backend}:protocol`);
   const now = options.now ?? (() => Date.now());
   const streamLogIntervalMs =
     options.streamLogIntervalMs ?? STREAM_LOG_INTERVAL_MS;

@@ -3,7 +3,7 @@ import type {
   MessagingBindingRecord,
   MessagingActiveTurnSummary,
   NavigationSnapshot,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { resolveMessagingThreadState } from "../messaging/core/messaging-thread-state";
 
 describe("resolveMessagingThreadState", () => {
@@ -20,19 +20,19 @@ describe("resolveMessagingThreadState", () => {
 
     expect(state).toMatchObject({
       activeTurn,
-      directoryPath: "/repo/pwragnt",
+      directoryPath: "/repo/pwragent",
       executionMode: "full-access",
       fastMode: false,
       gitBranch: "main",
       missing: false,
       model: "gpt-5.5",
       observedGitBranch: "feature/live",
-      projectLabel: "PwrAgnt",
+      projectLabel: "PwrAgent",
       reasoningEffort: "high",
       threadKey: "codex:thread-1",
       title: "Live desktop title",
       workMode: "worktree",
-      worktreePath: "/repo/pwragnt/.worktrees/live",
+      worktreePath: "/repo/pwragent/.worktrees/live",
     });
   });
 
@@ -87,12 +87,12 @@ function buildNavigationSnapshot(): NavigationSnapshot {
     backend: "all",
     directories: [
       {
-        key: "directory:pwragnt",
+        key: "directory:pwragent",
         kind: "directory",
-        label: "PwrAgnt",
+        label: "PwrAgent",
         latestUpdatedAt: 1000,
         needsAttentionCount: 0,
-        path: "/repo/pwragnt",
+        path: "/repo/pwragent",
         threadKeys: ["codex:thread-1"],
       },
     ],
@@ -113,17 +113,17 @@ function buildNavigationSnapshot(): NavigationSnapshot {
         },
         linkedDirectories: [
           {
-            id: "directory:pwragnt",
+            id: "directory:pwragent",
             kind: "local",
-            label: "PwrAgnt",
-            path: "/repo/pwragnt",
+            label: "PwrAgent",
+            path: "/repo/pwragent",
           },
           {
-            id: "worktree:pwragnt-live",
+            id: "worktree:pwragent-live",
             kind: "worktree",
-            label: "PwrAgnt",
-            path: "/repo/pwragnt",
-            worktreePath: "/repo/pwragnt/.worktrees/live",
+            label: "PwrAgent",
+            path: "/repo/pwragent",
+            worktreePath: "/repo/pwragent/.worktrees/live",
           },
         ],
         model: "gpt-5.5",

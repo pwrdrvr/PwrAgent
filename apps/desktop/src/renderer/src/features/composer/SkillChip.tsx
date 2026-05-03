@@ -1,4 +1,4 @@
-import type { AppServerSkillSummary } from "@pwragnt/shared";
+import type { AppServerSkillSummary } from "@pwragent/shared";
 import { buildSkillTooltip } from "../../lib/skill-mentions";
 
 type SkillChipProps = {

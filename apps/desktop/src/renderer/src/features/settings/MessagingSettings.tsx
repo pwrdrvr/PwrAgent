@@ -3,7 +3,7 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
   MessagingToolUpdateMode,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import {
   formatSourceLabel,
   joinListValue,

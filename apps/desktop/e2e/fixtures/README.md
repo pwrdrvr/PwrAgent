@@ -22,7 +22,7 @@ fixture for CI.
 
    ```bash
    PWRAGNT_PROTOCOL_CAPTURE=true \
-   PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragnt-protocol-captures \
+   PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragent-protocol-captures \
    pnpm dev
    ```
 
@@ -40,8 +40,8 @@ fixture for CI.
    point:
 
    ```bash
-   pnpm --filter @pwragnt/desktop export:session-capture -- \
-     --capture-root /tmp/pwragnt-protocol-captures \
+   pnpm --filter @pwragent/desktop export:session-capture -- \
+     --capture-root /tmp/pwragent-protocol-captures \
      --session codex:<thread-id> \
      --output /tmp/<scenario>.raw.capture.jsonl
    ```
@@ -50,8 +50,8 @@ fixture for CI.
    you can export by capture id instead:
 
    ```bash
-   pnpm --filter @pwragnt/desktop export:session-capture -- \
-     --capture-root /tmp/pwragnt-protocol-captures \
+   pnpm --filter @pwragent/desktop export:session-capture -- \
+     --capture-root /tmp/pwragent-protocol-captures \
      --capture-id <capture-id> \
      --output /tmp/<scenario>.raw.capture.jsonl
    ```
@@ -59,7 +59,7 @@ fixture for CI.
 5. Derive the curated fixture into this directory:
 
    ```bash
-   pnpm --filter @pwragnt/desktop derive:replay-fixture -- \
+   pnpm --filter @pwragent/desktop derive:replay-fixture -- \
      --input /tmp/<scenario>.raw.capture.jsonl \
      --output-dir apps/desktop/e2e/fixtures/<scenario> \
      --scenario <scenario> \

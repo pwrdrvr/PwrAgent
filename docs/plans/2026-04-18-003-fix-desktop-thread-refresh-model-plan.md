@@ -306,7 +306,7 @@ flowchart TB
 
 ## Sources & References
 
-- **Origin document:** [docs/brainstorms/2026-04-18-desktop-thread-refresh-model-requirements.md](/Users/huntharo/pwrdrvr/PwrAgnt/docs/brainstorms/2026-04-18-desktop-thread-refresh-model-requirements.md)
+- **Origin document:** [docs/brainstorms/2026-04-18-desktop-thread-refresh-model-requirements.md](/Users/huntharo/pwrdrvr/PwrAgent/docs/brainstorms/2026-04-18-desktop-thread-refresh-model-requirements.md)
 - Related code: `apps/desktop/src/renderer/src/App.tsx`
 - Related code: `apps/desktop/src/renderer/src/lib/useThreadNavigation.ts`
 - Related code: `apps/desktop/src/renderer/src/lib/useThreadTranscript.ts`

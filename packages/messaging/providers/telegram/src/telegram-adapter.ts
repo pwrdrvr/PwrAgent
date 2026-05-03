@@ -15,8 +15,8 @@ import type {
   MessagingJsonValue,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
-} from "@pwragnt/messaging-interface";
-import { layoutMessagingActionRows } from "@pwragnt/messaging-interface";
+} from "@pwragent/messaging-interface";
+import { layoutMessagingActionRows } from "@pwragent/messaging-interface";
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
   actionsForTelegramIntent,
@@ -405,15 +405,15 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       commands: [
         {
           command: "resume",
-          description: "Resume or start a PwrAgnt thread",
+          description: "Resume or start a PwrAgent thread",
         },
         {
           command: "status",
-          description: "Show the current PwrAgnt binding",
+          description: "Show the current PwrAgent binding",
         },
         {
           command: "detach",
-          description: "Detach this chat from PwrAgnt",
+          description: "Detach this chat from PwrAgent",
         },
       ],
     });
@@ -1807,7 +1807,7 @@ function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | unde
 
 function sanitizeTelegramTopicName(title: string): string {
   const normalized = title.replace(/\s+/g, " ").trim();
-  return Array.from(normalized || "PwrAgnt thread").slice(0, 128).join("");
+  return Array.from(normalized || "PwrAgent thread").slice(0, 128).join("");
 }
 
 function telegramGroupStreamMinIntervalMs(deliveriesInWindow: number): number {

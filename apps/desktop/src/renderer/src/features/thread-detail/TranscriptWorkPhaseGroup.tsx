@@ -4,7 +4,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadImagePart,
   DesktopApplicationsSnapshot,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptActivity } from "./TranscriptActivity";
 import { TranscriptMessage } from "./TranscriptMessage";

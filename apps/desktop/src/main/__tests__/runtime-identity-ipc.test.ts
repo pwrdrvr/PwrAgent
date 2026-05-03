@@ -28,13 +28,13 @@ describe("runtime identity ipc", () => {
     execFileSyncMock.mockReturnValue("codex/show-runtime-identity\n");
     const { resolveRuntimeIdentity } = await import("../ipc/runtime-identity");
 
-    expect(resolveRuntimeIdentity("/repo/PwrAgnt")).toEqual({
+    expect(resolveRuntimeIdentity("/repo/PwrAgent")).toEqual({
       branch: "codex/show-runtime-identity",
-      cwd: "/repo/PwrAgnt",
+      cwd: "/repo/PwrAgent",
     });
     expect(execFileSyncMock).toHaveBeenCalledWith(
       "git",
-      ["-C", "/repo/PwrAgnt", "branch", "--show-current"],
+      ["-C", "/repo/PwrAgent", "branch", "--show-current"],
       {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
@@ -51,9 +51,9 @@ describe("runtime identity ipc", () => {
       .mockReturnValueOnce("ab12cd3344556677889900aabbccddeeff001122\n");
     const { resolveRuntimeIdentity } = await import("../ipc/runtime-identity");
 
-    expect(resolveRuntimeIdentity("/repo/PwrAgnt")).toEqual({
+    expect(resolveRuntimeIdentity("/repo/PwrAgent")).toEqual({
       commitSha: "ab12cd3344556677889900aabbccddeeff001122",
-      cwd: "/repo/PwrAgnt",
+      cwd: "/repo/PwrAgent",
       detachedHead: true,
     });
   });

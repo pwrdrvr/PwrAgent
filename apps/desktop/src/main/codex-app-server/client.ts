@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   shortenDerivedThreadTitle,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type {
   AppServerNotification,
   AppServerPendingRequestNotification,
@@ -35,7 +35,7 @@ import type {
   BackendModelOption,
   BackendRateLimitSummary,
   LinkedDirectorySummary,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import type {
   ClientRequest as CodexClientRequest,
@@ -44,7 +44,7 @@ import type {
   ReasoningEffort as CodexReasoningEffort,
   ServerRequest as CodexServerRequest,
   ServiceTier as CodexServiceTier,
-} from "@pwragnt/shared/codex-app-server-protocol";
+} from "@pwragent/shared/codex-app-server-protocol";
 import type {
   AskForApproval as CodexAskForApproval,
   ModelListParams as CodexModelListParams,
@@ -59,7 +59,7 @@ import type {
   TurnStartParams as CodexTurnStartParams,
   TurnSteerParams as CodexTurnSteerParams,
   UserInput as CodexUserInput,
-} from "@pwragnt/shared/codex-app-server-protocol/v2";
+} from "@pwragent/shared/codex-app-server-protocol/v2";
 import {
   JsonRpcConnection,
   type JsonRpcId,
@@ -134,7 +134,7 @@ type SkillCatalogEntry = {
 
 type CodexSessionIndexEntry = {
   id: string;
-  source: "pwragnt";
+  source: "pwragent";
   thread_name: string;
   updated_at: string;
 };
@@ -209,7 +209,7 @@ const GENERATED_CODEX_SERVER_REQUEST_METHODS = new Set<CodexServerRequestMethod>
   "applyPatchApproval",
   "execCommandApproval",
 ]);
-const codexClientLog = getMainLogger("pwragnt:codex-client");
+const codexClientLog = getMainLogger("pwragent:codex-client");
 
 function isApprovalLikeMethod(method: string): boolean {
   return method.endsWith("/requestApproval");
@@ -2383,7 +2383,7 @@ function extractThreadIndexEntryFromValue(
 
   return {
     id: threadId,
-    source: "pwragnt",
+    source: "pwragent",
     thread_name: indexName?.trim() || "Untitled thread",
     updated_at: new Date(updatedAt).toISOString(),
   };
@@ -4250,8 +4250,8 @@ export class CodexAppServerClient {
       try {
         const initializeParams: CodexInitializeParams = {
           clientInfo: {
-            name: "pwragnt-desktop",
-            title: "PwrAgnt",
+            name: "pwragent-desktop",
+            title: "PwrAgent",
             version: this.options.clientVersion ?? "0.0.0",
           },
           capabilities: { experimentalApi: false }

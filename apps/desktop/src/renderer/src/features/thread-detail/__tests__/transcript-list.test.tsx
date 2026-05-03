@@ -273,7 +273,7 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "assistant",
-            text: "I updated [AGENTS.md](/repo/PwrAgnt/AGENTS.md:17).",
+            text: "I updated [AGENTS.md](/repo/PwrAgent/AGENTS.md:17).",
           },
         ]}
         loading={false}
@@ -289,7 +289,7 @@ describe("TranscriptList", () => {
       expect(openApplication).toHaveBeenCalledWith({
         applicationId: "zed",
         kind: "editor",
-        targetPath: "/repo/PwrAgnt/AGENTS.md",
+        targetPath: "/repo/PwrAgent/AGENTS.md",
       });
     });
   });
@@ -685,7 +685,7 @@ describe("TranscriptList", () => {
               {
                 id: "detail-1",
                 kind: "command",
-                label: "pnpm --filter @pwragnt/desktop typecheck"
+                label: "pnpm --filter @pwragent/desktop typecheck"
               }
             ],
             turn: activeTurn
@@ -702,13 +702,13 @@ describe("TranscriptList", () => {
           {
             type: "activity",
             id: "activity-2",
-            summary: "pnpm --filter @pwragnt/desktop test",
+            summary: "pnpm --filter @pwragent/desktop test",
             createdAt: 4_000,
             details: [
               {
                 id: "detail-2",
                 kind: "command",
-                label: "pnpm --filter @pwragnt/desktop test:e2e -- directory-launchpad-skills.spec.ts"
+                label: "pnpm --filter @pwragent/desktop test:e2e -- directory-launchpad-skills.spec.ts"
               }
             ],
             turn: activeTurn
@@ -741,7 +741,7 @@ describe("TranscriptList", () => {
     const firstActivityIndex = transcriptText.indexOf("Used 2 tools");
     const changedIndex = transcriptText.indexOf("Changed 1 file");
     const commentaryIndex = transcriptText.indexOf("The focused composer tests are green.");
-    const laterActivityIndex = transcriptText.indexOf("pnpm --filter @pwragnt/desktop test");
+    const laterActivityIndex = transcriptText.indexOf("pnpm --filter @pwragent/desktop test");
 
     expect(firstActivityIndex).toBeGreaterThanOrEqual(0);
     expect(changedIndex).toBeGreaterThan(firstActivityIndex);

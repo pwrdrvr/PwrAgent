@@ -57,7 +57,7 @@ The product is thread-first, so thread identity needs to be user-editable, not o
 
 ## Key Technical Decisions
 
-- Use `thread/name/set` as the single backend protocol method: this matches OpenClaw and the existing agent-core app-server contract, avoiding a PwrAgnt-only backend command.
+- Use `thread/name/set` as the single backend protocol method: this matches OpenClaw and the existing agent-core app-server contract, avoiding a PwrAgent-only backend command.
 - Add a shared desktop `RenameThreadRequest` / `RenameThreadResponse` rather than overloading thread list or archive contracts: rename is a first-class mutation with its own error and optimistic-update lifecycle.
 - Route Codex rename through the same preferred-mode fallback used for Codex archive and turn operations: a thread may be associated with either default or full-access Codex client mode, and rename should not fail just because the first guessed mode is wrong.
 - Let backend notifications and explicit refresh converge state after optimistic UI updates: the renderer can update immediately, but `thread/name/updated` and `getNavigationSnapshot()` remain the source of truth.

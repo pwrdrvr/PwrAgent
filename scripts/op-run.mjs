@@ -2,7 +2,7 @@
 import { execFileSync, spawn } from "node:child_process";
 
 const DEFAULT_VAULT_NAME = "Private";
-const DEFAULT_ITEM_NAME = "PwrAgnt Messaging";
+const DEFAULT_ITEM_NAME = "PwrAgent Messaging";
 
 const SECRET_FIELDS = [
   {
@@ -62,7 +62,7 @@ function loadOpEnv(env = process.env) {
   if (loadedCount === 0) {
     throw new Error(
       [
-        `No PwrAgnt messaging fields were loaded from 1Password item "${itemName}" in vault "${vaultName}".`,
+        `No PwrAgent messaging fields were loaded from 1Password item "${itemName}" in vault "${vaultName}".`,
         `Create that item or set PWRAGNT_OP_VAULT/PWRAGNT_OP_ITEM before running this command.`,
       ].join(" "),
     );

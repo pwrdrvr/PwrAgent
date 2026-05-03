@@ -1,6 +1,6 @@
-import type { DiscordMessagingConfig } from "@pwragnt/messaging-provider-discord";
-import type { TelegramMessagingConfig } from "@pwragnt/messaging-provider-telegram";
-import type { MessagingToolUpdateMode } from "@pwragnt/shared";
+import type { DiscordMessagingConfig } from "@pwragent/messaging-provider-discord";
+import type { TelegramMessagingConfig } from "@pwragent/messaging-provider-telegram";
+import type { MessagingToolUpdateMode } from "@pwragent/shared";
 import type { MessagingAttachmentPolicy } from "./core/messaging-attachment-processor";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
 import {

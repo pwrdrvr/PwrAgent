@@ -25,7 +25,7 @@ the same persisted entry so the assertion surface stays small and deterministic.
 
 ```bash
 PWRAGNT_PROTOCOL_CAPTURE=true \
-PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragnt-protocol-captures \
+PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragent-protocol-captures \
 pnpm dev
 ```
 
@@ -56,14 +56,14 @@ new message for this scenario.
 ## Promotion Commands
 
 ```bash
-pnpm --filter @pwragnt/desktop export:session-capture -- \
-  --capture-root /tmp/pwragnt-protocol-captures \
+pnpm --filter @pwragent/desktop export:session-capture -- \
+  --capture-root /tmp/pwragent-protocol-captures \
   --session codex:019ce224-97ac-7c01-a2ae-55da8b7a4006 \
   --output /tmp/codex-todo-list.raw.capture.jsonl
 ```
 
 ```bash
-pnpm --filter @pwragnt/desktop derive:replay-fixture -- \
+pnpm --filter @pwragent/desktop derive:replay-fixture -- \
   --input /tmp/codex-todo-list.raw.capture.jsonl \
   --output-dir apps/desktop/e2e/fixtures/codex-todo-list \
   --scenario codex-todo-list \

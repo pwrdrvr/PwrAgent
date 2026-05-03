@@ -26,7 +26,7 @@ import type {
   MessagingJsonValue,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
-} from "@pwragnt/messaging-interface";
+} from "@pwragent/messaging-interface";
 import type { DiscordMessagingConfig } from "./discord-config.ts";
 import type {
   DiscordApplicationCommand,
@@ -1575,7 +1575,7 @@ function isDiscordThreadConversation(
 
 function sanitizeDiscordThreadName(title: string): string {
   const normalized = title.replace(/\s+/g, " ").trim();
-  return Array.from(normalized || "PwrAgnt thread").slice(0, 100).join("");
+  return Array.from(normalized || "PwrAgent thread").slice(0, 100).join("");
 }
 
 function discordChannelIsThread(channel: unknown): boolean {

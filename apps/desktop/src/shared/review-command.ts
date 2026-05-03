@@ -1,4 +1,4 @@
-import type { AppServerReviewTarget } from "@pwragnt/shared";
+import type { AppServerReviewTarget } from "@pwragent/shared";
 
 export type ParsedReviewCommand = {
   target: AppServerReviewTarget;

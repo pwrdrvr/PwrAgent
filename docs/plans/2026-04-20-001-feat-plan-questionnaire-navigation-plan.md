@@ -12,7 +12,7 @@ origin: docs/brainstorms/2026-04-19-codex-desktop-protocol-parity-requirements.m
 
 Bring Codex `request_user_input` Plan-mode questionnaires into the desktop thread view as a first-class pending-input surface with Back, Next, and Submit navigation. This is separate from command/file approval prompts: questionnaire requests must never appear as Approve/Decline cards and must respond with the Codex app-server `ToolRequestUserInputResponse` shape.
 
-This plan treats `/Users/huntharo/pwrdrvr/openclaw-codex-app-server` as prior art and this PwrAgnt desktop app as the target. OpenClaw already has useful questionnaire state and response-formatting concepts, but its chat callback queue is platform-specific and should not be copied into the Electron renderer.
+This plan treats `/Users/huntharo/pwrdrvr/openclaw-codex-app-server` as prior art and this PwrAgent desktop app as the target. OpenClaw already has useful questionnaire state and response-formatting concepts, but its chat callback queue is platform-specific and should not be copied into the Electron renderer.
 
 ## Problem Frame
 
@@ -47,7 +47,7 @@ Derived requirements for this feature:
 
 ## Context & Research
 
-### PwrAgnt Surfaces
+### PwrAgent Surfaces
 
 - `packages/shared/src/contracts/app-server.ts` currently has a broad `AppServerPendingRequestNotification` type and a notification union that is approval-oriented in its named variants.
 - `packages/shared/src/contracts/agent.ts` already lets `SubmitServerRequestRequest.response` be any `Record<string, unknown>`, which is broad enough for questionnaire answers.
@@ -81,7 +81,7 @@ No `docs/solutions/` artifacts were present for this topic. Existing plans for p
 
 ### External References
 
-None. The authoritative references are the local Codex protocol definitions, OpenClaw prior art, and PwrAgnt's existing desktop replay harness.
+None. The authoritative references are the local Codex protocol definitions, OpenClaw prior art, and PwrAgent's existing desktop replay harness.
 
 ## Key Technical Decisions
 
@@ -197,7 +197,7 @@ flowchart TB
 - Test: `apps/desktop/src/renderer/src/features/thread-detail/__tests__/questionnaire.test.ts`
 
 **Approach:**
-- Adapt OpenClaw's structured extractor, completion helper, and response formatter to PwrAgnt's shared protocol types.
+- Adapt OpenClaw's structured extractor, completion helper, and response formatter to PwrAgent's shared protocol types.
 - Keep one question id per answer map entry and render selected option labels or free-form text into `answers: string[]`.
 - Provide pure functions such as `createQuestionnaireState`, `answerCurrentQuestion`, `goToNextQuestion`, `goToPreviousQuestion`, `canAdvanceQuestionnaire`, `canSubmitQuestionnaire`, and `buildQuestionnaireResponse`.
 - Normalize recommended options by detecting `(Recommended)` in the label while preserving the original user-facing label.
@@ -355,12 +355,12 @@ flowchart TB
 Targeted commands for the implementation pass:
 
 ```bash
-pnpm --filter @pwragnt/desktop test -- useThreadSessionState
-pnpm --filter @pwragnt/desktop test -- questionnaire
-pnpm --filter @pwragnt/desktop test -- thread-view
-pnpm --filter @pwragnt/desktop test -- transcript-list
-pnpm --filter @pwragnt/desktop test:e2e -- request-user-input
-pnpm --filter @pwragnt/desktop typecheck
+pnpm --filter @pwragent/desktop test -- useThreadSessionState
+pnpm --filter @pwragent/desktop test -- questionnaire
+pnpm --filter @pwragent/desktop test -- thread-view
+pnpm --filter @pwragent/desktop test -- transcript-list
+pnpm --filter @pwragent/desktop test:e2e -- request-user-input
+pnpm --filter @pwragent/desktop typecheck
 ```
 
 Acceptance criteria:

@@ -5,8 +5,8 @@ import type {
   NavigationLaunchpadDefaults,
   ThreadExecutionMode,
   ThreadOverlayState,
-} from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 
 export const CURRENT_OVERLAY_STORE_VERSION = 5;
 

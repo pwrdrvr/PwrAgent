@@ -10,7 +10,7 @@ import {
   resolveCodexCommand,
 } from "../settings/codex-discovery";
 
-const codexTransportLog = getMainLogger("pwragnt:codex-transport");
+const codexTransportLog = getMainLogger("pwragent:codex-transport");
 
 export type StdioJsonRpcTransportOptions = {
   command: string;

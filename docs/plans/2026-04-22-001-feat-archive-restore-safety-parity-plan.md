@@ -11,7 +11,7 @@ deepened: 2026-04-22
 
 ## Overview
 
-Bring PwrAgnt's thread archive behavior closer to Codex's archive/restore model while making archive non-destructive to local filesystem state. The current branch can hide active threads and remove linked worktrees, but it does not move Grok rollout files into an archived collection, does not expose unarchive/restore, and currently couples archive to local cleanup that can delete worktrees and branches.
+Bring PwrAgent's thread archive behavior closer to Codex's archive/restore model while making archive non-destructive to local filesystem state. The current branch can hide active threads and remove linked worktrees, but it does not move Grok rollout files into an archived collection, does not expose unarchive/restore, and currently couples archive to local cleanup that can delete worktrees and branches.
 
 This follow-up plan raises the persistence and safety bar: archived Grok threads should leave the active thread store the way Codex moves rollouts out of active `sessions`, restore should be a first-class backend operation, and archive must not delete or mutate local directories, dirty state, worktrees, or branches. A visible archived-thread restore surface is deferred so the primary sidebar stays focused on active threads.
 
@@ -19,7 +19,7 @@ This follow-up plan raises the persistence and safety bar: archived Grok threads
 
 The first archive implementation intentionally moved quickly: it added `thread/archive` for Codex and Grok, hid archived rows, and cleaned up linked worktrees. That was useful, but it is not Codex-parity safe. Codex's local thread store archives by moving rollout JSONL files from `sessions` to `archived_sessions` and unarchives by moving the same file back into the dated `sessions` tree. Codex archive does not appear to delete worktrees or branches in that path.
 
-PwrAgnt currently archives Grok by writing `archived = true` in `thread.toml` while leaving the thread under the active `threads` tree. Older Grok agent-core versions can therefore still discover and render those archived threads. PwrAgnt also removes worktrees forcefully and deletes branches from the archive path. That behavior is not Codex parity: Codex archive moves thread history and shuts down the active thread, but does not decide that a local worktree or branch is safe to delete.
+PwrAgent currently archives Grok by writing `archived = true` in `thread.toml` while leaving the thread under the active `threads` tree. Older Grok agent-core versions can therefore still discover and render those archived threads. PwrAgent also removes worktrees forcefully and deletes branches from the archive path. That behavior is not Codex parity: Codex archive moves thread history and shuts down the active thread, but does not decide that a local worktree or branch is safe to delete.
 
 ## Requirements Trace
 
@@ -28,7 +28,7 @@ PwrAgnt currently archives Grok by writing `archived = true` in `thread.toml` wh
 - R3. Add Grok `thread/unarchive` parity so archived Grok threads can be restored through the app-server protocol.
 - R4. Preserve desktop restore plumbing for archived threads without exposing an Archived sidebar lens yet; a smaller recent-archived restore surface can be added later.
 - R5. Archive must not delete or mutate local directories, registered worktrees, non-git directories, local branches, dirty tracked changes, staged changes, untracked files, ignored local files, or rollout-adjacent working files.
-- R6. PwrAgnt must not infer local branch deletion conditions from Codex archive. Codex app-server archive does not delete branches, even when a branch is pushed, merged, PR-backed, or clean.
+- R6. PwrAgent must not infer local branch deletion conditions from Codex archive. Codex app-server archive does not delete branches, even when a branch is pushed, merged, PR-backed, or clean.
 - R7. Capture and expose archive/restore results honestly: thread history moved/restored, local state left untouched, and no implied worktree or branch restoration.
 - R8. Examine Codex ghost commits as a dirty-state recovery reference, but treat them as separate turn-level undo artifacts, not archive-time backups.
 - R9. Keep existing thread identity and directory/worktree anchoring rules from Codex Desktop parity work: archive/restore must not silently re-home a thread to a different directory or worktree.
@@ -38,7 +38,7 @@ PwrAgnt currently archives Grok by writing `archived = true` in `thread.toml` wh
 - In scope: Grok archive storage migration, Grok unarchive, desktop unarchive IPC/preload/client support, removing archive-time local cleanup, and local-state preservation metadata where useful.
 - In scope: Characterization of Codex archive/unarchive and ghost snapshot behavior from `/Users/huntharo/github/codex`.
 - In scope: Tests that prove archive does not call local worktree or branch cleanup and does not mutate non-git directories.
-- Out of scope: Mutating Codex's own rollout files directly from PwrAgnt.
+- Out of scope: Mutating Codex's own rollout files directly from PwrAgent.
 - Out of scope: Reimplementing the full Codex ghost snapshot system unless the implementation confirms it is needed and can be made durable.
 - Out of scope: Deleting or rewriting existing brainstorm/plan documents.
 - Out of scope: Any automatic local worktree or branch deletion as part of archive. A future "cleanup local worktree" action should be explicit and separate from archive.
@@ -77,7 +77,7 @@ PwrAgnt currently archives Grok by writing `archived = true` in `thread.toml` wh
 
 ### External References
 
-- None. The important reference behavior is in the local Codex source checkout and the current PwrAgnt codebase.
+- None. The important reference behavior is in the local Codex source checkout and the current PwrAgent codebase.
 
 ## Key Technical Decisions
 
@@ -85,9 +85,9 @@ PwrAgnt currently archives Grok by writing `archived = true` in `thread.toml` wh
 - Mirror Codex's storage concept for Grok by moving archived Grok thread directories out of the active `threads` tree into an archived collection. Because Grok stores `thread.toml` and `rollout.jsonl` together, moving the whole thread directory is the closest practical equivalent to Codex moving one rollout file.
 - Add `thread/unarchive` as the restore primitive for Grok and desktop. For Codex, call the Codex app-server `thread/unarchive` method when advertised or supported.
 - Extend list-thread plumbing intentionally for archived views instead of overloading active Recents. Restore needs a way to fetch archived rows, and active navigation should remain active-only by default.
-- Separate "restore thread" from "restore worktree." Codex unarchive restores thread history to the active collection; it does not recreate deleted worktrees. Because archive must leave local directories untouched, PwrAgnt should avoid any copy that implies workspace files were backed up or restored by archive.
+- Separate "restore thread" from "restore worktree." Codex unarchive restores thread history to the active collection; it does not recreate deleted worktrees. Because archive must leave local directories untouched, PwrAgent should avoid any copy that implies workspace files were backed up or restored by archive.
 - Remove archive-time worktree cleanup. Archive should not call `cleanupThreadWorktrees`, `git worktree remove`, `git branch -d`, or `git branch -D`.
-- Remove archive-time branch deletion. Codex does not define safe branch deletion conditions as part of archive, so PwrAgnt should not attempt to infer them from push/remote/PR/merge state in the archive flow.
+- Remove archive-time branch deletion. Codex does not define safe branch deletion conditions as part of archive, so PwrAgent should not attempt to infer them from push/remote/PR/merge state in the archive flow.
 - Treat Codex ghost commits as a design input for future undo or explicit cleanup, not a direct dependency of archive. Detached ghost commits may exist in rollout history from previous turns and should move with archived thread history, but archive should not create a new ghost snapshot or depend on one for safety.
 - Keep local preservation visible enough for tests and logs: archive succeeds or fails based on thread history movement, and local filesystem state is left untouched.
 
@@ -96,11 +96,11 @@ PwrAgnt currently archives Grok by writing `archived = true` in `thread.toml` wh
 ### Resolved During Planning
 
 - Does Codex gzip or compress archived rollouts? No. Codex moves JSONL rollout files into `archived_sessions`.
-- Does Codex archive delete local branches or worktrees? No. The app-server archive path and local thread-store archive path contain no worktree or branch deletion. Worktree/branch cleanup is PwrAgnt-specific and should be removed from archive.
+- Does Codex archive delete local branches or worktrees? No. The app-server archive path and local thread-store archive path contain no worktree or branch deletion. Worktree/branch cleanup is PwrAgent-specific and should be removed from archive.
 - What does Codex do with dirty non-committed, non-ignored tree state during archive? Nothing. Archive does not touch the local worktree, so dirty state remains where it was.
 - When does Codex app-server decide it can delete a local branch during archive? It does not make that decision in the archive path. No PR, remote, pushed, merged, branch-tip, or clean-tree condition is used for local branch deletion as part of archive.
 - Does Codex archive have special non-git directory protections? Archive does not need them because it does not run Git cleanup or filesystem deletion against the thread CWD.
-- Should PwrAgnt delete local worktrees or branches on archive? No. Archive should leave local state untouched in all cases.
+- Should PwrAgent delete local worktrees or branches on archive? No. Archive should leave local state untouched in all cases.
 
 ### Deferred to Implementation
 
@@ -156,7 +156,7 @@ flowchart TB
 - Regression guard: no Codex archive client or backend-registry test should assert or require local worktree/branch cleanup for Codex archive.
 
 **Verification:**
-- A reviewer can trace every parity claim in this plan to a Codex source path or a PwrAgnt test.
+- A reviewer can trace every parity claim in this plan to a Codex source path or a PwrAgent test.
 
 - [x] **Unit 2: Move Grok archived threads out of active rollout storage**
 
@@ -381,8 +381,8 @@ flowchart TB
 
 - Prior plan: `docs/plans/2026-04-21-001-feat-thread-archive-ui-worktree-cleanup-plan.md`
 - Protocol parity requirements: `docs/brainstorms/2026-04-19-codex-desktop-protocol-parity-requirements.md`
-- PwrAgnt archive orchestration: `apps/desktop/src/main/app-server/backend-registry.ts`
-- PwrAgnt worktree cleanup: `apps/desktop/src/main/app-server/git-directory-service.ts`
+- PwrAgent archive orchestration: `apps/desktop/src/main/app-server/backend-registry.ts`
+- PwrAgent worktree cleanup: `apps/desktop/src/main/app-server/git-directory-service.ts`
 - Grok rollout persistence: `packages/agent-core/src/persistence/grok-rollout-store.ts`
 - Grok session state archive filter: `packages/agent-core/src/app-server/session-state.ts`
 - Codex app-server archive orchestration: `/Users/huntharo/github/codex/codex-rs/app-server/src/codex_message_processor.rs`

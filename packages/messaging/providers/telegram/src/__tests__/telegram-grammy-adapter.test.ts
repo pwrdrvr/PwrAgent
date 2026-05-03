@@ -20,7 +20,7 @@ describe("adaptGrammyBot", () => {
       commands: [
         {
           command: "resume",
-          description: "Resume or start a PwrAgnt thread",
+          description: "Resume or start a PwrAgent thread",
         },
       ],
     });
@@ -74,7 +74,7 @@ describe("adaptGrammyBot", () => {
     expect(grammyBot.api.setMyCommands).toHaveBeenCalledWith([
       {
         command: "resume",
-        description: "Resume or start a PwrAgnt thread",
+        description: "Resume or start a PwrAgent thread",
       },
     ]);
     expect(grammyBot.api.sendMessage).toHaveBeenCalledWith(

@@ -11,7 +11,7 @@ async function createActiveTurnThinkingFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-active-turn-thinking-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-active-turn-thinking-"));
   const fixturePath = path.join(rootDir, "active-turn-thinking.fixture.json");
 
   await writeFile(
@@ -149,7 +149,7 @@ test("keeps transient turn UI through metadata and premature idle notifications"
     await app.window
       .getByLabel("Reply")
       .fill(
-        "Create /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+        "Create /tmp/pwragent-turn-lifecycle.txt with exactly the text lifecycle second turn."
       );
     await app.window.getByRole("button", { name: "Send" }).click();
 
@@ -205,7 +205,7 @@ test("keeps transient turn UI through metadata and premature idle notifications"
     ).toBeHidden();
     await expect(
       transcript.getByText(
-        "Created /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+        "Created /tmp/pwragent-turn-lifecycle.txt with exactly the text lifecycle second turn."
       )
     ).toBeVisible();
     await previousMessagesToggle.click();
@@ -242,7 +242,7 @@ test("renders the context window moon from token usage notifications", async () 
     await app.window
       .getByLabel("Reply")
       .fill(
-        "Create /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+        "Create /tmp/pwragent-turn-lifecycle.txt with exactly the text lifecycle second turn."
       );
     await app.window.getByRole("button", { name: "Send" }).click();
 

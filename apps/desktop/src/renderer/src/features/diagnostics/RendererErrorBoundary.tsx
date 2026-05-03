@@ -37,7 +37,7 @@ export class RendererErrorBoundary extends Component<
     if (this.state.report) {
       return (
         <main className="renderer-error-boundary" role="alert">
-          <p className="eyebrow">PwrAgnt</p>
+          <p className="eyebrow">PwrAgent</p>
           <h1>Renderer error</h1>
           <p>
             The desktop renderer hit an unrecoverable UI error. Details were logged for

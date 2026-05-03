@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import type { AppServerThreadActivityEntry } from "@pwragnt/shared";
+import type { AppServerThreadActivityEntry } from "@pwragent/shared";
 import { TranscriptCommandOutput } from "./TranscriptCommandOutput";
 import { TranscriptDiff } from "./TranscriptDiff";
 

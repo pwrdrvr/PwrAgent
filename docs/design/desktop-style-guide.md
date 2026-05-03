@@ -1,12 +1,12 @@
-# PwrAgnt Desktop Style Guide
+# PwrAgent Desktop Style Guide
 
-This guide defines the visual language for the PwrAgnt desktop app. It exists to keep the product from drifting into generic Electron-dark-dashboard styling as more UI gets built.
+This guide defines the visual language for the PwrAgent desktop app. It exists to keep the product from drifting into generic Electron-dark-dashboard styling as more UI gets built.
 
 For exact theme tokens, palette usage, and Tangerine Terminal visual rules, use [docs/UI-THEME.md](../UI-THEME.md).
 
 ## Product Tone
 
-PwrAgnt should feel like a serious operator tool:
+PwrAgent should feel like a serious operator tool:
 
 - dense enough for real work
 - calm enough to keep long sessions readable
@@ -292,7 +292,7 @@ Avoid:
 
 ## Copy Rules
 
-PwrAgnt UI copy should sound like product UI, not demo narration.
+PwrAgent UI copy should sound like product UI, not demo narration.
 
 Good:
 

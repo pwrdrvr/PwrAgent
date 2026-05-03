@@ -2,13 +2,13 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AppServerThreadSummary } from "@pwragnt/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared";
 import { OverlayStore } from "../persistence/overlay-store";
 
 const tempDirs: string[] = [];
 
 async function createStore(): Promise<OverlayStore> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-refresh-reconcile-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-refresh-reconcile-"));
   tempDirs.push(tempDir);
   return new OverlayStore(path.join(tempDir, "overlay-state.json"));
 }
@@ -139,11 +139,11 @@ describe("refresh reconciliation", () => {
       threadId: "thread-1",
       gitBranch: "feat/thread-workspace-handoff-plan",
       directory: {
-        id: "pwragnt-handoff:codex:thread-1",
+        id: "pwragent-handoff:codex:thread-1",
         kind: "worktree",
-        label: "PwrAgnt",
+        label: "PwrAgent",
         path: "/repo",
-        worktreePath: "/repo/.worktrees/pwragnt-feature",
+        worktreePath: "/repo/.worktrees/pwragent-feature",
       },
     });
 
@@ -171,11 +171,11 @@ describe("refresh reconciliation", () => {
       backend: "codex",
       threadId: "thread-1",
       directory: {
-        id: "pwragnt-handoff:codex:thread-1",
+        id: "pwragent-handoff:codex:thread-1",
         kind: "worktree",
-        label: "PwrAgnt",
+        label: "PwrAgent",
         path: "/repo",
-        worktreePath: "/repo/.worktrees/pwragnt-feature",
+        worktreePath: "/repo/.worktrees/pwragent-feature",
       },
     });
     await store.setThreadObservedBranch({
@@ -208,11 +208,11 @@ describe("refresh reconciliation", () => {
       backend: "codex",
       threadId: "thread-1",
       directory: {
-        id: "pwragnt-handoff:codex:thread-1",
+        id: "pwragent-handoff:codex:thread-1",
         kind: "worktree",
-        label: "PwrAgnt",
+        label: "PwrAgent",
         path: "/repo",
-        worktreePath: "/repo/.worktrees/pwragnt-feature",
+        worktreePath: "/repo/.worktrees/pwragent-feature",
       },
     });
     await store.setThreadObservedBranch({

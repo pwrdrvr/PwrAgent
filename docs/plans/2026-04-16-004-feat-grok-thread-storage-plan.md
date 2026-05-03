@@ -16,13 +16,13 @@ Add durable Grok thread storage so Grok-backed threads survive desktop app resta
 
 The current Grok app-server path is effectively stateless across process restarts:
 
-- [`apps/desktop/src/main/grok-app-server/client.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/apps/desktop/src/main/grok-app-server/client.ts) creates an in-process `CodexAppServer`
-- [`packages/agent-core/src/app-server/codex-app-server.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/app-server/codex-app-server.ts) owns an in-memory `AppServerSessionState`
-- [`packages/agent-core/src/app-server/session-state.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/app-server/session-state.ts) stores threads, messages, replay items, previous response ids, and active runs only in maps
+- [`apps/desktop/src/main/grok-app-server/client.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/apps/desktop/src/main/grok-app-server/client.ts) creates an in-process `CodexAppServer`
+- [`packages/agent-core/src/app-server/codex-app-server.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/app-server/codex-app-server.ts) owns an in-memory `AppServerSessionState`
+- [`packages/agent-core/src/app-server/session-state.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/app-server/session-state.ts) stores threads, messages, replay items, previous response ids, and active runs only in maps
 
-That is why restarting the desktop app drops every Grok thread. The app already persists navigation overlay state through [`packages/agent-core/src/persistence/overlay-store.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/persistence/overlay-store.ts), but the server-side thread data the desktop actually needs to render and resume Grok threads is not durable.
+That is why restarting the desktop app drops every Grok thread. The app already persists navigation overlay state through [`packages/agent-core/src/persistence/overlay-store.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/persistence/overlay-store.ts), but the server-side thread data the desktop actually needs to render and resume Grok threads is not durable.
 
-The current config story is also awkward. Runtime code imports [`packages/agent-core/src/testing/load-local-env.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/testing/load-local-env.ts), which loads `XAI_API_KEY`, `XAI_BASE_URL`, and `GROK_MODEL` from `~/.config/grok-app-server/config.env` or legacy `.env` files. That helper works, but it couples production startup to a testing-oriented env parser and gives us no clean place to put storage settings.
+The current config story is also awkward. Runtime code imports [`packages/agent-core/src/testing/load-local-env.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/testing/load-local-env.ts), which loads `XAI_API_KEY`, `XAI_BASE_URL`, and `GROK_MODEL` from `~/.config/grok-app-server/config.env` or legacy `.env` files. That helper works, but it couples production startup to a testing-oriented env parser and gives us no clean place to put storage settings.
 
 The earlier draft of this plan leaned toward SQLite as the canonical runtime store. That is operationally tidy, but it fights the way this product is likely to be debugged and inspected. For Grok threads, plain text matters:
 
@@ -67,12 +67,12 @@ This revision therefore fixes both issues together:
 
 ### Relevant Code and Patterns
 
-- [`packages/agent-core/src/app-server/session-state.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/app-server/session-state.ts) is the direct source of the restart bug. It owns the thread registry, transcript messages, replay items, previous response ids, and run map entirely in memory.
-- [`packages/agent-core/src/app-server/codex-app-server.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/app-server/codex-app-server.ts) creates `AppServerSessionState` internally, so persistence has to be wired through the server constructor rather than bolted on in the desktop shell.
-- [`packages/agent-core/src/app-server/turn-runner.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/app-server/turn-runner.ts), [`packages/agent-core/src/app-server/compaction-runner.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/app-server/compaction-runner.ts), and [`packages/agent-core/src/app-server/review-runner.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/app-server/review-runner.ts) already funnel all durable thread mutations through `AppServerSessionState`. That makes a write-through persistence layer feasible without rewriting the runners.
-- [`apps/desktop/src/main/grok-app-server/client.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/apps/desktop/src/main/grok-app-server/client.ts) currently loads env defaults and instantiates `CodexAppServer` directly. That is the right integration point for config loading and storage-path wiring.
-- [`packages/agent-core/src/persistence/overlay-store.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/persistence/overlay-store.ts) shows the existing local persistence style in this repo: simple durable files, explicit migrations, and atomic writes for small metadata payloads.
-- [`docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md) explicitly left durable cross-process thread persistence out of scope. This plan is the follow-on that closes that gap.
+- [`packages/agent-core/src/app-server/session-state.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/app-server/session-state.ts) is the direct source of the restart bug. It owns the thread registry, transcript messages, replay items, previous response ids, and run map entirely in memory.
+- [`packages/agent-core/src/app-server/codex-app-server.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/app-server/codex-app-server.ts) creates `AppServerSessionState` internally, so persistence has to be wired through the server constructor rather than bolted on in the desktop shell.
+- [`packages/agent-core/src/app-server/turn-runner.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/app-server/turn-runner.ts), [`packages/agent-core/src/app-server/compaction-runner.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/app-server/compaction-runner.ts), and [`packages/agent-core/src/app-server/review-runner.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/app-server/review-runner.ts) already funnel all durable thread mutations through `AppServerSessionState`. That makes a write-through persistence layer feasible without rewriting the runners.
+- [`apps/desktop/src/main/grok-app-server/client.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/apps/desktop/src/main/grok-app-server/client.ts) currently loads env defaults and instantiates `CodexAppServer` directly. That is the right integration point for config loading and storage-path wiring.
+- [`packages/agent-core/src/persistence/overlay-store.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/persistence/overlay-store.ts) shows the existing local persistence style in this repo: simple durable files, explicit migrations, and atomic writes for small metadata payloads.
+- [`docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md) explicitly left durable cross-process thread persistence out of scope. This plan is the follow-on that closes that gap.
 
 ### Comparison: `codex`
 
@@ -105,7 +105,7 @@ Relevant references:
 - `/Users/huntharo/github/grok-cli/src/storage/sessions.ts`
 - `/Users/huntharo/github/grok-cli/src/storage/transcript.ts`
 
-`grok-cli` is still useful as a schema-design reference, especially for what data should be persisted. But for PwrAgnt, its SQLite-first storage shape is a worse fit than Codex's text-first artifacts because the desktop app and this repo benefit more from inspectable files than from database-only storage.
+`grok-cli` is still useful as a schema-design reference, especially for what data should be persisted. But for PwrAgent, its SQLite-first storage shape is a worse fit than Codex's text-first artifacts because the desktop app and this repo benefit more from inspectable files than from database-only storage.
 
 ### Institutional Learnings
 
@@ -145,8 +145,8 @@ Relevant references:
 
 - Should thread data live in the existing config directory? No. Keep config and runtime state separate even if both are under the Grok app-server namespace.
 - Should the new config remain env-shaped? No. Use TOML for the config file and keep env vars as overrides.
-- Should PwrAgnt use XDG paths? Yes. Use XDG config and state locations with the standard `~/.config` and `~/.local/state` fallbacks.
-- Should PwrAgnt copy Codex's JSONL rollout idea? Yes, at the level of canonical text-first thread artifacts, but not the full Codex rollout-plus-state-db architecture.
+- Should PwrAgent use XDG paths? Yes. Use XDG config and state locations with the standard `~/.config` and `~/.local/state` fallbacks.
+- Should PwrAgent copy Codex's JSONL rollout idea? Yes, at the level of canonical text-first thread artifacts, but not the full Codex rollout-plus-state-db architecture.
 - Should SQLite be the source of truth? No. If SQLite appears later, it should be a derived index, not the canonical history store.
 - Should the first persistence pass try to recover in-flight runs? No. Persist completed thread history and allow new turns after restart; do not promise crash-exact active turn recovery.
 
@@ -244,7 +244,7 @@ The persistence adapter should hydrate the in-memory session state at boot and t
 - Keep the current `config.env` or `.env` loading path as a compatibility fallback during migration rather than breaking existing users immediately.
 
 **Patterns to follow:**
-- [`packages/agent-core/src/testing/load-local-env.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/testing/load-local-env.ts)
+- [`packages/agent-core/src/testing/load-local-env.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/testing/load-local-env.ts)
 - `/Users/huntharo/github/codex/codex-rs/config/src/types.rs`
 
 **Test scenarios:**
@@ -285,7 +285,7 @@ The persistence adapter should hydrate the in-memory session state at boot and t
 **Execution note:** Implement new store behavior test-first because this unit changes persistent state and restart semantics.
 
 **Patterns to follow:**
-- [`packages/agent-core/src/persistence/overlay-store.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/persistence/overlay-store.ts)
+- [`packages/agent-core/src/persistence/overlay-store.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/persistence/overlay-store.ts)
 - `/Users/huntharo/github/codex/codex-rs/rollout/src/list.rs`
 
 **Test scenarios:**
@@ -355,8 +355,8 @@ The persistence adapter should hydrate the in-memory session state at boot and t
 - Optionally layer the derived index in for listing if Unit 3 exists, but keep file-based hydration as the fallback path.
 
 **Patterns to follow:**
-- [`packages/agent-core/src/app-server/codex-app-server.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/app-server/codex-app-server.ts)
-- [`packages/agent-core/src/app-server/turn-runner.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/app-server/turn-runner.ts)
+- [`packages/agent-core/src/app-server/codex-app-server.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/app-server/codex-app-server.ts)
+- [`packages/agent-core/src/app-server/turn-runner.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/app-server/turn-runner.ts)
 
 **Test scenarios:**
 - Happy path: a server instance creates a thread, records a completed turn, shuts down, and a new server instance on the same state root returns the same thread from `thread/list`.
@@ -389,8 +389,8 @@ The persistence adapter should hydrate the in-memory session state at boot and t
 - Add a desktop-level restart-style test that creates one Grok client, writes thread state, disposes it, then recreates the client against the same state root and verifies the thread is still present.
 
 **Patterns to follow:**
-- [`apps/desktop/src/main/grok-app-server/client.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/apps/desktop/src/main/grok-app-server/client.ts)
-- [`apps/desktop/src/main/app-server/backend-registry.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/apps/desktop/src/main/app-server/backend-registry.ts)
+- [`apps/desktop/src/main/grok-app-server/client.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/apps/desktop/src/main/grok-app-server/client.ts)
+- [`apps/desktop/src/main/app-server/backend-registry.ts`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/apps/desktop/src/main/app-server/backend-registry.ts)
 
 **Test scenarios:**
 - Happy path: a thread created through `GrokAppServerClient` survives client teardown and re-creation.
@@ -421,7 +421,7 @@ The persistence adapter should hydrate the in-memory session state at boot and t
 - Document that rollout files are canonical and any SQLite index is rebuildable.
 
 **Patterns to follow:**
-- Existing plan-document style in [`docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md`](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md)
+- Existing plan-document style in [`docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md`](/Users/huntharo/.codex/worktrees/4978/PwrAgent/docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md)
 
 **Test scenarios:**
 - Test expectation: none -- documentation-only unit.
@@ -458,12 +458,12 @@ The persistence adapter should hydrate the in-memory session state at boot and t
 
 ## Sources & References
 
-- **Origin document:** [docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md)
-- Related code: [apps/desktop/src/main/grok-app-server/client.ts](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/apps/desktop/src/main/grok-app-server/client.ts)
-- Related code: [packages/agent-core/src/app-server/codex-app-server.ts](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/app-server/codex-app-server.ts)
-- Related code: [packages/agent-core/src/app-server/session-state.ts](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/app-server/session-state.ts)
-- Related code: [packages/agent-core/src/persistence/overlay-store.ts](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/packages/agent-core/src/persistence/overlay-store.ts)
-- Related plan: [docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md](/Users/huntharo/.codex/worktrees/4978/PwrAgnt/docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md)
+- **Origin document:** [docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md](/Users/huntharo/.codex/worktrees/4978/PwrAgent/docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md)
+- Related code: [apps/desktop/src/main/grok-app-server/client.ts](/Users/huntharo/.codex/worktrees/4978/PwrAgent/apps/desktop/src/main/grok-app-server/client.ts)
+- Related code: [packages/agent-core/src/app-server/codex-app-server.ts](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/app-server/codex-app-server.ts)
+- Related code: [packages/agent-core/src/app-server/session-state.ts](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/app-server/session-state.ts)
+- Related code: [packages/agent-core/src/persistence/overlay-store.ts](/Users/huntharo/.codex/worktrees/4978/PwrAgent/packages/agent-core/src/persistence/overlay-store.ts)
+- Related plan: [docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md](/Users/huntharo/.codex/worktrees/4978/PwrAgent/docs/plans/2026-04-16-002-feat-app-server-protocol-compatibility-plan.md)
 - Comparison repo: `/Users/huntharo/github/codex/codex-rs/config/src/types.rs`
 - Comparison repo: `/Users/huntharo/github/codex/codex-rs/rollout/src/list.rs`
 - Comparison repo: `/Users/huntharo/github/codex/codex-rs/state/src/runtime.rs`

@@ -6,7 +6,7 @@ import type {
   StartReviewRequest,
   StartTurnRequest,
   StartTurnResponse,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { Composer } from "../Composer";
@@ -211,8 +211,8 @@ describe("Composer", () => {
             {
               id: "directory-1",
               kind: "local",
-              label: "PwrAgnt",
-              path: "/repo/PwrAgnt",
+              label: "PwrAgent",
+              path: "/repo/PwrAgent",
             },
           ],
           inbox: { inInbox: false },
@@ -225,7 +225,7 @@ describe("Composer", () => {
       expect(openApplication).toHaveBeenCalledWith({
         applicationId: "vscode",
         kind: "editor",
-        targetPath: "/repo/PwrAgnt",
+        targetPath: "/repo/PwrAgent",
       });
     });
 
@@ -234,7 +234,7 @@ describe("Composer", () => {
       expect(openApplication).toHaveBeenCalledWith({
         applicationId: "ghostty",
         kind: "terminal",
-        targetPath: "/repo/PwrAgnt",
+        targetPath: "/repo/PwrAgent",
       });
     });
   });
@@ -1587,10 +1587,10 @@ describe("Composer", () => {
         }}
         disabled={false}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
           kind: "directory",
-          label: "PwrAgnt",
-          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -1614,8 +1614,8 @@ describe("Composer", () => {
           linkedDirectories: [
             {
               id: "dir-1",
-              label: "PwrAgnt",
-              path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
               kind: "local",
             },
           ],
@@ -1648,8 +1648,8 @@ describe("Composer", () => {
       expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
         direction: "local-to-worktree",
         strategy: "detached-changes",
-        repositoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
-        sourcePath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        repositoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+        sourcePath: "/Users/huntharo/pwrdrvr/PwrAgent",
         sourceBranch: "feat/thread-workspace-handoff-plan",
       });
     });
@@ -1671,7 +1671,7 @@ describe("Composer", () => {
         directory={{
           key: "directory:/repo",
           kind: "directory",
-          label: "PwrAgnt",
+          label: "PwrAgent",
           path: "/repo",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
@@ -1695,7 +1695,7 @@ describe("Composer", () => {
           linkedDirectories: [
             {
               id: "dir-1",
-              label: "PwrAgnt",
+              label: "PwrAgent",
               path: "/repo",
               kind: "local",
             },
@@ -1760,10 +1760,10 @@ describe("Composer", () => {
           },
         ]}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
           kind: "directory",
-          label: "PwrAgnt",
-          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -1773,10 +1773,10 @@ describe("Composer", () => {
           },
         }}
         launchpad={{
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
           directoryKind: "directory",
-          directoryLabel: "PwrAgnt",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -1801,7 +1801,7 @@ describe("Composer", () => {
 
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
-        "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+        "directory:/Users/huntharo/pwrdrvr/PwrAgent",
         expect.objectContaining({ workMode: "worktree" }),
         { stickySettingsChanged: true }
       );
@@ -1813,10 +1813,10 @@ describe("Composer", () => {
       <Composer
         backends={[backendSummary("codex")]}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
           kind: "directory",
-          label: "PwrAgnt",
-          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -1831,10 +1831,10 @@ describe("Composer", () => {
           },
         }}
         launchpad={{
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
           directoryKind: "directory",
-          directoryLabel: "PwrAgnt",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -1883,7 +1883,7 @@ describe("Composer", () => {
         directory={{
           key: "directory:/repo",
           kind: "directory",
-          label: "PwrAgnt",
+          label: "PwrAgent",
           path: "/repo",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
@@ -1905,9 +1905,9 @@ describe("Composer", () => {
           linkedDirectories: [
             {
               id: "dir-1",
-              label: "PwrAgnt",
+              label: "PwrAgent",
               path: "/repo",
-              worktreePath: "/repo/.worktrees/pwragnt-feature",
+              worktreePath: "/repo/.worktrees/pwragent-feature",
               kind: "worktree",
             },
           ],
@@ -1921,7 +1921,7 @@ describe("Composer", () => {
       expect(openApplication).toHaveBeenLastCalledWith({
         applicationId: "vscode",
         kind: "editor",
-        targetPath: "/repo/.worktrees/pwragnt-feature",
+        targetPath: "/repo/.worktrees/pwragent-feature",
       });
     });
 
@@ -1936,7 +1936,7 @@ describe("Composer", () => {
       expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
         direction: "worktree-to-local",
         repositoryPath: "/repo",
-        sourcePath: "/repo/.worktrees/pwragnt-feature",
+        sourcePath: "/repo/.worktrees/pwragent-feature",
         sourceBranch: "HEAD",
       });
     });
@@ -1963,7 +1963,7 @@ describe("Composer", () => {
         directory={{
           key: "directory:/repo",
           kind: "directory",
-          label: "PwrAgnt",
+          label: "PwrAgent",
           path: "/repo",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
@@ -1980,7 +1980,7 @@ describe("Composer", () => {
           linkedDirectories: [
             {
               id: "dir-1",
-              label: "PwrAgnt",
+              label: "PwrAgent",
               path: "/repo",
               kind: "local",
             },

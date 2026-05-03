@@ -20,7 +20,7 @@ The control should show only the current workspace value first, then a separator
 | Local checkout | `Local (<branch>)` when branch is known, otherwise `Local` | `Handoff to New Worktree` |
 | Worktree | `Worktree` | `Handoff to Local` |
 
-Handoff is a real Git state transition. The implementation should treat it as a main-process transaction: capture dirty non-ignored source changes in a named stash when needed, move the branch to the target checkout, apply the source stash on the target, update PwrAgnt-owned thread metadata, and report the final workspace clearly.
+Handoff is a real Git state transition. The implementation should treat it as a main-process transaction: capture dirty non-ignored source changes in a named stash when needed, move the branch to the target checkout, apply the source stash on the target, update PwrAgent-owned thread metadata, and report the final workspace clearly.
 
 ## Problem Frame
 
@@ -48,10 +48,10 @@ The requested product behavior is more direct:
 ## Scope Boundaries
 
 - In scope: existing desktop threads backed by a Git local checkout or Git worktree.
-- In scope: Codex and Grok threads as represented through PwrAgnt shared contracts and overlay metadata.
+- In scope: Codex and Grok threads as represented through PwrAgent shared contracts and overlay metadata.
 - In scope: tracked changes, staged changes, and non-ignored untracked files through `git stash --include-untracked` semantics.
 - Out of scope: ignored files such as `node_modules`; they are not stashed and should be called out in completion/error copy when relevant.
-- Out of scope: non-Git directories and PwrAgnt scratch workspaces without enough Git metadata to move branches safely.
+- Out of scope: non-Git directories and PwrAgent scratch workspaces without enough Git metadata to move branches safely.
 - Out of scope: branch deletion, branch rename, or PR retargeting.
 - Out of scope: mutating Codex SQLite, rollout files, or private Codex thread indexes.
 
@@ -92,7 +92,7 @@ The requested product behavior is more direct:
 - Split handoff into an explicit preflight phase and a mutation phase. Preflight should resolve repository root, primary checkout, registered worktrees, branch occupancy, branch choices, default-branch fallback, source dirtiness, destination dirtiness, and target path availability before creating any stash or changing checkout state.
 - Treat destination checkout dirtiness conservatively. For local-to-worktree the target is newly created and should be clean. For worktree-to-local, if the local checkout has dirty non-ignored changes, create a separate named local-protection stash before switching branches; do not auto-apply that protection stash onto the moved branch because it belongs to the branch local was leaving.
 - Add explicit handoff contracts instead of overloading launchpad materialization or worktree archive/restore contracts. Handoff has different preconditions, progress, and errors.
-- Update PwrAgnt overlay metadata after Git succeeds. Backend-owned thread identity stays the same; PwrAgnt's navigation overlay records the new linked directory relationship so the UI reflects Local or Worktree without mutating Codex private state.
+- Update PwrAgent overlay metadata after Git succeeds. Backend-owned thread identity stays the same; PwrAgent's navigation overlay records the new linked directory relationship so the UI reflects Local or Worktree without mutating Codex private state.
 - Keep worktree-to-local archive cleanup internal to the successful handoff flow. If branch movement or stash application fails, do not archive/remove the source worktree.
 - Use a custom menu/popover for the workspace control. Native selects cannot reliably render the requested separator/action structure and conflict with the desktop UI guidance against browser-default controls.
 
@@ -102,7 +102,7 @@ The requested product behavior is more direct:
 
 - Should dirty source changes block the initial version? No. Preserve tracked, staged, and non-ignored untracked changes with a named stash and apply it in the target checkout.
 - Should ignored files be preserved? No. Git stash with non-ignored untracked files does not preserve ignored files, and this feature should not add filesystem backup semantics.
-- Should handoff mutate Codex private files? No. Use PwrAgnt overlay metadata for desktop navigation and supported backend contracts for thread identity.
+- Should handoff mutate Codex private files? No. Use PwrAgent overlay metadata for desktop navigation and supported backend contracts for thread identity.
 - Should worktree archive remain available independently? Yes. Handoff can reuse the service internally, but archive/restore remains separate user-facing lifecycle behavior.
 - Should Local-to-Worktree use the launchpad detached-worktree pattern? No. Existing thread handoff is branch-moving behavior, not detached scratch creation; the target worktree should check out the moved branch so subsequent work stays on that branch.
 
@@ -172,7 +172,7 @@ flowchart TB
 - Include request fields for backend, thread id, repository path, source worktree/local path, source branch, selected local-leave branch for local-to-worktree, and optional user confirmation flags for dirty-workspace handling.
 - Include response fields for final work mode, final linked directory summary, branch, target path, created worktree path when applicable, archived source worktree snapshot when applicable, stash outcomes, protection-stash outcomes, and warnings.
 - Add overlay-store functionality to replace the effective active linked directory for a thread while preserving unrelated extra linked directories and worktree snapshots.
-- Keep metadata additive and PwrAgnt-owned; do not remove backend-provided historical information unless the overlay helper owns that exact relationship.
+- Keep metadata additive and PwrAgent-owned; do not remove backend-provided historical information unless the overlay helper owns that exact relationship.
 
 **Patterns to follow:**
 - `packages/shared/src/contracts/normalized-app-server.ts`
@@ -393,7 +393,7 @@ flowchart TB
 | Git branch occupancy rules block checkout in the target. | Detach or switch the source checkout before checking out the branch in the target; detect third-worktree occupancy before mutating. |
 | A stash is dropped before the target state is proven. | Use apply-then-verify-then-drop semantics; never use pop for handoff stashes. |
 | Local dirty changes get incorrectly applied to the moved branch. | Create a separate local-protection stash for destination local dirtiness and do not auto-apply it onto the incoming branch. |
-| Overlay metadata diverges from backend-reported linked directories. | Store handoff metadata in PwrAgnt overlay only after Git success and materialize it through the existing navigation snapshot merge path. |
+| Overlay metadata diverges from backend-reported linked directories. | Store handoff metadata in PwrAgent overlay only after Git success and materialize it through the existing navigation snapshot merge path. |
 | Native select cannot display the requested separator/action menu. | Use a custom menu/popover control for existing threads while leaving launchpad select behavior for this pass unless the implementation naturally extracts a shared control. |
 | Worktree-to-local archive accidentally removes the primary checkout. | Reuse or extend `WorktreeArchiveService` guards that refuse to archive primary checkouts. |
 

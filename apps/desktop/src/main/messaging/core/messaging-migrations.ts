@@ -4,7 +4,7 @@ import type {
   MessagingCallbackHandleRecord,
   MessagingDeliveryResult,
   MessagingPendingIntentRecord,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export const CURRENT_MESSAGING_STORE_VERSION = 2;
 
