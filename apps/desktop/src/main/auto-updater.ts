@@ -1,5 +1,6 @@
 import { ipcMain } from "electron";
-import { autoUpdater } from "electron-updater";
+import electronUpdater from "electron-updater";
+const { autoUpdater } = electronUpdater;
 import { APP_UPDATE_CHECK_CHANNEL } from "../shared/ipc";
 import type { AppUpdateCheckResult } from "../shared/app-metadata";
 import { getMainLogger } from "./log";
