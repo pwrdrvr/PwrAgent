@@ -67,7 +67,10 @@ mac:
       arch: [arm64]
 
 dmg:
-  background: build/dmg-background.png
+  background: build/dmg-background.tiff
+  window:
+    width: 660
+    height: 400
   iconSize: 80
   contents:
     - x: 180
