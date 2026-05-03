@@ -35,7 +35,13 @@ export default defineConfig(({ command }) => {
         minify: "esbuild",
         sourcemap: false,
         rollupOptions: {
-          external: ["bufferutil", "utf-8-validate", "zlib-sync"]
+          external: [
+            "abort-controller",
+            "bufferutil",
+            "node-fetch",
+            "utf-8-validate",
+            "zlib-sync"
+          ]
         }
       }
     },
