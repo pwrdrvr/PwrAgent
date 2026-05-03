@@ -378,6 +378,61 @@ describe("buildBindingStatusIntent", () => {
     });
   });
 
+  it("paginates handoff branch picker choices", () => {
+    const binding = buildBinding();
+    const context = {
+      ...buildHandoffContext(),
+      leaveLocalBranches: Array.from({ length: 18 }, (_, index) => `branch-${index + 1}`),
+    };
+
+    const firstPage = buildHandoffBranchPickerIntent({
+      id: "handoff-branch-page-1",
+      binding,
+      context,
+      createdAt: 1000,
+    });
+    expect(
+      firstPage.choices.filter((choice) => choice.id === "handoff:select-leave-branch"),
+    ).toHaveLength(8);
+    expect(firstPage.prompt).toContain("Page 1/3.");
+    expect(firstPage.choices).toContainEqual(
+      expect.objectContaining({
+        id: "handoff:branches:next",
+        label: "Next",
+        value: expect.objectContaining({ pageIndex: 1 }),
+      }),
+    );
+    expect(firstPage.choices).not.toContainEqual(
+      expect.objectContaining({ id: "handoff:branches:previous" }),
+    );
+
+    const lastPage = buildHandoffBranchPickerIntent({
+      id: "handoff-branch-page-3",
+      binding,
+      context,
+      createdAt: 1000,
+      pageIndex: 2,
+    });
+    expect(
+      lastPage.choices.filter((choice) => choice.id === "handoff:select-leave-branch"),
+    ).toHaveLength(2);
+    expect(lastPage.prompt).toContain("Page 3/3.");
+    expect(lastPage.choices[0]).toMatchObject({
+      id: "handoff:select-leave-branch",
+      label: "17. branch-17",
+    });
+    expect(lastPage.choices).toContainEqual(
+      expect.objectContaining({
+        id: "handoff:branches:previous",
+        label: "Previous",
+        value: expect.objectContaining({ pageIndex: 1 }),
+      }),
+    );
+    expect(lastPage.choices).not.toContainEqual(
+      expect.objectContaining({ id: "handoff:branches:next" }),
+    );
+  });
+
   it("parses a handoff request only from complete action values", () => {
     expect(
       handoffRequestFromValue({

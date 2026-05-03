@@ -2148,6 +2148,68 @@ describe("MessagingController", () => {
     });
   });
 
+  it("pages large local-to-worktree handoff branch lists from the status menu", async () => {
+    const harness = await createHarness();
+    const navigation = buildLocalHandoffNavigationSnapshot();
+    navigation.directories[0]!.gitStatus = {
+      currentBranch: "feature/handoff",
+      handoffBranches: Array.from({ length: 18 }, (_, index) => `branch-${index + 1}`),
+    };
+    harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:handoff" }),
+    );
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: toWorktree.id,
+        value: toWorktree.value,
+      }),
+    );
+
+    const firstPage = harness.delivered.at(-1);
+    if (!firstPage || !("choices" in firstPage)) {
+      throw new Error("Expected handoff branch picker");
+    }
+    expect(firstPage.prompt).toContain("Page 1/3.");
+    expect(
+      firstPage.choices.filter((choice) => choice.id === "handoff:select-leave-branch"),
+    ).toHaveLength(8);
+    expect(firstPage.choices).toContainEqual(
+      expect.objectContaining({
+        id: "handoff:branches:next",
+        value: expect.objectContaining({ pageIndex: 1 }),
+      }),
+    );
+
+    const nextPage = findChoice(firstPage, "handoff:branches:next");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: nextPage.id,
+        value: nextPage.value,
+      }),
+    );
+
+    const secondPage = harness.delivered.at(-1);
+    if (!secondPage || !("choices" in secondPage)) {
+      throw new Error("Expected second handoff branch picker");
+    }
+    expect(secondPage.prompt).toContain("Page 2/3.");
+    expect(secondPage.choices[0]).toMatchObject({
+      id: "handoff:select-leave-branch",
+      label: "9. branch-9",
+    });
+    expect(secondPage.choices).toContainEqual(
+      expect.objectContaining({
+        id: "handoff:branches:previous",
+        value: expect.objectContaining({ pageIndex: 0 }),
+      }),
+    );
+  });
+
   it("runs a worktree-to-local handoff from the status menu", async () => {
     const harness = await createHarness();
     harness.getNavigationSnapshot.mockResolvedValue(buildWorktreeHandoffNavigationSnapshot());

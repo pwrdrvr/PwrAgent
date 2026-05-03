@@ -1330,6 +1330,17 @@ export class MessagingController {
       await this.presentHandoffBranchPicker(binding, event);
       return;
     }
+    if (
+      actionId === "handoff:branches:next" ||
+      actionId === "handoff:branches:previous"
+    ) {
+      await this.presentHandoffBranchPicker(
+        binding,
+        event,
+        handoffBranchPageIndexFromValue(event.value),
+      );
+      return;
+    }
     if (actionId === "handoff:worktree-to-local") {
       await this.presentHandoffConfirmation(binding, event);
       return;
@@ -1428,6 +1439,7 @@ export class MessagingController {
   private async presentHandoffBranchPicker(
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
+    pageIndex = 0,
   ): Promise<void> {
     const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
     const context = handoffContextForBinding(binding, navigation);
@@ -1447,6 +1459,7 @@ export class MessagingController {
           binding,
           context,
           createdAt: this.now(),
+          pageIndex,
         }),
         audit: this.buildHandoffAudit("handoff.branch_picker", binding, event),
       },
@@ -2698,6 +2711,16 @@ function handoffContextForBinding(
     workingDirectoryPath: localDirectory.path,
     workspaceKind: "local",
   };
+}
+
+function handoffBranchPageIndexFromValue(value: MessagingJsonValue | undefined): number {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return 0;
+  }
+  const pageIndex = value.pageIndex;
+  return typeof pageIndex === "number" && Number.isFinite(pageIndex)
+    ? Math.max(0, Math.trunc(pageIndex))
+    : 0;
 }
 
 function findNavigationDirectory(
