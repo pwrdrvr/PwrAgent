@@ -89,6 +89,7 @@ import {
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   APP_METADATA_READ_CHANNEL,
+  APP_UPDATE_CHECK_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
@@ -119,7 +120,7 @@ import {
   WINDOW_FOCUS_SYNC_CHANNEL,
 } from "../shared/ipc";
 import type { RuntimeIdentity } from "../shared/runtime-identity";
-import type { AppMetadata } from "../shared/app-metadata";
+import type { AppMetadata, AppUpdateCheckResult } from "../shared/app-metadata";
 
 function recordPreloadLog(
   level: "info" | "warn",
@@ -148,6 +149,8 @@ const desktopApi = Object.freeze({
   },
   readAppMetadata: async (): Promise<AppMetadata> =>
     await ipcRenderer.invoke(APP_METADATA_READ_CHANNEL),
+  checkForAppUpdates: async (): Promise<AppUpdateCheckResult> =>
+    await ipcRenderer.invoke(APP_UPDATE_CHECK_CHANNEL),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>

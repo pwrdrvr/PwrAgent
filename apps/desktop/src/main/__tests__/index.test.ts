@@ -10,6 +10,9 @@ const registerApplicationIpcHandlersMock = vi.fn();
 const disposeApplicationIpcHandlersMock = vi.fn();
 const registerAppMetadataIpcHandlersMock = vi.fn();
 const disposeAppMetadataIpcHandlersMock = vi.fn();
+const registerAppUpdateIpcHandlersMock = vi.fn();
+const disposeAppUpdateIpcHandlersMock = vi.fn();
+const initAutoUpdaterMock = vi.fn();
 const registerImageNormalizationIpcHandlersMock = vi.fn();
 const disposeImageNormalizationIpcHandlersMock = vi.fn();
 const registerPreloadLogIpcHandlersMock = vi.fn();
@@ -84,6 +87,12 @@ vi.mock("../ipc/applications", () => ({
 vi.mock("../ipc/app-metadata", () => ({
   registerAppMetadataIpcHandlers: registerAppMetadataIpcHandlersMock,
   disposeAppMetadataIpcHandlers: disposeAppMetadataIpcHandlersMock,
+}));
+
+vi.mock("../auto-updater", () => ({
+  registerAppUpdateIpcHandlers: registerAppUpdateIpcHandlersMock,
+  disposeAppUpdateIpcHandlers: disposeAppUpdateIpcHandlersMock,
+  initAutoUpdater: initAutoUpdaterMock,
 }));
 
 vi.mock("../ipc/image-normalization", () => ({
