@@ -1073,6 +1073,7 @@ async function createControllerHarness(options: {
       getNavigationSnapshot,
       startTurn,
     },
+    inputDebounceMs: 0,
     now: () => 1000,
     store,
   });
