@@ -88,6 +88,10 @@ describe("desktop settings contracts", () => {
         preferredEditorId: { value: "", source: "default" },
         preferredTerminalId: { value: "", source: "default" },
       },
+      worktrees: {
+        storage: { value: "user-home", source: "default" },
+        effectivePath: "/home/example/.pwragnt/worktrees",
+      },
     };
 
     const encoded = JSON.stringify(snapshot);

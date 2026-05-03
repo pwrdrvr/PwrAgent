@@ -4,8 +4,10 @@ import path from "node:path";
 import type {
   DesktopChatReplyComposer,
   DesktopMessagingImageProfile,
+  DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
 } from "@pwragnt/shared";
+import { isDesktopWorktreeStorageLocation } from "@pwragnt/shared";
 import { DESKTOP_CONFIG_PATH_ENV } from "./desktop-settings-env";
 
 type DesktopConfigPathOptions = {
@@ -51,6 +53,9 @@ export type DesktopSettingsConfig = {
       preferredId?: string;
     };
   };
+  worktrees?: {
+    storage?: DesktopWorktreeStorageLocation;
+  };
 };
 
 type TomlScalar = string | number | boolean | string[];
@@ -64,6 +69,10 @@ export function defaultDesktopConfigDir(
     options?.xdgConfigHome?.trim() || env.XDG_CONFIG_HOME?.trim();
 
   return path.join(xdgConfigHome || path.join(homeDir, ".config"), "pwragnt");
+}
+
+export function userHomeWorktreesRoot(homeDir?: string): string {
+  return path.join(homeDir ?? os.homedir(), ".pwragnt", "worktrees");
 }
 
 export function resolveDesktopConfigPath(
@@ -138,6 +147,10 @@ export function mergeDesktopSettingsConfig(
         ...current.applications?.terminal,
         ...patch.applications?.terminal,
       },
+    },
+    worktrees: {
+      ...current.worktrees,
+      ...patch.worktrees,
     },
   });
 }
@@ -295,6 +308,15 @@ export function stringifyDesktopSettingsToml(
     );
   }
 
+  const worktrees = config.worktrees;
+  if (worktrees?.storage !== undefined) {
+    sections.push(
+      ["[worktrees]", `storage = ${formatTomlValue(worktrees.storage)}`].join(
+        "\n",
+      ),
+    );
+  }
+
   return sections.join("\n\n").concat(sections.length ? "\n" : "");
 }
 
@@ -309,6 +331,7 @@ function normalizeDesktopConfig(
   const codex = tables["models.codex"];
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
+  const worktrees = tables["worktrees"];
 
   return pruneEmptyConfig({
     experimental: {
@@ -346,6 +369,9 @@ function normalizeDesktopConfig(
       terminal: {
         preferredId: readString(terminal?.preferred_id),
       },
+    },
+    worktrees: {
+      storage: readWorktreeStorage(worktrees?.storage),
     },
   });
 }
@@ -405,6 +431,11 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     if (terminal && hasDefinedValue(terminal)) {
       pruned.applications.terminal = terminal;
     }
+  }
+
+  const worktrees = config.worktrees;
+  if (worktrees && hasDefinedValue(worktrees)) {
+    pruned.worktrees = worktrees;
   }
 
   return pruned;
@@ -479,6 +510,14 @@ function isDesktopMessagingImageProfile(
   value: string,
 ): value is DesktopMessagingImageProfile {
   return value === "low" || value === "medium" || value === "high" || value === "actual";
+}
+
+function readWorktreeStorage(
+  value: TomlScalar | undefined,
+): DesktopWorktreeStorageLocation | undefined {
+  return typeof value === "string" && isDesktopWorktreeStorageLocation(value)
+    ? value
+    : undefined;
 }
 
 function parseTomlValue(

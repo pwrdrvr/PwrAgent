@@ -1062,7 +1062,12 @@ export class DesktopBackendRegistry {
         connectionObserver: grokObserver,
       });
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
-    this.gitDirectoryService = options?.gitDirectoryService ?? new GitDirectoryService();
+    this.gitDirectoryService =
+      options?.gitDirectoryService ??
+      new GitDirectoryService({
+        resolveWorktreeStorage: () =>
+          getDesktopSettingsService().resolveWorktreeStorage(),
+      });
     this.worktreeArchiveService =
       options?.worktreeArchiveService ?? new WorktreeArchiveService();
     this.gitWorkspaceHandoffService =

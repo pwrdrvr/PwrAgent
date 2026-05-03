@@ -41,17 +41,23 @@ export function formatRuntimePath(cwd: string): string {
   const worktreesIndex = segments.lastIndexOf(".worktrees");
 
   if (worktreesIndex >= 0 && segments[worktreesIndex + 1]) {
-    return `.worktrees/${elideMiddle(segments[worktreesIndex + 1], 30)}`;
+    const hashSegment = segments[worktreesIndex + 1];
+    const projectSegment = segments[worktreesIndex + 2];
+    if (projectSegment && /^[0-9a-z]+(?:-\d+)?$/.test(hashSegment)) {
+      return `${hashSegment}/${projectSegment}`;
+    }
+    return `.worktrees/${elideMiddle(hashSegment, 30)}`;
   }
 
-  const codexWorktreesIndex = segments.lastIndexOf("worktrees");
+  const bareWorktreesIndex = segments.lastIndexOf("worktrees");
   if (
-    codexWorktreesIndex >= 0 &&
-    segments[codexWorktreesIndex - 1] === ".codex" &&
-    segments[codexWorktreesIndex + 1] &&
-    segments[codexWorktreesIndex + 2]
+    bareWorktreesIndex >= 1 &&
+    (segments[bareWorktreesIndex - 1] === ".pwragnt" ||
+      segments[bareWorktreesIndex - 1] === ".codex") &&
+    segments[bareWorktreesIndex + 1] &&
+    segments[bareWorktreesIndex + 2]
   ) {
-    return `${segments[codexWorktreesIndex + 1]}/${segments[codexWorktreesIndex + 2]}`;
+    return `${segments[bareWorktreesIndex + 1]}/${segments[bareWorktreesIndex + 2]}`;
   }
 
   return segments.slice(-2).join("/") || cwd;
