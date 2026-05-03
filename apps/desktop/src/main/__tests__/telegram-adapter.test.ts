@@ -109,6 +109,23 @@ describe("TelegramAdapter", () => {
     expect(callbackData).not.toContain("thread-1");
     expect(secondCallbackData).toMatch(/^tg:/);
     expect(secondCallbackData).not.toBe(callbackData);
+    await expect(
+      harness.store.resolveCallbackHandle({
+        actorId: "42",
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        handle: callbackData ?? "",
+        now: 1000,
+      }),
+    ).resolves.toMatchObject({
+      actionId: "browse:select-thread",
+      browseSessionId: expect.stringMatching(/^browse:/),
+    });
   });
 
   it("signals typing activity without rendering a visible Telegram message", async () => {

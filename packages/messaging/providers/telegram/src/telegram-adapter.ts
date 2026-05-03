@@ -968,6 +968,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         expiresAt: this.now() + 15 * 60 * 1000,
         handle,
         pendingIntentId: intent.id,
+        browseSessionId: browseSessionIdForIntent(intent),
         surface: intent.targetSurface,
         updatedAt: this.now(),
         value: action.value,
@@ -1472,6 +1473,12 @@ function coerceTelegramSentMessage(
 function parseTelegramIdentifier(value: string): number | string {
   const numeric = Number(value);
   return Number.isSafeInteger(numeric) && String(numeric) === value ? numeric : value;
+}
+
+function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | undefined {
+  return intent.kind === "thread_picker" || intent.kind === "project_picker"
+    ? intent.browseSessionId
+    : undefined;
 }
 
 function sanitizeTelegramTopicName(title: string): string {

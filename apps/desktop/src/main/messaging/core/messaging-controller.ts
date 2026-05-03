@@ -8,6 +8,7 @@ import type {
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
   MessagingBindingRecord,
+  MessagingCallbackHandleRecord,
   MessagingBrowseSessionRecord,
   MessagingActiveTurnSummary,
   MessagingChannelKind,
@@ -940,11 +941,7 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent,
     actionId: string,
   ): Promise<void> {
-    const session = await this.options.store.findActiveBrowseSessionForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
+    const session = await this.findBrowseSessionForCallback(event);
     if (!session) {
       await this.deliver(
         buildErrorIntent({
@@ -1104,6 +1101,37 @@ export class MessagingController {
     }
 
     await this.deliverInvalidBrowseSelection(event);
+  }
+
+  private async findBrowseSessionForCallback(
+    event: MessagingInboundCallbackEvent,
+  ): Promise<MessagingBrowseSessionRecord | undefined> {
+    const callbackHandle = await this.resolveCallbackHandleForEvent(event);
+    if (callbackHandle?.browseSessionId) {
+      return await this.options.store.getBrowseSession(callbackHandle.browseSessionId, {
+        now: this.now(),
+      });
+    }
+    if (callbackHandle) {
+      return undefined;
+    }
+
+    return await this.options.store.findActiveBrowseSessionForChannel({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      now: this.now(),
+    });
+  }
+
+  private async resolveCallbackHandleForEvent(
+    event: MessagingInboundCallbackEvent,
+  ): Promise<MessagingCallbackHandleRecord | undefined> {
+    return await this.options.store.resolveCallbackHandle({
+      actorId: event.actor.platformUserId,
+      channel: event.channel,
+      handle: event.interaction.id,
+      now: this.now(),
+    });
   }
 
   private async renderResumeBrowser(

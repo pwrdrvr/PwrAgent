@@ -189,6 +189,7 @@ function buildThreadPickerIntent(params: {
     id: params.id,
     kind: "thread_picker",
     bindingId: params.session.bindingId,
+    browseSessionId: params.session.id,
     createdAt: params.createdAt,
     delivery: {
       mode: params.session.surface ? "update" : "present",
@@ -246,6 +247,7 @@ function buildProjectPickerIntent(params: {
     id: params.id,
     kind: "project_picker",
     bindingId: params.session.bindingId,
+    browseSessionId: params.session.id,
     createdAt: params.createdAt,
     delivery: {
       mode: params.session.surface ? "update" : "present",

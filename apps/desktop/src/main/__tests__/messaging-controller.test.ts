@@ -213,6 +213,63 @@ describe("MessagingController", () => {
     });
   });
 
+  it("updates the clicked resume picker when multiple pickers are active", async () => {
+    const harness = await createHarness();
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    const firstPicker = harness.delivered.at(-1);
+    if (firstPicker?.kind !== "thread_picker" || !firstPicker.browseSessionId) {
+      throw new Error("Expected first resume picker with a browse session id");
+    }
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    const secondPicker = harness.delivered.at(-1);
+    if (secondPicker?.kind !== "thread_picker") {
+      throw new Error("Expected second resume picker");
+    }
+
+    await harness.store.upsertCallbackHandle({
+      id: "callback:first-picker",
+      actionId: "browse:select-thread",
+      allowedActorIds: ["user-1"],
+      browseSessionId: firstPicker.browseSessionId,
+      channel: buildCommandEvent("/resume").channel,
+      createdAt: 1000,
+      updatedAt: 1000,
+      expiresAt: 2000,
+      handle: "tg:first-picker",
+      value: {
+        backend: "codex",
+        threadId: "thread-1",
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        interactionId: "tg:first-picker",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    const confirmation = [...harness.delivered]
+      .reverse()
+      .find((intent) => intent.kind === "confirmation");
+    expect(confirmation).toMatchObject({
+      kind: "confirmation",
+      targetSurface: expect.objectContaining({
+        id: `surface:${firstPicker.id}`,
+      }),
+    });
+    expect(confirmation).not.toMatchObject({
+      targetSurface: expect.objectContaining({
+        id: `surface:${secondPicker.id}`,
+      }),
+    });
+  });
+
   it("maps text fallback replies against pending picker actions", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
@@ -2415,6 +2472,7 @@ function buildToolCompletedEvent(id: string, command: string): AgentEvent {
 
 function buildCallbackEvent(params: {
   actionId: string;
+  interactionId?: string;
   routingState?: MessagingInboundCallbackEvent["routingState"];
   value?: MessagingInboundCallbackEvent["value"];
 }): MessagingInboundCallbackEvent {
@@ -2435,7 +2493,7 @@ function buildCallbackEvent(params: {
     routingState: params.routingState,
     interaction: {
       channel: "telegram",
-      id: params.actionId,
+      id: params.interactionId ?? params.actionId,
     },
     actionId: params.actionId,
     value: params.value,

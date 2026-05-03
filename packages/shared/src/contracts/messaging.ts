@@ -277,6 +277,7 @@ export type MessagingProgressIntent = MessagingBaseSurfaceIntent & {
 
 export type MessagingThreadPickerIntent = MessagingBaseSurfaceIntent & {
   kind: "thread_picker";
+  browseSessionId?: string;
   navigation: Pick<NavigationSnapshot, "backend" | "fetchedAt" | "unchanged">;
   page: MessagingPickerPage<NavigationThreadSummary | AppServerThreadSummary>;
   prompt: string;
@@ -284,6 +285,7 @@ export type MessagingThreadPickerIntent = MessagingBaseSurfaceIntent & {
 
 export type MessagingProjectPickerIntent = MessagingBaseSurfaceIntent & {
   kind: "project_picker";
+  browseSessionId?: string;
   navigation: Pick<NavigationSnapshot, "backend" | "fetchedAt" | "unchanged">;
   page: MessagingPickerPage<NavigationDirectorySummary>;
   prompt: string;
