@@ -71,13 +71,13 @@ dmg:
   window:
     width: 660
     height: 400
-  iconSize: 80
+  iconSize: 100
   contents:
     - x: 180
-      y: 200
+      y: 220
       type: file
     - x: 480
-      y: 200
+      y: 220
       type: link
       path: /Applications
   writeUpdateInfo: false
