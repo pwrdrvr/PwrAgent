@@ -40,7 +40,7 @@ async function createRepo(): Promise<string> {
   await git(repoPath, ["config", "user.email", "test@example.com"]);
   await git(repoPath, ["config", "user.name", "Test User"]);
   await writeFile(path.join(repoPath, "README.md"), "main\n", "utf8");
-  await writeFile(path.join(repoPath, ".gitignore"), "node_modules/\n", "utf8");
+  await writeFile(path.join(repoPath, ".gitignore"), "node_modules/\n.worktrees/\n", "utf8");
   await git(repoPath, ["add", "."]);
   await git(repoPath, ["commit", "-m", "initial"]);
   await git(repoPath, ["switch", "-c", "feature/handoff"]);
@@ -94,6 +94,49 @@ describe("GitWorkspaceHandoffService", () => {
     );
   });
 
+  it("moves dirty local changes to a detached worktree and leaves local on the current branch", async () => {
+    const repoPath = await createRepo();
+    await writeFile(path.join(repoPath, "README.md"), "dirty local\n", "utf8");
+    await writeFile(path.join(repoPath, "notes.txt"), "untracked\n", "utf8");
+    await mkdir(path.join(repoPath, "node_modules"));
+    await writeFile(path.join(repoPath, "node_modules", "ignored.txt"), "ignored\n", "utf8");
+
+    const service = new GitWorkspaceHandoffService();
+    const result = await service.handoff({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      strategy: "detached-changes",
+      repositoryPath: repoPath,
+      sourcePath: repoPath,
+      sourceBranch: "feature/handoff",
+      now: 1500,
+    });
+
+    expect(result.workMode).toBe("worktree");
+    expect(result.strategy).toBe("detached-changes");
+    expect(result.branch).toBeUndefined();
+    expect(result.baseSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(result.linkedDirectory.kind).toBe("worktree");
+    expect(result.sourceStash).toMatchObject({ applied: true, dropped: true });
+    expect(await git(repoPath, ["branch", "--show-current"])).toBe("feature/handoff");
+    expect(await git(result.targetPath, ["branch", "--show-current"])).toBe("");
+    expect(await git(result.targetPath, ["rev-parse", "HEAD"])).toBe(result.baseSha);
+    await expect(readFile(path.join(result.targetPath, "feature.txt"), "utf8")).resolves.toBe(
+      "feature\n",
+    );
+    await expect(readFile(path.join(result.targetPath, "README.md"), "utf8")).resolves.toBe(
+      "dirty local\n",
+    );
+    await expect(readFile(path.join(result.targetPath, "notes.txt"), "utf8")).resolves.toBe(
+      "untracked\n",
+    );
+    expect(await pathExists(path.join(result.targetPath, "node_modules", "ignored.txt"))).toBe(
+      false,
+    );
+    expect(await git(repoPath, ["status", "--porcelain", "--untracked-files=normal"])).toBe("");
+  });
+
   it("moves a dirty worktree branch back to local and archives the old worktree", async () => {
     const repoPath = await createRepo();
     await git(repoPath, ["switch", "main"]);
@@ -129,6 +172,44 @@ describe("GitWorkspaceHandoffService", () => {
     await expect(readFile(path.join(repoPath, "worktree-note.txt"), "utf8")).resolves.toBe(
       "untracked\n",
     );
+  });
+
+  it("moves a detached worktree head back to local without treating stale branch metadata as truth", async () => {
+    const repoPath = await createRepo();
+    await writeFile(path.join(repoPath, "README.md"), "dirty detached\n", "utf8");
+
+    const service = new GitWorkspaceHandoffService();
+    const detachedResult = await service.handoff({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      strategy: "detached-changes",
+      repositoryPath: repoPath,
+      sourcePath: repoPath,
+      sourceBranch: "feature/handoff",
+      now: 2500,
+    });
+
+    const result = await service.handoff({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "worktree-to-local",
+      repositoryPath: repoPath,
+      sourcePath: detachedResult.targetPath,
+      sourceBranch: "main",
+      now: 2600,
+    });
+
+    expect(result.workMode).toBe("local");
+    expect(result.strategy).toBe("detached-changes");
+    expect(result.branch).toBeUndefined();
+    expect(result.baseSha).toBe(detachedResult.baseSha);
+    expect(await git(repoPath, ["branch", "--show-current"])).toBe("");
+    expect(await git(repoPath, ["rev-parse", "HEAD"])).toBe(detachedResult.baseSha);
+    await expect(readFile(path.join(repoPath, "README.md"), "utf8")).resolves.toBe(
+      "dirty detached\n",
+    );
+    expect(await pathExists(detachedResult.targetPath)).toBe(false);
   });
 
   it("protects dirty local changes separately when moving a worktree branch to local", async () => {

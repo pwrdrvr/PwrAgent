@@ -349,6 +349,10 @@ export type ThreadWorkspaceHandoffDirection =
   | "local-to-worktree"
   | "worktree-to-local";
 
+export type ThreadWorkspaceHandoffStrategy =
+  | "move-branch"
+  | "detached-changes";
+
 export type ThreadWorkspaceHandoffStashSummary = {
   ref?: string;
   message: string;
@@ -361,6 +365,7 @@ export type HandoffThreadWorkspaceRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   direction: ThreadWorkspaceHandoffDirection;
+  strategy?: ThreadWorkspaceHandoffStrategy;
   repositoryPath?: string;
   sourcePath?: string;
   sourceBranch?: string;
@@ -371,8 +376,10 @@ export type HandoffThreadWorkspaceResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   direction: ThreadWorkspaceHandoffDirection;
+  strategy?: ThreadWorkspaceHandoffStrategy;
   workMode: "local" | "worktree";
   branch?: string;
+  baseSha?: string;
   repositoryPath: string;
   targetPath: string;
   linkedDirectory: LinkedDirectorySummary;

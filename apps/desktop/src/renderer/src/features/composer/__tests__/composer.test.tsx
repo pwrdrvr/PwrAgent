@@ -1637,17 +1637,20 @@ describe("Composer", () => {
     expect(dialog).toBeInTheDocument();
     expect(dialog.closest(".workspace-handoff-modal")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("feat/thread-workspace-handoff-plan");
-    expect(screen.getByLabelText("Leave Local on")).toHaveValue("main");
-    expect(screen.queryByRole("option", { name: "Detached HEAD" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("radio", { name: /Handoff to Detached HEAD/ })
+    ).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByLabelText("Leave current checkout on")).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Handoff to New Branch/ })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
     await waitFor(() => {
       expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
         direction: "local-to-worktree",
+        strategy: "detached-changes",
         repositoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
         sourcePath: "/Users/huntharo/pwrdrvr/PwrAgnt",
         sourceBranch: "feat/thread-workspace-handoff-plan",
-        leaveLocalBranch: "main",
       });
     });
 
@@ -1655,6 +1658,69 @@ describe("Composer", () => {
 
     await waitFor(() => {
       expect(onSetExecutionMode).toHaveBeenCalledWith("full-access");
+    });
+  });
+
+  it("lets the desktop handoff dialog move the current branch instead", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/repo",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "feature/handoff",
+            defaultBranch: "main",
+            branches: ["feature/handoff", "main", "release"],
+            handoffBranches: ["main", "release"],
+            syncState: "untracked",
+          },
+        }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          gitBranch: "feature/handoff",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgnt",
+              path: "/repo",
+              kind: "local",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
+
+    expect(screen.getByLabelText("Leave current checkout on")).toHaveValue("main");
+    fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "local-to-worktree",
+        strategy: "move-branch",
+        repositoryPath: "/repo",
+        sourcePath: "/repo",
+        sourceBranch: "feature/handoff",
+        leaveLocalBranch: "main",
+      });
     });
   });
 
@@ -1821,6 +1887,10 @@ describe("Composer", () => {
           path: "/repo",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "main",
+            branches: ["main", "feature/handoff"],
+          },
         }}
         onHandoffThreadWorkspace={onHandoffThreadWorkspace}
         skills={[]}
@@ -1830,7 +1900,8 @@ describe("Composer", () => {
           titleSource: "explicit",
           source: "codex",
           executionMode: "default",
-          gitBranch: "feature/handoff",
+          gitBranch: "main",
+          observedGitBranch: "HEAD",
           linkedDirectories: [
             {
               id: "dir-1",
@@ -1856,7 +1927,9 @@ describe("Composer", () => {
 
     fireEvent.click(screen.getByLabelText("Workspace mode"));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
-    expect(screen.getByRole("dialog", { name: "Handoff to Local" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Handoff to Local" });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Detached HEAD to move");
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
     await waitFor(() => {
@@ -1864,8 +1937,7 @@ describe("Composer", () => {
         direction: "worktree-to-local",
         repositoryPath: "/repo",
         sourcePath: "/repo/.worktrees/pwragnt-feature",
-        sourceBranch: "feature/handoff",
-        leaveLocalBranch: undefined,
+        sourceBranch: "HEAD",
       });
     });
 

@@ -1308,17 +1308,18 @@ export class DesktopBackendRegistry {
       sourcePath: request.sourcePath ?? candidate.sourcePath,
       sourceBranch: request.sourceBranch ?? candidate.sourceBranch,
     });
+    const resultBranch = result.strategy === "detached-changes" ? "HEAD" : result.branch;
 
     await this.overlayStore.replaceWorkspaceLinkedDirectory({
       backend: request.backend,
       threadId: request.threadId,
       directory: result.linkedDirectory,
-      gitBranch: result.branch,
+      gitBranch: resultBranch,
     });
     await this.updateThreadGitBranchMetadata({
       backend: request.backend,
       threadId: request.threadId,
-      branch: result.branch,
+      branch: resultBranch,
     });
 
     if (result.archivedSourceWorktree) {
