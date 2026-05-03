@@ -142,9 +142,14 @@ textarea {
   -webkit-app-region: drag;
 }
 
+.sidebar__masthead *,
+.thread-header * {
+  -webkit-app-region: drag;
+}
+
 .sidebar__masthead {
   align-items: center;
-  padding: 10px 0 14px 60px;
+  padding: 10px 0 14px 80px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -159,6 +164,10 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.sidebar__masthead-actions,
+.sidebar__masthead-actions * {
   -webkit-app-region: no-drag;
 }
 
