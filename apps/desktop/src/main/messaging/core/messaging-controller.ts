@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { buildThreadIdentityKey } from "@pwragnt/shared";
 import type {
   AgentEvent,
   AppServerTurnInputItem,
