@@ -5,7 +5,7 @@ import {
   resolveDesktopConfigPath,
 } from "../settings/desktop-config";
 import { DESKTOP_CONFIG_PATH_ENV } from "../settings/desktop-settings-env";
-import { PWRAGNT_HOME_ENV } from "../pwragnt-home";
+import { PWRAGNT_HOME_ENV } from "../profile";
 
 describe("desktop config path", () => {
   it("defaults to ~/.config/pwragnt under the home directory", () => {
@@ -27,7 +27,7 @@ describe("desktop config path", () => {
     ).toBe("/tmp/xdg-config/pwragnt");
   });
 
-  it("places config under PWRAGNT_HOME when that env var is set", () => {
+  it("places config under the active profile when PWRAGNT_HOME is set", () => {
     expect(
       resolveDesktopConfigPath({
         env: {
@@ -35,10 +35,10 @@ describe("desktop config path", () => {
         } as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe(path.join("/tmp/pwragnt-home", "config.toml"));
+    ).toBe(path.join("/tmp/pwragnt-home/profiles/default", "config.toml"));
   });
 
-  it("prefers PWRAGNT_CONFIG_PATH over PWRAGNT_HOME for backward compatibility", () => {
+  it("prefers PWRAGNT_CONFIG_PATH over profile path for backward compatibility", () => {
     expect(
       resolveDesktopConfigPath({
         env: {
@@ -50,12 +50,12 @@ describe("desktop config path", () => {
     ).toBe("/tmp/explicit/config.toml");
   });
 
-  it("falls back to XDG-style ~/.config/pwragnt/config.toml when no override is set", () => {
+  it("defaults to the profile path under ~/.pwragnt/", () => {
     expect(
       resolveDesktopConfigPath({
         env: {} as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe("/Users/tester/.config/pwragnt/config.toml");
+    ).toBe("/Users/tester/.pwragnt/profiles/default/config.toml");
   });
 });

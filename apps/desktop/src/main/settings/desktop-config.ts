@@ -8,14 +8,14 @@ import type {
   MessagingToolUpdateMode,
 } from "@pwragnt/shared";
 import { isDesktopWorktreeStorageLocation } from "@pwragnt/shared";
-import { readPwragntHome } from "../pwragnt-home";
+import { resolveActiveProfilePath } from "../profile";
 import { DESKTOP_CONFIG_PATH_ENV } from "./desktop-settings-env";
 
 type DesktopConfigPathOptions = {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
   xdgConfigHome?: string;
-  pwragntHome?: string;
+  cliProfile?: string;
 };
 
 export type DesktopSettingsConfig = {
@@ -83,9 +83,7 @@ export function resolveDesktopConfigPath(
   const env = options?.env ?? process.env;
   const explicit = env[DESKTOP_CONFIG_PATH_ENV]?.trim();
   if (explicit) return explicit;
-  const pwragntHome = options?.pwragntHome ?? readPwragntHome({ env });
-  if (pwragntHome) return path.join(pwragntHome, "config.toml");
-  return path.join(defaultDesktopConfigDir(options), "config.toml");
+  return resolveActiveProfilePath("config.toml", options);
 }
 
 export function readDesktopSettingsConfig(

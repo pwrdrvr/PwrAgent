@@ -47,6 +47,10 @@ export {
 } from "./testing/load-local-env.js";
 export { OverlayStore } from "./persistence/overlay-store.js";
 export {
+  buildNavigationSnapshot,
+  buildNavigationSnapshotHash,
+} from "./domain/navigation-state.js";
+export {
   GrokRolloutStore,
   type AppServerSessionStore,
   type HydratedSessionState,

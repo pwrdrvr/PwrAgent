@@ -5,6 +5,7 @@ packages:
   - packages/messaging/providers/*
 allowBuilds:
   b: true
+  better-sqlite3: true
   d: true
   e: true
   electron: true

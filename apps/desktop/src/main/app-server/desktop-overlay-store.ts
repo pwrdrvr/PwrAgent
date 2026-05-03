@@ -1,16 +1,16 @@
-import { OverlayStore } from "@pwragnt/agent-core";
-import { resolveDesktopOverlayStorePath } from "./desktop-state-root";
+import type { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { getAppOverlayStore } from "../state/app-state";
 
-let overlayStore: OverlayStore | null = null;
+let overlayStoreOverride: SqliteOverlayStore | null = null;
 
-export function getDesktopOverlayStore(): OverlayStore {
-  if (!overlayStore) {
-    overlayStore = new OverlayStore(resolveDesktopOverlayStorePath());
-  }
-
-  return overlayStore;
+export function getDesktopOverlayStore(): SqliteOverlayStore {
+  return overlayStoreOverride ?? getAppOverlayStore();
 }
 
 export function resetDesktopOverlayStoreForTests(): void {
-  overlayStore = null;
+  overlayStoreOverride = null;
+}
+
+export function setDesktopOverlayStoreForTests(store: SqliteOverlayStore): void {
+  overlayStoreOverride = store;
 }

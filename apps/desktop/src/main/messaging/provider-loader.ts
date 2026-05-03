@@ -1,6 +1,6 @@
 import type { MessagingChannelKind } from "@pwragnt/messaging-interface";
 import { getMainLogger } from "../log";
-import type { MessagingStore } from "./core/messaging-store";
+import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import type { DesktopMessagingConfig } from "./messaging-config";
 import type { DesktopMessagingAdapter } from "./messaging-runtime";
 
@@ -13,7 +13,7 @@ export type DesktopMessagingProviderModule = {
   createAdapter(params: {
     config: DesktopMessagingConfig;
     logger: typeof messagingLog;
-    store: MessagingStore;
+    store: MessagingStoreLike;
   }): DesktopMessagingAdapter | undefined;
 };
 
@@ -33,7 +33,7 @@ const providerModuleCache = new Map<
 export async function loadConfiguredMessagingAdapters(params: {
   config: DesktopMessagingConfig;
   registry?: DesktopMessagingProviderRegistry;
-  store: MessagingStore;
+  store: MessagingStoreLike;
 }): Promise<DesktopMessagingAdapter[]> {
   const registry = params.registry ?? defaultMessagingProviderRegistry;
   const adapters: DesktopMessagingAdapter[] = [];

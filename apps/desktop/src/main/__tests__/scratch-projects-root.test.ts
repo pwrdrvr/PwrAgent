@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { resolveScratchProjectsRoot } from "../app-server/scratch-projects";
-import { PWRAGNT_HOME_ENV } from "../pwragnt-home";
+import { PWRAGNT_HOME_ENV } from "../profile";
 
 describe("resolveScratchProjectsRoot", () => {
-  it("defaults to ~/.pwragnt/projects under the home directory", () => {
+  it("defaults to the profile path under ~/.pwragnt/", () => {
     expect(
       resolveScratchProjectsRoot({
         env: {} as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe("/Users/tester/.pwragnt/projects");
+    ).toBe("/Users/tester/.pwragnt/profiles/default/projects");
   });
 
-  it("places the projects root under PWRAGNT_HOME when set", () => {
+  it("places the projects root under the active profile when PWRAGNT_HOME is set", () => {
     expect(
       resolveScratchProjectsRoot({
         env: {
@@ -20,6 +20,6 @@ describe("resolveScratchProjectsRoot", () => {
         } as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe("/tmp/pwragnt-home/projects");
+    ).toBe("/tmp/pwragnt-home/profiles/default/projects");
   });
 });

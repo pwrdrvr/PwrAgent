@@ -1,8 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { readPwragntHome } from "../pwragnt-home";
+import { resolveActiveProfilePath } from "../profile";
 
 function formatLocalDatePrefix(date: Date): string {
   const year = String(date.getFullYear());
@@ -15,10 +14,7 @@ export function resolveScratchProjectsRoot(options?: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
 }): string {
-  const pwragntHome = readPwragntHome({ env: options?.env });
-  if (pwragntHome) return path.join(pwragntHome, "projects");
-  const homeDir = options?.homeDir ?? os.homedir();
-  return path.join(homeDir, ".pwragnt", "projects");
+  return resolveActiveProfilePath("projects", options);
 }
 
 export async function createScratchProjectDirectory(

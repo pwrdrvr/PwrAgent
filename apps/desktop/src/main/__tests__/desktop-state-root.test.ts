@@ -6,7 +6,7 @@ import {
   resolveDesktopOverlayStorePath,
   resolveDesktopStateRoot,
 } from "../app-server/desktop-state-root";
-import { PWRAGNT_HOME_ENV } from "../pwragnt-home";
+import { PWRAGNT_HOME_ENV } from "../profile";
 
 describe("desktop state root", () => {
   it("defaults to an XDG-style state directory under the home directory", () => {
@@ -49,7 +49,7 @@ describe("desktop state root", () => {
     ).toBe(path.join("/tmp/pwragnt-state", "overlay-state.json"));
   });
 
-  it("places state under PWRAGNT_HOME when that env var is set", () => {
+  it("places state under the active profile when PWRAGNT_HOME is set", () => {
     expect(
       resolveDesktopStateRoot({
         env: {
@@ -57,10 +57,10 @@ describe("desktop state root", () => {
         } as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe("/tmp/pwragnt-home/state");
+    ).toBe("/tmp/pwragnt-home/profiles/default/state");
   });
 
-  it("prefers PWRAGNT_STATE_ROOT over PWRAGNT_HOME for backward compatibility", () => {
+  it("prefers PWRAGNT_STATE_ROOT over profile path for backward compatibility", () => {
     expect(
       resolveDesktopStateRoot({
         env: {
@@ -72,12 +72,12 @@ describe("desktop state root", () => {
     ).toBe("/tmp/legacy");
   });
 
-  it("falls back to XDG when neither override is set", () => {
+  it("defaults to the profile path under ~/.pwragnt/", () => {
     expect(
       resolveDesktopStateRoot({
         env: {} as NodeJS.ProcessEnv,
         homeDir: "/Users/tester",
       }),
-    ).toBe("/Users/tester/.local/state/pwragnt");
+    ).toBe("/Users/tester/.pwragnt/profiles/default/state");
   });
 });
