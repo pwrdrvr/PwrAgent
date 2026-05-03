@@ -35,7 +35,7 @@ export default defineConfig(({ command }) => {
         minify: "esbuild",
         sourcemap: false,
         rollupOptions: {
-          external: ["discord.js", "grammy"]
+          external: ["bufferutil", "utf-8-validate", "zlib-sync"]
         }
       }
     },
