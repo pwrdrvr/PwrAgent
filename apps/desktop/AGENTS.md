@@ -34,6 +34,19 @@ The desktop style guide defines:
 - Keep radius at `8px` or below.
 - Favor one accent color and neutral surfaces.
 
+## Running the App for Development
+
+To launch the desktop app with live threads and real user state, run from the **repo root** (or worktree root):
+
+```bash
+pnpm --filter @pwragnt/desktop dev:no-messaging
+```
+
+- Do **not** override `HOME` or set `NODE_ENV` — the app needs the real user data directory to load saved threads and Keychain secrets.
+- `dev:no-messaging` disables the Telegram/Discord messaging interface, which avoids bot-token prompts and Keychain access issues during development.
+- For visual verification of UI changes, use this command so you can see real threads in the sidebar and thread detail pane.
+- The `dev` script (without `no-messaging`) also works but will attempt to connect messaging providers.
+
 ## Implementation Notes
 
 - Centralize visual tokens in `styles/app.css` before expanding renderer surfaces.

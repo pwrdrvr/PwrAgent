@@ -61,6 +61,13 @@ textarea {
   font: inherit;
 }
 
+input,
+textarea,
+[contenteditable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .app-shell {
   display: grid;
   position: relative;
@@ -71,6 +78,8 @@ textarea {
   overflow: hidden;
   background: var(--bg-app);
   color: var(--text-primary);
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .app-shell--fatal-settings {
@@ -84,7 +93,7 @@ textarea {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 42px 16px 0;
+  padding: 0 16px;
   overflow: hidden;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-subtle);
@@ -142,10 +151,14 @@ textarea {
   -webkit-app-region: drag;
 }
 
+.sidebar__masthead *,
+.thread-header * {
+  -webkit-app-region: drag;
+}
+
 .sidebar__masthead {
   align-items: center;
-  padding-bottom: 14px;
-  padding-left: 60px;
+  padding: 10px 0 14px 80px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -160,7 +173,15 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.sidebar__masthead-actions,
+.sidebar__masthead-actions * {
   -webkit-app-region: no-drag;
+}
+
+.thread-header {
+  padding-top: 10px;
 }
 
 .thread-header button,
@@ -1164,7 +1185,7 @@ textarea {
   display: flex;
   min-height: 0;
   min-width: 0;
-  padding: 24px 0 24px 28px;
+  padding: 0 0 24px 28px;
   overflow: hidden;
 }
 
@@ -1185,7 +1206,6 @@ textarea {
   flex-direction: column;
   gap: 18px;
   min-height: 0;
-  padding-top: 10px;
   overflow: hidden;
 }
 
@@ -1888,6 +1908,8 @@ textarea {
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .transcript-message--user {
