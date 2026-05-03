@@ -1131,6 +1131,35 @@ describe("MessagingController", () => {
     });
   });
 
+  it("clears starting state when navigation lookup fails before retrying", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.getNavigationSnapshot.mockRejectedValueOnce(new Error("navigation unavailable"));
+
+    await harness.controller.handleInboundEvent(buildTextEvent("first turn"));
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Turn could not start",
+      body: "navigation unavailable",
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("retry turn"));
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "retry turn",
+          },
+        ],
+      }),
+    );
+  });
+
   it("steers queued follow-ups into the active turn and removes queued actions", async () => {
     const harness = await createHarness();
     await bindThread(harness);

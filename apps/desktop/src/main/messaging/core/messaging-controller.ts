@@ -695,10 +695,10 @@ export class MessagingController {
   }): Promise<void> {
     this.turnAdmission.markStarting(params.threadKey);
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
     try {
+      const navigation = await this.options.backend.getNavigationSnapshot({
+        backend: "all",
+      });
       const turnSettings = turnSettingsForBinding(params.binding, navigation);
       const started = await this.options.backend.startTurn({
         backend: params.binding.backend,

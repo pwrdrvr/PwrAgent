@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createTestHarness, FakeProvider } from "../testing/test-harness.js";
+import type {
+  AppServerProvider,
+  ProviderActiveTurn,
+  ProviderTurnParams,
+} from "../providers/provider-contract.js";
+import { createTestHarness, Deferred, FakeProvider } from "../testing/test-harness.js";
 
 describe("Codex turn lifecycle", () => {
   it("starts a turn, preserves mixed input, and emits a completion notification", async () => {
@@ -107,6 +112,36 @@ describe("Codex turn lifecycle", () => {
     });
 
     expect(provider.runs).toHaveLength(2);
+  });
+
+  it("rejects a concurrent start while provider startup is still pending", async () => {
+    const provider = new SlowStartProvider();
+    const { server } = createTestHarness({ provider });
+    await server.request("thread/start", { cwd: "/repo/workspace" });
+
+    const firstStart = server.request("turn/start", {
+      threadId: "thread-1",
+      input: [{ type: "text", text: "First turn" }],
+    });
+    await provider.startRequested.promise;
+
+    const secondStart = server.request("turn/start", {
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Overlapping turn" }],
+    });
+    await Promise.resolve();
+
+    expect(provider.startCalls).toBe(1);
+    await expect(secondStart).rejects.toThrow(
+      "Thread already has an active turn in progress: thread-1",
+    );
+
+    provider.allowStart.resolve();
+    await expect(firstStart).resolves.toEqual({
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    expect(provider.runs).toHaveLength(1);
   });
 
   it("steers an active turn with the expected turn id", async () => {
@@ -287,3 +322,21 @@ describe("Codex turn lifecycle", () => {
     ]);
   });
 });
+
+class SlowStartProvider implements AppServerProvider {
+  readonly startRequested = new Deferred<void>();
+  readonly allowStart = new Deferred<void>();
+  private readonly delegate = new FakeProvider();
+  startCalls = 0;
+
+  get runs() {
+    return this.delegate.runs;
+  }
+
+  async startTurn(params: ProviderTurnParams): Promise<ProviderActiveTurn> {
+    this.startCalls += 1;
+    this.startRequested.resolve();
+    await this.allowStart.promise;
+    return this.delegate.startTurn(params);
+  }
+}
