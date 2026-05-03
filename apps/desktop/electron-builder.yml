@@ -72,6 +72,7 @@ dmg:
     width: 660
     height: 400
   iconSize: 100
+  iconTextSize: 1
   contents:
     - x: 180
       y: 220
