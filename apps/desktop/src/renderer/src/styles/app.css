@@ -1176,7 +1176,7 @@ textarea {
   display: flex;
   min-height: 0;
   min-width: 0;
-  padding: 24px 0 24px 28px;
+  padding: 0 0 24px 28px;
   overflow: hidden;
 }
 
