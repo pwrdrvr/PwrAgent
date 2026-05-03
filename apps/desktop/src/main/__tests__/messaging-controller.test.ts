@@ -684,7 +684,7 @@ describe("MessagingController", () => {
     });
   });
 
-  it("detaches a bound conversation and unpins the status surface", async () => {
+  it("detaches a bound conversation, clears status actions, and unpins the status surface", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
@@ -695,14 +695,28 @@ describe("MessagingController", () => {
         },
       }),
     );
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/detach").channel,
+    );
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
 
+    expect(harness.delivered.at(-3)).toMatchObject({
+      kind: "status",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+        fallback: "fail",
+      },
+      targetSurface: binding?.statusSurface,
+    });
     expect(harness.delivered.at(-2)).toMatchObject({
       kind: "dismiss",
       delivery: {
         unpin: true,
       },
+      targetSurface: binding?.pinnedStatusSurface,
     });
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/detach").channel),

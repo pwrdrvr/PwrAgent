@@ -2065,7 +2065,6 @@ export class MessagingController {
       return;
     }
 
-    const statusSurface = binding.pinnedStatusSurface ?? binding.statusSurface;
     const activeTurn = this.getActiveTurn(binding);
     if (activeTurn) {
       await this.signalTurnActivity(
@@ -2079,24 +2078,11 @@ export class MessagingController {
       );
     }
     await this.flushToolUpdatesForBinding(binding, { clear: true });
-    if (statusSurface) {
-      await this.deliver(
-        {
-          id: this.newIntentId("status-dismiss"),
-          kind: "dismiss",
-          bindingId: binding.id,
-          createdAt: this.now(),
-          delivery: {
-            mode: "dismiss",
-            unpin: Boolean(binding.pinnedStatusSurface),
-          },
-          reason: "detached",
-          targetSurface: statusSurface,
-        },
-        binding,
-        event,
-      );
-    }
+    await this.retireBindingStatus(
+      binding,
+      event,
+      await this.options.backend.getNavigationSnapshot({ backend: "all" }),
+    );
 
     await this.options.store.revokeBinding({
       bindingId: binding.id,
