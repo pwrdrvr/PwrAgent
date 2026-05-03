@@ -16,6 +16,7 @@ import type {
 import { TelegramAdapter } from "@pwragnt/messaging-provider-telegram";
 import type {
   TelegramBotApi,
+  TelegramBotLike,
   TelegramEditForumTopicRequest,
   TelegramEditMessageTextRequest,
   TelegramPinChatMessageRequest,
@@ -38,6 +39,50 @@ afterEach(async () => {
 });
 
 describe("TelegramAdapter", () => {
+  it("registers a Telegram bot error handler for polling middleware failures", async () => {
+    const api = createApi();
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    };
+    const catchHandler = vi.fn<(handler: (error: unknown) => void) => void>();
+    const onHandler = vi.fn<
+      (filter: string, handler: (context: unknown) => void | Promise<void>) => void
+    >();
+    const start = vi.fn<(options?: { allowed_updates?: string[] }) => Promise<void>>(
+      async () => {},
+    );
+    const stop = vi.fn<() => void>();
+    const bot: TelegramBotLike = {
+      api: api as unknown as TelegramBotApi,
+      catch: catchHandler,
+      on: onHandler,
+      start,
+      stop,
+    };
+    const adapter = new TelegramAdapter({
+      bot,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+      },
+      logger,
+      now: () => 1000,
+      pollOnStart: false,
+    });
+
+    await adapter.start(async () => {});
+    expect(catchHandler).toHaveBeenCalledTimes(1);
+
+    const handler = catchHandler.mock.calls[0]?.[0];
+    handler?.(new Error("middleware failed"));
+
+    expect(logger.warn).toHaveBeenCalledWith("telegram bot middleware failed", {
+      error: "middleware failed",
+    });
+  });
+
   it("normalizes /resume and renders a thread picker with inline keyboard handles", async () => {
     const harness = await createControllerHarness();
 

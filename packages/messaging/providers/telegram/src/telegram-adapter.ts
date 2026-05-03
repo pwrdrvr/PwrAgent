@@ -288,6 +288,7 @@ export type TelegramGrammyBotLike = {
       other?: Omit<TelegramUnpinChatMessageRequest, "chat_id" | "message_id">,
     ): Promise<boolean>;
   };
+  catch?(handler: (error: unknown) => void): void;
   handleUpdate?(update: TelegramUpdate): Promise<void>;
   on?(filter: string, handler: (context: unknown) => void | Promise<void>): void;
   start?(options?: { allowed_updates?: string[] }): Promise<void>;
@@ -353,6 +354,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
     this.listener = listener;
 
+    this.registerBotErrorHandler();
     this.registerBotHandlers();
 
     const webhookInfo = await this.bot.api.getWebhookInfo();
@@ -1307,6 +1309,14 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     });
   }
 
+  private registerBotErrorHandler(): void {
+    this.bot.catch?.((error) => {
+      this.options.logger?.warn?.("telegram bot middleware failed", {
+        error: errorMessage(error),
+      });
+    });
+  }
+
   private get bot(): TelegramBotLike {
     if (this.options.bot) {
       return this.options.bot;
@@ -1447,6 +1457,7 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
         return await bot.api.unpinChatMessage(chat_id, message_id, other);
       },
     },
+    catch: bot.catch?.bind(bot),
     handleUpdate: bot.handleUpdate?.bind(bot),
     on: bot.on?.bind(bot),
     start: bot.start?.bind(bot),
