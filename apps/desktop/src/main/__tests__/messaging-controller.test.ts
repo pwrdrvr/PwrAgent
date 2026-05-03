@@ -459,6 +459,88 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not restart typing from a stale assistant delivery after idle", async () => {
+    let now = 1000;
+    let resolveAssistantDelivery!: () => void;
+    const assistantDelivery = new Promise<void>((resolve) => {
+      resolveAssistantDelivery = resolve;
+    });
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      now: () => now,
+      deliver: async (intent) => {
+        delivered.push(intent);
+        if (intent.kind === "message" && intent.role === "assistant") {
+          await assistantDelivery;
+        }
+        return {
+          channel: "telegram",
+          deliveredAt: now,
+          outcome: intent.kind === "status" && intent.delivery?.pin ? "pinned" : "presented",
+          surface: {
+            channel: "telegram",
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    delivered.length = 0;
+
+    const assistantEvent = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "item-1",
+            type: "agentMessage",
+            text: "Done.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    await vi.waitFor(() => {
+      expect(delivered).toEqual([
+        expect.objectContaining({
+          kind: "message",
+          role: "assistant",
+        }),
+      ]);
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "thread-1",
+          status: {
+            type: "idle",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    const idleActivityIndex = delivered.findIndex(
+      (intent) => intent.kind === "activity" && intent.state === "idle",
+    );
+    expect(idleActivityIndex).toBeGreaterThanOrEqual(0);
+
+    now += 11_000;
+    resolveAssistantDelivery();
+    await assistantEvent;
+
+    expect(
+      delivered
+        .slice(idleActivityIndex + 1)
+        .filter((intent) => intent.kind === "activity" && intent.state === "active"),
+    ).toEqual([]);
+  });
+
   it("recreates the pinned status surface for /status commands", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(

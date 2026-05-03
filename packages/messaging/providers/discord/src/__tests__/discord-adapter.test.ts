@@ -282,7 +282,9 @@ function createApi(overrides: Partial<DiscordApi> = {}): DiscordApi {
     }),
     deleteApplicationCommand: async () => {},
     listApplicationCommands: async () => [],
+    pinMessage: async () => {},
     sendTyping: async () => {},
+    unpinMessage: async () => {},
     updateChannelName: async () => {},
     updateApplicationCommand: async () => applicationCommand(),
     updateInteractionOriginalResponse: async () => ({

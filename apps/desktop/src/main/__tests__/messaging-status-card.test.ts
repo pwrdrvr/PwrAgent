@@ -100,6 +100,26 @@ describe("buildBindingStatusIntent", () => {
     });
   });
 
+  it("shortens derived thread titles in the compact status binding line", () => {
+    const binding = buildBinding();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.title =
+      "How much wood would a woodchuck chuck if a woodchuck could chuck wood";
+    navigation.threads[0]!.titleSource = "derived";
+
+    const intent = buildBindingStatusIntent({
+      id: "status-derived-title",
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Binding: How much wood would a woodchuck chuck if a... (codex)");
+    expect(intent.text).not.toContain(
+      "Binding: How much wood would a woodchuck chuck if a woodchuck could chuck wood",
+    );
+  });
+
   it("renders live thread permissions ahead of stale binding preferences", () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0]!.executionMode = "default";

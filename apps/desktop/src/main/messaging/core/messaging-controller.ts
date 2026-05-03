@@ -308,8 +308,16 @@ export class MessagingController {
           force: true,
         });
         await this.renderBindingStatus(binding);
-      } else if (activeTurn?.status === "working") {
-        await this.signalTurnActivity(binding, activeTurn, {
+      } else {
+        const latestActiveTurn = this.getActiveTurn(binding);
+        if (latestActiveTurn?.status !== "working") {
+          continue;
+        }
+        const eventTurnId = turnIdForBackendEvent(event);
+        if (eventTurnId && latestActiveTurn.turnId !== eventTurnId) {
+          continue;
+        }
+        await this.signalTurnActivity(binding, latestActiveTurn, {
           reason: event.notification.method,
         });
       }

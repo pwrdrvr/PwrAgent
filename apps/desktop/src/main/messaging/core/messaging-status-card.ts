@@ -9,6 +9,7 @@ import type {
   MessagingStatusIntent,
   ThreadIdentifier,
 } from "@pwragnt/shared";
+import { shortenDerivedThreadTitle } from "@pwragnt/shared";
 import type { MessagingResolvedThreadState } from "./messaging-thread-state.js";
 
 export type MessagingWorkspaceHandoffContext = {
@@ -55,6 +56,7 @@ export function buildBindingStatusIntent(params: {
     "default";
   const activeTurn = params.threadState.activeTurn;
   const branch = formatBranch(params.threadState);
+  const bindingTitle = formatStatusBindingTitle(params.threadState, params.binding.threadId);
   const toolUpdateMode = resolveMessagingToolUpdateMode(
     params.binding,
     params.toolUpdateMode,
@@ -73,7 +75,7 @@ export function buildBindingStatusIntent(params: {
     targetSurface: params.binding.statusSurface,
     status: statusForThreadState(params.threadState),
     text: [
-      `Binding: ${params.threadState.title ?? params.binding.threadId} (${params.binding.backend})`,
+      `Binding: ${bindingTitle} (${params.binding.backend})`,
       `Project: ${projectLabel}`,
       `Directory: ${directoryPath}`,
       params.threadState.worktreePath ? `Worktree: ${params.threadState.worktreePath}` : undefined,
@@ -170,6 +172,35 @@ export function buildBindingStatusIntent(params: {
       },
     ],
   };
+}
+
+function formatStatusBindingTitle(
+  threadState: MessagingResolvedThreadState,
+  fallbackThreadId: ThreadIdentifier,
+): string {
+  if (!threadState.title) {
+    return fallbackThreadId;
+  }
+  if (threadState.titleSource === "derived") {
+    return truncateStatusTitle(
+      shortenDerivedThreadTitle(threadState.title) ?? threadState.title,
+    );
+  }
+  return threadState.title;
+}
+
+function truncateStatusTitle(title: string, limit = 48): string {
+  const normalized = title.replace(/\s+/g, " ").trim();
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+
+  const breakpointWindow = normalized.slice(0, limit + 1);
+  const wordBreak = breakpointWindow.lastIndexOf(" ");
+  if (wordBreak >= Math.floor(limit * 0.6)) {
+    return `${normalized.slice(0, wordBreak).trim()}...`;
+  }
+  return `${normalized.slice(0, limit).trim()}...`;
 }
 
 const TOOL_UPDATE_MODE_ORDER: MessagingToolUpdateMode[] = [
