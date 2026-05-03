@@ -28,6 +28,7 @@ import {
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
+  MESSAGING_INPUT_DEBOUNCE_MS_ENV,
   TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
@@ -54,6 +55,13 @@ type ConfigReadResult = {
   config: DesktopSettingsConfig;
   error?: string;
 };
+
+const DEFAULT_MESSAGING_INPUT_DEBOUNCE_MS = 500;
+const MAX_MESSAGING_INPUT_DEBOUNCE_MS = 5_000;
+
+function clampInteger(value: number, maxValue: number): number {
+  return Math.min(Math.max(value, 0), maxValue);
+}
 
 export class DesktopSettingsService {
   private readonly env: NodeJS.ProcessEnv;
@@ -123,6 +131,12 @@ export class DesktopSettingsService {
         ),
       },
       messaging: {
+        inputDebounceMs: this.resolveClampedNumber(
+          config.messaging?.inputDebounceMs,
+          DEFAULT_MESSAGING_INPUT_DEBOUNCE_MS,
+          MESSAGING_INPUT_DEBOUNCE_MS_ENV,
+          MAX_MESSAGING_INPUT_DEBOUNCE_MS,
+        ),
         toolUpdateMode: this.resolveToolUpdateMode(
           config.messaging?.toolUpdateMode,
         ),
@@ -338,6 +352,28 @@ export class DesktopSettingsService {
 
     return {
       value: configValue ?? defaultValue,
+      source: configValue === undefined ? "default" : "config",
+      error: envValue.error,
+    };
+  }
+
+  private resolveClampedNumber(
+    configValue: number | undefined,
+    defaultValue: number,
+    envKey: string,
+    maxValue: number,
+  ): DesktopSettingsValue<number> {
+    const envValue = readEnvInteger(this.env, envKey);
+    if (envValue.value !== undefined) {
+      return {
+        value: clampInteger(envValue.value, maxValue),
+        source: "env",
+        overriddenByEnv: configValue !== undefined,
+      };
+    }
+
+    return {
+      value: clampInteger(configValue ?? defaultValue, maxValue),
       source: configValue === undefined ? "default" : "config",
       error: envValue.error,
     };

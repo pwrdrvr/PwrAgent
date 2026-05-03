@@ -32,6 +32,7 @@ function createSnapshot(
       },
     },
     messaging: {
+      inputDebounceMs: { value: 500, source: "default" },
       toolUpdateMode: { value: "show_some", source: "default" },
       telegram: {
         enabled: { value: false, source: "default" },
@@ -193,6 +194,17 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
           toolUpdateMode: "show_all",
+        },
+      });
+    });
+    fireEvent.change(screen.getByLabelText("Input debounce"), {
+      target: { value: "750" },
+    });
+    fireEvent.blur(screen.getByLabelText("Input debounce"));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          inputDebounceMs: 750,
         },
       });
     });
