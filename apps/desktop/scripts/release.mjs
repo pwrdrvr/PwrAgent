@@ -97,9 +97,16 @@ runChecked(
 
 // 4. Copy the build output and electron-builder inputs into the stage so
 //    electron-builder finds them at well-known paths.
+//    pnpm deploy copies the package source tree (including out/ if it exists)
+//    into the stage. Remove stale copies before our controlled cp to avoid
+//    macOS cp -R nesting (cp -R src dst/ creates dst/src/ when dst exists).
 step("seed stage with build output + builder inputs");
 for (const dir of ["out", "build"]) {
-  run(`cp -R ${join(desktopRoot, dir)} ${join(stageDir, dir)}`);
+  const target = join(stageDir, dir);
+  if (existsSync(target)) {
+    rmSync(target, { recursive: true, force: true });
+  }
+  run(`cp -R ${join(desktopRoot, dir)} ${target}`);
 }
 run(`cp ${join(desktopRoot, "electron-builder.yml")} ${join(stageDir, "electron-builder.yml")}`);
 

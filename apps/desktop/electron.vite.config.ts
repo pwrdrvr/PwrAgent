@@ -10,12 +10,21 @@ export default defineConfig({
   main: {
     plugins: [
       externalizeDepsPlugin({
-        exclude: ["@pwragnt/shared", "@pwragnt/agent-core"]
+        exclude: [
+          "@pwragnt/shared",
+          "@pwragnt/agent-core",
+          "@pwragnt/messaging-interface",
+          "@pwragnt/messaging-provider-discord",
+          "@pwragnt/messaging-provider-telegram"
+        ]
       })
     ],
     build: {
       minify: "esbuild",
-      sourcemap: false
+      sourcemap: false,
+      rollupOptions: {
+        external: ["discord.js", "grammy"]
+      }
     }
   },
   preload: {
