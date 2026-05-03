@@ -515,6 +515,35 @@ describe("MessagingController", () => {
     });
   });
 
+  it("refreshes the status card when a bound thread is renamed", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    const renamedNavigation = buildNavigationSnapshot();
+    renamedNavigation.threads[0]!.title = "Wood chuck joke";
+    renamedNavigation.threads[0]!.titleSource = "explicit";
+    harness.getNavigationSnapshot.mockResolvedValueOnce(renamedNavigation);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-1",
+          threadName: "Wood chuck joke",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "status",
+        text: expect.stringContaining("Binding: Wood chuck joke (codex)"),
+      }),
+    ]);
+  });
+
   it("does not restart typing from a stale assistant delivery after idle", async () => {
     let now = 1000;
     let resolveAssistantDelivery!: () => void;

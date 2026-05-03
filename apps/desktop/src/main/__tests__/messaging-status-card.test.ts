@@ -114,9 +114,28 @@ describe("buildBindingStatusIntent", () => {
       threadState: resolveMessagingThreadState({ binding, navigation }),
     });
 
-    expect(intent.text).toContain("Binding: How much wood would a woodchuck chuck if a... (codex)");
+    expect(intent.text).toContain("Binding: How much wood would a woodchuck... (codex)");
     expect(intent.text).not.toContain(
       "Binding: How much wood would a woodchuck chuck if a woodchuck could chuck wood",
+    );
+  });
+
+  it("compacts short derived prompt titles before the generated title arrives", () => {
+    const binding = buildBinding();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.title = "We're here for another wood chuck joke";
+    navigation.threads[0]!.titleSource = "derived";
+
+    const intent = buildBindingStatusIntent({
+      id: "status-derived-short-title",
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent.text).toContain("Binding: We're here for another wood... (codex)");
+    expect(intent.text).not.toContain(
+      "Binding: We're here for another wood chuck joke (codex)",
     );
   });
 

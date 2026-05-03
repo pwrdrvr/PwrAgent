@@ -291,6 +291,11 @@ export class MessagingController {
         await this.deliverAssistantMessage(assistantText, event, binding);
       }
 
+      if (isThreadNameUpdatedEvent(event)) {
+        await this.renderBindingStatus(binding);
+        continue;
+      }
+
       if (turnStateChanged && (lifecycle || (isThreadStatusIdleEvent(event) && activeTurn))) {
         await this.signalTurnActivity(binding, activeTurn!, {
           reason: event.notification.method,
@@ -2835,6 +2840,10 @@ function isSameActiveTurnState(
       previous.turnId === next.turnId &&
       previous.status === next.status,
   );
+}
+
+function isThreadNameUpdatedEvent(event: AgentEvent): boolean {
+  return event.notification.method === "thread/name/updated";
 }
 
 function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boolean {

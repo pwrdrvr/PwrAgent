@@ -189,7 +189,7 @@ function formatStatusBindingTitle(
   return threadState.title;
 }
 
-function truncateStatusTitle(title: string, limit = 48): string {
+function truncateStatusTitle(title: string, limit = 32): string {
   const normalized = title.replace(/\s+/g, " ").trim();
   if (normalized.length <= limit) {
     return normalized;
