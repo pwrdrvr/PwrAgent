@@ -76,6 +76,9 @@ export function classifyShellCommand(command: string): ShellSafetyClassification
       reason: "mutating or unknown git commands require approval",
     };
   }
+  if (program === "grep") {
+    return { safe: true, commandAction: "search" };
+  }
   if (program === "cat" || program === "head" || program === "tail") {
     return { safe: true, commandAction: "read" };
   }

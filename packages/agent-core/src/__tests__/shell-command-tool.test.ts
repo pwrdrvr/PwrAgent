@@ -18,7 +18,7 @@ describe("shell_command tool", () => {
     const tool = createShellCommandTool();
 
     const result = await tool.execute(
-      tool.parseArguments({ command: "rg -n SAFE_NEEDLE ." }),
+      tool.parseArguments({ command: "grep -rn SAFE_NEEDLE ." }),
       { cwd: workspace.path, approvalPolicy: "on-request" },
     );
 
@@ -27,7 +27,7 @@ describe("shell_command tool", () => {
         success: true,
         commandAction: "search",
         itemType: "commandExecution",
-        command: "rg -n SAFE_NEEDLE .",
+        command: "grep -rn SAFE_NEEDLE .",
       }),
     );
     expect(result.output).toContain("needle.txt:1:SAFE_NEEDLE");
