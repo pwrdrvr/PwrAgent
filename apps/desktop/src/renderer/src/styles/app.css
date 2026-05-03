@@ -84,7 +84,7 @@ textarea {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 16px 16px 0;
+  padding: 42px 16px 0;
   overflow: hidden;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-subtle);
@@ -139,11 +139,13 @@ textarea {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  -webkit-app-region: drag;
 }
 
 .sidebar__masthead {
   align-items: center;
   padding-bottom: 14px;
+  padding-left: 60px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -158,6 +160,14 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.thread-header button,
+.thread-header input,
+.thread-header a,
+.thread-header select {
+  -webkit-app-region: no-drag;
 }
 
 .sidebar__icon-button {
@@ -261,6 +271,7 @@ textarea {
   min-width: 0;
   align-items: center;
   gap: 6px;
+  -webkit-app-region: no-drag;
 }
 
 .runtime-identity__button {
@@ -1164,7 +1175,7 @@ textarea {
   inset: 0;
   min-width: 0;
   min-height: 0;
-  padding: 24px;
+  padding: 42px 24px 24px;
   background: var(--bg-app);
 }
 
@@ -1174,6 +1185,7 @@ textarea {
   flex-direction: column;
   gap: 18px;
   min-height: 0;
+  padding-top: 10px;
   overflow: hidden;
 }
 

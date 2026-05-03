@@ -83,6 +83,8 @@ export function createMainWindow(options?: {
     minHeight: 760,
     show: false,
     title: "PwrAgnt",
+    titleBarStyle: "hiddenInset",
+    trafficLightPosition: { x: 20, y: 18 },
     backgroundColor: "#10151f",
     webPreferences: {
       preload: preloadPath,
