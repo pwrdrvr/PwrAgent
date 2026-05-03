@@ -120,6 +120,37 @@ test("thread reply Tiptap skill autocomplete filters and commits the reported mu
   }
 });
 
+test("thread reply Tiptap slash review autocomplete stays open on exact command text", async () => {
+  const app = await launchElectronApp({
+    env: tiptapWysiwygComposerEnv,
+    fixturePath,
+    windowSize: {
+      width: 1180,
+      height: 760,
+    },
+  });
+
+  try {
+    await openSkillAutocompleteThread(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "Reply" });
+    await textbox.focus();
+    await app.window.keyboard.type("/revie");
+    await expect(tiptapInput).toHaveAttribute("data-value", "/revie");
+    await expect(app.window.getByRole("listbox", { name: "Commands" })).toBeVisible();
+
+    await app.window.keyboard.type("w");
+    await expect(tiptapInput).toHaveAttribute("data-value", "/review");
+
+    const commands = app.window.getByRole("listbox", { name: "Commands" });
+    await expect(commands).toBeVisible();
+    await expect(commands.getByRole("button", { name: /\/review/i })).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
+
 test("thread reply Tiptap skill insertion preserves rich Markdown blocks", async () => {
   const app = await launchElectronApp({
     env: tiptapWysiwygComposerEnv,
