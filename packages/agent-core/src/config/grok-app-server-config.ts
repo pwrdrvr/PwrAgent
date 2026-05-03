@@ -3,20 +3,23 @@ import os from "node:os";
 import path from "node:path";
 import { parseFlatToml } from "./simple-toml.js";
 
+const PWRAGNT_HOME_ENV = "PWRAGNT_HOME";
+
 type ConfigDirOptions = {
   homeDir?: string;
   xdgConfigHome?: string;
+  pwragntHome?: string;
+  env?: NodeJS.ProcessEnv;
 };
 
 type StateDirOptions = {
   homeDir?: string;
   xdgStateHome?: string;
+  pwragntHome?: string;
+  env?: NodeJS.ProcessEnv;
 };
 
-type ResolveConfigOptions = ConfigDirOptions &
-  StateDirOptions & {
-    env?: NodeJS.ProcessEnv;
-  };
+type ResolveConfigOptions = ConfigDirOptions & StateDirOptions;
 
 export type GrokAppServerRuntimeConfig = {
   apiKey?: string;
@@ -26,10 +29,23 @@ export type GrokAppServerRuntimeConfig = {
   stateRoot: string;
 };
 
+function readPwragntHomeFromOptions(options?: {
+  pwragntHome?: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  if (options?.pwragntHome?.trim()) return path.resolve(options.pwragntHome.trim());
+  const env = options?.env ?? process.env;
+  const value = env[PWRAGNT_HOME_ENV]?.trim();
+  return value ? path.resolve(value) : undefined;
+}
+
 export function defaultGrokAppServerConfigDir(options?: ConfigDirOptions): string {
+  const pwragntHome = readPwragntHomeFromOptions(options);
+  if (pwragntHome) return path.join(pwragntHome, "grok-app-server");
   const homeDir = options?.homeDir ?? os.homedir();
+  const env = options?.env ?? process.env;
   const xdgConfigHome =
-    options?.xdgConfigHome?.trim() || process.env.XDG_CONFIG_HOME?.trim();
+    options?.xdgConfigHome?.trim() || env.XDG_CONFIG_HOME?.trim();
   return path.join(xdgConfigHome || path.join(homeDir, ".config"), "grok-app-server");
 }
 
@@ -38,9 +54,12 @@ export function defaultGrokAppServerConfigPath(options?: ConfigDirOptions): stri
 }
 
 export function defaultGrokAppServerStateDir(options?: StateDirOptions): string {
+  const pwragntHome = readPwragntHomeFromOptions(options);
+  if (pwragntHome) return path.join(pwragntHome, "grok-app-server");
   const homeDir = options?.homeDir ?? os.homedir();
+  const env = options?.env ?? process.env;
   const xdgStateHome =
-    options?.xdgStateHome?.trim() || process.env.XDG_STATE_HOME?.trim();
+    options?.xdgStateHome?.trim() || env.XDG_STATE_HOME?.trim();
   return path.join(
     xdgStateHome || path.join(homeDir, ".local", "state"),
     "grok-app-server",

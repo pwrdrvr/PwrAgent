@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readPwragntHome } from "../pwragnt-home";
 
 function formatLocalDatePrefix(date: Date): string {
   const year = String(date.getFullYear());
@@ -10,10 +11,20 @@ function formatLocalDatePrefix(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+export function resolveScratchProjectsRoot(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): string {
+  const pwragntHome = readPwragntHome({ env: options?.env });
+  if (pwragntHome) return path.join(pwragntHome, "projects");
+  const homeDir = options?.homeDir ?? os.homedir();
+  return path.join(homeDir, ".pwragnt", "projects");
+}
+
 export async function createScratchProjectDirectory(
   now = new Date()
 ): Promise<string> {
-  const projectsRoot = path.join(os.homedir(), ".pwragnt", "projects");
+  const projectsRoot = resolveScratchProjectsRoot();
   await fs.mkdir(projectsRoot, { recursive: true });
 
   const prefix = formatLocalDatePrefix(now);

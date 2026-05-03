@@ -16,12 +16,16 @@ import { stringifyFlatToml } from "../config/simple-toml.js";
 const originalHome = process.env.HOME;
 const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 const originalXdgStateHome = process.env.XDG_STATE_HOME;
+const originalPwragntHome = process.env.PWRAGNT_HOME;
 const tempEnvKeys = [
   "XAI_API_KEY",
   "GROK_MODEL",
   "XAI_BASE_URL",
   "GROK_APP_SERVER_STATE_ROOT",
+  "PWRAGNT_HOME",
 ];
+
+delete process.env.PWRAGNT_HOME;
 
 afterEach(() => {
   for (const key of tempEnvKeys) {
@@ -41,6 +45,11 @@ afterEach(() => {
     delete process.env.XDG_STATE_HOME;
   } else {
     process.env.XDG_STATE_HOME = originalXdgStateHome;
+  }
+  if (originalPwragntHome === undefined) {
+    delete process.env.PWRAGNT_HOME;
+  } else {
+    process.env.PWRAGNT_HOME = originalPwragntHome;
   }
 });
 
@@ -249,6 +258,32 @@ describe("test harness helpers", () => {
         env: {} as NodeJS.ProcessEnv,
       }),
     ).toThrow(`Unsupported TOML table on line 1 in ${configPath}`);
+
+    await temp.cleanup();
+  });
+
+  it("places config and state under PWRAGNT_HOME when that env var is set", async () => {
+    const temp = await createTemporaryTestDirectory();
+    const pwragntHome = path.join(temp.path, "pwragnt-root");
+    const configPath = defaultGrokAppServerConfigPath({ pwragntHome });
+
+    expect(configPath).toBe(
+      path.join(pwragntHome, "grok-app-server", "config.toml"),
+    );
+
+    expect(defaultGrokAppServerStateDir({ pwragntHome })).toBe(
+      path.join(pwragntHome, "grok-app-server"),
+    );
+
+    const runtimeConfig = resolveGrokAppServerRuntimeConfig({
+      pwragntHome,
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(runtimeConfig.configPath).toBe(configPath);
+    expect(runtimeConfig.stateRoot).toBe(
+      path.join(pwragntHome, "grok-app-server"),
+    );
 
     await temp.cleanup();
   });

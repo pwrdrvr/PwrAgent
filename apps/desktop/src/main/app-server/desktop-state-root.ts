@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { readPwragntHome } from "../pwragnt-home";
 
 export const DESKTOP_STATE_ROOT_ENV = "PWRAGNT_STATE_ROOT";
 
@@ -7,6 +8,7 @@ type DesktopStatePathOptions = {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
   xdgStateHome?: string;
+  pwragntHome?: string;
 };
 
 export function defaultDesktopStateRoot(
@@ -27,7 +29,11 @@ export function resolveDesktopStateRoot(
   options?: DesktopStatePathOptions,
 ): string {
   const env = options?.env ?? process.env;
-  return env[DESKTOP_STATE_ROOT_ENV]?.trim() || defaultDesktopStateRoot(options);
+  const explicit = env[DESKTOP_STATE_ROOT_ENV]?.trim();
+  if (explicit) return explicit;
+  const pwragntHome = options?.pwragntHome ?? readPwragntHome({ env });
+  if (pwragntHome) return path.join(pwragntHome, "state");
+  return defaultDesktopStateRoot(options);
 }
 
 export function resolveDesktopOverlayStorePath(
