@@ -6,53 +6,67 @@ import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 // For shipped builds we want minified main/preload/renderer with sourcemaps
 // stripped. esbuild minification is the right default; switch to terser only
 // if a measured size win justifies the build-time cost.
-export default defineConfig({
-  main: {
-    plugins: [
-      externalizeDepsPlugin({
-        exclude: [
-          "@pwragnt/shared",
-          "@pwragnt/agent-core",
-          "@pwragnt/messaging-interface",
-          "@pwragnt/messaging-provider-discord",
-          "@pwragnt/messaging-provider-telegram"
-        ]
-      })
-    ],
-    build: {
-      minify: "esbuild",
-      sourcemap: false,
-      rollupOptions: {
-        external: ["discord.js", "grammy"]
-      }
-    }
-  },
-  preload: {
-    build: {
-      minify: "esbuild",
-      sourcemap: false,
-      rollupOptions: {
-        output: {
-          format: "cjs"
+//
+// The function form is needed so we can conditionally define process.env.NODE_ENV
+// only during `electron-vite build`. Without this, the built main/preload bundles
+// keep process.env.NODE_ENV as a runtime reference — and in the packaged .app
+// it's undefined, so isDevelopment checks resolve to true.
+export default defineConfig(({ command }) => {
+  const isBuild = command === "build";
+  const productionDefine = isBuild
+    ? { "process.env.NODE_ENV": JSON.stringify("production") }
+    : {};
+
+  return {
+    main: {
+      define: productionDefine,
+      plugins: [
+        externalizeDepsPlugin({
+          exclude: [
+            "@pwragnt/shared",
+            "@pwragnt/agent-core",
+            "@pwragnt/messaging-interface",
+            "@pwragnt/messaging-provider-discord",
+            "@pwragnt/messaging-provider-telegram"
+          ]
+        })
+      ],
+      build: {
+        minify: "esbuild",
+        sourcemap: false,
+        rollupOptions: {
+          external: ["discord.js", "grammy"]
         }
       }
     },
-    plugins: [
-      externalizeDepsPlugin({
-        exclude: ["@pwragnt/shared"]
-      })
-    ]
-  },
-  renderer: {
-    plugins: [react()],
-    resolve: {
-      alias: {
-        "@renderer": resolve(__dirname, "src/renderer/src")
-      }
+    preload: {
+      define: productionDefine,
+      build: {
+        minify: "esbuild",
+        sourcemap: false,
+        rollupOptions: {
+          output: {
+            format: "cjs"
+          }
+        }
+      },
+      plugins: [
+        externalizeDepsPlugin({
+          exclude: ["@pwragnt/shared"]
+        })
+      ]
     },
-    build: {
-      minify: "esbuild",
-      sourcemap: false
+    renderer: {
+      plugins: [react()],
+      resolve: {
+        alias: {
+          "@renderer": resolve(__dirname, "src/renderer/src")
+        }
+      },
+      build: {
+        minify: "esbuild",
+        sourcemap: false
+      }
     }
-  }
+  };
 });
