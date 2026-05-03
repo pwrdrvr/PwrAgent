@@ -357,7 +357,20 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     this.registerBotErrorHandler();
     this.registerBotHandlers();
 
-    const webhookInfo = await this.bot.api.getWebhookInfo();
+    const tokenDiagnostics = telegramBotTokenDiagnostics(this.options.config.botToken);
+    this.options.logger?.debug("telegram startup token diagnostics", tokenDiagnostics);
+
+    let webhookInfo: { url: string };
+    try {
+      webhookInfo = await this.bot.api.getWebhookInfo();
+    } catch (error) {
+      this.options.logger?.warn?.("telegram getWebhookInfo failed", {
+        error: errorMessage(error),
+        ...telegramHttpErrorDiagnostics(error),
+        token: tokenDiagnostics,
+      });
+      throw error;
+    }
     if (webhookInfo.url) {
       await this.bot.api.deleteWebhook({
         drop_pending_updates: false,
@@ -1519,6 +1532,68 @@ function sanitizeTelegramTopicName(title: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function telegramBotTokenDiagnostics(token: string): Record<string, unknown> {
+  const trimmed = token.trim();
+  const [botId = "", secret = ""] = trimmed.split(":", 2);
+  return {
+    length: token.length,
+    trimmedLength: trimmed.length,
+    hasColon: trimmed.includes(":"),
+    hasSurroundingWhitespace: token !== trimmed,
+    hasAnyWhitespace: /\s/.test(token),
+    botIdLength: botId.length,
+    botIdIsNumeric: /^\d+$/.test(botId),
+    secretLength: secret.length,
+    secretPresent: secret.length > 0,
+    matchesExpectedShape: /^\d+:[^\s:]+$/.test(trimmed),
+  };
+}
+
+function telegramHttpErrorDiagnostics(error: unknown): Record<string, unknown> {
+  const inner = readErrorProperty(error);
+  const status = readNumberProperty(inner, "status") ?? readNumberProperty(error, "status");
+  const statusText =
+    readStringProperty(inner, "statusText") ?? readStringProperty(error, "statusText");
+  const code = readStringProperty(inner, "code") ?? readStringProperty(error, "code");
+  const innerMessage = diagnosticErrorMessage(inner);
+  return {
+    ...(status !== undefined ? { status } : {}),
+    ...(statusText !== undefined ? { statusText } : {}),
+    ...(code !== undefined ? { code } : {}),
+    ...(inner !== undefined ? { cause: innerMessage } : {}),
+  };
+}
+
+function readErrorProperty(error: unknown): unknown {
+  if (!error || typeof error !== "object" || !("error" in error)) {
+    return undefined;
+  }
+  return (error as { error?: unknown }).error;
+}
+
+function diagnosticErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return typeof error === "string" ? error : undefined;
+}
+
+function readNumberProperty(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== "object" || !(key in value)) {
+    return undefined;
+  }
+  const property = (value as Record<string, unknown>)[key];
+  return typeof property === "number" ? property : undefined;
+}
+
+function readStringProperty(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== "object" || !(key in value)) {
+    return undefined;
+  }
+  const property = (value as Record<string, unknown>)[key];
+  return typeof property === "string" ? property : undefined;
 }
 
 function compactPreview(text: string, limit = 96): string {
