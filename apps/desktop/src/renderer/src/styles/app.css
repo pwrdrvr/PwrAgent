@@ -61,6 +61,13 @@ textarea {
   font: inherit;
 }
 
+input,
+textarea,
+[contenteditable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .app-shell {
   display: grid;
   position: relative;
@@ -71,6 +78,8 @@ textarea {
   overflow: hidden;
   background: var(--bg-app);
   color: var(--text-primary);
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .app-shell--fatal-settings {
@@ -1899,6 +1908,8 @@ textarea {
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .transcript-message--user {
