@@ -186,14 +186,12 @@ export function migrateIfNeeded(options?: {
   cleanupSidecars(tmpDbPath);
   fs.renameSync(tmpDbPath, dbPath);
 
-  const ts = Date.now();
   copyConfig(legacy.desktopConfig, options);
   copyGrokConfig(legacy.grokAppServerConfig, options);
-  backupFile(legacy.messagingState, ts);
-  backupFile(legacy.overlayState, ts);
-  backupFile(legacy.settingsSecrets, ts);
-  backupFile(legacy.desktopConfig, ts);
-  backupFile(legacy.grokAppServerConfig, ts);
+
+  // Legacy files are intentionally left in place. The old app code may still
+  // be running against them on other branches. Cleanup happens post-merge
+  // once all inflight branches are rebased to the new system.
 
   const counts = verifyCounts(dbPath);
   return { status: "migrated", dbPath, counts };
