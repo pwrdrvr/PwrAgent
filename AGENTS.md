@@ -28,8 +28,20 @@
   - `messaging` for Telegram, Discord, adapters, and messaging integrations.
   - `desktop` for the desktop app itself.
   - `agent-core` for the coding agent, currently the Grok coding agent.
+  - `release` for packaging, signing, notarization, distribution, and auto-update pipeline.
   - `docs` for documentation changes.
   - `tests` for test coverage, fixtures, and test infrastructure.
+
+## Release / Distribution
+
+- The desktop release pipeline (Mac, signing, notarization, auto-update) is
+  documented in [docs/desktop-release-runbook.md](docs/desktop-release-runbook.md).
+- The Phase 1 → Phase 2 distribution channel migration runbook lives at
+  [docs/desktop-distribution-phase-2-runbook.md](docs/desktop-distribution-phase-2-runbook.md).
+- v1.0 is closed-source proprietary, owned by PwrDrvr LLC. Treat the LICENSE
+  file at the repo root and all `package.json` `license: "UNLICENSED"` markings
+  as load-bearing — do not add OSS license language to any package, README, or
+  source-file header without an explicit policy change from PwrDrvr LLC.
 
 ## Runtime Config
 

@@ -1,6 +1,10 @@
 import { app, BrowserWindow, Menu, shell } from "electron";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import {
+  disposeAppMetadataIpcHandlers,
+  registerAppMetadataIpcHandlers,
+} from "./ipc/app-metadata";
+import {
   disposeApplicationIpcHandlers,
   registerApplicationIpcHandlers,
 } from "./ipc/applications";
@@ -34,6 +38,8 @@ import { getDesktopSettingsService } from "./settings/desktop-settings-singleton
 import { createMainWindow } from "./window";
 
 const APP_NAME = "PwrAgnt";
+const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC. All rights reserved.";
+const APP_WEBSITE = "https://pwrdrvr.com";
 const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragnt:main");
@@ -49,13 +55,19 @@ function installApplicationMenu(): void {
       role: "help",
       submenu: [
         {
-          label: "PwrAgnt",
+          label: `About ${APP_NAME}`,
+          click: () => {
+            app.showAboutPanel();
+          },
+        },
+        {
+          label: "Visit Website",
           click: async () => {
-            await shell.openExternal("https://github.com/pwrdrvr/PwrAgnt");
-          }
-        }
-      ]
-    }
+            await shell.openExternal(APP_WEBSITE);
+          },
+        },
+      ],
+    },
   ];
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -63,6 +75,12 @@ function installApplicationMenu(): void {
 
 export function bootstrapApp(): void {
   app.setName(APP_NAME);
+  app.setAboutPanelOptions({
+    applicationName: APP_NAME,
+    applicationVersion: app.getVersion(),
+    version: app.getVersion(),
+    copyright: APP_COPYRIGHT,
+  });
   initializeMainLogger();
 
   app.whenReady().then(async () => {
@@ -72,6 +90,7 @@ export function bootstrapApp(): void {
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();
     registerApplicationIpcHandlers();
+    registerAppMetadataIpcHandlers();
     registerImageNormalizationIpcHandlers();
     registerPreloadLogIpcHandlers();
     registerRendererErrorIpcHandlers();
@@ -111,6 +130,7 @@ export function bootstrapApp(): void {
   app.on("before-quit", () => {
     disposeAgentIpcHandlers();
     disposeApplicationIpcHandlers();
+    disposeAppMetadataIpcHandlers();
     disposeImageNormalizationIpcHandlers();
     disposePreloadLogIpcHandlers();
     disposeSettingsIpcHandlers();

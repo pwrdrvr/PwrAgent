@@ -74,10 +74,12 @@ import type {
   WriteDesktopSettingsConfigRequest,
 } from "@pwragnt/shared";
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
+import type { AppMetadata } from "../../../shared/app-metadata";
 
 export type DesktopApi = {
   copyText?: (text: string) => Promise<void>;
   getRuntimeIdentity?: () => Promise<RuntimeIdentity>;
+  readAppMetadata?: () => Promise<AppMetadata>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

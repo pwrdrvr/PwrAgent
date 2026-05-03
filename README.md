@@ -1,19 +1,32 @@
 # PwrAgnt
 
-Thread-centric coding agent desktop app.
+> **Closed-source preview.** Copyright © 2026 PwrDrvr LLC. All rights reserved.
+> See [LICENSE](LICENSE).
 
-## Getting Started
+PwrAgnt is a thread-centric coding agent desktop app. This repository contains
+the proprietary source code for PwrDrvr LLC's PwrAgnt product. It is not open
+source. Distribution of source, binaries, or derivative works requires prior
+written consent from PwrDrvr LLC.
+
+## Internal Development
+
+### Setup
 
 1. `pnpm install`
 2. `pnpm dev`
 
-## Workspace
+### Workspace
 
-- `apps/desktop` - Electron app shell
-- `packages/shared` - shared contracts and types
-- `packages/agent-core` - agent runtime and domain services
+- `apps/desktop` — Electron app shell
+- `packages/shared` — internal contracts and types
+- `packages/agent-core` — internal agent runtime and domain services
+- `packages/messaging/*` — internal messaging adapters
 
-## Messaging Integrations
+These packages are internal to PwrDrvr LLC and not intended for external
+consumption. Workspace `package.json` files are marked `private: true` and
+licensed `UNLICENSED`.
+
+### Messaging Integrations
 
 Telegram and Discord adapters can be enabled from the desktop main process with
 PwrAgnt-prefixed environment variables and allowlisted platform user IDs. Setup,
@@ -23,7 +36,7 @@ The channel adapter boundary for future Mattermost, Feishu/Lark, Slack, Matrix,
 or mobile integrations is documented in
 [docs/messaging-adapter-contract.md](docs/messaging-adapter-contract.md).
 
-## Testing
+### Testing
 
 - `pnpm test`
 - `pnpm typecheck`
@@ -60,7 +73,26 @@ Typical workflow:
 4. Run the desktop Electron regressions:
    `pnpm test:desktop-e2e`
 
-## Heap Diagnostics
+## Releasing
+
+Mac release pipeline (signing, notarization, distribution) is documented in:
+
+- [docs/desktop-release-runbook.md](docs/desktop-release-runbook.md)
+  — how to cut a release.
+- [docs/desktop-distribution-phase-2-runbook.md](docs/desktop-distribution-phase-2-runbook.md)
+  — Phase 1 → Phase 2 distribution channel migration.
+
+Release plan and brainstorm context:
+
+- [docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md](docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md)
+- [docs/brainstorms/2026-05-02-desktop-release-packaging-requirements.md](docs/brainstorms/2026-05-02-desktop-release-packaging-requirements.md)
+
+## Developer Diagnostics
+
+These sections cover internal development diagnostics; they are not user-facing
+features and are gated behind environment variables.
+
+### Heap Diagnostics
 
 Desktop heap diagnostics are opt-in and write artifacts under repo-local `.local/`.
 
@@ -93,7 +125,7 @@ Each sample and event record is tagged with `source: "renderer"` or `source: "ma
 
 During a repro run the desktop main process logs the session directory path. Share that path for later diagnosis.
 
-## Startup CPU Profiling
+### Startup CPU Profiling
 
 Desktop startup CPU profiling is opt-in and writes artifacts under repo-local `.local/`.
 
@@ -126,7 +158,9 @@ The desktop main process logs the created session directory path during startup.
 
 `summary.md` gives the quick ranked view of the hottest startup functions and source buckets. Open the raw `.cpuprofile` files in DevTools when the generated summary shows Electron or Chromium-heavy frames that need deeper inspection.
 
-`packages/agent-core` now includes the Grok-backed Codex app-server contract,
+## Internal Agent-Core Notes
+
+`packages/agent-core` includes the Grok-backed Codex app-server contract,
 consumer-sequence compatibility tests, and provider coverage for the OpenClaw-used
 subset.
 

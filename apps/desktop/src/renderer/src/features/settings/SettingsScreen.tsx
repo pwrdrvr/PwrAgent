@@ -2,23 +2,32 @@ import type {
   DesktopChatReplyComposer,
   DesktopSettingsSnapshot,
 } from "@pwragnt/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
 import type { DesktopSettingsState } from "./useDesktopSettings";
+import { AboutSettings } from "./AboutSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
 import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
 import { useState } from "react";
 
-type SettingsSection = "experimental" | "messaging" | "models" | "applications";
+type SettingsSection =
+  | "experimental"
+  | "messaging"
+  | "models"
+  | "applications"
+  | "about";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "applications", label: "Applications" },
   { id: "messaging", label: "Messaging" },
   { id: "models", label: "Models" },
   { id: "experimental", label: "Experimental" },
+  { id: "about", label: "About" },
 ];
 
 export function SettingsScreen(props: {
+  desktopApi?: DesktopApi;
   settings: DesktopSettingsState;
   onClose?: () => void;
 }) {
@@ -94,6 +103,7 @@ export function SettingsScreen(props: {
             </div>
           ) : snapshot ? (
             <SettingsSectionBody
+              desktopApi={props.desktopApi}
               section={section}
               settings={props.settings}
               snapshot={snapshot}
@@ -111,10 +121,15 @@ export function SettingsScreen(props: {
 }
 
 function SettingsSectionBody(props: {
+  desktopApi?: DesktopApi;
   section: SettingsSection;
   settings: DesktopSettingsState;
   snapshot: DesktopSettingsSnapshot;
 }) {
+  if (props.section === "about") {
+    return <AboutSettings desktopApi={props.desktopApi} />;
+  }
+
   if (props.section === "experimental") {
     return (
       <ExperimentalSettings
