@@ -693,15 +693,13 @@ textarea,
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   background: var(--bg-panel-elevated);
-  color: var(--text-secondary);
+  /* Use primary text color, not secondary — colored emoji (✅ 👀 …)
+     ignore CSS color anyway, but monochrome symbol-block codepoints
+     (🅐 🅑 …) take this color, and secondary made them look alpha'd
+     down compared to the colored emoji. Picker uses --text-primary too. */
+  color: var(--text-primary);
   font-size: 16px;
   line-height: 1;
-  /* Force emoji presentation. Codepoints in the symbol blocks
-     (U+1F150-U+1F189 negative circled/squared letters) render as plain
-     text glyphs by default in some contexts but as colored emoji chips
-     in others — pinning this property keeps the chip looking identical
-     to the picker option. */
-  font-variant-emoji: emoji;
   cursor: pointer;
   transition:
     background 120ms ease,
