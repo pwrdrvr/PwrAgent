@@ -906,9 +906,13 @@ textarea,
 
 .directory-row__header {
   display: grid;
+  position: sticky;
+  top: 0;
+  z-index: 5;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
+  background: var(--bg-sidebar);
 }
 
 .directory-row__summary {
