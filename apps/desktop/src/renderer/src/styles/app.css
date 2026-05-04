@@ -28,6 +28,10 @@
   --success-text: #9ce5b3;
   --info-soft: rgba(86, 137, 196, 0.16);
   --info-text: #9fc8ff;
+  --status-ok: #5fa969;
+  --status-warning: #d99a3d;
+  --status-suspended: #6b6660;
+  --status-error: #c45a3a;
   --button-text: #120800;
   --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.42);
   --thinking-scanner-beam-width: 18px;
@@ -5026,5 +5030,55 @@ textarea,
 
   .composer__review-options {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Status indicator dots — used by messaging platform icons (header + per-thread)
+   and any other small state pip. The four states map to --status-* tokens.
+   Keep these visually subordinate to the tangerine accent: they signal state,
+   they do not compete for attention. */
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-suspended);
+  flex: 0 0 auto;
+}
+
+.status-dot--ok {
+  background: var(--status-ok);
+}
+
+.status-dot--warning {
+  background: var(--status-warning);
+}
+
+.status-dot--suspended {
+  background: var(--status-suspended);
+}
+
+.status-dot--error {
+  background: var(--status-error);
+}
+
+@keyframes status-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.status-dot--blink {
+  animation: status-blink 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot--blink {
+    animation: none;
   }
 }

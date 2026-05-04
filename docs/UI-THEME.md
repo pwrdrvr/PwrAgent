@@ -55,6 +55,41 @@ Status colors may exist, but they should remain low-volume and functional:
 
 Status colors should not compete with tangerine as the main action and focus signal.
 
+### Status indicator dots
+
+For small live-state pips (messaging platform health, per-thread binding
+activity, future system-state indicators) use the `--status-*` tokens with
+the `.status-dot` utility class:
+
+```css
+--status-ok: #5fa969;          /* enabled and healthy */
+--status-warning: #d99a3d;     /* needs attention but still working */
+--status-suspended: #6b6660;   /* configured but intentionally paused */
+--status-error: #c45a3a;       /* configured, attempted, currently failing */
+```
+
+Activity (sending or receiving in flight) is signalled by adding the
+`.status-dot--blink` modifier — a 1.6s `ease-in-out` opacity pulse. The
+animation is suppressed under `prefers-reduced-motion: reduce`.
+
+These dots are subordinate signals: keep them at 8px or smaller, never use
+them as the primary call-to-action color, and never use them in body copy.
+
+## Icons
+
+Renderer iconography lives in
+[apps/desktop/src/renderer/src/icons/](../apps/desktop/src/renderer/src/icons/).
+Every shipped icon should be an exported component from that directory.
+
+- Stroke icons render at 16px square with `strokeWidth: 1.75` and use
+  `currentColor` so callers control color via CSS.
+- Decorative icons stay `aria-hidden`. Pass `aria-label` only when the icon
+  is the *only* signal of meaning (the component flips to `role="img"`
+  automatically).
+- **No emoji as iconography.** Emoji are content (e.g., user reactions),
+  never UI chrome. Folder, branch, worktree, settings, platform marks, etc.
+  must come from the icon library.
+
 ## Color Rules
 
 Use absolute black as the app foundation. Panels, sidebars, inputs, and message surfaces should be near-black, not gray slabs.
