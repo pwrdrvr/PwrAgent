@@ -152,6 +152,16 @@ function SettingsSectionBody(props: {
             experimental: { chatReplyComposer },
           });
         }}
+        onDiffCondensationEnabledChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { diffCondensation: { enabled } },
+          });
+        }}
+        onDiffCondensationModelChange={async (model: string) => {
+          await props.settings.writeConfig({
+            experimental: { diffCondensation: { model } },
+          });
+        }}
       />
     );
   }

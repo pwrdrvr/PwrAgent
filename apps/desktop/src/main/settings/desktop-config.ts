@@ -20,6 +20,10 @@ type DesktopConfigPathOptions = {
 export type DesktopSettingsConfig = {
   experimental?: {
     chatReplyComposer?: DesktopChatReplyComposer;
+    diffCondensation?: {
+      enabled?: boolean;
+      model?: string;
+    };
   };
   messaging?: {
     inputDebounceMs?: number;
@@ -112,6 +116,10 @@ export function mergeDesktopSettingsConfig(
     experimental: {
       ...current.experimental,
       ...patch.experimental,
+      diffCondensation: {
+        ...current.experimental?.diffCondensation,
+        ...patch.experimental?.diffCondensation,
+      },
     },
     messaging: {
       inputDebounceMs:
@@ -207,6 +215,22 @@ export function stringifyDesktopSettingsToml(
           config.experimental.chatReplyComposer,
         )}`,
       ].join("\n"),
+    );
+  }
+
+  const diffCondensation = config.experimental?.diffCondensation;
+  if (
+    diffCondensation
+    && (diffCondensation.enabled !== undefined || diffCondensation.model !== undefined)
+  ) {
+    sections.push(
+      [
+        "[experimental.diff_condensation]",
+        formatOptionalTomlEntry("enabled", diffCondensation.enabled),
+        formatOptionalTomlEntry("model", diffCondensation.model),
+      ]
+        .filter(Boolean)
+        .join("\n"),
     );
   }
 
@@ -331,6 +355,7 @@ function normalizeDesktopConfig(
   tables: Record<string, Record<string, TomlScalar>>,
 ): DesktopSettingsConfig {
   const experimental = tables["experimental"];
+  const diffCondensation = tables["experimental.diff_condensation"];
   const messaging = tables["messaging"];
   const attachments = tables["messaging.attachments"];
   const telegram = tables["messaging.telegram"];
@@ -343,6 +368,10 @@ function normalizeDesktopConfig(
   return pruneEmptyConfig({
     experimental: {
       chatReplyComposer: readComposer(experimental?.chat_reply_composer),
+      diffCondensation: {
+        enabled: readBoolean(diffCondensation?.enabled),
+        model: readString(diffCondensation?.model),
+      },
     },
     messaging: {
       inputDebounceMs: readNumber(messaging?.input_debounce_ms),

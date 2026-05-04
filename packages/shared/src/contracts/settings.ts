@@ -124,6 +124,21 @@ export type DesktopSettingsSnapshot = {
   secretStorage: DesktopSettingsSecretStorageState;
   experimental: {
     chatReplyComposer: DesktopSettingsValue<DesktopChatReplyComposer>;
+    /**
+     * Diff condensation (a.k.a. "diff eliding") gates whether we send
+     * focused-diff requests to xAI. When enabled, less-relevant diff
+     * hunks are hidden via an xAI judgment call. When disabled, every
+     * diff renders in full and no xAI request fires.
+     *
+     * model:
+     *   - "auto" — use the backend's default condensation model
+     *   - any other string — use that model id for every condensation
+     *     request, regardless of which backend is active
+     */
+    diffCondensation: {
+      enabled: DesktopSettingsValue<boolean>;
+      model: DesktopSettingsValue<string>;
+    };
   };
   messaging: {
     inputDebounceMs: DesktopSettingsValue<number>;
@@ -164,6 +179,11 @@ export type DesktopSettingsSnapshot = {
 export type DesktopSettingsConfigPatch = {
   experimental?: {
     chatReplyComposer?: DesktopChatReplyComposer;
+    diffCondensation?: {
+      enabled?: boolean;
+      /** "auto" or a specific model id. Empty string is coerced to "auto". */
+      model?: string;
+    };
   };
   messaging?: {
     inputDebounceMs?: number;

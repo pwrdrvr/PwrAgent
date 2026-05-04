@@ -36,7 +36,13 @@ export type FocusedDiffHunkDecision = {
 
 export type FocusedDiffAnalysisMode = "fallback" | "focused" | "full";
 
-export type FocusedDiffAnalysisSource = "cache" | "grok" | "heuristic" | "ineligible";
+export type FocusedDiffAnalysisSource =
+  | "cache"
+  | "grok"
+  | "heuristic"
+  | "ineligible"
+  /** The diff condensation experimental setting is off. */
+  | "condensation-disabled";
 
 export type FocusedDiffAnalysisResponse = {
   mode: FocusedDiffAnalysisMode;
