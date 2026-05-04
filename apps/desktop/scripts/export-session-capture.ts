@@ -13,10 +13,10 @@ async function main(): Promise<void> {
 
   const captureRoot =
     optionalString(args["capture-root"])
-    ?? process.env.PWRAGNT_PROTOCOL_CAPTURE_ROOT?.trim();
+    ?? process.env.PWRAGENT_PROTOCOL_CAPTURE_ROOT?.trim();
   if (!captureRoot) {
     throw new Error(
-      "Missing --capture-root and PWRAGNT_PROTOCOL_CAPTURE_ROOT is not set"
+      "Missing --capture-root and PWRAGENT_PROTOCOL_CAPTURE_ROOT is not set"
     );
   }
 
@@ -88,13 +88,13 @@ function parseBackend(
 
 function printUsage(): void {
   console.log(`Usage:
-  pnpm --filter @pwragnt/desktop export:session-capture -- \\
+  pnpm --filter @pwragent/desktop export:session-capture -- \\
     --capture-root /path/to/protocol-captures \\
     --session codex:thread-123 \\
     --output /tmp/thread-123.raw.capture.jsonl
 
   Or:
-  pnpm --filter @pwragnt/desktop export:session-capture -- \\
+  pnpm --filter @pwragent/desktop export:session-capture -- \\
     --capture-root /path/to/protocol-captures \\
     --capture-id 2026-04-18T15-00-00-000Z-codex \\
     --output /tmp/session.raw.capture.jsonl`);

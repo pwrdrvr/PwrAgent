@@ -65,7 +65,7 @@ function optionalString(values: string[] | undefined): string | undefined {
 
 function printUsage(): void {
   console.log(`Usage:
-  pnpm --filter @pwragnt/desktop analyze:startup-cpu-profile -- \\
+  pnpm --filter @pwragent/desktop analyze:startup-cpu-profile -- \\
     --session-dir .local/startup-cpu-2026-04-19-0930-abc123
 
 Optional:

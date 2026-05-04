@@ -9,7 +9,7 @@ async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-launchpad-sync-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-sync-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
   await mkdir(repoDir, { recursive: true });
 
@@ -19,9 +19,9 @@ async function createDirectoryLaunchpadTranscriptFixture(): Promise<{
     "git",
     [
       "-c",
-      "user.name=PwrAgnt Tests",
+      "user.name=PwrAgent Tests",
       "-c",
-      "user.email=pwragnt-tests@example.invalid",
+      "user.email=pwragent-tests@example.invalid",
       "commit",
       "--allow-empty",
       "-m",

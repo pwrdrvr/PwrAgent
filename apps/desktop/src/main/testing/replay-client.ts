@@ -8,7 +8,7 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadSummary,
   AppServerTurnInputItem,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { ReplayController } from "./replay-controller";
 import {
   asInitializeResult,

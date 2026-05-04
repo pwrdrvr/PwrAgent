@@ -2,7 +2,7 @@ import { ipcMain } from "electron";
 import type {
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { APPLICATION_OPEN_CHANNEL } from "../../shared/ipc";
 import { openDesktopApplication } from "../settings/application-discovery";
 

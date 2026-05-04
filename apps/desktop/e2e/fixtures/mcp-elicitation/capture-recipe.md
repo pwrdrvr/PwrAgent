@@ -13,7 +13,7 @@ Launch the desktop app with protocol capture enabled:
 
 ```bash
 PWRAGNT_PROTOCOL_CAPTURE=true \
-PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragnt-protocol-captures \
+PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragent-protocol-captures \
 pnpm dev
 ```
 
@@ -37,5 +37,5 @@ while recording this scenario.
   progress or completion notification, then stop.
 - Redact URL query strings, hashes, cookies, tokens, and machine-specific paths.
 - Do not check in `raw.capture.jsonl` until it has been reviewed for secrets.
-- If only URL-mode elicitation is captured, keep credentials out of PwrAgnt and
+- If only URL-mode elicitation is captured, keep credentials out of PwrAgent and
   assert only the redacted display URL plus accept/decline/cancel controls.

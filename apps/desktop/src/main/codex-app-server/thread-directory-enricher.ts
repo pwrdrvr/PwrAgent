@@ -2,7 +2,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { LinkedDirectorySummary } from "@pwragnt/shared";
+import type { LinkedDirectorySummary } from "@pwragent/shared";
 
 const execFile = promisify(execFileCallback);
 

@@ -2,13 +2,13 @@ import { mkdtemp, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AppServerThreadSummary } from "@pwragnt/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared";
 import { OverlayStore } from "../persistence/overlay-store";
 
 const tempDirs: string[] = [];
 
 async function createStore(): Promise<OverlayStore> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-overlay-store-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-overlay-store-"));
   tempDirs.push(tempDir);
   return new OverlayStore(path.join(tempDir, "overlay-state.json"));
 }
@@ -128,7 +128,7 @@ describe("OverlayStore", () => {
       threadId: "thread-1",
       gitBranch: "feature/handoff",
       directory: {
-        id: "pwragnt-handoff:codex:thread-1",
+        id: "pwragent-handoff:codex:thread-1",
         kind: "worktree",
         label: "repo",
         path: "/repo",
@@ -148,7 +148,7 @@ describe("OverlayStore", () => {
           path: "/other",
         },
         {
-          id: "pwragnt-handoff:codex:thread-1",
+          id: "pwragent-handoff:codex:thread-1",
           kind: "worktree",
           path: "/repo",
           worktreePath: "/repo/.worktrees/repo-feature",
@@ -164,7 +164,7 @@ describe("OverlayStore", () => {
       backend: "codex",
       threadId: "thread-1",
       directory: {
-        id: "pwragnt-handoff:codex:thread-1",
+        id: "pwragent-handoff:codex:thread-1",
         kind: "worktree",
         label: "repo",
         path: "/repo",
@@ -208,8 +208,8 @@ describe("OverlayStore", () => {
         id: "snapshot-1",
         backend: "codex",
         threadId: "thread-1",
-        worktreePath: "/Users/huntharo/.codex/worktrees/d593/PwrAgnt",
-        repositoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        worktreePath: "/Users/huntharo/.codex/worktrees/d593/PwrAgent",
+        repositoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
         snapshotRef: "refs/codex/snapshots/snapshot-1",
         snapshotCommit: "abc123",
         createdAt: 1000,
@@ -276,10 +276,10 @@ describe("OverlayStore", () => {
     const store = await createStore();
 
     await store.upsertDirectoryLaunchpad({
-      directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+      directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
       directoryKind: "directory",
-      directoryLabel: "PwrAgnt",
-      directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
       backend: "codex",
       executionMode: "full-access",
       prompt: "Investigate the directories launchpad flow",
@@ -296,7 +296,7 @@ describe("OverlayStore", () => {
       threads: Record<string, unknown>;
     };
 
-    expect(raw.directoryLaunchpads["directory:/Users/huntharo/pwrdrvr/PwrAgnt"]).toMatchObject({
+    expect(raw.directoryLaunchpads["directory:/Users/huntharo/pwrdrvr/PwrAgent"]).toMatchObject({
       prompt: "Investigate the directories launchpad flow",
       executionMode: "full-access",
     });
@@ -413,7 +413,7 @@ describe("OverlayStore", () => {
   });
 
   it("persists correctly when separate store instances write the same file concurrently", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-overlay-store-shared-"));
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-overlay-store-shared-"));
     tempDirs.push(tempDir);
     const sharedPath = path.join(tempDir, "overlay-state.json");
     const firstStore = new OverlayStore(sharedPath);

@@ -24,7 +24,7 @@ import type {
   StartThreadResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { MessagingBackendBridge } from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";

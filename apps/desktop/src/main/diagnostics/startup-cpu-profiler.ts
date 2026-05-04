@@ -103,7 +103,7 @@ export class StartupCpuProfiler {
       ?? resolveStartupCpuProfileConfig({
         repoRoot: resolveRepoRoot(),
       });
-    this.logger = options?.logger ?? getMainLogger("pwragnt:startup-cpu");
+    this.logger = options?.logger ?? getMainLogger("pwragent:startup-cpu");
     this.now = options?.now ?? (() => new Date());
     this.createSession = options?.createSession ?? createStartupCpuProfileSession;
     this.createMainProfiler =

@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTemporaryTestDirectory } from "@pwragnt/agent-core";
+import { createTemporaryTestDirectory } from "@pwragent/agent-core";
 import { resolveHeapMonitorConfig } from "../diagnostics/heap-monitor-config";
 import { createHeapSession } from "../diagnostics/heap-session";
 
 function createEnabledConfig(repoRoot: string) {
   const config = resolveHeapMonitorConfig({
     env: {
-      PWRAGNT_HEAP_DIAGNOSTICS: "1",
+      PWRAGENT_HEAP_DIAGNOSTICS: "1",
     },
     repoRoot,
   });
@@ -229,8 +229,8 @@ describe("heap diagnostics session", () => {
 
     const config = resolveHeapMonitorConfig({
       env: {
-        PWRAGNT_HEAP_DIAGNOSTICS: "1",
-        PWRAGNT_HEAP_DIAGNOSTICS_SETTLE_MS: "0",
+        PWRAGENT_HEAP_DIAGNOSTICS: "1",
+        PWRAGENT_HEAP_DIAGNOSTICS_SETTLE_MS: "0",
       },
       repoRoot: workspace.path,
     });

@@ -11,7 +11,7 @@ deepened: 2026-04-30
 
 ## Overview
 
-Add a desktop app settings system backed by a PwrAgnt TOML config file, keychain-backed secret storage, environment-variable overrides, and a dedicated settings screen. The first slice establishes durable app-level configuration for Experimental, Messaging, and Models without implementing Telegram or Discord bot runtime behavior.
+Add a desktop app settings system backed by a PwrAgent TOML config file, keychain-backed secret storage, environment-variable overrides, and a dedicated settings screen. The first slice establishes durable app-level configuration for Experimental, Messaging, and Models without implementing Telegram or Discord bot runtime behavior.
 
 ## Problem Frame
 
@@ -39,7 +39,7 @@ The desktop app currently has thread/draft controls in the composer and separate
 ### Relevant Code and Patterns
 
 - `packages/agent-core/src/config/grok-app-server-config.ts` and `packages/agent-core/src/config/simple-toml.ts` establish XDG-aware config path resolution, env-first precedence, and small TOML helpers for the current Grok runtime config.
-- `apps/desktop/src/main/app-server/desktop-state-root.ts` already resolves XDG-aware desktop state paths under `pwragnt` and supports `PWRAGNT_STATE_ROOT`.
+- `apps/desktop/src/main/app-server/desktop-state-root.ts` already resolves XDG-aware desktop state paths under `pwragent` and supports `PWRAGNT_STATE_ROOT`.
 - `apps/desktop/src/shared/ipc.ts`, `apps/desktop/src/preload/index.ts`, `apps/desktop/src/renderer/src/lib/desktop-api.ts`, and `apps/desktop/src/main/ipc/*` are the established path for shared contracts, IPC channel constants, preload exposure, renderer API typing, and main-process handlers.
 - `packages/shared/src/contracts/*.ts` is where desktop-facing request/response contracts live before export from `packages/shared/src/index.ts`.
 - `apps/desktop/src/main/codex-app-server/stdio-transport.ts` already handles Codex command auto-discovery, version detection, `PWRAGNT_CODEX_COMMAND`, Codex.app paths, and version ordering.
@@ -59,19 +59,19 @@ The desktop app currently has thread/draft controls in the composer and separate
 
 ## Key Technical Decisions
 
-- Desktop config path: use `~/.config/pwragnt/config.toml` by default, honoring `XDG_CONFIG_HOME`; add `PWRAGNT_CONFIG_PATH` for explicit override and tests. This mirrors the Grok app-server XDG direction without reusing the Grok-specific config file.
+- Desktop config path: use `~/.config/pwragent/config.toml` by default, honoring `XDG_CONFIG_HOME`; add `PWRAGNT_CONFIG_PATH` for explicit override and tests. This mirrors the Grok app-server XDG direction without reusing the Grok-specific config file.
 - TOML shape: use readable TOML tables for user-facing configuration, not flat keys. Implement a small desktop-specific TOML codec for the known settings shape rather than expanding the current agent-core flat TOML helper or adding a broad parser dependency.
 - Secret storage: use a `DesktopSecretStore` abstraction with an Electron `safeStorage` production adapter for the first pass. Store encrypted secret records outside TOML under the desktop state root and put only non-secret presence/source metadata in settings snapshots. This avoids the archived `keytar` dependency while using Electron's OS-backed cryptography.
 - Unsafe secret backend handling: if `safeStorage.isEncryptionAvailable()` is false or Linux reports `basic_text`, mark secret writes unavailable and surface that state in Settings instead of silently falling back to weak storage.
 - Runtime precedence: resolve effective values in the main process as `env > secret/config > product default`; renderer snapshots receive values for non-secrets, metadata for secrets, and override source information.
-- Env naming: use the origin-provided messaging env names, add missing PwrAgnt names for non-secret messaging flags/lists and composer selection, keep `XAI_API_KEY` as the canonical Grok API-key env override, and keep `PWRAGNT_CODEX_COMMAND` as the Codex path env override.
+- Env naming: use the origin-provided messaging env names, add missing PwrAgent names for non-secret messaging flags/lists and composer selection, keep `XAI_API_KEY` as the canonical Grok API-key env override, and keep `PWRAGNT_CODEX_COMMAND` as the Codex path env override.
 - Composer implementation boundary: introduce a lightweight composer implementation preference that currently selects the existing textarea runtime implementation for all modes unless a richer implementation is present. This lets the setting ship without pretending TipTap/custom composers are complete.
 
 ## Open Questions
 
 ### Resolved During Planning
 
-- Desktop config path and TOML shape: `~/.config/pwragnt/config.toml` with tables `[experimental]`, `[messaging.telegram]`, `[messaging.discord]`, `[models.codex]`, and `[models.grok]`.
+- Desktop config path and TOML shape: `~/.config/pwragent/config.toml` with tables `[experimental]`, `[messaging.telegram]`, `[messaging.discord]`, `[models.codex]`, and `[models.grok]`.
 - Secret backend choice: use Electron `safeStorage` behind a `DesktopSecretStore` boundary for this pass; avoid `keytar` unless implementation proves `safeStorage` cannot satisfy the app's actual security requirement.
 - Env overrides: use the complete set documented in the Environment Contract section below.
 - Codex discovery order: explicit env override, explicit config path, PATH `codex`, then Codex.app candidates, with executable checks and version detection using short timeouts.
@@ -181,7 +181,7 @@ The main process owns all config parsing, secret reads/writes, override preceden
 - Error path: unavailable keychain state can be represented without requiring a secret value.
 
 **Verification:**
-- Shared contracts compile and are exported through `@pwragnt/shared`.
+- Shared contracts compile and are exported through `@pwragent/shared`.
 - Contract tests prove raw secret values are absent from read response shapes.
 
 - [x] **Unit 2: Desktop Config And Secret Services**
@@ -201,7 +201,7 @@ The main process owns all config parsing, secret reads/writes, override preceden
 - Test: `apps/desktop/src/main/__tests__/desktop-secret-store.test.ts`
 
 **Approach:**
-- Resolve the config path as `PWRAGNT_CONFIG_PATH` when set, otherwise `XDG_CONFIG_HOME/pwragnt/config.toml` or `~/.config/pwragnt/config.toml`.
+- Resolve the config path as `PWRAGNT_CONFIG_PATH` when set, otherwise `XDG_CONFIG_HOME/pwragent/config.toml` or `~/.config/pwragent/config.toml`.
 - Store encrypted secret records under `resolveDesktopStateRoot()` rather than in TOML; TOML stores only non-secret config.
 - Implement the first secret-store adapter with Electron `safeStorage`; reject writes when encryption is unavailable or when Linux selects `basic_text`.
 - Parse TOML tables for the known settings shape and write stable, sorted config output to keep diffs reviewable.
@@ -248,7 +248,7 @@ The main process owns all config parsing, secret reads/writes, override preceden
 - Add channels for reading the redacted settings snapshot, writing non-secret config patches, replacing secrets, clearing secrets, and refreshing Codex discovery.
 - Register and dispose settings IPC handlers alongside the existing app-server, agent, image, and diagnostic handlers.
 - Keep raw secret values constrained to the replace-secret IPC request path; never include them in read responses, logs, or diagnostic payloads.
-- Expose typed preload methods in `window.pwragnt` and optional renderer API methods in `DesktopApi`.
+- Expose typed preload methods in `window.pwragent` and optional renderer API methods in `DesktopApi`.
 
 **Patterns to follow:**
 - `apps/desktop/src/main/ipc/app-server.ts`
@@ -448,7 +448,7 @@ The main process owns all config parsing, secret reads/writes, override preceden
 - **Interaction graph:** `App` opens `SettingsScreen`; `SettingsScreen` calls `DesktopApi`; preload invokes settings IPC; main settings service reads TOML, env, secret store, and Codex discovery; backend registry and Grok/xAI callers consume effective model settings.
 - **Error propagation:** config parse, secret-store, and discovery errors should remain localized to Settings snapshots and inline UI states unless they affect backend availability, where they should surface through existing backend unavailable reasons.
 - **State lifecycle risks:** settings writes must be atomic enough to avoid partial TOML corruption; secret writes and config writes should be separate operations so a failed secret write cannot imply a saved secret in TOML.
-- **API surface parity:** new settings contracts must be exported from `@pwragnt/shared`, exposed through preload, typed in `DesktopApi`, and tested in main and renderer.
+- **API surface parity:** new settings contracts must be exported from `@pwragent/shared`, exposed through preload, typed in `DesktopApi`, and tested in main and renderer.
 - **Integration coverage:** unit tests prove contracts and services; renderer tests prove UI flows; one E2E smoke path proves the real shell entrypoint and section navigation.
 - **Unchanged invariants:** thread history, existing composer thread/draft model controls, Grok app-server config compatibility, Codex auto-discovery fallback, and messaging runtime behavior remain unchanged except where model runtime settings are intentionally consumed.
 

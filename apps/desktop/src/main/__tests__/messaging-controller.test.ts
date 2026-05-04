@@ -19,7 +19,7 @@ import type {
   StartTurnRequest,
   SteerTurnRequest,
   SubmitServerRequestRequest,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import {
   MessagingController,
   type MessagingControllerOptions,
@@ -39,7 +39,7 @@ vi.mock("../messaging/attachment-image-normalization", () => ({
 }));
 
 async function createStore(): Promise<MessagingStore> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-controller-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-controller-"));
   tempDirs.push(tempDir);
   return new MessagingStore(path.join(tempDir, "messaging-state.json"));
 }
@@ -67,7 +67,7 @@ describe("MessagingController", () => {
     expect(harness.delivered).toHaveLength(1);
     expect(harness.delivered[0]).toMatchObject({
       kind: "thread_picker",
-      fallbackText: expect.stringContaining("Showing recent PwrAgnt threads."),
+      fallbackText: expect.stringContaining("Showing recent PwrAgent threads."),
     });
     expect(JSON.stringify(harness.delivered[0])).not.toMatch(/callback_data|custom_id/);
     await expect(harness.store.getPendingIntent(harness.delivered[0]!.id, { now: 1000 }))
@@ -89,7 +89,7 @@ describe("MessagingController", () => {
       page: {
         items: [
           expect.objectContaining({
-            label: "PwrAgnt",
+            label: "PwrAgent",
           }),
         ],
       },
@@ -99,16 +99,16 @@ describe("MessagingController", () => {
       buildCallbackEvent({
         actionId: "browse:select-project",
         value: {
-          directoryKey: "directory:pwragnt",
-          label: "PwrAgnt",
-          path: "/repo/pwragnt",
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
         },
       }),
     );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "thread_picker",
-      fallbackText: expect.stringContaining("PwrAgnt"),
+      fallbackText: expect.stringContaining("PwrAgent"),
       page: {
         items: [
           expect.objectContaining({
@@ -127,16 +127,16 @@ describe("MessagingController", () => {
       buildCallbackEvent({
         actionId: "browse:select-project",
         value: {
-          directoryKey: "directory:pwragnt",
-          label: "PwrAgnt",
-          path: "/repo/pwragnt",
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
         },
       }),
     );
 
     expect(harness.startThread).toHaveBeenCalledWith({
       backend: "codex",
-      cwd: "/repo/pwragnt",
+      cwd: "/repo/pwragent",
       executionMode: "default",
       fastMode: undefined,
       model: undefined,
@@ -155,10 +155,10 @@ describe("MessagingController", () => {
     expect(binding).not.toHaveProperty("threadDisplay");
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Project: PwrAgnt"),
+      text: expect.stringContaining("Project: PwrAgent"),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
-      text: expect.stringContaining("Directory: /repo/pwragnt"),
+      text: expect.stringContaining("Directory: /repo/pwragent"),
     });
   });
 
@@ -179,9 +179,9 @@ describe("MessagingController", () => {
       buildCallbackEvent({
         actionId: "browse:select-project",
         value: {
-          directoryKey: "directory:pwragnt",
-          label: "PwrAgnt",
-          path: "/repo/pwragnt",
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
         },
       }),
     );
@@ -672,7 +672,7 @@ describe("MessagingController", () => {
         fallback: "fail",
       },
       targetSurface: binding?.statusSurface,
-      text: expect.stringContaining("Project: PwrAgnt"),
+      text: expect.stringContaining("Project: PwrAgent"),
     });
     expect(statusIntents[1]).toMatchObject({
       kind: "dismiss",
@@ -689,7 +689,7 @@ describe("MessagingController", () => {
         pin: true,
       },
       targetSurface: undefined,
-      text: expect.stringContaining("Project: PwrAgnt"),
+      text: expect.stringContaining("Project: PwrAgent"),
     });
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/status").channel),
@@ -774,7 +774,7 @@ describe("MessagingController", () => {
     expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
-      title: "PwrAgnt",
+      title: "PwrAgent",
     });
   });
 
@@ -3025,20 +3025,20 @@ describe("MessagingController", () => {
       backend: "codex",
       direction: "local-to-worktree",
       leaveLocalBranch: "main",
-      repositoryPath: "/repo/pwragnt",
+      repositoryPath: "/repo/pwragent",
       sourceBranch: "feature/handoff",
-      sourcePath: "/repo/pwragnt",
+      sourcePath: "/repo/pwragent",
       threadId: "thread-1",
     });
     expect(harness.delivered.at(-2)).toMatchObject({
       kind: "status",
       status: "completed",
-      text: expect.stringContaining("/repo/pwragnt/.worktrees/pwragnt-feature-handoff"),
+      text: expect.stringContaining("/repo/pwragent/.worktrees/pwragent-feature-handoff"),
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining(
-        "Worktree: /repo/pwragnt/.worktrees/pwragnt-feature-handoff",
+        "Worktree: /repo/pwragent/.worktrees/pwragent-feature-handoff",
       ),
     });
   });
@@ -3144,14 +3144,14 @@ describe("MessagingController", () => {
     expect(harness.handoffThreadWorkspace).toHaveBeenCalledWith({
       backend: "codex",
       direction: "worktree-to-local",
-      repositoryPath: "/repo/pwragnt",
+      repositoryPath: "/repo/pwragent",
       sourceBranch: "feature/handoff",
-      sourcePath: "/repo/pwragnt/.worktrees/pwragnt-feature-handoff",
+      sourcePath: "/repo/pwragent/.worktrees/pwragent-feature-handoff",
       threadId: "thread-1",
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
-      text: expect.stringContaining("Directory: /repo/pwragnt"),
+      text: expect.stringContaining("Directory: /repo/pwragent"),
     });
     const finalStatus = harness.delivered.at(-1);
     if (!finalStatus || finalStatus.kind !== "status") {
@@ -3365,23 +3365,23 @@ async function createHarness(options?: {
             ? "worktree" as const
             : "local" as const,
           branch: request.sourceBranch,
-          repositoryPath: request.repositoryPath ?? "/repo/pwragnt",
+          repositoryPath: request.repositoryPath ?? "/repo/pwragent",
           targetPath: request.direction === "local-to-worktree"
-            ? "/repo/pwragnt/.worktrees/pwragnt-feature-handoff"
-            : "/repo/pwragnt",
+            ? "/repo/pwragent/.worktrees/pwragent-feature-handoff"
+            : "/repo/pwragent",
           linkedDirectory: request.direction === "local-to-worktree"
             ? {
-                id: "pwragnt-handoff:codex:thread-1",
+                id: "pwragent-handoff:codex:thread-1",
                 kind: "worktree" as const,
-                label: "PwrAgnt",
-                path: "/repo/pwragnt",
-                worktreePath: "/repo/pwragnt/.worktrees/pwragnt-feature-handoff",
+                label: "PwrAgent",
+                path: "/repo/pwragent",
+                worktreePath: "/repo/pwragent/.worktrees/pwragent-feature-handoff",
               }
             : {
-                id: "directory:pwragnt",
+                id: "directory:pwragent",
                 kind: "local" as const,
-                label: "PwrAgnt",
-                path: "/repo/pwragnt",
+                label: "PwrAgent",
+                path: "/repo/pwragent",
               },
           warnings: [],
           completedAt: 1000,
@@ -3513,10 +3513,10 @@ function buildNavigationSnapshot(): NavigationSnapshot {
         source: "codex",
         linkedDirectories: [
           {
-            id: "directory:pwragnt",
+            id: "directory:pwragent",
             kind: "local",
-            label: "PwrAgnt",
-            path: "/repo/pwragnt",
+            label: "PwrAgent",
+            path: "/repo/pwragent",
           },
         ],
         inbox: {
@@ -3528,10 +3528,10 @@ function buildNavigationSnapshot(): NavigationSnapshot {
     inboxThreadKeys: [],
     directories: [
       {
-        key: "directory:pwragnt",
+        key: "directory:pwragent",
         kind: "directory",
-        label: "PwrAgnt",
-        path: "/repo/pwragnt",
+        label: "PwrAgent",
+        path: "/repo/pwragent",
         threadKeys: ["codex:thread-1"],
         needsAttentionCount: 0,
         latestUpdatedAt: 1000,
@@ -3567,11 +3567,11 @@ function buildWorktreeHandoffNavigationSnapshot(): NavigationSnapshot {
     gitBranch: "feature/handoff",
     linkedDirectories: [
       {
-        id: "pwragnt-handoff:codex:thread-1",
+        id: "pwragent-handoff:codex:thread-1",
         kind: "worktree",
-        label: "PwrAgnt",
-        path: "/repo/pwragnt",
-        worktreePath: "/repo/pwragnt/.worktrees/pwragnt-feature-handoff",
+        label: "PwrAgent",
+        path: "/repo/pwragent",
+        worktreePath: "/repo/pwragent/.worktrees/pwragent-feature-handoff",
       },
     ],
   };

@@ -9,10 +9,10 @@ const fixturePath = path.resolve(
   "fixtures/skill-autocomplete-interactions/replay.fixture.json",
 );
 const customWidgetComposerEnv = {
-  PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "custom-widget-chips",
+  PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "custom-widget-chips",
 };
 const tiptapWysiwygComposerEnv = {
-  PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-wysiwyg-markdown-chips",
+  PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-wysiwyg-markdown-chips",
 };
 const reportedDraftPrefix =
   "Oh shoot... I was wrong about this I think. I thought the desktop app didn't show the tool use but I was looking at a version of the desktop app that didn't start the turn. I just now looked at the instance that started the turn and it does indeed have the tool use notifications.\n\n\n\nLet's use ";

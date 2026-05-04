@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary } from "@pwragnt/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 

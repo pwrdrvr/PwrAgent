@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BackendSummary, NavigationDirectorySummary } from "@pwragnt/shared";
+import type { BackendSummary, NavigationDirectorySummary } from "@pwragent/shared";
 import { Sidebar } from "../Sidebar";
 
 const backends: BackendSummary[] = [
@@ -90,9 +90,9 @@ const sharedThread = {
   linkedDirectories: [
     {
       id: "dir-a",
-      label: "PwrAgnt",
-      path: "/Users/huntharo/pwrdrvr/PwrAgnt",
-      worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
+      label: "PwrAgent",
+      path: "/Users/huntharo/pwrdrvr/PwrAgent",
+      worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
       kind: "worktree" as const,
     },
   ],
@@ -111,10 +111,10 @@ const updatedSinceSeenThread = {
 
 const directories: NavigationDirectorySummary[] = [
   {
-    key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+    key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
     kind: "directory",
-    label: "PwrAgnt",
-    path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+    label: "PwrAgent",
+    path: "/Users/huntharo/pwrdrvr/PwrAgent",
     threadKeys: ["codex:thread-1"],
     needsAttentionCount: 1,
     latestUpdatedAt: sharedThread.updatedAt,
@@ -171,7 +171,7 @@ describe("Sidebar", () => {
       "aria-pressed",
       "true"
     );
-    expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Cross-project cleanup").length).toBeGreaterThan(0);
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
   });
@@ -201,8 +201,8 @@ describe("Sidebar", () => {
       name: /Cross-project cleanup/i,
     });
 
-    expect(within(threadButton).getByLabelText("Copy path for worktree PwrAgnt")).toHaveTextContent(
-      "PwrAgnt"
+    expect(within(threadButton).getByLabelText("Copy path for worktree PwrAgent")).toHaveTextContent(
+      "PwrAgent"
     );
     expect(within(threadButton).queryByText("worktree")).not.toBeInTheDocument();
   });
@@ -215,8 +215,8 @@ describe("Sidebar", () => {
       linkedDirectories: [
         {
           id: "dir-a",
-          label: "PwrAgnt",
-          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
           kind: "local" as const,
         },
       ],
@@ -248,7 +248,7 @@ describe("Sidebar", () => {
 
     const browseSection = screen.getByRole("region", { name: "Thread browser" });
     fireEvent.click(
-      within(browseSection as HTMLElement).getByRole("button", { name: "PwrAgnt1" })
+      within(browseSection as HTMLElement).getByRole("button", { name: "PwrAgent1" })
     );
     const worktreeThreadButton = within(browseSection as HTMLElement).getByRole("button", {
       name: /Cross-project cleanup/i,
@@ -258,7 +258,7 @@ describe("Sidebar", () => {
     });
 
     expect(within(worktreeThreadButton).getByText("worktree")).toBeInTheDocument();
-    expect(within(worktreeThreadButton).queryByText("PwrAgnt")).not.toBeInTheDocument();
+    expect(within(worktreeThreadButton).queryByText("PwrAgent")).not.toBeInTheDocument();
     expect(within(localThreadButton).getByText("local")).toBeInTheDocument();
   });
 
@@ -286,7 +286,7 @@ describe("Sidebar", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Open new thread launchpad for PwrAgnt",
+        name: "Open new thread launchpad for PwrAgent",
       })
     );
 
@@ -300,8 +300,8 @@ describe("Sidebar", () => {
         launchpad: {
           directoryKey: directories[0]!.key,
           directoryKind: "directory",
-          directoryLabel: "PwrAgnt",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -332,7 +332,7 @@ describe("Sidebar", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Open new thread launchpad for PwrAgnt" }),
+      screen.getByRole("button", { name: "Open new thread launchpad for PwrAgent" }),
     ).not.toHaveClass("has-draft");
   });
 
@@ -343,8 +343,8 @@ describe("Sidebar", () => {
         launchpad: {
           directoryKey: directories[0]!.key,
           directoryKind: "directory",
-          directoryLabel: "PwrAgnt",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "Pending work",
@@ -375,7 +375,7 @@ describe("Sidebar", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Open new thread launchpad for PwrAgnt" }),
+      screen.getByRole("button", { name: "Open new thread launchpad for PwrAgent" }),
     ).toHaveClass("has-draft");
   });
 
@@ -539,7 +539,7 @@ describe("Sidebar", () => {
       "true"
     );
     expect(threadButton.querySelector('[data-thread-status="unread"]')).not.toBeNull();
-    expect(within(threadButton).getByText("PwrAgnt")).toBeInTheDocument();
+    expect(within(threadButton).getByText("PwrAgent")).toBeInTheDocument();
     expect(screen.queryByText("Cross-project cleanup")).not.toBeInTheDocument();
   });
 
@@ -689,7 +689,7 @@ describe("Sidebar", () => {
 
   it("copies thread context menu values", () => {
     const copyText = vi.fn(async () => undefined);
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         copyText,
@@ -733,7 +733,7 @@ describe("Sidebar", () => {
     expect(copyText).toHaveBeenNthCalledWith(1, "thread-1");
     expect(copyText).toHaveBeenNthCalledWith(
       2,
-      "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt"
+      "/Users/huntharo/.codex/worktrees/0f38/PwrAgent"
     );
     expect(copyText).toHaveBeenNthCalledWith(3, "codex/thread-centric-ui");
   });
@@ -752,8 +752,8 @@ describe("Sidebar", () => {
             linkedDirectories: [
               {
                 id: "dir-a",
-                label: "PwrAgnt",
-                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                label: "PwrAgent",
+                path: "/Users/huntharo/pwrdrvr/PwrAgent",
                 kind: "local" as const,
               },
             ],
@@ -770,8 +770,8 @@ describe("Sidebar", () => {
             linkedDirectories: [
               {
                 id: "dir-a",
-                label: "PwrAgnt",
-                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                label: "PwrAgent",
+                path: "/Users/huntharo/pwrdrvr/PwrAgent",
                 kind: "local" as const,
               },
             ],
@@ -1032,7 +1032,7 @@ describe("Sidebar", () => {
 
   it("copies a linked directory path from the recents chip", () => {
     const copyText = vi.fn(async () => undefined);
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         copyText,
@@ -1058,9 +1058,9 @@ describe("Sidebar", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy path for worktree PwrAgnt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy path for worktree PwrAgent" }));
 
-    expect(copyText).toHaveBeenCalledWith("/Users/huntharo/.codex/worktrees/0f38/PwrAgnt");
+    expect(copyText).toHaveBeenCalledWith("/Users/huntharo/.codex/worktrees/0f38/PwrAgent");
     expect(
       screen.queryByText("Line up the desktop shell with the app server")
     ).not.toBeInTheDocument();
@@ -1068,7 +1068,7 @@ describe("Sidebar", () => {
 
   it("shows compact runtime identity chips that copy full values", async () => {
     const copyText = vi.fn(async () => undefined);
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         copyText,
@@ -1087,7 +1087,7 @@ describe("Sidebar", () => {
         creatingThread={undefined}
         runtimeIdentity={{
           branch: "codex/fix-thread-naming-ephemeral",
-          cwd: "/Users/huntharo/pwrdrvr/PwrAgnt/.worktrees/pwragnt-fix-thread-naming-moioth2352",
+          cwd: "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352",
         }}
         selectedItemKey="codex:thread-1"
         threads={[sharedThread]}
@@ -1098,7 +1098,7 @@ describe("Sidebar", () => {
       />
     );
 
-    expect(screen.getByText(".worktrees/pwragnt-fix-th...ng-moioth2352")).toBeInTheDocument();
+    expect(screen.getByText(".worktrees/pwragent-fix-t...ng-moioth2352")).toBeInTheDocument();
     expect(screen.getByText("codex/fix-thread-naming-ephemeral")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy working directory" }));
@@ -1106,15 +1106,15 @@ describe("Sidebar", () => {
 
     expect(copyText).toHaveBeenNthCalledWith(
       1,
-      "/Users/huntharo/pwrdrvr/PwrAgnt/.worktrees/pwragnt-fix-thread-naming-moioth2352"
+      "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352"
     );
     expect(copyText).toHaveBeenNthCalledWith(2, "codex/fix-thread-naming-ephemeral");
-    expect(await screen.findAllByText("PwrAgnt")).not.toHaveLength(0);
+    expect(await screen.findAllByText("PwrAgent")).not.toHaveLength(0);
   });
 
   it("labels detached HEAD and copies the full commit SHA", () => {
     const copyText = vi.fn(async () => undefined);
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         copyText,
@@ -1133,7 +1133,7 @@ describe("Sidebar", () => {
         creatingThread={undefined}
         runtimeIdentity={{
           commitSha: "ab12cd3344556677889900aabbccddeeff001122",
-          cwd: "/Users/huntharo/.codex/worktrees/5d4b/PwrAgnt",
+          cwd: "/Users/huntharo/.codex/worktrees/5d4b/PwrAgent",
           detachedHead: true,
         }}
         selectedItemKey="codex:thread-1"

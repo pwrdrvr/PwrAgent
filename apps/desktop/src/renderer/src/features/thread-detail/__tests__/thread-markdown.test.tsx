@@ -47,7 +47,7 @@ describe("ThreadMarkdown", () => {
           preferredTerminalId: { value: "", source: "default" },
         }}
         desktopApi={{ openApplication }}
-        text={"I updated [AGENTS.md](/repo/PwrAgnt/AGENTS.md:17)."}
+        text={"I updated [AGENTS.md](/repo/PwrAgent/AGENTS.md:17)."}
       />
     );
 
@@ -57,7 +57,7 @@ describe("ThreadMarkdown", () => {
       expect(openApplication).toHaveBeenCalledWith({
         applicationId: "zed",
         kind: "editor",
-        targetPath: "/repo/PwrAgnt/AGENTS.md",
+        targetPath: "/repo/PwrAgent/AGENTS.md",
       });
     });
   });

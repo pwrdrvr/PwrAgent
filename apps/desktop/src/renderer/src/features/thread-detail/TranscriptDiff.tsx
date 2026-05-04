@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AppServerThreadActivityDetail } from "@pwragnt/shared";
+import type { AppServerThreadActivityDetail } from "@pwragent/shared";
 import {
   buildDiffView,
   getFocusedDiffEligibility,

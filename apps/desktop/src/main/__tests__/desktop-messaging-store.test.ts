@@ -9,15 +9,15 @@ describe("desktop messaging store", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwragnt-msg-store-test-"));
-    process.env.PWRAGNT_HOME = tmpDir;
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-msg-store-test-"));
+    process.env.PWRAGENT_HOME = tmpDir;
     initializeAppState();
   });
 
   afterEach(() => {
     resetDesktopMessagingStoreForTests();
     resetAppStateForTests();
-    delete process.env.PWRAGNT_HOME;
+    delete process.env.PWRAGENT_HOME;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

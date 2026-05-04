@@ -1,7 +1,7 @@
 import type {
   AppServerMcpElicitationRequestNotification,
   AppServerMcpElicitationResponse,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export type PendingMcpFieldOption = {
   value: string;

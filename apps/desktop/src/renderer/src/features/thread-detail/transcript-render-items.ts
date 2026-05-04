@@ -4,7 +4,7 @@ import type {
   AppServerThreadMessageEntry,
   AppServerThreadPlanEntry,
   AppServerThreadTurnMetadata,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export type TranscriptRenderItem =
   | {

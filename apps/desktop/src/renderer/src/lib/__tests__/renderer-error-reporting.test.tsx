@@ -3,13 +3,13 @@ import { installGlobalRendererErrorHandlers } from "../renderer-error-reporting"
 
 afterEach(() => {
   vi.restoreAllMocks();
-  delete (window as Window & { pwragnt?: unknown }).pwragnt;
+  delete (window as Window & { pwragent?: unknown }).pwragent;
 });
 
 describe("renderer error reporting", () => {
   it("forwards uncaught window errors to the desktop bridge", async () => {
     const reportRendererError = vi.fn(async () => undefined);
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         reportRendererError,

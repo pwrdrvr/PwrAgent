@@ -1,7 +1,7 @@
 import type {
   DesktopSettingsSnapshot,
   DesktopWorktreeStorageLocation,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { sourceBadge } from "./settings-fields";
 
 const STORAGE_OPTIONS: Array<{
@@ -17,7 +17,7 @@ const STORAGE_OPTIONS: Array<{
   },
   {
     description:
-      "Outside the repository under ~/.pwragnt/worktrees/<hash>/<project-folder>.",
+      "Outside the repository under ~/.pwragent/worktrees/<hash>/<project-folder>.",
     label: "User home",
     value: "user-home",
   },
@@ -83,7 +83,7 @@ export function WorktreesSettings(props: {
 
       {overridden ? (
         <p className="settings-row__description">
-          Overridden by PWRAGNT_WORKTREE_STORAGE; clear the environment
+          Overridden by PWRAGENT_WORKTREE_STORAGE; clear the environment
           variable to edit this from settings.
         </p>
       ) : null}

@@ -1,4 +1,4 @@
-import type { DesktopSettingsValue } from "@pwragnt/shared";
+import type { DesktopSettingsValue } from "@pwragent/shared";
 
 export function formatSourceLabel(source: string, overriddenByEnv?: boolean): string {
   if (source === "env") {

@@ -2,28 +2,28 @@
 import { execFileSync, spawn } from "node:child_process";
 
 const DEFAULT_VAULT_NAME = "Private";
-const DEFAULT_ITEM_NAME = "PwrAgnt Messaging";
+const DEFAULT_ITEM_NAME = "PwrAgent Messaging";
 
 const SECRET_FIELDS = [
   {
-    field: "PWRAGNT_MESSAGING_TELEGRAM_BOT_TOKEN",
-    env: "PWRAGNT_MESSAGING_TELEGRAM_BOT_TOKEN",
+    field: "PWRAGENT_MESSAGING_TELEGRAM_BOT_TOKEN",
+    env: "PWRAGENT_MESSAGING_TELEGRAM_BOT_TOKEN",
   },
   {
-    field: "PWRAGNT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS",
-    env: "PWRAGNT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS",
+    field: "PWRAGENT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS",
+    env: "PWRAGENT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS",
   },
   {
-    field: "PWRAGNT_MESSAGING_DISCORD_BOT_TOKEN",
-    env: "PWRAGNT_MESSAGING_DISCORD_BOT_TOKEN",
+    field: "PWRAGENT_MESSAGING_DISCORD_BOT_TOKEN",
+    env: "PWRAGENT_MESSAGING_DISCORD_BOT_TOKEN",
   },
   {
-    field: "PWRAGNT_MESSAGING_DISCORD_APPLICATION_ID",
-    env: "PWRAGNT_MESSAGING_DISCORD_APPLICATION_ID",
+    field: "PWRAGENT_MESSAGING_DISCORD_APPLICATION_ID",
+    env: "PWRAGENT_MESSAGING_DISCORD_APPLICATION_ID",
   },
   {
-    field: "PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS",
-    env: "PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS",
+    field: "PWRAGENT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS",
+    env: "PWRAGENT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS",
   },
 ];
 
@@ -44,8 +44,8 @@ function tryReadSecret(reference) {
 }
 
 function loadOpEnv(env = process.env) {
-  const vaultName = env.PWRAGNT_OP_VAULT ?? DEFAULT_VAULT_NAME;
-  const itemName = env.PWRAGNT_OP_ITEM ?? DEFAULT_ITEM_NAME;
+  const vaultName = env.PWRAGENT_OP_VAULT ?? DEFAULT_VAULT_NAME;
+  const itemName = env.PWRAGENT_OP_ITEM ?? DEFAULT_ITEM_NAME;
   const nextEnv = { ...env };
   let loadedCount = 0;
 
@@ -62,8 +62,8 @@ function loadOpEnv(env = process.env) {
   if (loadedCount === 0) {
     throw new Error(
       [
-        `No PwrAgnt messaging fields were loaded from 1Password item "${itemName}" in vault "${vaultName}".`,
-        `Create that item or set PWRAGNT_OP_VAULT/PWRAGNT_OP_ITEM before running this command.`,
+        `No PwrAgent messaging fields were loaded from 1Password item "${itemName}" in vault "${vaultName}".`,
+        `Create that item or set PWRAGENT_OP_VAULT/PWRAGENT_OP_ITEM before running this command.`,
       ].join(" "),
     );
   }
@@ -96,8 +96,8 @@ function main(argv = process.argv.slice(2)) {
         "  node scripts/op-run.mjs run -- <command> [args...]",
         "",
         "Defaults:",
-        `  PWRAGNT_OP_VAULT=${DEFAULT_VAULT_NAME}`,
-        `  PWRAGNT_OP_ITEM=${DEFAULT_ITEM_NAME}`,
+        `  PWRAGENT_OP_VAULT=${DEFAULT_VAULT_NAME}`,
+        `  PWRAGENT_OP_ITEM=${DEFAULT_ITEM_NAME}`,
         "",
       ].join("\n"),
     );

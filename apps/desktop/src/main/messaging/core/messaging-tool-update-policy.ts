@@ -1,4 +1,4 @@
-import type { MessagingToolUpdateMode } from "@pwragnt/shared";
+import type { MessagingToolUpdateMode } from "@pwragent/shared";
 import type { MessagingToolActivity } from "./messaging-tool-activity.js";
 
 export type MessagingToolUpdatePolicyDelivery = {

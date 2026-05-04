@@ -14,7 +14,7 @@ describe("Codex app-server contract", () => {
     expect(result).toEqual({
       protocolVersion: "1.0",
       serverInfo: {
-        name: "@pwragnt/grok-app-server",
+        name: "@pwragent/grok-app-server",
         version: "0.1.0",
       },
       capabilities: {

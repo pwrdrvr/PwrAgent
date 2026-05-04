@@ -42,7 +42,7 @@ describe("settings ipc", () => {
   });
 
   it("registers redacted read and write handlers", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragnt-settings-ipc-"));
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
     tempRoots.push(tempRoot);
     const secretStore = new MemoryDesktopSecretStore();
     await secretStore.setSecret("telegramBotToken", "123456789:secret-token");
@@ -110,7 +110,7 @@ describe("settings ipc", () => {
   });
 
   it("disposes backend clients after model settings change", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragnt-settings-ipc-"));
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
     tempRoots.push(tempRoot);
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),

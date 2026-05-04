@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Deferred, createTemporaryTestDirectory } from "@pwragnt/agent-core";
+import { Deferred, createTemporaryTestDirectory } from "@pwragent/agent-core";
 import { resolveHeapMonitorConfig } from "../diagnostics/heap-monitor-config";
 import { createHeapSession } from "../diagnostics/heap-session";
 import { MainProcessHeapMonitor } from "../diagnostics/main-process-heap-monitor";
@@ -26,12 +26,12 @@ function createMonitorConfig(
 ) {
   const config = resolveHeapMonitorConfig({
     env: {
-      PWRAGNT_HEAP_DIAGNOSTICS: "1",
-      PWRAGNT_HEAP_DIAGNOSTICS_SETTLE_MS: "1",
-      PWRAGNT_HEAP_DIAGNOSTICS_INTERVAL_MS: "5",
-      PWRAGNT_HEAP_DIAGNOSTICS_DELTA_BYTES: "100",
-      PWRAGNT_HEAP_DIAGNOSTICS_COOLDOWN_MS: "10",
-      PWRAGNT_HEAP_DIAGNOSTICS_MAX_SNAPSHOTS: "2",
+      PWRAGENT_HEAP_DIAGNOSTICS: "1",
+      PWRAGENT_HEAP_DIAGNOSTICS_SETTLE_MS: "1",
+      PWRAGENT_HEAP_DIAGNOSTICS_INTERVAL_MS: "5",
+      PWRAGENT_HEAP_DIAGNOSTICS_DELTA_BYTES: "100",
+      PWRAGENT_HEAP_DIAGNOSTICS_COOLDOWN_MS: "10",
+      PWRAGENT_HEAP_DIAGNOSTICS_MAX_SNAPSHOTS: "2",
     },
     repoRoot: "/repo",
   });
@@ -326,10 +326,10 @@ describe("MainProcessHeapMonitor", () => {
     const workspace = await createTemporaryTestDirectory();
     const config = resolveHeapMonitorConfig({
       env: {
-        PWRAGNT_HEAP_DIAGNOSTICS: "1",
-        PWRAGNT_HEAP_DIAGNOSTICS_SETTLE_MS: "1",
-        PWRAGNT_HEAP_DIAGNOSTICS_INTERVAL_MS: "5",
-        PWRAGNT_HEAP_DIAGNOSTICS_DELTA_BYTES: "100",
+        PWRAGENT_HEAP_DIAGNOSTICS: "1",
+        PWRAGENT_HEAP_DIAGNOSTICS_SETTLE_MS: "1",
+        PWRAGENT_HEAP_DIAGNOSTICS_INTERVAL_MS: "5",
+        PWRAGENT_HEAP_DIAGNOSTICS_DELTA_BYTES: "100",
       },
       repoRoot: workspace.path,
     });

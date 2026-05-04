@@ -46,7 +46,7 @@ test("keeps active work activity before later live commentary", async () => {
     const changedIndex = transcriptText.indexOf("Changed 1 file");
     const focusedMessageIndex = transcriptText.indexOf("The focused composer tests");
     const e2eCommandIndex = transcriptText.indexOf(
-      "pnpm --filter @pwragnt/desktop test"
+      "pnpm --filter @pwragent/desktop test"
     );
     const electronMessageIndex = transcriptText.indexOf(
       "Electron showed the plain contenteditable route"

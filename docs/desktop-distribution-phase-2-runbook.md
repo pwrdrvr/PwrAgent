@@ -5,7 +5,7 @@
 > Origin: [docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md](plans/2026-05-02-004-feat-desktop-release-packaging-plan.md)
 
 This runbook covers migrating the desktop auto-update channel from Phase 1
-(solo dogfooding through the existing private `pwrdrvr/PwrAgnt` GitHub repo,
+(solo dogfooding through the existing private `pwrdrvr/PwrAgent` GitHub repo,
 with a runtime-injected `GH_TOKEN`) to Phase 2 (no token required, multiple
 external testers can install).
 
@@ -23,7 +23,7 @@ public URL; the only differences are who hosts and how access is controlled.
 
 ### Option A — Open-source the source repo
 
-Make `pwrdrvr/PwrAgnt` public. GitHub Releases attached to a public repo are
+Make `pwrdrvr/PwrAgent` public. GitHub Releases attached to a public repo are
 public-readable, so `electron-updater` no longer needs a token.
 
 Required changes:
@@ -42,25 +42,25 @@ Trade-offs:
 
 ### Option B — Public release-only repo (recommended default)
 
-Keep `pwrdrvr/PwrAgnt` private. Create a new public repo `pwrdrvr/PwrAgnt-Releases`
+Keep `pwrdrvr/PwrAgent` private. Create a new public repo `pwrdrvr/PwrAgent-Releases`
 that holds *only* a README, the LICENSE/EULA, and GitHub Releases with the
 signed artifacts. `electron-updater` points at the public repo. This is what
 Hyper, early Linear, and several other closed-source Electron apps use.
 
 Required changes:
 - Create the public repo. Push a small README that says "Release artifacts for
-  PwrAgnt. Source is proprietary."
+  PwrAgent. Source is proprietary."
 - `electron-builder.yml` `publish:` →
   ```yaml
   publish:
     provider: github
     owner: pwrdrvr
-    repo: PwrAgnt-Releases
+    repo: PwrAgent-Releases
     private: false
     releaseType: release
   ```
 - `release.yml` workflow: change `RELEASES_PAT` to a fine-grained PAT with
-  `Contents: Read and Write` scoped to `pwrdrvr/PwrAgnt-Releases` only.
+  `Contents: Read and Write` scoped to `pwrdrvr/PwrAgent-Releases` only.
 - Mirror existing v0.x.0 / v1.0.x releases into the new repo so any installed
   Phase-1 binary that points at the new feed (after the bridge release lands)
   finds the expected versions.
@@ -87,7 +87,7 @@ Required changes:
   ```yaml
   publish:
     provider: generic
-    url: https://updates.pwragnt.com/${channel}
+    url: https://updates.pwragent.com/${channel}
     channel: latest
     useMultipleRangeRequest: true
   ```

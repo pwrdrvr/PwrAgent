@@ -6,7 +6,7 @@ This tree defines the generic messaging contract and the provider adapters that 
 
 - `packages/messaging/interface` is the only generic messaging contract. It may define channel-neutral types, capabilities, delivery policies, opaque adapter state, callback handles, and rendering primitives.
 - The interface package must not import Telegram, Discord, Feishu, Mattermost, desktop, or agent-core implementation code.
-- Provider packages under `packages/messaging/providers/*` are isolated TypeScript packages. They may import `@pwragnt/messaging-interface` and their own provider SDKs, but they must not import desktop, agent-core, shared app contracts, or sibling providers.
+- Provider packages under `packages/messaging/providers/*` are isolated TypeScript packages. They may import `@pwragent/messaging-interface` and their own provider SDKs, but they must not import desktop, agent-core, shared app contracts, or sibling providers.
 - Provider SDKs such as `grammy` and `discord.js` belong only inside their provider package. Do not import those SDKs from desktop messaging workflow code or from the generic interface.
 - Desktop messaging orchestration lives outside this tree, currently in `apps/desktop/src/main/messaging`. It should speak the generic interface and load providers through the provider loader, not through provider-specific workflow branches.
 

@@ -2,7 +2,7 @@ import { getMainLogger } from "../log";
 
 export type JsonRpcId = string | number;
 
-const jsonRpcLog = getMainLogger("pwragnt:json-rpc");
+const jsonRpcLog = getMainLogger("pwragent:json-rpc");
 
 type JsonRpcEnvelope = {
   jsonrpc?: string;

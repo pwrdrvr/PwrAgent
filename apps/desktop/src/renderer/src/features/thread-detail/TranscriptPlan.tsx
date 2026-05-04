@@ -1,7 +1,7 @@
 import type {
   AppServerThreadPlanEntry,
   DesktopApplicationsSnapshot,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 

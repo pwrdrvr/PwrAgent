@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AppServerNotification } from "@pwragnt/shared";
+import type { AppServerNotification } from "@pwragent/shared";
 import {
   readProtocolCaptureFile,
   type CapturedProtocolEnvelopeRecord,

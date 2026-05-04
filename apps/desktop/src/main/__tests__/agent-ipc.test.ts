@@ -8,7 +8,7 @@ import type {
   StartThreadRequest,
   StartTurnRequest,
   SteerTurnRequest,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const send = vi.fn();

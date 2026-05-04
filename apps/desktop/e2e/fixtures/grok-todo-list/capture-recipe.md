@@ -16,7 +16,7 @@ for Grok-backed threads.
 As of April 18, 2026, the live Grok probe did not emit a plan.
 
 - Probe thread: `thread-3mefc6i7`
-- Capture root: `/tmp/pwragnt-protocol-captures-grok-todo-e2e`
+- Capture root: `/tmp/pwragent-protocol-captures-grok-todo-e2e`
 - Prompt:
 
   ```text
@@ -44,7 +44,7 @@ fixture as soon as Grok emits live plan data.
 
 ```bash
 PWRAGNT_PROTOCOL_CAPTURE=true \
-PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragnt-protocol-captures \
+PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragent-protocol-captures \
 pnpm dev
 ```
 
@@ -60,14 +60,14 @@ pnpm dev
 ## Promotion Commands
 
 ```bash
-pnpm --filter @pwragnt/desktop export:session-capture -- \
-  --capture-root /tmp/pwragnt-protocol-captures \
+pnpm --filter @pwragent/desktop export:session-capture -- \
+  --capture-root /tmp/pwragent-protocol-captures \
   --session grok:<thread-id> \
   --output /tmp/grok-todo-list.raw.capture.jsonl
 ```
 
 ```bash
-pnpm --filter @pwragnt/desktop derive:replay-fixture -- \
+pnpm --filter @pwragent/desktop derive:replay-fixture -- \
   --input /tmp/grok-todo-list.raw.capture.jsonl \
   --output-dir apps/desktop/e2e/fixtures/grok-todo-list \
   --scenario grok-todo-list \

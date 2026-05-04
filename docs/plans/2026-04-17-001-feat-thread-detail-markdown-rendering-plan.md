@@ -251,7 +251,7 @@ flowchart TB
 
 ## Sources & References
 
-- **Origin document:** [docs/brainstorms/2026-04-17-thread-detail-markdown-rendering-requirements.md](/Users/huntharo/.codex/worktrees/5b80/PwrAgnt/docs/brainstorms/2026-04-17-thread-detail-markdown-rendering-requirements.md)
+- **Origin document:** [docs/brainstorms/2026-04-17-thread-detail-markdown-rendering-requirements.md](/Users/huntharo/.codex/worktrees/5b80/PwrAgent/docs/brainstorms/2026-04-17-thread-detail-markdown-rendering-requirements.md)
 - Related code: `apps/desktop/src/renderer/src/features/thread-detail/TranscriptMessage.tsx`
 - Related code: `apps/desktop/src/renderer/src/features/thread-detail/ThreadHeader.tsx`
 - Related code: `apps/desktop/src/renderer/src/lib/skill-mentions.ts`

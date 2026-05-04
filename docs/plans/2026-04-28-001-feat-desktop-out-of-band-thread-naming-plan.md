@@ -13,7 +13,7 @@ Add a desktop-owned out-of-band title generation flow for new thread prompts. Th
 
 ## Problem Frame
 
-PwrAgnt currently has two different naming behaviors in play. The desktop can derive a local title from the first prompt, and Codex Desktop appears to make a separate ephemeral generation call that later applies a polished name through `thread/name/set`. The existing PwrAgnt code now has a shared title prompt, but no code sends that prompt to a model or applies the generated title.
+PwrAgent currently has two different naming behaviors in play. The desktop can derive a local title from the first prompt, and Codex Desktop appears to make a separate ephemeral generation call that later applies a polished name through `thread/name/set`. The existing PwrAgent code now has a shared title prompt, but no code sends that prompt to a model or applies the generated title.
 
 There is also an existing desktop out-of-band model-call pattern in the focused-diff feature. That path is xAI-specific today, possibly underused, but it already demonstrates the right desktop ownership boundary: a renderer or desktop workflow asks the main process for an ephemeral model decision, the main process uses a short timeout, validates structured output, caches/falls back conservatively, and does not expose that decision as app-server protocol.
 

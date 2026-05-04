@@ -4,13 +4,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createReplayClientsFromEnv } from "../testing/replay-runtime";
 
-const REPLAY_FIXTURE_PATH_ENV = "PWRAGNT_REPLAY_FIXTURE_PATH";
+const REPLAY_FIXTURE_PATH_ENV = "PWRAGENT_REPLAY_FIXTURE_PATH";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
   delete process.env[REPLAY_FIXTURE_PATH_ENV];
-  delete globalThis.__PWRAGNT_REPLAY_DRIVER__;
+  delete globalThis.__PWRAGENT_REPLAY_DRIVER__;
 
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -80,7 +80,7 @@ describe("replay-runtime", () => {
     });
 
     expect(
-      globalThis.__PWRAGNT_REPLAY_DRIVER__?.getLastStartTurn({
+      globalThis.__PWRAGENT_REPLAY_DRIVER__?.getLastStartTurn({
         executionMode: "full-access"
       })
     ).toEqual({
@@ -88,13 +88,13 @@ describe("replay-runtime", () => {
       input: [{ type: "text", text: "Check payload capture" }]
     });
 
-    await globalThis.__PWRAGNT_REPLAY_DRIVER__?.advance({
+    await globalThis.__PWRAGENT_REPLAY_DRIVER__?.advance({
       executionMode: "full-access",
       stepId: "req-1"
     });
 
     expect(
-      globalThis.__PWRAGNT_REPLAY_DRIVER__?.getPendingRequest({
+      globalThis.__PWRAGENT_REPLAY_DRIVER__?.getPendingRequest({
         executionMode: "full-access"
       })
     ).toMatchObject({
@@ -104,15 +104,15 @@ describe("replay-runtime", () => {
       }
     });
 
-    expect(globalThis.__PWRAGNT_REPLAY_DRIVER__?.getPendingRequest()).toBeUndefined();
+    expect(globalThis.__PWRAGENT_REPLAY_DRIVER__?.getPendingRequest()).toBeUndefined();
 
-    await globalThis.__PWRAGNT_REPLAY_DRIVER__?.respondToPendingRequest({
+    await globalThis.__PWRAGENT_REPLAY_DRIVER__?.respondToPendingRequest({
       executionMode: "full-access",
       requestId: "approval-1"
     });
 
     expect(
-      globalThis.__PWRAGNT_REPLAY_DRIVER__?.getPendingRequest({
+      globalThis.__PWRAGENT_REPLAY_DRIVER__?.getPendingRequest({
         executionMode: "full-access"
       })
     ).toBeUndefined();
@@ -162,7 +162,7 @@ describe("replay-runtime", () => {
     });
 
     await clients!.grokClient.getInitializeResult();
-    await globalThis.__PWRAGNT_REPLAY_DRIVER__?.advance({ stepId: "notif-1" });
+    await globalThis.__PWRAGENT_REPLAY_DRIVER__?.advance({ stepId: "notif-1" });
 
     expect(notifications).toEqual(["thread/status/changed"]);
     await expect(clients!.codexDefaultClient.getInitializeResult()).rejects.toThrow(
@@ -172,7 +172,7 @@ describe("replay-runtime", () => {
 });
 
 function writeFixture(fixture: unknown): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwragnt-replay-runtime-"));
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-replay-runtime-"));
   tempDirs.push(tempDir);
 
   const fixturePath = path.join(tempDir, "replay.fixture.json");

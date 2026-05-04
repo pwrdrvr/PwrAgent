@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AppServerMcpElicitationRequestNotification } from "@pwragnt/shared";
+import type { AppServerMcpElicitationRequestNotification } from "@pwragent/shared";
 import {
   buildMcpElicitationResponse,
   canAcceptMcpElicitation,

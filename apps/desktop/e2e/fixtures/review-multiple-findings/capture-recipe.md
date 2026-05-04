@@ -6,7 +6,7 @@ Capture a Codex inline review that returns a plain-text summary plus multiple
 `Full review comments:` findings, followed by a duplicate `agentMessage` with
 the same text.
 
-The replay verifies that PwrAgnt renders the summary once and shows each finding
+The replay verifies that PwrAgent renders the summary once and shows each finding
 as its own review card.
 
 ## Source Capture

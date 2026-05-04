@@ -23,40 +23,40 @@ test("shows linked directory path tooltips in the context rail", async () => {
       name: "Thread context",
     });
 
-    await contextRail.getByLabel("Path for PwrAgnt", { exact: true }).focus();
-    await expectVisibleTooltip(app.window, "/repo/PwrAgnt");
+    await contextRail.getByLabel("Path for PwrAgent", { exact: true }).focus();
+    await expectVisibleTooltip(app.window, "/repo/PwrAgent");
 
     await contextRail
-      .getByRole("button", { name: "Copy path for PwrAgnt", exact: true })
+      .getByRole("button", { name: "Copy path for PwrAgent", exact: true })
       .focus();
     await expectVisibleTooltip(
       app.window,
-      "/repo/PwrAgnt\nClick to copy to clipboard"
+      "/repo/PwrAgent\nClick to copy to clipboard"
     );
 
-    await contextRail.getByLabel("Path for worktree PwrAgnt", { exact: true }).focus();
+    await contextRail.getByLabel("Path for worktree PwrAgent", { exact: true }).focus();
     await expectVisibleTooltip(
       app.window,
-      "/repo/PwrAgnt/.worktrees/feature-context-tooltips"
+      "/repo/PwrAgent/.worktrees/feature-context-tooltips"
     );
 
     await contextRail
-      .getByRole("button", { name: "Copy path for worktree PwrAgnt", exact: true })
+      .getByRole("button", { name: "Copy path for worktree PwrAgent", exact: true })
       .focus();
     await expectVisibleTooltip(
       app.window,
-      "/repo/PwrAgnt/.worktrees/feature-context-tooltips\nClick to copy to clipboard"
+      "/repo/PwrAgent/.worktrees/feature-context-tooltips\nClick to copy to clipboard"
     );
 
     await contextRail.getByLabel("Path for local LocalCheckout", { exact: true }).focus();
-    await expectVisibleTooltip(app.window, "/repo/PwrAgnt");
+    await expectVisibleTooltip(app.window, "/repo/PwrAgent");
 
     await contextRail
       .getByRole("button", { name: "Copy path for local LocalCheckout", exact: true })
       .focus();
     await expectVisibleTooltip(
       app.window,
-      "/repo/PwrAgnt\nClick to copy to clipboard"
+      "/repo/PwrAgent\nClick to copy to clipboard"
     );
   } finally {
     await app.close();

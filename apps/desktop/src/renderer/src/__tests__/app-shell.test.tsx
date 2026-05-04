@@ -12,7 +12,7 @@ import type {
   DesktopSettingsSnapshot,
   StartTurnRequest,
   StartTurnResponse,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 
@@ -40,7 +40,7 @@ describe("App", () => {
     }));
     const snapshot = {
       fetchedAt: 1,
-      configPath: "/tmp/pwragnt/config.toml",
+      configPath: "/tmp/pwragent/config.toml",
       configError: "line 3: expected a key",
       runtime: {
         messaging: {
@@ -102,11 +102,11 @@ describe("App", () => {
       },
       worktrees: {
         storage: { value: "user-home", source: "default" },
-        effectivePath: "/home/example/.pwragnt/worktrees",
+        effectivePath: "/home/example/.pwragent/worktrees",
       },
     } satisfies DesktopSettingsSnapshot;
 
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         readSettings: async () => ({ snapshot }),
@@ -133,7 +133,7 @@ describe("App", () => {
       fetchedAt: Date.now(),
       data: [
         {
-          cwd: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
+          cwd: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
           skills: [
             {
               name: "frontend-design",
@@ -249,13 +249,13 @@ describe("App", () => {
       }
     };
 
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         copyText,
         getRuntimeIdentity: async () => ({
           branch: "codex/fix-thread-naming-ephemeral",
-          cwd: "/Users/huntharo/pwrdrvr/PwrAgnt/.worktrees/pwragnt-fix-thread-naming-moioth2352",
+          cwd: "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352",
         }),
         ping: () => "pong",
         listSkills,
@@ -341,10 +341,10 @@ describe("App", () => {
               gitBranch: "codex/build-codex-client",
               linkedDirectories: [
                 {
-                  id: "/Users/huntharo/pwrdrvr/PwrAgnt",
-                  label: "PwrAgnt",
-                  path: "/Users/huntharo/pwrdrvr/PwrAgnt",
-                  worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
+                  id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                  label: "PwrAgent",
+                  path: "/Users/huntharo/pwrdrvr/PwrAgent",
+                  worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
                   kind: "worktree"
                 }
               ],
@@ -397,8 +397,8 @@ describe("App", () => {
         name: "Build Codex client"
       })
     ).toBeInTheDocument();
-    expect(screen.getAllByText("PwrAgnt").length).toBeGreaterThan(0);
-    expect(await screen.findByText(".worktrees/pwragnt-fix-th...ng-moioth2352")).toBeInTheDocument();
+    expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
+    expect(await screen.findByText(".worktrees/pwragent-fix-t...ng-moioth2352")).toBeInTheDocument();
     expect(screen.getByText("codex/fix-thread-naming-ephemeral")).toBeInTheDocument();
     expect(screen.getAllByText("codex/build-codex-client").length).toBeGreaterThan(0);
     expect(screen.queryByRole("heading", { level: 3, name: "Transcript" })).not.toBeInTheDocument();
@@ -419,13 +419,13 @@ describe("App", () => {
     ).toBeInTheDocument();
     const context = screen.getByLabelText("Thread context");
     fireEvent.click(
-      within(context).getByRole("button", { name: "Copy path for PwrAgnt" })
+      within(context).getByRole("button", { name: "Copy path for PwrAgent" })
     );
     fireEvent.click(
-      within(context).getByRole("button", { name: "Copy path for worktree PwrAgnt" })
+      within(context).getByRole("button", { name: "Copy path for worktree PwrAgent" })
     );
-    expect(copyText).toHaveBeenNthCalledWith(1, "/Users/huntharo/pwrdrvr/PwrAgnt");
-    expect(copyText).toHaveBeenNthCalledWith(2, "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt");
+    expect(copyText).toHaveBeenNthCalledWith(1, "/Users/huntharo/pwrdrvr/PwrAgent");
+    expect(copyText).toHaveBeenNthCalledWith(2, "/Users/huntharo/.codex/worktrees/0f38/PwrAgent");
     expect(screen.getByText("Codex app server")).toBeInTheDocument();
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByText("darwin")).toBeInTheDocument();
@@ -489,7 +489,7 @@ describe("App", () => {
       fetchedAt: Date.now(),
       data: [
         {
-          cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
           skills: [
             {
               name: "frontend-design",
@@ -501,7 +501,7 @@ describe("App", () => {
             {
               name: "desktop-e2e-fixture-seeding",
               description: "Replay-backed desktop E2E fixtures.",
-              path: "/Users/huntharo/pwrdrvr/PwrAgnt/.agents/skills/desktop-e2e-fixture-seeding/SKILL.md",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent/.agents/skills/desktop-e2e-fixture-seeding/SKILL.md",
               enabled: true,
               scope: "local",
             },
@@ -510,7 +510,7 @@ describe("App", () => {
       ],
     }));
 
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         ping: () => "pong",
@@ -561,10 +561,10 @@ describe("App", () => {
           threads: [],
           directories: [
             {
-              key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+              key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
               kind: "directory" as const,
-              label: "PwrAgnt",
-              path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
               threadKeys: [],
               needsAttentionCount: 0,
               gitStatus: {
@@ -573,10 +573,10 @@ describe("App", () => {
                 syncState: "in-sync" as const,
               },
               launchpad: {
-                directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+                directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
                 directoryKind: "directory" as const,
-                directoryLabel: "PwrAgnt",
-                directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                directoryLabel: "PwrAgent",
+                directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
                 backend: "codex" as const,
                 executionMode: "default" as const,
                 prompt: "",
@@ -605,8 +605,8 @@ describe("App", () => {
           launchpad: {
             directoryKey,
             directoryKind: "directory" as const,
-            directoryLabel: "PwrAgnt",
-            directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+            directoryLabel: "PwrAgent",
+            directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
             backend: "codex" as const,
             executionMode: "default" as const,
             prompt: typeof patch.prompt === "string" ? patch.prompt : "",
@@ -630,7 +630,7 @@ describe("App", () => {
 
     await screen.findByRole("heading", {
       level: 2,
-      name: "PwrAgnt",
+      name: "PwrAgent",
     });
 
     fireEvent.change(screen.getByRole("textbox", { name: "New thread" }), {
@@ -642,8 +642,8 @@ describe("App", () => {
     await waitFor(() => {
       expect(listSkills).toHaveBeenCalledWith({
         backend: "codex",
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
-        cwds: ["/Users/huntharo/pwrdrvr/PwrAgnt"],
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        cwds: ["/Users/huntharo/pwrdrvr/PwrAgent"],
       });
     });
 
@@ -721,7 +721,7 @@ describe("App", () => {
     };
     let navigationCallCount = 0;
 
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         ping: () => "pong",
@@ -1062,7 +1062,7 @@ describe("App", () => {
       'I don\'t have a built-in "X Search" tool or direct real-time access to the X/Twitter API with the available workspace tools.';
     const summary = "Grok thread summary";
 
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         ping: () => "pong",
@@ -1257,7 +1257,7 @@ describe("App", () => {
       })
     );
 
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         ping: () => "pong",
@@ -1550,7 +1550,7 @@ describe("App", () => {
       })
     );
 
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         ping: () => "pong",
@@ -1826,7 +1826,7 @@ describe("App", () => {
       })
     );
 
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         ping: () => "pong",
@@ -1993,7 +1993,7 @@ describe("App", () => {
       },
     }));
 
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         copyText: async () => undefined,

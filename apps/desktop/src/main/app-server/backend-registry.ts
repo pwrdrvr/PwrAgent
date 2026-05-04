@@ -68,7 +68,7 @@ import {
   type UpdateThreadExpectedBranchResponse,
   type EnsureDirectoryLaunchpadRequest,
   type EnsureDirectoryLaunchpadResponse,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { GrokAppServerClient } from "../grok-app-server/client";
 import { createScratchProjectDirectory } from "./scratch-projects";
@@ -105,9 +105,9 @@ type InitializeResult = {
 };
 
 const isDevelopment = process.env.NODE_ENV !== "production";
-const REPLAY_THREAD_TITLE_ENV = "PWRAGNT_REPLAY_THREAD_TITLE";
+const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
 const THREAD_LIST_REUSE_WINDOW_MS = 750;
-const backendRegistryLog = getMainLogger("pwragnt:backend-registry");
+const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const execFile = promisify(execFileCallback);
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
@@ -232,7 +232,11 @@ function resolveThreadGitSourcePath(
 function hasHandoffWorkspace(
   directories: AppServerThreadSummary["linkedDirectories"] = [],
 ): boolean {
-  return directories.some((directory) => directory.id.startsWith("pwragnt-handoff:"));
+  return directories.some(
+    (directory) =>
+      directory.id.startsWith("pwragent-handoff:") ||
+      directory.id.startsWith("pwragnt-handoff:"),  // legacy prefix from pre-rebrand data
+  );
 }
 
 function buildLocalLinkedDirectory(cwd: string | undefined): LinkedDirectorySummary[] {

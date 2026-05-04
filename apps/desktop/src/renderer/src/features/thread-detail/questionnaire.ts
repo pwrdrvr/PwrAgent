@@ -1,7 +1,7 @@
 import type {
   AppServerToolRequestUserInputNotification,
   AppServerToolRequestUserInputResponse,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export type PendingQuestionnaireOption = {
   key: string;

@@ -35,7 +35,7 @@ That baseline is enough to prove the direction, but it is still narrower than th
 - progress and plan notifications such as `item/started`, `item/completed`, `item/plan/delta`, `turn/plan/updated`
 - interactive request flows plus `serverRequest/resolved`
 
-If PwrAgnt stops at the current subset, the desktop client will either fail against the Grok server or accumulate client-side special cases that undercut the whole point of a shared app-server contract. This plan turns the remaining compatibility gap into a concrete implementation backlog.
+If PwrAgent stops at the current subset, the desktop client will either fail against the Grok server or accumulate client-side special cases that undercut the whole point of a shared app-server contract. This plan turns the remaining compatibility gap into a concrete implementation backlog.
 
 ## Requirements Trace
 

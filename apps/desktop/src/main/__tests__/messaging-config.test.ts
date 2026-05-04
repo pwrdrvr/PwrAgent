@@ -205,7 +205,7 @@ describe("desktop messaging config", () => {
 });
 
 function createTempRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragnt-messaging-config-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-messaging-config-"));
   tempRoots.push(root);
   return root;
 }

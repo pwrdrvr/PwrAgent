@@ -1,0 +1,50 @@
+name: Preview Build (macOS arm64)
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    name: Build preview DMG
+    if: github.event.label.name == 'build-preview'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v5
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@v1
+
+      - name: Compute preview version
+        id: version
+        run: |
+          raw=$(node -p "require('./apps/desktop/package.json').version")
+          base=$(echo "$raw" | sed 's/-.*//')
+          preview="${base}-pr.${{ github.event.pull_request.number }}"
+          echo "version=${preview}" >> "$GITHUB_OUTPUT"
+          echo "Preview version: ${preview}"
+
+      - name: Set preview version in package.json
+        run: |
+          cd apps/desktop
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${{ steps.version.outputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Build preview package (unsigned)
+        run: pnpm --filter @pwragent/desktop package:dryrun
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: PwrAgent-${{ steps.version.outputs.version }}-preview
+          path: apps/desktop/release-stage/dist/*.dmg
+          retention-days: 14

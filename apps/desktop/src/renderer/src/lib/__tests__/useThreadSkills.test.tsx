@@ -15,12 +15,12 @@ describe("useThreadSkills", () => {
       fetchedAt: Date.now(),
       data: [
         {
-          cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
           skills: [
             {
               name: "local-fix",
               description: "Project-local skill",
-              path: "/Users/huntharo/pwrdrvr/PwrAgnt/.agents/skills/local-fix/SKILL.md",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent/.agents/skills/local-fix/SKILL.md",
               scope: "local",
               enabled: true,
             },
@@ -44,10 +44,10 @@ describe("useThreadSkills", () => {
       useThreadSkills({
         desktopApi,
         launchpad: {
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
           directoryKind: "directory",
-          directoryLabel: "PwrAgnt",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -65,8 +65,8 @@ describe("useThreadSkills", () => {
 
     expect(listSkills).toHaveBeenCalledWith({
       backend: "codex",
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
-      cwds: ["/Users/huntharo/pwrdrvr/PwrAgnt"],
+      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      cwds: ["/Users/huntharo/pwrdrvr/PwrAgent"],
     });
 
     await waitFor(() => {

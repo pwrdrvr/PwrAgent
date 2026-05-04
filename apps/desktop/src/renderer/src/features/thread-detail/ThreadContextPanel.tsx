@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useLayoutEffect,
   useRef,
   useState,
@@ -14,7 +15,7 @@ import type {
   BackendSummary,
   NavigationThreadSummary,
   WorktreeSnapshotSummary,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 
@@ -50,6 +51,21 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   }>();
   const pinned = props.pinned;
   const open = pinned || revealed;
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  // Debounced reveal/hide prevents flicker from CSS transform transitions
+  // causing spurious mouseenter→mouseleave sequences.
+  const revealRail = useCallback(() => {
+    clearTimeout(hideTimerRef.current);
+    setRevealed(true);
+  }, []);
+
+  const hideRail = useCallback(() => {
+    clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = setTimeout(() => {
+      setRevealed(false);
+    }, 200);
+  }, []);
 
   useLayoutEffect(() => {
     if (!tooltip || tooltip.left !== undefined) {
@@ -125,22 +141,22 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       style={{ "--context-rail-width": `${railWidth}px` } as CSSProperties}
       onMouseEnter={() => {
         if (!pinned) {
-          setRevealed(true);
+          revealRail();
         }
       }}
       onMouseLeave={() => {
         if (!pinned) {
-          setRevealed(false);
+          hideRail();
         }
       }}
       onFocusCapture={() => {
         if (!pinned) {
-          setRevealed(true);
+          revealRail();
         }
       }}
       onBlurCapture={(event) => {
         if (!pinned && !event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          setRevealed(false);
+          hideRail();
         }
       }}
     >
@@ -171,11 +187,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           onClick={() => {
             if (pinned) {
               updatePinned(false);
+              clearTimeout(hideTimerRef.current);
               setRevealed(false);
               return;
             }
 
-            setRevealed(true);
+            revealRail();
           }}
         >
           <span className="context-rail__menu-glyph" aria-hidden="true">

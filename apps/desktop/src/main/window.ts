@@ -8,9 +8,9 @@ import { getMainLogger } from "./log";
 import { attachWindowFocusSync } from "./window-focus-sync";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
-const mainLog = getMainLogger("pwragnt:main");
-const heapLog = getMainLogger("pwragnt:heap");
-const rendererConsoleLog = getMainLogger("pwragnt:renderer:console");
+const mainLog = getMainLogger("pwragent:main");
+const heapLog = getMainLogger("pwragent:heap");
+const rendererConsoleLog = getMainLogger("pwragent:renderer:console");
 
 function serializeError(error: unknown): string {
   if (error instanceof Error) {
@@ -82,7 +82,7 @@ export function createMainWindow(options?: {
     minWidth: 1200,
     minHeight: 760,
     show: false,
-    title: "PwrAgnt",
+    title: "PwrAgent",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 20, y: 18 },
     backgroundColor: "#10151f",
@@ -219,8 +219,8 @@ export function createMainWindow(options?: {
       void webContents
         .executeJavaScript(
           `({
-            hasPwragnt: typeof window.pwragnt !== "undefined",
-            pwragntKeys: typeof window.pwragnt !== "undefined" ? Object.keys(window.pwragnt) : [],
+            hasPwragent: typeof window.pwragent !== "undefined",
+            pwragentKeys: typeof window.pwragent !== "undefined" ? Object.keys(window.pwragent) : [],
             locationHref: window.location.href
           })`,
           true

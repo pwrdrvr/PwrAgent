@@ -9,7 +9,7 @@ import type {
   MessagingChannelRef,
   MessagingJsonValue,
   MessagingPendingIntentRecord,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import {
   CURRENT_MESSAGING_STORE_VERSION,
   migrateMessagingStoreData,

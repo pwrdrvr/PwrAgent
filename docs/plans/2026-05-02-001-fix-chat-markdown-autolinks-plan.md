@@ -39,7 +39,7 @@ There is a second user-visible problem in the Tiptap composer. When using the `t
 - In scope: main-process external-open handling for renderer-created windows.
 - In scope: focused regression tests for false-positive autolinks and allowed explicit links.
 - Out of scope: replacing `react-markdown` or removing `remark-gfm` entirely.
-- Out of scope: preventing Telegram, Discord, or a user's browser from applying their own native client-side autolink rules to plain text after PwrAgnt sends it.
+- Out of scope: preventing Telegram, Discord, or a user's browser from applying their own native client-side autolink rules to plain text after PwrAgent sends it.
 - Out of scope: adding a new in-app confirmation dialog for every external link click.
 
 ## Context & Research
@@ -174,7 +174,7 @@ flowchart TB
 **Approach:**
 - Extract a small `isSafeExternalOpenUrl` or equivalent helper near `createMainWindow`.
 - Parse the candidate URL with the platform `URL` parser and deny malformed values.
-- Allow only the protocols PwrAgnt intentionally supports for renderer links. Prefer `https:` and `mailto:` for external browser/mail links; allow `http:` only for loopback/local development hosts if implementation preserves that workflow; include `file:` only if preserving the current explicit local-link behavior requires it.
+- Allow only the protocols PwrAgent intentionally supports for renderer links. Prefer `https:` and `mailto:` for external browser/mail links; allow `http:` only for loopback/local development hosts if implementation preserves that workflow; include `file:` only if preserving the current explicit local-link behavior requires it.
 - Keep returning `{ action: "deny" }` from `setWindowOpenHandler` so the renderer never creates a new Electron window.
 - Log denied URLs at debug level with enough context to diagnose regressions without dumping full untrusted transcript content.
 
@@ -183,10 +183,10 @@ flowchart TB
 - Existing Electron mocks in `apps/desktop/src/main/__tests__/app-bootstrap.test.ts`.
 
 **Test scenarios:**
-- Happy path: `https://github.com/pwrdrvr/PwrAgnt` is passed to `shell.openExternal` and the new window is denied.
+- Happy path: `https://github.com/pwrdrvr/PwrAgent` is passed to `shell.openExternal` and the new window is denied.
 - Happy path: loopback/local development HTTP URLs are allowed only if the implementation explicitly keeps that host class.
 - Happy path: an allowed explicit `file:` URL still follows the intended current behavior if file links remain supported.
-- Error path: `javascript:alert(1)`, `pwragnt-test://payload`, non-loopback `http://example.com`, and malformed URL strings are denied without calling `shell.openExternal`.
+- Error path: `javascript:alert(1)`, `pwragent-test://payload`, non-loopback `http://example.com`, and malformed URL strings are denied without calling `shell.openExternal`.
 - Error path: a bare or generated `http://2026-05-02-001-feat-messaging-tool-update-verbosity-plan.md` is denied by the main-process HTTP policy and also blocked earlier by Unit 1.
 - Integration: `setWindowOpenHandler` continues to be installed exactly once during window creation.
 
@@ -233,7 +233,7 @@ flowchart TB
 
 - [x] **Unit 4: Keep messaging adapter link behavior explicit**
 
-**Goal:** Confirm PwrAgnt messaging adapters do not add their own optimistic linkification for bare paths, and document the boundary where Telegram/Discord clients may still autolink plain text.
+**Goal:** Confirm PwrAgent messaging adapters do not add their own optimistic linkification for bare paths, and document the boundary where Telegram/Discord clients may still autolink plain text.
 
 **Requirements:** R1, R5
 
@@ -245,9 +245,9 @@ flowchart TB
 - Modify: `docs/messaging-adapter-contract.md`
 
 **Approach:**
-- Add provider formatting tests that render the exact repo-relative plan-path shape and assert PwrAgnt does not produce explicit anchor markup or transformed HTTP URLs.
+- Add provider formatting tests that render the exact repo-relative plan-path shape and assert PwrAgent does not produce explicit anchor markup or transformed HTTP URLs.
 - Keep Telegram's markdownish HTML renderer conservative: code spans and code blocks are formatted, but bare paths remain escaped text.
-- Keep Discord formatting free of PwrAgnt-generated markdown links for bare paths; mention that Discord may still apply client-native autolinking outside PwrAgnt's control.
+- Keep Discord formatting free of PwrAgent-generated markdown links for bare paths; mention that Discord may still apply client-native autolinking outside PwrAgent's control.
 - Update the adapter contract to state that channel adapters must not turn scheme-less bare paths into explicit HTTP links. If a platform autolinks plain text anyway, adapters may neutralize later only with a platform-specific policy and tests.
 
 **Patterns to follow:**
@@ -262,7 +262,7 @@ flowchart TB
 - Error path: mention sanitization in Discord still neutralizes broad mentions while leaving the path text unlinked.
 
 **Verification:**
-- Provider tests prove PwrAgnt does not introduce new explicit links for bare repo paths, and documentation states the remaining platform-native autolink limitation.
+- Provider tests prove PwrAgent does not introduce new explicit links for bare repo paths, and documentation states the remaining platform-native autolink limitation.
 
 ## System-Wide Impact
 
@@ -281,7 +281,7 @@ flowchart TB
 | Tiptap Link configuration does not fully stop sticky trailing marks | Add a targeted input handler that clears stored link marks when typing at the trailing edge of a link, and cover the exact space-after-link sequence in tests |
 | Tightening link policy breaks useful explicit local links | Preserve explicit markdown links in tests and keep plain paths text-only |
 | Main-process validation gives a false sense of safety for accidental HTTP links | Deny non-loopback `http:` in the main process and still keep renderer source-intent filtering, because some accidental links may be syntactically valid `https:` or `file:` URLs |
-| Remote messaging clients still autolink bare text | Document the boundary and avoid PwrAgnt-generated explicit links; neutralize per-platform only after concrete reproductions |
+| Remote messaging clients still autolink bare text | Document the boundary and avoid PwrAgent-generated explicit links; neutralize per-platform only after concrete reproductions |
 
 ## Documentation / Operational Notes
 

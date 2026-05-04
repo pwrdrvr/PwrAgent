@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTemporaryTestDirectory } from "@pwragnt/agent-core";
+import { createTemporaryTestDirectory } from "@pwragent/agent-core";
 import { createStartupCpuProfileSession } from "../diagnostics/startup-cpu-profile-session";
 import { RendererStartupCpuProfiler } from "../diagnostics/renderer-startup-cpu-profiler";
 import { resolveStartupCpuProfileConfig } from "../diagnostics/startup-cpu-profile-config";
@@ -8,7 +8,7 @@ import { resolveStartupCpuProfileConfig } from "../diagnostics/startup-cpu-profi
 function createEnabledConfig(repoRoot: string) {
   const config = resolveStartupCpuProfileConfig({
     env: {
-      PWRAGNT_STARTUP_CPU_PROFILING: "1",
+      PWRAGENT_STARTUP_CPU_PROFILING: "1",
     },
     repoRoot,
   });

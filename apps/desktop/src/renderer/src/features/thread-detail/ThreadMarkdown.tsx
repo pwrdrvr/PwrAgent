@@ -1,7 +1,7 @@
 import type {
   AppServerSkillSummary,
   DesktopApplicationsSnapshot,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { memo, useCallback, useMemo, type MouseEvent, type ReactNode } from "react";
 import ReactMarkdown, { type Components, type UrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";

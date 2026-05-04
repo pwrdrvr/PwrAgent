@@ -7,13 +7,13 @@ import { MessagingStore } from "../messaging/core/messaging-store";
 import type {
   MessagingInboundEvent,
   MessagingSurfaceIntent,
-} from "@pwragnt/messaging-interface";
+} from "@pwragent/messaging-interface";
 import type {
   AgentEvent,
   NavigationSnapshot,
   StartTurnRequest,
-} from "@pwragnt/shared";
-import { TelegramAdapter } from "@pwragnt/messaging-provider-telegram";
+} from "@pwragent/shared";
+import { TelegramAdapter } from "@pwragent/messaging-provider-telegram";
 import type {
   TelegramBotApi,
   TelegramBotLike,
@@ -25,8 +25,8 @@ import type {
   TelegramSendMessageRequest,
   TelegramSendPhotoRequest,
   TelegramUnpinChatMessageRequest,
-} from "@pwragnt/messaging-provider-telegram";
-import { TELEGRAM_CALLBACK_DATA_LIMIT_BYTES } from "@pwragnt/messaging-provider-telegram";
+} from "@pwragent/messaging-provider-telegram";
+import { TELEGRAM_CALLBACK_DATA_LIMIT_BYTES } from "@pwragent/messaging-provider-telegram";
 
 const tempDirs: string[] = [];
 
@@ -1134,7 +1134,7 @@ describe("TelegramAdapter", () => {
     });
   });
 
-  it("registers PwrAgnt bot commands on startup", async () => {
+  it("registers PwrAgent bot commands on startup", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({
       api: api as unknown as TelegramBotApi,
@@ -1152,15 +1152,15 @@ describe("TelegramAdapter", () => {
       commands: [
         {
           command: "resume",
-          description: "Resume or start a PwrAgnt thread",
+          description: "Resume or start a PwrAgent thread",
         },
         {
           command: "status",
-          description: "Show the current PwrAgnt binding",
+          description: "Show the current PwrAgent binding",
         },
         {
           command: "detach",
-          description: "Detach this chat from PwrAgnt",
+          description: "Detach this chat from PwrAgent",
         },
       ],
     });
@@ -1577,7 +1577,7 @@ describe("TelegramAdapter", () => {
       message: {
         chat: {
           id: -100777,
-          title: "PwrAgnt",
+          title: "PwrAgent",
           type: "supergroup",
         },
         date: 1,
@@ -1606,7 +1606,7 @@ describe("TelegramAdapter", () => {
         message: {
           chat: {
             id: -100777,
-            title: "PwrAgnt",
+            title: "PwrAgent",
             type: "supergroup",
           },
           message_id: 200,
@@ -1894,7 +1894,7 @@ describe("TelegramAdapter", () => {
       message: {
         chat: {
           id: -100777,
-          title: "PwrAgnt topics",
+          title: "PwrAgent topics",
           type: "supergroup",
         },
         forum_topic_edited: {
@@ -2167,7 +2167,7 @@ async function createControllerHarness(): Promise<{
   startTurn: ReturnType<typeof vi.fn>;
   store: MessagingStore;
 }> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-telegram-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-telegram-"));
   tempDirs.push(tempDir);
   const store = new MessagingStore(path.join(tempDir, "messaging-state.json"));
   const api = createApi();

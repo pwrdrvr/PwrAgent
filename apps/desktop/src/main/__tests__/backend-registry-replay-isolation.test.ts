@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 
-const REPLAY_FIXTURE_PATH_ENV = "PWRAGNT_REPLAY_FIXTURE_PATH";
+const REPLAY_FIXTURE_PATH_ENV = "PWRAGENT_REPLAY_FIXTURE_PATH";
 
 const constructorState = vi.hoisted(() => ({
   codexCount: 0,
@@ -142,7 +142,7 @@ function createOverlayStoreMock() {
       executionMode,
       extraLinkedDirectories: [],
     }),
-  } as unknown as InstanceType<typeof import("@pwragnt/agent-core").OverlayStore>;
+  } as unknown as InstanceType<typeof import("@pwragent/agent-core").OverlayStore>;
 }
 
 beforeEach(() => {
@@ -152,7 +152,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env[REPLAY_FIXTURE_PATH_ENV];
-  delete globalThis.__PWRAGNT_REPLAY_DRIVER__;
+  delete globalThis.__PWRAGENT_REPLAY_DRIVER__;
 
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -240,7 +240,7 @@ describe("DesktopBackendRegistry replay isolation", () => {
 });
 
 function writeFixture(fixture: unknown): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwragnt-registry-replay-"));
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-registry-replay-"));
   tempDirs.push(tempDir);
 
   const fixturePath = path.join(tempDir, "replay.fixture.json");

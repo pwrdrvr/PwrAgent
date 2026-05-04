@@ -17,7 +17,7 @@ Add first-class desktop support for Codex app-server MCP request flows, starting
 
 The desktop app currently receives Codex MCP activity but does not complete the protocol loop. A live Codex turn emitted an `item/started` notification for an `mcpToolCall`, then sent a JSON-RPC request with method `mcpServer/elicitation/request` asking whether the `playwright` MCP server could run tool `browser_tabs`. The Codex adapter recognized the method as part of the generated protocol, but logged it as an unhandled inbound request and the renderer did not surface it as pending user action.
 
-This is a protocol-parity issue, not a request to build Playwright MCP inside PwrAgnt. For the Codex backend, Codex app-server owns MCP server startup and tool execution; PwrAgnt must act as the client/UI that displays approvals or input requests, submits the right response shape, and renders MCP progress. For the Grok app-server, MCP can remain status-shape-compatible until a separate plan adds a real MCP runtime.
+This is a protocol-parity issue, not a request to build Playwright MCP inside PwrAgent. For the Codex backend, Codex app-server owns MCP server startup and tool execution; PwrAgent must act as the client/UI that displays approvals or input requests, submits the right response shape, and renders MCP progress. For the Grok app-server, MCP can remain status-shape-compatible until a separate plan adds a real MCP runtime.
 
 ## Requirements Trace
 
@@ -38,7 +38,7 @@ This is a protocol-parity issue, not a request to build Playwright MCP inside Pw
 - In scope: normalized shared contracts, renderer state, thread UI, response formatting, replay fixtures, and E2E coverage.
 - In scope: preserving `mcpServerStatus/list` as stable metadata for Codex and Grok, with richer rendering when data is available.
 - Out of scope: implementing a real MCP server runtime in `packages/agent-core` or the Electron app.
-- Out of scope: storing third-party credentials, OAuth tokens, or browser-session secrets in PwrAgnt.
+- Out of scope: storing third-party credentials, OAuth tokens, or browser-session secrets in PwrAgent.
 - Out of scope: changing Codex app-server generated protocol types by hand; generated files remain generated.
 - Out of scope: automatic allow rules for MCP tools. This pass should be explicit and user-visible.
 
@@ -73,10 +73,10 @@ This is a protocol-parity issue, not a request to build Playwright MCP inside Pw
 
 - **Treat MCP elicitations as their own pending interaction type.** Approval cards return `{ decision }`, Plan questionnaires return `{ answers }`, and MCP elicitations return `{ action, content, _meta }`. The UI state and response builders must make those impossible to mix accidentally.
 - **Handle empty-schema form elicitations as approvals.** The observed Playwright request has `mode: "form"` and an empty object schema. The user-facing affordance can be Approve/Decline/Cancel, but the submitted payload must still be MCP-shaped.
-- **Handle non-empty form schemas as structured MCP input.** MCP form elicitations can request non-secret structured fields. The first implementation should support the generated schema primitives already present in `@pwragnt/shared/codex-app-server-protocol/v2`, with validation helpers kept pure and narrowly tested.
-- **Handle URL mode as out-of-band user action.** URL mode should display the URL and allow the user to open it externally, but PwrAgnt must not ask for or collect credentials. Accept means the user has completed or wants to continue the out-of-band flow; decline/cancel remain available.
-- **Keep MCP runtime ownership explicit.** Codex app-server runs MCP servers and tools. PwrAgnt desktop displays status, approvals, and progress. Grok app-server keeps shape-compatible metadata until a separate plan adds a real MCP client/server runtime.
-- **Preserve generated protocol ownership.** Use generated Codex app-server protocol types as inputs at the adapter boundary. Add normalized PwrAgnt contracts in `packages/shared/src/contracts/normalized-app-server.ts`; do not hand-edit generated protocol files.
+- **Handle non-empty form schemas as structured MCP input.** MCP form elicitations can request non-secret structured fields. The first implementation should support the generated schema primitives already present in `@pwragent/shared/codex-app-server-protocol/v2`, with validation helpers kept pure and narrowly tested.
+- **Handle URL mode as out-of-band user action.** URL mode should display the URL and allow the user to open it externally, but PwrAgent must not ask for or collect credentials. Accept means the user has completed or wants to continue the out-of-band flow; decline/cancel remain available.
+- **Keep MCP runtime ownership explicit.** Codex app-server runs MCP servers and tools. PwrAgent desktop displays status, approvals, and progress. Grok app-server keeps shape-compatible metadata until a separate plan adds a real MCP client/server runtime.
+- **Preserve generated protocol ownership.** Use generated Codex app-server protocol types as inputs at the adapter boundary. Add normalized PwrAgent contracts in `packages/shared/src/contracts/normalized-app-server.ts`; do not hand-edit generated protocol files.
 - **Prefer replay-backed verification over live-only MCP runs.** A live Playwright MCP request is useful for capture, but CI should use deterministic replay fixtures for the request/response UI path.
 
 ## Open Questions
@@ -84,7 +84,7 @@ This is a protocol-parity issue, not a request to build Playwright MCP inside Pw
 ### Resolved During Planning
 
 - **Are MCPs implemented by the desktop client or the app server?** For the Codex backend, Codex app-server owns MCP server lifecycle and tool execution. The desktop client owns request presentation, approval/input collection, response submission, and status/progress rendering.
-- **Should `mcpServer/elicitation/request` be handled?** Yes. It is a known generated Codex server request and currently blocks because PwrAgnt does not surface or answer it correctly.
+- **Should `mcpServer/elicitation/request` be handled?** Yes. It is a known generated Codex server request and currently blocks because PwrAgent does not surface or answer it correctly.
 - **Can the observed empty-schema elicitation use approval buttons?** Yes, as UI language, as long as the wire response is MCP-shaped.
 - **Should Grok gain a real MCP runtime in this plan?** No. Keep stable empty status metadata for Grok; real MCP runtime support is a larger provider/runtime project.
 
@@ -292,7 +292,7 @@ flowchart TB
 - Redact credential-like keys, URL query strings, bearer-looking values, and long opaque tokens before displaying `_meta`, tool parameters, arguments, or URLs in compact transcript summaries.
 - For empty-schema form mode, show Accept, Decline, and Cancel controls with user-facing copy appropriate to allowing an MCP tool call.
 - For structured form mode, render compact field controls based on the pure model helpers and show validation feedback only where required to proceed.
-- For URL mode, show the URL as an explicit external destination and provide an Open control plus Accept/Decline/Cancel. The UI should not ask for credentials or imply PwrAgnt can inspect the out-of-band result.
+- For URL mode, show the URL as an explicit external destination and provide an Open control plus Accept/Decline/Cancel. The UI should not ask for credentials or imply PwrAgent can inspect the out-of-band result.
 - Add a `submitPendingMcpInteraction` handler separate from approval and questionnaire handlers.
 - Preserve the pending card and entered form values if `submitServerRequest` rejects.
 - Follow the desktop style guide: dense thread-native surface, no browser-default controls in shipped UI, radius at or below 8px, no scaffold narration.
@@ -402,10 +402,10 @@ flowchart TB
 - **Interaction graph:** Codex app-server JSON-RPC requests flow through `CodexAppServerClient`, `DesktopBackendRegistry`, IPC, `useThreadSessionState`, and thread-detail UI. MCP support should reuse this graph instead of adding a parallel bridge.
 - **Error propagation:** JSON-RPC handler errors still return JSON-RPC errors to Codex. User decline/cancel is not an exception; it is a valid MCP response. Bridge submission failures should remain visible in the pending card.
 - **State lifecycle risks:** Pending MCP interactions must be keyed by backend, thread id, and request id so a request from one thread cannot clear another. Stale requests clear on matching resolution or terminal turn state.
-- **API surface parity:** Generated Codex request/notification types stay at the adapter boundary. Normalized PwrAgnt contracts gain MCP-specific discriminated types so downstream UI does not parse generated blobs.
+- **API surface parity:** Generated Codex request/notification types stay at the adapter boundary. Normalized PwrAgent contracts gain MCP-specific discriminated types so downstream UI does not parse generated blobs.
 - **Integration coverage:** Unit tests cover response builders and session lifecycle; replay/E2E covers JSON-RPC request through renderer submit and pending-state cleanup.
 - **Unchanged invariants:** Command/file approvals still use approval responses, Plan questionnaires still use answer-map responses, permissions approvals remain excluded until separately implemented, and Grok does not claim a real MCP runtime.
-- **Security handling:** MCP interactions cross a third-party tool boundary. The desktop should show enough context for informed consent while redacting secret-like values, avoiding credential collection in form mode, and treating URL mode as an out-of-band action whose credentials never pass through PwrAgnt.
+- **Security handling:** MCP interactions cross a third-party tool boundary. The desktop should show enough context for informed consent while redacting secret-like values, avoiding credential collection in form mode, and treating URL mode as an out-of-band action whose credentials never pass through PwrAgent.
 
 ## Risks & Dependencies
 

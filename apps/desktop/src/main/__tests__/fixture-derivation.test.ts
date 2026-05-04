@@ -8,7 +8,7 @@ import {
 } from "../testing/fixture-derivation";
 
 async function createTempDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-fixture-derivation-"));
+  return await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-fixture-derivation-"));
 }
 
 async function writeJsonl(filePath: string, records: unknown[]): Promise<void> {

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { AppServerReviewOutput, AppServerReviewTarget } from "@pwragnt/shared";
+import type { AppServerReviewOutput, AppServerReviewTarget } from "@pwragent/shared";
 import type { AppServerNotification, ThreadState } from "./internal-contract.js";
 import { AppServerSessionState } from "./session-state.js";
 import { TurnRunner } from "./turn-runner.js";

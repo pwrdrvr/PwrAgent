@@ -28,7 +28,7 @@ describe("runtime flags", () => {
       }),
     ).toEqual({
       disabled: true,
-      reason: "PWRAGNT_DISABLE_MESSAGING is enabled",
+      reason: "PWRAGENT_DISABLE_MESSAGING is enabled",
     });
   });
 });

@@ -66,7 +66,7 @@ import type {
   UpdateThreadExpectedBranchRequest,
   UpdateThreadExpectedBranchResponse,
   WriteDesktopSettingsConfigRequest,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { RendererErrorReport } from "../shared/renderer-error";
 import type { RendererDiagnosticLogRequest } from "../shared/renderer-diagnostic";
 import type {
@@ -334,7 +334,7 @@ const desktopApi = Object.freeze({
 });
 
 if (process.contextIsolated) {
-  contextBridge.exposeInMainWorld("pwragnt", desktopApi);
+  contextBridge.exposeInMainWorld("pwragent", desktopApi);
   recordPreloadLog("info", "exposed context bridge", {
     keys: Object.keys(desktopApi)
   });

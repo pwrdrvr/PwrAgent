@@ -26,19 +26,19 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@pwragnt/agent-core':
+      '@pwragent/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
-      '@pwragnt/messaging-interface':
+      '@pwragent/messaging-interface':
         specifier: workspace:*
         version: link:../../packages/messaging/interface
-      '@pwragnt/messaging-provider-discord':
+      '@pwragent/messaging-provider-discord':
         specifier: workspace:*
         version: link:../../packages/messaging/providers/discord
-      '@pwragnt/messaging-provider-telegram':
+      '@pwragent/messaging-provider-telegram':
         specifier: workspace:*
         version: link:../../packages/messaging/providers/telegram
-      '@pwragnt/shared':
+      '@pwragent/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@tiptap/extension-mention':
@@ -126,7 +126,7 @@ importers:
       '@ai-sdk/xai':
         specifier: ^3.0.83
         version: 3.0.83(zod@4.3.6)
-      '@pwragnt/shared':
+      '@pwragent/shared':
         specifier: workspace:*
         version: link:../shared
       ai:
@@ -135,13 +135,13 @@ importers:
 
   packages/messaging/interface:
     dependencies:
-      '@pwragnt/shared':
+      '@pwragent/shared':
         specifier: workspace:*
         version: link:../../shared
 
   packages/messaging/providers/discord:
     dependencies:
-      '@pwragnt/messaging-interface':
+      '@pwragent/messaging-interface':
         specifier: workspace:*
         version: link:../../interface
       discord.js:
@@ -154,7 +154,7 @@ importers:
 
   packages/messaging/providers/telegram:
     dependencies:
-      '@pwragnt/messaging-interface':
+      '@pwragent/messaging-interface':
         specifier: workspace:*
         version: link:../../interface
       grammy:

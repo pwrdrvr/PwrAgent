@@ -5,7 +5,7 @@ import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadActivityStatus,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export function summarizeToolActivityItems(
   items: Record<string, unknown>[],

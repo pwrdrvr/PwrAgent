@@ -86,7 +86,7 @@ instead of useful.
 ### External References
 
 - External research is not needed. This is an internal event-normalization fix
-  grounded in captured PwrAgnt behavior.
+  grounded in captured PwrAgent behavior.
 
 ## Key Technical Decisions
 

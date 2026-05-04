@@ -32,9 +32,9 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 async function createRepo(): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "pwragnt-handoff-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-"));
   cleanupPaths.push(root);
-  const repoPath = path.join(root, "PwrAgnt");
+  const repoPath = path.join(root, "PwrAgent");
   await mkdir(repoPath);
   await git(repoPath, ["init", "-b", "main"]);
   await git(repoPath, ["config", "user.email", "test@example.com"]);
@@ -85,7 +85,7 @@ describe("GitWorkspaceHandoffService", () => {
     expect(await git(result.targetPath, ["branch", "--show-current"])).toBe(
       "feature/handoff",
     );
-    expect(path.basename(result.targetPath)).toBe("PwrAgnt");
+    expect(path.basename(result.targetPath)).toBe("PwrAgent");
     await expect(readFile(path.join(result.targetPath, "README.md"), "utf8")).resolves.toBe(
       "dirty local\n",
     );
@@ -123,7 +123,7 @@ describe("GitWorkspaceHandoffService", () => {
     expect(result.branch).toBeUndefined();
     expect(result.baseSha).toMatch(/^[0-9a-f]{40}$/);
     expect(result.linkedDirectory.kind).toBe("worktree");
-    expect(path.basename(result.targetPath)).toBe("PwrAgnt");
+    expect(path.basename(result.targetPath)).toBe("PwrAgent");
     expect(result.sourceStash).toMatchObject({ applied: true, dropped: true });
     expect(await git(repoPath, ["branch", "--show-current"])).toBe("feature/handoff");
     expect(await git(result.targetPath, ["branch", "--show-current"])).toBe("");
@@ -241,7 +241,7 @@ describe("GitWorkspaceHandoffService", () => {
 
     expect(result.workMode).toBe("worktree");
     expect(result.strategy).toBe("detached-changes");
-    expect(path.basename(result.targetPath)).toBe("PwrAgnt");
+    expect(path.basename(result.targetPath)).toBe("PwrAgent");
     await expect(readFile(path.join(result.targetPath, "scratch.txt"), "utf8")).resolves.toBe(
       "scratch\n",
     );

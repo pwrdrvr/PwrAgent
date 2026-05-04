@@ -8,7 +8,7 @@ import type {
   NavigationDirectorySummary,
   NavigationSnapshot,
   NavigationThreadSummary,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export const MESSAGING_SURFACE_INTENT_KINDS = [
   "activity",

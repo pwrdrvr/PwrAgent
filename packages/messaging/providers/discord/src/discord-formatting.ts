@@ -3,8 +3,8 @@ import type {
   MessagingContentPart,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
-} from "@pwragnt/messaging-interface";
-import { layoutMessagingActionRows } from "@pwragnt/messaging-interface";
+} from "@pwragent/messaging-interface";
+import { layoutMessagingActionRows } from "@pwragent/messaging-interface";
 
 export const DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES = 100;
 export const DISCORD_MESSAGE_CONTENT_LIMIT = 2000;

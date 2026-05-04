@@ -1,4 +1,4 @@
-import type { AppServerBackendKind } from "@pwragnt/shared";
+import type { AppServerBackendKind } from "@pwragent/shared";
 import {
   XaiEphemeralObjectCaller,
   type XaiObjectClientLike,

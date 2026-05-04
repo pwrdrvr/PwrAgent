@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 function createTempRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragnt-settings-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-"));
   tempRoots.push(root);
   return root;
 }
@@ -118,7 +118,7 @@ describe("DesktopSettingsService", () => {
       source: "default",
     });
     expect(snapshot.worktrees.effectivePath).toMatch(
-      /\.pwragnt\/worktrees$/,
+      /\.pwragent\/worktrees$/,
     );
   });
 
@@ -147,7 +147,7 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveWorktreeStorage()).toBe("in-repo");
   });
 
-  it("treats PWRAGNT_WORKTREE_STORAGE as a high-precedence override", async () => {
+  it("treats PWRAGENT_WORKTREE_STORAGE as a high-precedence override", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(
@@ -158,7 +158,7 @@ describe("DesktopSettingsService", () => {
 
     const service = new DesktopSettingsService({
       configPath,
-      env: { PWRAGNT_WORKTREE_STORAGE: "user-home" },
+      env: { PWRAGENT_WORKTREE_STORAGE: "user-home" },
       secretStore: new MemoryDesktopSecretStore(),
     });
 
@@ -170,7 +170,7 @@ describe("DesktopSettingsService", () => {
       overriddenByEnv: true,
     });
     expect(snapshot.worktrees.effectivePath).toMatch(
-      /\.pwragnt\/worktrees$/,
+      /\.pwragent\/worktrees$/,
     );
   });
 
@@ -217,12 +217,12 @@ describe("DesktopSettingsService", () => {
     const service = new DesktopSettingsService({
       configPath,
       env: {
-        PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "custom-widget-chips",
-        PWRAGNT_MESSAGING_INPUT_DEBOUNCE_MS: "250",
-        PWRAGNT_MESSAGING_TELEGRAM_ENABLED: "true",
-        PWRAGNT_MESSAGING_TELEGRAM_STREAMING_RESPONSES: "true",
-        PWRAGNT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS: "222222222,333333333",
-        PWRAGNT_CODEX_COMMAND: "codex-env",
+        PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "custom-widget-chips",
+        PWRAGENT_MESSAGING_INPUT_DEBOUNCE_MS: "250",
+        PWRAGENT_MESSAGING_TELEGRAM_ENABLED: "true",
+        PWRAGENT_MESSAGING_TELEGRAM_STREAMING_RESPONSES: "true",
+        PWRAGENT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS: "222222222,333333333",
+        PWRAGENT_CODEX_COMMAND: "codex-env",
         XAI_API_KEY: "xai-env",
       },
       secretStore,
@@ -327,7 +327,7 @@ describe("DesktopSettingsService", () => {
     const service = new DesktopSettingsService({
       configPath: path.join(createTempRoot(), "config.toml"),
       env: {
-        PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_GUILDS: " , ",
+        PWRAGENT_MESSAGING_DISCORD_AUTHORIZED_GUILDS: " , ",
       },
       secretStore: new MemoryDesktopSecretStore(),
     });

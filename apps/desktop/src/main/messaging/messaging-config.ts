@@ -1,8 +1,9 @@
-import type { DiscordMessagingConfig } from "@pwragnt/messaging-provider-discord";
-import type { TelegramMessagingConfig } from "@pwragnt/messaging-provider-telegram";
-import type { MessagingToolUpdateMode } from "@pwragnt/shared";
+import type { DiscordMessagingConfig } from "@pwragent/messaging-provider-discord";
+import type { TelegramMessagingConfig } from "@pwragent/messaging-provider-telegram";
+import type { MessagingToolUpdateMode } from "@pwragent/shared";
 import type { MessagingAttachmentPolicy } from "./core/messaging-attachment-processor";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
+import { getMainLogger } from "../log";
 import {
   DISCORD_APPLICATION_ID_ENV,
   DISCORD_AUTHORIZED_USER_IDS_ENV,
@@ -100,6 +101,7 @@ export async function loadDesktopMessagingConfigFromSettings(
   settings: DesktopMessagingSettingsSource,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<DesktopMessagingConfig> {
+  const log = getMainLogger("pwragent:messaging");
   const snapshot = await settings.readSettings();
   const envConfig = loadDesktopMessagingConfig(env);
   const telegramBotToken =
@@ -118,51 +120,111 @@ export async function loadDesktopMessagingConfigFromSettings(
     maxAttachmentCount: snapshot.messaging.attachments.maxAttachmentCount.value,
   };
 
+  // Resolve per-platform enablement and log the decision for each
+  const telegramEnabled = shouldEnableSettingsChannel(
+    snapshot.messaging.telegram.enabled.value,
+    envConfig.telegram,
+    env,
+    TELEGRAM_ENABLED_ENV,
+  );
+  const discordEnabled = shouldEnableSettingsChannel(
+    snapshot.messaging.discord.enabled.value,
+    envConfig.discord,
+    env,
+    DISCORD_ENABLED_ENV,
+  );
+
+  const telegramConfig = buildChannelConfig({
+    log,
+    channel: "telegram",
+    enabled: telegramEnabled,
+    hasToken: Boolean(telegramBotToken),
+    authorizedActorCount: telegramAuthorizedActorIds.length,
+  })
+    ? {
+        telegram: {
+          channel: "telegram" as const,
+          enabled: true,
+          botToken: telegramBotToken!,
+          streamingResponses: snapshot.messaging.telegram.streamingResponses.value,
+          authorizedActorIds: telegramAuthorizedActorIds,
+        },
+      }
+    : {};
+
+  const discordConfig = buildChannelConfig({
+    log,
+    channel: "discord",
+    enabled: discordEnabled,
+    hasToken: Boolean(discordBotToken),
+    authorizedActorCount: discordAuthorizedActorIds.length,
+  })
+    ? {
+        discord: {
+          channel: "discord" as const,
+          enabled: true,
+          botToken: discordBotToken!,
+          applicationId:
+            (envConfig.discord?.applicationId
+              ?? snapshot.messaging.discord.applicationId.value)
+            || undefined,
+          streamingResponses: snapshot.messaging.discord.streamingResponses.value,
+          authorizedActorIds: discordAuthorizedActorIds,
+        },
+      }
+    : {};
+
   return {
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
     toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
     attachmentPolicy,
-    ...(shouldEnableSettingsChannel(
-      snapshot.messaging.telegram.enabled.value,
-      envConfig.telegram,
-      env,
-      TELEGRAM_ENABLED_ENV,
-    )
-    && telegramBotToken
-    && telegramAuthorizedActorIds.length > 0
-      ? {
-          telegram: {
-            channel: "telegram" as const,
-            enabled: true,
-            botToken: telegramBotToken,
-            streamingResponses: snapshot.messaging.telegram.streamingResponses.value,
-            authorizedActorIds: telegramAuthorizedActorIds,
-          },
-        }
-      : {}),
-    ...(shouldEnableSettingsChannel(
-      snapshot.messaging.discord.enabled.value,
-      envConfig.discord,
-      env,
-      DISCORD_ENABLED_ENV,
-    )
-    && discordBotToken
-    && discordAuthorizedActorIds.length > 0
-      ? {
-          discord: {
-            channel: "discord" as const,
-            enabled: true,
-            botToken: discordBotToken,
-            applicationId:
-              (envConfig.discord?.applicationId
-                ?? snapshot.messaging.discord.applicationId.value)
-              || undefined,
-            streamingResponses: snapshot.messaging.discord.streamingResponses.value,
-            authorizedActorIds: discordAuthorizedActorIds,
-          },
-        }
-      : {}),
+    ...telegramConfig,
+    ...discordConfig,
   };
+}
+
+/**
+ * Evaluate whether a messaging channel can start, logging the decision clearly.
+ * Returns true only when the channel is enabled, has a token, and has authorized actors.
+ */
+function buildChannelConfig(params: {
+  log: ReturnType<typeof getMainLogger>;
+  channel: string;
+  enabled: boolean;
+  hasToken: boolean;
+  authorizedActorCount: number;
+}): boolean {
+  const { log, channel, enabled, hasToken, authorizedActorCount } = params;
+
+  if (!enabled) {
+    log.info(`${channel}: disabled in settings — skipping`, {
+      channel,
+    });
+    return false;
+  }
+
+  // Channel is enabled — any missing prerequisite is an error
+  if (!hasToken) {
+    log.error(
+      `${channel}: enabled but bot token is missing or could not be decrypted — cannot start`,
+      { channel },
+    );
+    return false;
+  }
+
+  if (authorizedActorCount === 0) {
+    log.error(
+      `${channel}: enabled but no authorized user IDs configured — cannot start`,
+      { channel },
+    );
+    return false;
+  }
+
+  log.info(`${channel}: enabled — will attempt to start`, {
+    channel,
+    authorizedActorCount,
+  });
+  return true;
 }
 
 export function redactDesktopMessagingConfig(

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import type { AppServerBackendKind, NavigationLaunchpadDefaults } from "@pwragnt/shared";
+import type { AppServerBackendKind, NavigationLaunchpadDefaults } from "@pwragent/shared";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 async function assertTangerineFocusRing(locator: Locator) {
@@ -28,8 +28,10 @@ async function createProviderSelectorFixture(params: {
   env?: Record<string, string>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-provider-model-selectors-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-provider-model-selectors-"));
   const fixturePath = path.join(rootDir, "provider-model-selectors.fixture.json");
+  // Use the legacy "pwragnt" directory name because the migration code in
+  // migration.ts intentionally looks for legacy files at this path.
   const stateRoot = path.join(rootDir, ".local", "state", "pwragnt");
 
   if (params.launchpadDefaults) {

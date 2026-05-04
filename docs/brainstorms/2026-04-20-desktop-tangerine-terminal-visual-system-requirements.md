@@ -7,7 +7,7 @@ topic: desktop-tangerine-terminal-visual-system
 
 ## Problem Frame
 
-The desktop app currently has the right product ambition, but the active palette reads too much like gray text on darker gray surfaces with a loud chartreuse accent. The next visual pass should make PwrAgnt feel more distinctive, sharper, and more durable for all-day work: absolute black foundation, crisp white text, neutral gray metadata, and sparse tangerine signal.
+The desktop app currently has the right product ambition, but the active palette reads too much like gray text on darker gray surfaces with a loud chartreuse accent. The next visual pass should make PwrAgent feel more distinctive, sharper, and more durable for all-day work: absolute black foundation, crisp white text, neutral gray metadata, and sparse tangerine signal.
 
 The goal is not a flashy theme or a literal Bloomberg clone. The goal is a serious terminal-like workstation with enough visual point of view that a screenshot immediately feels like a product.
 
@@ -15,7 +15,7 @@ The goal is not a flashy theme or a literal Bloomberg clone. The goal is a serio
 
 The desktop renderer currently uses hand-authored React/Electron CSS with centralized CSS custom properties. No shadcn, Tailwind, or Radix component system is installed in the desktop package today.
 
-Current industry systems point in the same general direction even when the libraries differ: semantic tokens for surfaces, foregrounds, borders, focus, accents, and component states. PwrAgnt should keep the lightweight CSS-variable approach for now and strengthen the token model before considering a component-system migration.
+Current industry systems point in the same general direction even when the libraries differ: semantic tokens for surfaces, foregrounds, borders, focus, accents, and component states. PwrAgent should keep the lightweight CSS-variable approach for now and strengthen the token model before considering a component-system migration.
 
 ## Requirements
 

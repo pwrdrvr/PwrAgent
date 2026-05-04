@@ -22,7 +22,7 @@ async function createDirectoryLaunchpadFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-launchpad-e2e-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-e2e-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
   const otherRepoDir = path.join(rootDir, "OtherRepo");
   await mkdir(repoDir, { recursive: true });
@@ -34,9 +34,9 @@ async function createDirectoryLaunchpadFixture(): Promise<{
     "git",
     [
       "-c",
-      "user.name=PwrAgnt Tests",
+      "user.name=PwrAgent Tests",
       "-c",
-      "user.email=pwragnt-tests@example.invalid",
+      "user.email=pwragent-tests@example.invalid",
       "commit",
       "--allow-empty",
       "-m",
@@ -51,9 +51,9 @@ async function createDirectoryLaunchpadFixture(): Promise<{
     "git",
     [
       "-c",
-      "user.name=PwrAgnt Tests",
+      "user.name=PwrAgent Tests",
       "-c",
-      "user.email=pwragnt-tests@example.invalid",
+      "user.email=pwragent-tests@example.invalid",
       "commit",
       "--allow-empty",
       "-m",
@@ -281,7 +281,7 @@ function readOverlayState(homeRoot: string): {
 } {
   const dbPath = path.join(
     homeRoot,
-    ".pwragnt",
+    ".pwragent",
     "profiles",
     "default",
     "state",
@@ -432,7 +432,7 @@ test("directory launchpad repairs stale drafts that saved the internal directory
     const directoryKey = `directory:${repoDir}`;
 
     await app.window.evaluate(async (key) => {
-      await (window as any).pwragnt.updateDirectoryLaunchpad({
+      await (window as any).pwragent.updateDirectoryLaunchpad({
         directoryKey: key,
         patch: {
           prompt: "A stale draft that already has content",

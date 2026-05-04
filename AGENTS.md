@@ -1,4 +1,4 @@
-# PwrAgnt Repository Guidance
+# PwrAgent Repository Guidance
 
 ## Source of Truth
 
@@ -14,7 +14,7 @@
 - Do not delete or "clean up" files in `docs/brainstorms/`, `docs/plans/`, or future `docs/solutions/` directories.
 - Exclude `apps/desktop/.local/protocol-captures/` from broad searches by default. Only search it when the task is specifically about captured E2E protocol snippets.
 - Use the project-local [desktop E2E fixture seeding skill](.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when seeding or refreshing desktop replay fixtures from live captured sessions.
-- For reliable desktop E2E runs, prefer `pnpm test:desktop-e2e` from the repo root. The package-level `pnpm --filter @pwragnt/desktop test:e2e` path is also safe now because it builds `apps/desktop/out/` before launching Playwright.
+- For reliable desktop E2E runs, prefer `pnpm test:desktop-e2e` from the repo root. The package-level `pnpm --filter @pwragent/desktop test:e2e` path is also safe now because it builds `apps/desktop/out/` before launching Playwright.
 - When focusing root Vitest runs through `pnpm test`, pass file paths or filters directly, for example `pnpm test packages/agent-core/src/__tests__/overlay-store.test.ts`. Do not insert a standalone `--` before the focus args; `pnpm test -- packages/...` makes Vitest run the full workspace suite.
 
 ## Agent Instruction Files
@@ -45,10 +45,10 @@
 
 ## Runtime Config
 
-- All desktop config and state lives under `~/.pwragnt/` (the "PwrAgnt root").
-- Override the root with `PWRAGNT_HOME=/path/to/root` for isolated E2E or dev-profile use.
-- Select a named profile with `PWRAGNT_PROFILE=<name>` (defaults to `default`).
-- Per-profile layout: `~/.pwragnt/profiles/<name>/config.toml` (settings), `~/.pwragnt/profiles/<name>/state/state.db` (sqlite).
+- All desktop config and state lives under `~/.pwragent/` (the "PwrAgent root").
+- Override the root with `PWRAGENT_HOME=/path/to/root` for isolated E2E or dev-profile use.
+- Select a named profile with `PWRAGENT_PROFILE=<name>` (defaults to `default`).
+- Per-profile layout: `~/.pwragent/profiles/<name>/config.toml` (settings), `~/.pwragent/profiles/<name>/state/state.db` (sqlite).
 - Grok app-server config lives at `~/.config/grok-app-server/config.toml` (legacy path, still read).
 - Runtime config keys in the grok config: `xai_api_key`, `grok_model`, `xai_base_url`, `state_root`.
 - Environment variables (`XAI_API_KEY`, `GROK_MODEL`, `XAI_BASE_URL`) still override the toml config.

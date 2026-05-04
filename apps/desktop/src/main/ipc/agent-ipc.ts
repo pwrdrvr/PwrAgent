@@ -27,7 +27,7 @@ import type {
   SubmitServerRequestResponse,
   UpdateThreadExpectedBranchRequest,
   UpdateThreadExpectedBranchResponse,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
   AGENT_EVENT_CHANNEL,
@@ -50,7 +50,7 @@ import { getMainLogger } from "../log";
 let unsubscribeRegistryEvents: (() => void) | undefined;
 
 const isDevelopment = process.env.NODE_ENV !== "production";
-const appServerLog = getMainLogger("pwragnt:app-server");
+const appServerLog = getMainLogger("pwragent:app-server");
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
   if (!isDevelopment) {

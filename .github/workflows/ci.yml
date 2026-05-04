@@ -118,4 +118,4 @@ jobs:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           XAI_BASE_URL: https://api.x.ai/v1
           GROK_MODEL: grok-4.20-reasoning
-        run: pnpm --filter @pwragnt/agent-core test:live
+        run: pnpm --filter @pwragent/agent-core test:live

@@ -7,7 +7,7 @@ import type {
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
   WriteDesktopSettingsConfigRequest,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import {
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_READ_CHANNEL,

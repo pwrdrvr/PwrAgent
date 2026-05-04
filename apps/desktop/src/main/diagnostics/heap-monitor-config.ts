@@ -64,12 +64,12 @@ export function resolveHeapMonitorConfig(options?: {
   repoRoot?: string;
 }): HeapMonitorConfig {
   const env = options?.env ?? process.env;
-  if (!isEnabled(env.PWRAGNT_HEAP_DIAGNOSTICS)) {
+  if (!isEnabled(env.PWRAGENT_HEAP_DIAGNOSTICS)) {
     return { enabled: false };
   }
 
   const repoRoot = path.resolve(
-    env.PWRAGNT_HEAP_DIAGNOSTICS_ROOT ?? options?.repoRoot ?? process.cwd(),
+    env.PWRAGENT_HEAP_DIAGNOSTICS_ROOT ?? options?.repoRoot ?? process.cwd(),
   );
 
   return {
@@ -77,23 +77,23 @@ export function resolveHeapMonitorConfig(options?: {
     repoRoot,
     outputRoot: path.join(repoRoot, ".local"),
     intervalMs: parsePositiveInteger(
-      env.PWRAGNT_HEAP_DIAGNOSTICS_INTERVAL_MS,
+      env.PWRAGENT_HEAP_DIAGNOSTICS_INTERVAL_MS,
       DEFAULT_INTERVAL_MS,
     ),
     settleDelayMs: parseNonNegativeInteger(
-      env.PWRAGNT_HEAP_DIAGNOSTICS_SETTLE_MS,
+      env.PWRAGENT_HEAP_DIAGNOSTICS_SETTLE_MS,
       DEFAULT_SETTLE_DELAY_MS,
     ),
     deltaThresholdBytes: parsePositiveInteger(
-      env.PWRAGNT_HEAP_DIAGNOSTICS_DELTA_BYTES,
+      env.PWRAGENT_HEAP_DIAGNOSTICS_DELTA_BYTES,
       DEFAULT_DELTA_THRESHOLD_BYTES,
     ),
     snapshotCooldownMs: parseNonNegativeInteger(
-      env.PWRAGNT_HEAP_DIAGNOSTICS_COOLDOWN_MS,
+      env.PWRAGENT_HEAP_DIAGNOSTICS_COOLDOWN_MS,
       DEFAULT_SNAPSHOT_COOLDOWN_MS,
     ),
     maxSnapshots: parsePositiveInteger(
-      env.PWRAGNT_HEAP_DIAGNOSTICS_MAX_SNAPSHOTS,
+      env.PWRAGENT_HEAP_DIAGNOSTICS_MAX_SNAPSHOTS,
       DEFAULT_MAX_SNAPSHOTS,
     ),
   };

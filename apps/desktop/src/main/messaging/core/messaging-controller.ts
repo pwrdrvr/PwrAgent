@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import type {
   AgentEvent,
   AppServerTurnInputItem,
@@ -32,7 +32,7 @@ import type {
   NavigationThreadSummary,
   ThreadExecutionMode,
   ThreadIdentifier,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import type { MessagingStoreLike } from "../../state/messaging-store-sqlite";
 import type { MessagingAdapter, MessagingBackendBridge } from "./messaging-adapter.js";
@@ -97,7 +97,7 @@ const DEFAULT_INPUT_DEBOUNCE_MS = 500;
 // Provider adapters own stricter platform pacing; the generic layer only
 // coalesces noisy token deltas into human-visible refreshes.
 const STREAM_UPDATE_REFRESH_MS = 1_000;
-const messagingControllerLog = getMainLogger("pwragnt:messaging");
+const messagingControllerLog = getMainLogger("pwragent:messaging");
 
 type AssistantStreamDelta = {
   delta: string;
@@ -235,7 +235,7 @@ export class MessagingController {
           id: this.newIntentId("unauthorized"),
           createdAt: this.now(),
           title: "Not authorized",
-          body: "This channel user is not authorized to control PwrAgnt.",
+          body: "This channel user is not authorized to control PwrAgent.",
           recoverable: false,
         }),
         undefined,
@@ -478,7 +478,7 @@ export class MessagingController {
       buildConfirmationIntent({
         id: this.newIntentId("help"),
         createdAt: this.now(),
-        title: "PwrAgnt",
+        title: "PwrAgent",
         body: "Use /resume to choose a thread to control from this conversation.",
         actions: [
           {
@@ -553,7 +553,7 @@ export class MessagingController {
           id: this.newIntentId("needs-binding"),
           createdAt: this.now(),
           title: "Choose a thread",
-          body: "Bind this conversation to a PwrAgnt thread before sending instructions.",
+          body: "Bind this conversation to a PwrAgent thread before sending instructions.",
           fallbackText: "Reply /resume to choose a thread.",
           actions: [
             {
@@ -598,7 +598,7 @@ export class MessagingController {
           id: this.newIntentId("needs-binding-media"),
           createdAt: this.now(),
           title: "Choose a thread",
-          body: "Bind this conversation to a PwrAgnt thread before sending attachments.",
+          body: "Bind this conversation to a PwrAgent thread before sending attachments.",
           fallbackText: "Reply /resume to choose a thread.",
           actions: [
             {
@@ -1861,7 +1861,7 @@ export class MessagingController {
           id: this.newIntentId("status-unbound"),
           createdAt: this.now(),
           title: "No thread bound",
-          body: "Use /resume to choose a PwrAgnt thread for this conversation.",
+          body: "Use /resume to choose a PwrAgent thread for this conversation.",
           actions: [
             {
               id: "command:resume",
@@ -2662,7 +2662,7 @@ export class MessagingController {
           id: this.newIntentId("detach-unbound"),
           createdAt: this.now(),
           title: "No thread bound",
-          body: "This conversation is not bound to a PwrAgnt thread.",
+          body: "This conversation is not bound to a PwrAgent thread.",
         }),
         undefined,
         event,
@@ -2698,7 +2698,7 @@ export class MessagingController {
         id: this.newIntentId("detached"),
         createdAt: this.now(),
         title: "Thread detached",
-        body: "Messages in this conversation will no longer route to PwrAgnt.",
+        body: "Messages in this conversation will no longer route to PwrAgent.",
       }),
       undefined,
       event,

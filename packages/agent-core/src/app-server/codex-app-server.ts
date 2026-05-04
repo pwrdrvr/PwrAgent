@@ -185,7 +185,7 @@ export class CodexAppServer {
     return {
       protocolVersion: APP_SERVER_PROTOCOL_VERSION,
       serverInfo: {
-        name: "@pwragnt/grok-app-server",
+        name: "@pwragent/grok-app-server",
         version: "0.1.0",
       },
       capabilities: {

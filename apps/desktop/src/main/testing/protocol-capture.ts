@@ -4,9 +4,9 @@ import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { ProtocolCaptureStore } from "./capture-store";
 
-const CAPTURE_ENABLED_ENV = "PWRAGNT_PROTOCOL_CAPTURE";
-const CAPTURE_ROOT_ENV = "PWRAGNT_PROTOCOL_CAPTURE_ROOT";
-const protocolCaptureLog = getMainLogger("pwragnt:protocol-capture");
+const CAPTURE_ENABLED_ENV = "PWRAGENT_PROTOCOL_CAPTURE";
+const CAPTURE_ROOT_ENV = "PWRAGENT_PROTOCOL_CAPTURE_ROOT";
+const protocolCaptureLog = getMainLogger("pwragent:protocol-capture");
 
 export function createProtocolCaptureObserver(params: {
   backend: "codex" | "grok";

@@ -25,7 +25,7 @@ async function createThreadImageFitFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-thread-image-fit-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-image-fit-"));
   const fixturePath = path.join(rootDir, "thread-image-fit.fixture.json");
   const imageBuffer = await readFile(fixtureImagePath);
   const imageUrl = `data:image/png;base64,${imageBuffer.toString("base64")}`;

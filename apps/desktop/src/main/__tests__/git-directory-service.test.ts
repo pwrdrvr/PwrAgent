@@ -13,13 +13,13 @@ function runGit(cwd: string, args: string[]): string {
 }
 
 async function createFixtureRepo(): Promise<string> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-git-directory-service-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-git-directory-service-"));
   execFileSync("git", ["init", rootDir], { stdio: "ignore" });
   execFileSync("git", ["-C", rootDir, "checkout", "-B", "main"], { stdio: "ignore" });
-  execFileSync("git", ["-C", rootDir, "config", "user.name", "PwrAgnt Tests"], {
+  execFileSync("git", ["-C", rootDir, "config", "user.name", "PwrAgent Tests"], {
     stdio: "ignore",
   });
-  execFileSync("git", ["-C", rootDir, "config", "user.email", "pwragnt-tests@example.invalid"], {
+  execFileSync("git", ["-C", rootDir, "config", "user.email", "pwragent-tests@example.invalid"], {
     stdio: "ignore",
   });
   execFileSync("git", ["-C", rootDir, "commit", "--allow-empty", "-m", "Seed fixture repo"], {
@@ -128,7 +128,7 @@ describe("GitDirectoryService", () => {
   it("creates a worktree under a user-home root when storage is user-home", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
-    const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-worktree-home-"));
+    const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-home-"));
     cleanupPaths.push(homeDir);
     const service = new GitDirectoryService({
       resolveWorktreeStorage: () => "user-home",
@@ -143,7 +143,7 @@ describe("GitDirectoryService", () => {
       branchName: "main",
     });
 
-    const expectedRoot = path.join(homeDir, ".pwragnt", "worktrees");
+    const expectedRoot = path.join(homeDir, ".pwragent", "worktrees");
     expect(workspace.cwd!.startsWith(`${expectedRoot}${path.sep}`)).toBe(true);
     expect(path.basename(workspace.cwd!)).toBe(path.basename(repoDir));
   });
@@ -213,7 +213,7 @@ describe("GitDirectoryService", () => {
       service.prepareLaunchpadWorkspace({
         directoryKind: "workspace",
         directoryLabel: "Workspaces",
-        directoryPath: "/Users/test/.pwragnt/projects",
+        directoryPath: "/Users/test/.pwragent/projects",
         workMode: "local",
       }),
     ).resolves.toEqual({

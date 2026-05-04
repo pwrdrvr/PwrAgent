@@ -10,35 +10,35 @@ describe("runtime identity formatting", () => {
   it("shows the distinctive worktree directory segment", () => {
     expect(
       formatRuntimePath(
-        "/Users/huntharo/pwrdrvr/PwrAgnt/.worktrees/pwragnt-fix-thread-naming-moioth2352"
+        "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352"
       )
-    ).toBe(".worktrees/pwragnt-fix-th...ng-moioth2352");
+    ).toBe(".worktrees/pwragent-fix-t...ng-moioth2352");
   });
 
   it("ignores the desktop app package when showing the runtime workspace", () => {
-    expect(formatRuntimePath("/Users/huntharo/github/PwrAgnt/apps/desktop")).toBe(
-      "github/PwrAgnt"
+    expect(formatRuntimePath("/Users/huntharo/github/PwrAgent/apps/desktop")).toBe(
+      "github/PwrAgent"
     );
   });
 
   it("ignores the desktop app package below a repo worktree", () => {
     expect(
       formatRuntimePath(
-        "/Users/huntharo/github/PwrAgnt/.worktrees/pwragnt-fix-thread-naming-moioth2352/apps/desktop"
+        "/Users/huntharo/github/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352/apps/desktop"
       )
-    ).toBe(".worktrees/pwragnt-fix-th...ng-moioth2352");
+    ).toBe(".worktrees/pwragent-fix-t...ng-moioth2352");
   });
 
   it("shows the codex worktree id and repo for codex-managed worktrees", () => {
-    expect(formatRuntimePath("/Users/huntharo/.codex/worktrees/5d4b/PwrAgnt")).toBe(
-      "5d4b/PwrAgnt"
+    expect(formatRuntimePath("/Users/huntharo/.codex/worktrees/5d4b/PwrAgent")).toBe(
+      "5d4b/PwrAgent"
     );
   });
 
   it("ignores the desktop app package below a codex-managed worktree", () => {
     expect(
-      formatRuntimePath("/Users/huntharo/.codex/worktrees/5d4b/PwrAgnt/apps/desktop")
-    ).toBe("5d4b/PwrAgnt");
+      formatRuntimePath("/Users/huntharo/.codex/worktrees/5d4b/PwrAgent/apps/desktop")
+    ).toBe("5d4b/PwrAgent");
   });
 
   it("shows hash/project for the new in-repo worktree layout", () => {
@@ -67,14 +67,14 @@ describe("runtime identity formatting", () => {
 
   it("shows hash/project for the user-home worktree layout", () => {
     expect(
-      formatRuntimePath("/Users/huntharo/.pwragnt/worktrees/moit6ddw/PwrAgnt")
+      formatRuntimePath("/Users/huntharo/.pwragent/worktrees/moit6ddw/PwrAgnt")
     ).toBe("moit6ddw/PwrAgnt");
   });
 
   it("ignores the desktop app package below a user-home worktree", () => {
     expect(
       formatRuntimePath(
-        "/Users/huntharo/.pwragnt/worktrees/moit6ddw/PwrAgnt/apps/desktop"
+        "/Users/huntharo/.pwragent/worktrees/moit6ddw/PwrAgnt/apps/desktop"
       )
     ).toBe("moit6ddw/PwrAgnt");
   });
@@ -88,7 +88,7 @@ describe("runtime identity formatting", () => {
   it("labels a detached ref as HEAD while copying the commit SHA", () => {
     const identity = {
       commitSha: "ab12cd3344556677889900aabbccddeeff001122",
-      cwd: "/repo/PwrAgnt",
+      cwd: "/repo/PwrAgent",
       detachedHead: true,
     };
 

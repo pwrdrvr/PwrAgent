@@ -139,8 +139,8 @@ describe("telegram formatting", () => {
       createdAt: 1000,
       prompt: [
         "Workspace Handoff",
-        "Repository: /repo/pwragnt",
-        "Working directory: /repo/pwragnt",
+        "Repository: /repo/pwragent",
+        "Working directory: /repo/pwragent",
         "Branch: feature/handoff",
       ].join("\n"),
       fallbackText: "Reply with 1, Back, Refresh, or Cancel.",
@@ -154,8 +154,8 @@ describe("telegram formatting", () => {
             backend: "codex",
             threadId: "thread-1",
             direction: "local-to-worktree",
-            repositoryPath: "/repo/pwragnt",
-            sourcePath: "/repo/pwragnt",
+            repositoryPath: "/repo/pwragent",
+            sourcePath: "/repo/pwragent",
             sourceBranch: "feature/handoff",
           },
         },
@@ -178,7 +178,7 @@ describe("telegram formatting", () => {
       ["Handoff to New Worktree"],
       ["Cancel"],
     ]);
-    expect(JSON.stringify(keyboard)).not.toContain("/repo/pwragnt");
+    expect(JSON.stringify(keyboard)).not.toContain("/repo/pwragent");
   });
 
   it("escapes plain text without introducing formatting", () => {

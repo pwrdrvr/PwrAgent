@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   MessagingBindingRecord,
   MessagingInboundTextEvent,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import {
   MessagingTurnAdmission,
   threadKeyForBinding,

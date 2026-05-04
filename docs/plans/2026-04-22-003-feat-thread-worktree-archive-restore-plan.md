@@ -16,16 +16,16 @@ thread archive/restore moves conversation history between active and archived
 collections, while worktree archive/restore snapshots and removes or recreates
 the local Git worktree attached to a thread.
 
-Codex-owned threads should stay protocol-first. PwrAgnt should use Codex
+Codex-owned threads should stay protocol-first. PwrAgent should use Codex
 app-server archive/unarchive when available and must not mutate Codex SQLite
-state or Codex rollout files directly. For worktree cleanup, PwrAgnt can use
+state or Codex rollout files directly. For worktree cleanup, PwrAgent can use
 the observed Codex Desktop snapshot-ref convention as a best-effort
 compatibility path, but should treat that convention as reverse-engineered
 behavior rather than a stable wire protocol.
 
 Agent-core-owned Grok threads should implement the same user-facing lifecycle
-with PwrAgnt-owned storage, refs, and metadata. The Grok implementation should
-be similar to Codex where the model is useful, but namespaced to PwrAgnt so it
+with PwrAgent-owned storage, refs, and metadata. The Grok implementation should
+be similar to Codex where the model is useful, but namespaced to PwrAgent so it
 does not collide with Codex refs or imply Codex ownership.
 
 ## Problem Frame
@@ -45,7 +45,7 @@ archive action rather than a documented app-server promise:
   worktree as part of the user-facing archive action.
 - Before deletion, Codex created a Git commit at
   `refs/codex/snapshots/ed94b6fb65ed9bf9ddc53617d1b5c692bbe7bf8b`.
-- The ref suffix was `sha1("/Users/huntharo/.codex/worktrees/13af/PwrAgnt")`,
+- The ref suffix was `sha1("/Users/huntharo/.codex/worktrees/13af/PwrAgent")`,
   not the thread id.
 - Restoring the thread moved the rollout back but did not recreate the
   worktree.
@@ -53,7 +53,7 @@ archive action rather than a documented app-server promise:
   snapshot ref as a clean detached HEAD.
 - Ignored files such as `node_modules` were not restored.
 
-PwrAgnt needs to decide which parts of that behavior to rely on, which parts to
+PwrAgent needs to decide which parts of that behavior to rely on, which parts to
 delegate to Codex, and which parts to own independently for Grok.
 
 ## Requirements Trace
@@ -63,14 +63,14 @@ delegate to Codex, and which parts to own independently for Grok.
 - R2. For Codex-owned threads, use supported Codex app-server methods for
   thread archive/unarchive and do not write Codex SQLite, Codex rollout files,
   or Codex session indexes directly.
-- R3. For Codex-owned worktrees, when PwrAgnt performs explicit worktree
+- R3. For Codex-owned worktrees, when PwrAgent performs explicit worktree
   archive, create a Codex-compatible snapshot ref when possible:
   `refs/codex/snapshots/<sha1(abs-worktree-path)>`.
 - R4. Treat Codex-compatible worktree snapshots as best-effort compatibility,
-  not a guaranteed contract. PwrAgnt restore must be able to restore worktrees
+  not a guaranteed contract. PwrAgent restore must be able to restore worktrees
   it archived even if a future Codex version changes its internal convention.
 - R5. For Grok-owned threads, own the full archive/restore lifecycle in
-  agent-core storage, including archived thread storage and PwrAgnt-namespaced
+  agent-core storage, including archived thread storage and PwrAgent-namespaced
   worktree snapshot refs.
 - R6. Preserve dirty tracked changes, staged changes, and eligible untracked
   files in a Git snapshot before removing a worktree. Do not claim ignored
@@ -92,8 +92,8 @@ delegate to Codex, and which parts to own independently for Grok.
   explicit worktree restore, shared contracts, desktop IPC/preload wiring,
   renderer affordances, agent-core persistence, and tests.
 - In scope: Codex-compatible snapshot creation for Codex-owned worktrees when
-  PwrAgnt is the actor removing the worktree.
-- In scope: PwrAgnt-owned snapshot refs and metadata for Grok-owned worktrees.
+  PwrAgent is the actor removing the worktree.
+- In scope: PwrAgent-owned snapshot refs and metadata for Grok-owned worktrees.
 - Out of scope: Direct mutation of Codex SQLite, Codex rollout files, Codex
   archived session files, or Codex session indexes.
 - Out of scope: Restoring ignored dependency directories such as `node_modules`.
@@ -150,7 +150,7 @@ delegate to Codex, and which parts to own independently for Grok.
 - The snapshot id is derivable from persisted thread cwd. It was not stored in
   the visible thread row in `state_5.sqlite`, and it was not the thread id hash.
 - The observed worktree snapshot/delete and restore-worktree operations are
-  Desktop shell behavior around thread archive state. PwrAgnt should not assume
+  Desktop shell behavior around thread archive state. PwrAgent should not assume
   that calling Codex app-server `thread/archive` alone guarantees worktree
   deletion or snapshot creation.
 
@@ -172,18 +172,18 @@ delegate to Codex, and which parts to own independently for Grok.
 ## Key Technical Decisions
 
 - Delegate Codex thread archive/restore to Codex app-server. If Codex does not
-  support the operation, PwrAgnt should show it as unavailable rather than
+  support the operation, PwrAgent should show it as unavailable rather than
   emulating it by editing Codex files.
 - Introduce explicit worktree archive/restore APIs instead of overloading
   `ArchiveThreadResponse.cleanup`. Thread archive and worktree archive have
   different safety properties and should not share a response shape.
 - Split worktree snapshot ownership by backend. Codex-owned worktrees may get a
   `refs/codex/snapshots/<sha1(cwd)>` ref for compatibility; Grok-owned worktrees
-  should use `refs/pwragnt/snapshots/<sha1(cwd)>` or an equivalent PwrAgnt
+  should use `refs/pwragent/snapshots/<sha1(cwd)>` or an equivalent PwrAgent
   namespace chosen during implementation.
-- Store PwrAgnt-owned worktree snapshot metadata outside Codex state for every
-  worktree PwrAgnt archives, including Codex-owned threads. The metadata should
-  live in PwrAgnt-controlled storage and include thread id, backend, repo root,
+- Store PwrAgent-owned worktree snapshot metadata outside Codex state for every
+  worktree PwrAgent archives, including Codex-owned threads. The metadata should
+  live in PwrAgent-controlled storage and include thread id, backend, repo root,
   worktree path, snapshot ref, commit sha, base HEAD, branch, creation time,
   restore status, and excluded categories such as ignored files.
 - Use Git snapshots for Git worktrees, not filesystem copies. A commit-tree or
@@ -202,27 +202,27 @@ delegate to Codex, and which parts to own independently for Grok.
 
 ### Resolved During Planning
 
-- Should PwrAgnt touch Codex SQLite to make Codex restore work? No. This is a
+- Should PwrAgent touch Codex SQLite to make Codex restore work? No. This is a
   hard boundary.
 - Is the Codex snapshot ref named after the thread id? No. It is named after
   `sha1(abs-worktree-path)`.
-- Can PwrAgnt make a Codex-compatible snapshot ref without touching Codex DB?
+- Can PwrAgent make a Codex-compatible snapshot ref without touching Codex DB?
   Probably yes for the worktree snapshot itself, because the ref is normal Git
   state in the repository. Compatibility with future Codex restore UI remains
   best-effort because the convention is not a documented protocol.
 - Should thread archive automatically remove worktrees again? No. Worktree
   archive must be explicit or part of a clearly labeled compound action.
 - Should Grok snapshots use `refs/codex/snapshots`? No. They should be
-  PwrAgnt-namespaced to avoid pretending Codex owns them.
+  PwrAgent-namespaced to avoid pretending Codex owns them.
 - Does Codex app-server `thread/archive` alone guarantee worktree snapshot and
   deletion? No documented guarantee. Treat Codex thread archive and Codex
-  worktree archive as separate capabilities in PwrAgnt even if Codex Desktop
+  worktree archive as separate capabilities in PwrAgent even if Codex Desktop
   currently wires them together in its own shell.
 
 ### Deferred to Implementation
 
-- Exact PwrAgnt snapshot ref namespace. The plan recommends
-  `refs/pwragnt/snapshots/<worktree-id>`, but the implementer should verify it
+- Exact PwrAgent snapshot ref namespace. The plan recommends
+  `refs/pwragent/snapshots/<worktree-id>`, but the implementer should verify it
   does not conflict with existing repo policy.
 - Exact temporary-index mechanics for preserving staged state while producing a
   snapshot commit. The plan requires no user index disturbance; the final helper
@@ -248,10 +248,10 @@ flowchart TB
 
     WT --> OWNER{"Thread backend"}
     OWNER -->|Codex| CODEX_REF["refs/codex/snapshots/sha1(cwd)"]
-    OWNER -->|Grok| PWR_REF["refs/pwragnt/snapshots/sha1(cwd)"]
+    OWNER -->|Grok| PWR_REF["refs/pwragent/snapshots/sha1(cwd)"]
 
     CODEX_REF --> REMOVE["Remove Git worktree explicitly"]
-    PWR_REF --> META["Persist PwrAgnt snapshot metadata"]
+    PWR_REF --> META["Persist PwrAgent snapshot metadata"]
     META --> REMOVE
     REMOVE --> RESTORE["Restore worktree from snapshot ref"]
 ```
@@ -327,12 +327,12 @@ branches.
 - Create a service that validates the linked directory is a registered Git
   worktree and not the primary checkout.
 - Compute `worktreeId = sha1(absWorktreePath)` for both Codex-compatible and
-  PwrAgnt-owned snapshots.
+  PwrAgent-owned snapshots.
 - Create a snapshot commit with a temporary-index or equivalent approach so
   dirty tracked, staged, and eligible untracked files are captured without
   disturbing the user's index.
 - Use `refs/codex/snapshots/<worktreeId>` only for Codex-owned worktrees and
-  `refs/pwragnt/snapshots/<worktreeId>` for Grok-owned worktrees.
+  `refs/pwragent/snapshots/<worktreeId>` for Grok-owned worktrees.
 - Remove the registered worktree only after the snapshot ref is created and
   verified.
 - Do not delete the associated branch.
@@ -366,9 +366,9 @@ untracked files before modifying the old cleanup path.
 - No path from `archiveThread` calls `git worktree remove`; only the explicit
   worktree archive path can remove a worktree.
 
-- [ ] **Unit 3: Persist PwrAgnt-owned worktree snapshot metadata**
+- [ ] **Unit 3: Persist PwrAgent-owned worktree snapshot metadata**
 
-**Goal:** Give every worktree archived by PwrAgnt a durable, PwrAgnt-owned way
+**Goal:** Give every worktree archived by PwrAgent a durable, PwrAgent-owned way
 to find and restore its snapshot without relying on Codex state.
 
 **Requirements:** R4, R5, R9, R10
@@ -386,8 +386,8 @@ to find and restore its snapshot without relying on Codex state.
 - Test: `packages/agent-core/src/__tests__/codex-app-server-persistence.test.ts`
 
 **Approach:**
-- Add a worktree snapshot metadata collection in PwrAgnt-controlled storage.
-  Codex-owned snapshots created by PwrAgnt should record metadata there even
+- Add a worktree snapshot metadata collection in PwrAgent-controlled storage.
+  Codex-owned snapshots created by PwrAgent should record metadata there even
   when they also use a Codex-compatible Git ref. Grok-owned snapshots should be
   recorded there and may also be associated with Grok thread storage.
 - For Grok threads, metadata should move with archived thread state when useful,
@@ -406,11 +406,11 @@ to find and restore its snapshot without relying on Codex state.
 
 **Test scenarios:**
 - Happy path: Grok worktree archive metadata persists across app restart.
-- Happy path: Codex-owned worktree archive performed by PwrAgnt records
-  PwrAgnt metadata without touching Codex SQLite or rollout files.
+- Happy path: Codex-owned worktree archive performed by PwrAgent records
+  PwrAgent metadata without touching Codex SQLite or rollout files.
 - Happy path: archived Grok thread storage retains snapshot metadata while the
   thread is archived.
-- Edge case: Codex-compatible snapshot ref exists but PwrAgnt metadata is
+- Edge case: Codex-compatible snapshot ref exists but PwrAgent metadata is
   missing; restore can still use the compatibility ref but reports the lower
   confidence source.
 - Edge case: metadata exists but the Git ref is missing; summary marks restore
@@ -421,7 +421,7 @@ to find and restore its snapshot without relying on Codex state.
   restored as a thread, and still show the worktree restore state.
 
 **Verification:**
-- PwrAgnt can locate snapshots it created using PwrAgnt state first, with
+- PwrAgent can locate snapshots it created using PwrAgent state first, with
   Codex-compatible ref derivation only as a fallback for Codex-owned threads.
 
 - [x] **Unit 4: Implement worktree restore**
@@ -444,8 +444,8 @@ Grok-owned threads without touching Codex SQLite or silently changing paths.
 - Test: `apps/desktop/src/main/__tests__/app-server-ipc.test.ts`
 
 **Approach:**
-- Resolve the snapshot ref from explicit PwrAgnt metadata first; for Codex-owned
-  threads without PwrAgnt metadata, derive the compatibility ref from
+- Resolve the snapshot ref from explicit PwrAgent metadata first; for Codex-owned
+  threads without PwrAgent metadata, derive the compatibility ref from
   `sha1(absWorktreePath)`.
 - Restore to the anchored worktree path only when the path is absent and the
   home repo is available.
@@ -463,7 +463,7 @@ Grok-owned threads without touching Codex SQLite or silently changing paths.
 **Test scenarios:**
 - Happy path: a missing Codex-owned worktree restores from
   `refs/codex/snapshots/<sha1(cwd)>` when the ref exists.
-- Happy path: a missing Grok-owned worktree restores from a PwrAgnt snapshot
+- Happy path: a missing Grok-owned worktree restores from a PwrAgent snapshot
   ref recorded in metadata.
 - Edge case: target path already exists; restore fails clearly and does not
   overwrite the path.
@@ -503,7 +503,7 @@ thread archive restores files or that ignored dependencies are preserved.
 - Use copy that distinguishes "Archive worktree" from "Archive thread" and
   warns that ignored files such as dependencies are not included.
 - Show "Restore worktree" only when the worktree path is missing and a snapshot
-  ref or PwrAgnt metadata exists.
+  ref or PwrAgent metadata exists.
 - Show unavailable states when the snapshot is missing, the repo is missing, or
   the linked directory is not a Git worktree.
 
@@ -551,11 +551,11 @@ including Codex compatibility boundaries.
 **Approach:**
 - Add unit-level Git fixture tests for snapshot, remove, and restore.
 - Add renderer replay coverage for action visibility and status transitions.
-- Add Codex adapter tests that prove PwrAgnt uses protocol calls for thread
+- Add Codex adapter tests that prove PwrAgent uses protocol calls for thread
   archive/unarchive and never edits Codex persistence directly.
-- Add tests that prove PwrAgnt does not assume Codex app-server
+- Add tests that prove PwrAgent does not assume Codex app-server
   `thread/archive` created a worktree snapshot unless a snapshot ref or
-  PwrAgnt metadata is actually present.
+  PwrAgent metadata is actually present.
 - Add a manual verification note or fixture capture for Codex-compatible
   snapshot refs, because current compatibility is based on observed Desktop
   behavior rather than a published protocol.
@@ -574,10 +574,10 @@ snapshot naming before implementing the compatibility helper.
 - Happy path: Codex thread archive/unarchive goes through Codex app-server only.
 - Happy path: Codex worktree archive creates the compatibility snapshot ref
   based on `sha1(absWorktreePath)`.
-- Edge case: Codex-compatible snapshot ref is absent; PwrAgnt does not attempt
+- Edge case: Codex-compatible snapshot ref is absent; PwrAgent does not attempt
   to modify Codex DB to compensate.
 - Edge case: Codex thread archive succeeds but no worktree snapshot ref exists;
-  PwrAgnt reports thread archive success and worktree restore unavailable.
+  PwrAgent reports thread archive success and worktree restore unavailable.
 - Error path: snapshot creation succeeds but worktree removal fails; restore
   remains possible from the snapshot while UI reports the partial result.
 - Integration: navigation refresh reflects present/missing/restorable worktree
@@ -595,7 +595,7 @@ snapshot naming before implementing the compatibility helper.
   index, writes backend-namespaced snapshot refs, refuses primary checkouts,
   removes worktrees without deleting branches, and restores detached worktrees
   from snapshot commits.
-- Persisted PwrAgnt-created snapshot metadata in the overlay store and hydrated
+- Persisted PwrAgent-created snapshot metadata in the overlay store and hydrated
   it into navigation thread summaries. The broader Grok rollout-store metadata
   move described in Unit 3 remains future work.
 - Added context-panel worktree archive/restore affordances and navigation hook
@@ -641,10 +641,10 @@ flowchart TB
 
 | Risk | Mitigation |
 |------|------------|
-| Codex changes its internal snapshot convention | Treat `refs/codex/snapshots/sha1(cwd)` as best-effort compatibility and keep PwrAgnt restore independent for snapshots it creates. |
+| Codex changes its internal snapshot convention | Treat `refs/codex/snapshots/sha1(cwd)` as best-effort compatibility and keep PwrAgent restore independent for snapshots it creates. |
 | Data loss if removal happens before snapshot verification | Make snapshot ref creation and commit validation a hard prerequisite before `git worktree remove`. |
 | User expects `node_modules` to come back | State in contract/UI that ignored files are excluded; tests should assert ignored directories are not restored. |
-| PwrAgnt accidentally mutates Codex persistence | Keep Codex thread archive/restore protocol-only and add tests that fail on direct Codex file writes in adapter paths. |
+| PwrAgent accidentally mutates Codex persistence | Keep Codex thread archive/restore protocol-only and add tests that fail on direct Codex file writes in adapter paths. |
 | Snapshot creation disturbs staged state | Use temporary-index style snapshotting and tests that cover staged changes. |
 | Worktree restore overwrites user files | Refuse restore when the target path already exists. |
 | Branch deletion sneaks back into archive | Keep branch deletion out of service responsibilities and assert no branch delete command in worktree archive tests. |
@@ -654,7 +654,7 @@ flowchart TB
 
 - Add a short docs note or plan back-reference explaining that thread archive
   and worktree archive are separate operations.
-- Document the PwrAgnt worktree snapshot namespace and metadata location once
+- Document the PwrAgent worktree snapshot namespace and metadata location once
   the final names are chosen.
 - Document Codex compatibility as observational, not as a guaranteed contract.
 - Consider adding a troubleshooting note: restored worktrees are clean snapshots

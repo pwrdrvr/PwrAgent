@@ -6,7 +6,7 @@ import type {
   MessagingChannelRef,
   MessagingJsonValue,
   MessagingPendingIntentRecord,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { StateDb } from "./state-db.js";
 import type {
   MessagingDeliveryRecord,

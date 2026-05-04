@@ -109,7 +109,7 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
       executeJavaScript: vi.fn(() =>
         Promise.resolve({
           hasPwragnt: true,
-          pwragntKeys: [],
+          pwragentKeys: [],
           locationHref: "http://127.0.0.1:5173"
         })
       ),
@@ -206,7 +206,7 @@ describe("createMainWindow", () => {
     const openHandler = browserWindowState.setWindowOpenHandler?.mock.calls[0]?.[0];
     expect(openHandler).toBeDefined();
 
-    expect(openHandler({ url: "https://github.com/pwrdrvr/PwrAgnt" })).toEqual({
+    expect(openHandler({ url: "https://github.com/pwrdrvr/PwrAgent" })).toEqual({
       action: "deny",
     });
     expect(openHandler({ url: "mailto:team@example.com" })).toEqual({
@@ -224,7 +224,7 @@ describe("createMainWindow", () => {
 
     expect(shellOpenExternalMock).toHaveBeenCalledTimes(5);
     expect(shellOpenExternalMock).toHaveBeenCalledWith(
-      "https://github.com/pwrdrvr/PwrAgnt"
+      "https://github.com/pwrdrvr/PwrAgent"
     );
     expect(shellOpenExternalMock).toHaveBeenCalledWith("mailto:team@example.com");
     expect(shellOpenExternalMock).toHaveBeenCalledWith("file:///tmp/example.md");
@@ -245,7 +245,7 @@ describe("createMainWindow", () => {
 
     expect(openHandler({ url: "http://example.com" })).toEqual({ action: "deny" });
     expect(openHandler({ url: "javascript:alert(1)" })).toEqual({ action: "deny" });
-    expect(openHandler({ url: "pwragnt-test://payload" })).toEqual({
+    expect(openHandler({ url: "pwragent-test://payload" })).toEqual({
       action: "deny",
     });
     expect(openHandler({ url: "docs/plans/example.md" })).toEqual({

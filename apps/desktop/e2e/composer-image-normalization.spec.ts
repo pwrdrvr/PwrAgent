@@ -8,7 +8,7 @@ async function createComposerImageFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-composer-image-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-composer-image-"));
   const fixturePath = path.join(rootDir, "composer-image-normalization.fixture.json");
   await mkdir(rootDir, { recursive: true });
   await writeFile(

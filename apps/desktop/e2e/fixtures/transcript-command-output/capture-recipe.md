@@ -2,7 +2,7 @@
 
 This scenario is derived from captured Codex thread
 `019ddaa3-60c1-7160-95f3-14744bdfabb7`, where the live protocol and rollout
-both contained rich `npm view dive` command output but PwrAgnt only rendered a
+both contained rich `npm view dive` command output but PwrAgent only rendered a
 single command line.
 
 ## Stop Point

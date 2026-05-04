@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AppServerToolRequestUserInputNotification } from "@pwragnt/shared";
+import type { AppServerToolRequestUserInputNotification } from "@pwragent/shared";
 import {
   answerQuestionnaireOption,
   answerQuestionnaireText,

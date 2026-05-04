@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragnt/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared";
 import { buildDirectorySummaries } from "../domain/directory-navigation";
 
 function buildThread(
@@ -30,8 +30,8 @@ describe("buildDirectorySummaries", () => {
           linkedDirectories: [
             {
               id: "dir-1",
-              label: "PwrAgnt",
-              path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
               kind: "local",
             },
           ],
@@ -42,8 +42,8 @@ describe("buildDirectorySummaries", () => {
           linkedDirectories: [
             {
               id: "dir-1",
-              label: "PwrAgnt",
-              path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
               kind: "local",
             },
           ],
@@ -54,8 +54,8 @@ describe("buildDirectorySummaries", () => {
 
     expect(directories).toEqual([
       expect.objectContaining({
-        key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
-        label: "PwrAgnt",
+        key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+        label: "PwrAgent",
         threadKeys: ["codex:thread-1", "codex:thread-2"],
         needsAttentionCount: 1,
         latestUpdatedAt: 2_000,
@@ -67,11 +67,11 @@ describe("buildDirectorySummaries", () => {
     const directories = buildDirectorySummaries({
       threads: [],
       launchpadsByKey: {
-        "directory:/Users/huntharo/pwrdrvr/PwrAgnt": {
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+        "directory:/Users/huntharo/pwrdrvr/PwrAgent": {
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
           directoryKind: "directory",
-          directoryLabel: "PwrAgnt",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "Draft prompt",
@@ -84,7 +84,7 @@ describe("buildDirectorySummaries", () => {
 
     expect(directories).toEqual([
       expect.objectContaining({
-        key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+        key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
         threadKeys: [],
         needsAttentionCount: 0,
         launchpad: expect.objectContaining({
@@ -101,8 +101,8 @@ describe("buildDirectorySummaries", () => {
           linkedDirectories: [
             {
               id: "dir-1",
-              label: "directory:/Users/huntharo/github/PwrAgnt",
-              path: "/Users/huntharo/github/PwrAgnt",
+              label: "directory:/Users/huntharo/github/PwrAgent",
+              path: "/Users/huntharo/github/PwrAgent",
               kind: "local",
             },
           ],
@@ -112,8 +112,8 @@ describe("buildDirectorySummaries", () => {
 
     expect(directories).toEqual([
       expect.objectContaining({
-        key: "directory:/Users/huntharo/github/PwrAgnt",
-        label: "PwrAgnt",
+        key: "directory:/Users/huntharo/github/PwrAgent",
+        label: "PwrAgent",
       }),
     ]);
   });
@@ -122,11 +122,11 @@ describe("buildDirectorySummaries", () => {
     const directories = buildDirectorySummaries({
       threads: [],
       launchpadsByKey: {
-        "directory:/Users/huntharo/github/PwrAgnt": {
-          directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+        "directory:/Users/huntharo/github/PwrAgent": {
+          directoryKey: "directory:/Users/huntharo/github/PwrAgent",
           directoryKind: "directory",
-          directoryLabel: "directory:/Users/huntharo/github/PwrAgnt",
-          directoryPath: "/Users/huntharo/github/PwrAgnt",
+          directoryLabel: "directory:/Users/huntharo/github/PwrAgent",
+          directoryPath: "/Users/huntharo/github/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "Existing draft",
@@ -139,10 +139,10 @@ describe("buildDirectorySummaries", () => {
 
     expect(directories).toEqual([
       expect.objectContaining({
-        key: "directory:/Users/huntharo/github/PwrAgnt",
-        label: "PwrAgnt",
+        key: "directory:/Users/huntharo/github/PwrAgent",
+        label: "PwrAgent",
         launchpad: expect.objectContaining({
-          directoryLabel: "PwrAgnt",
+          directoryLabel: "PwrAgent",
           prompt: "Existing draft",
         }),
       }),
@@ -153,10 +153,10 @@ describe("buildDirectorySummaries", () => {
     const directories = buildDirectorySummaries({
       threads: [],
       launchpadsByKey: {
-        "directory:/Users/huntharo/github/PwrAgnt": {
-          directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+        "directory:/Users/huntharo/github/PwrAgent": {
+          directoryKey: "directory:/Users/huntharo/github/PwrAgent",
           directoryKind: "directory",
-          directoryLabel: "directory:/Users/huntharo/github/PwrAgnt",
+          directoryLabel: "directory:/Users/huntharo/github/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "Existing draft",
@@ -169,12 +169,12 @@ describe("buildDirectorySummaries", () => {
 
     expect(directories).toEqual([
       expect.objectContaining({
-        key: "directory:/Users/huntharo/github/PwrAgnt",
-        label: "PwrAgnt",
-        path: "/Users/huntharo/github/PwrAgnt",
+        key: "directory:/Users/huntharo/github/PwrAgent",
+        label: "PwrAgent",
+        path: "/Users/huntharo/github/PwrAgent",
         launchpad: expect.objectContaining({
-          directoryLabel: "PwrAgnt",
-          directoryPath: "/Users/huntharo/github/PwrAgnt",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/github/PwrAgent",
         }),
       }),
     ]);
@@ -184,11 +184,11 @@ describe("buildDirectorySummaries", () => {
     const directories = buildDirectorySummaries({
       threads: [],
       launchpadsByKey: {
-        "directory:/Users/huntharo/pwrdrvr/PwrAgnt": {
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+        "directory:/Users/huntharo/pwrdrvr/PwrAgent": {
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
           directoryKind: "directory",
-          directoryLabel: "PwrAgnt",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -206,11 +206,11 @@ describe("buildDirectorySummaries", () => {
     const directories = buildDirectorySummaries({
       threads: [],
       launchpadsByKey: {
-        "directory:/Users/huntharo/pwrdrvr/PwrAgnt": {
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+        "directory:/Users/huntharo/pwrdrvr/PwrAgent": {
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
           directoryKind: "directory",
-          directoryLabel: "PwrAgnt",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "full-access",
           prompt: "",
@@ -224,7 +224,7 @@ describe("buildDirectorySummaries", () => {
 
     expect(directories).toEqual([
       expect.objectContaining({
-        key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+        key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
         launchpad: expect.objectContaining({
           executionMode: "full-access",
           settingsTouchedAt: 2_000,
@@ -239,9 +239,9 @@ describe("buildDirectorySummaries", () => {
         buildThread({
           linkedDirectories: [
             {
-              id: "/Users/huntharo/.pwragnt/projects",
+              id: "/Users/huntharo/.pwragent/projects",
               label: "projects",
-              path: "/Users/huntharo/.pwragnt/projects",
+              path: "/Users/huntharo/.pwragent/projects",
               kind: "local",
             },
           ],
@@ -250,9 +250,9 @@ describe("buildDirectorySummaries", () => {
           id: "thread-2",
           linkedDirectories: [
             {
-              id: "/Users/huntharo/.pwragnt/projects/2026-05-02-a1b2c3",
+              id: "/Users/huntharo/.pwragent/projects/2026-05-02-a1b2c3",
               label: "2026-05-02-a1b2c3",
-              path: "/Users/huntharo/.pwragnt/projects/2026-05-02-a1b2c3",
+              path: "/Users/huntharo/.pwragent/projects/2026-05-02-a1b2c3",
               kind: "local",
             },
           ],
@@ -263,10 +263,10 @@ describe("buildDirectorySummaries", () => {
 
     expect(directories).toEqual([
       expect.objectContaining({
-        key: "workspace:/Users/huntharo/.pwragnt/projects",
+        key: "workspace:/Users/huntharo/.pwragent/projects",
         kind: "workspace",
         label: "Workspaces",
-        path: "/Users/huntharo/.pwragnt/projects",
+        path: "/Users/huntharo/.pwragent/projects",
         threadKeys: ["codex:thread-1", "codex:thread-2"],
       }),
     ]);
@@ -280,8 +280,8 @@ describe("buildDirectorySummaries", () => {
           linkedDirectories: [
             {
               id: "dir-1",
-              label: "PwrAgnt",
-              path: "/Users/huntharo/.codex/worktrees/repo-one/PwrAgnt",
+              label: "PwrAgent",
+              path: "/Users/huntharo/.codex/worktrees/repo-one/PwrAgent",
               kind: "worktree",
             },
           ],
@@ -291,8 +291,8 @@ describe("buildDirectorySummaries", () => {
           linkedDirectories: [
             {
               id: "dir-2",
-              label: "PwrAgnt",
-              path: "/Users/huntharo/.codex/worktrees/repo-two/PwrAgnt",
+              label: "PwrAgent",
+              path: "/Users/huntharo/.codex/worktrees/repo-two/PwrAgent",
               kind: "worktree",
             },
           ],
@@ -305,15 +305,15 @@ describe("buildDirectorySummaries", () => {
     expect(directories).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          key: "directory:/Users/huntharo/.codex/worktrees/repo-one/PwrAgnt",
-          label: "PwrAgnt",
-          path: "/Users/huntharo/.codex/worktrees/repo-one/PwrAgnt",
+          key: "directory:/Users/huntharo/.codex/worktrees/repo-one/PwrAgent",
+          label: "PwrAgent",
+          path: "/Users/huntharo/.codex/worktrees/repo-one/PwrAgent",
           threadKeys: ["codex:thread-1"],
         }),
         expect.objectContaining({
-          key: "directory:/Users/huntharo/.codex/worktrees/repo-two/PwrAgnt",
-          label: "PwrAgnt",
-          path: "/Users/huntharo/.codex/worktrees/repo-two/PwrAgnt",
+          key: "directory:/Users/huntharo/.codex/worktrees/repo-two/PwrAgent",
+          label: "PwrAgent",
+          path: "/Users/huntharo/.codex/worktrees/repo-two/PwrAgent",
           threadKeys: ["codex:thread-2"],
         }),
       ]),
@@ -328,9 +328,9 @@ describe("buildDirectorySummaries", () => {
           linkedDirectories: [
             {
               id: "dir-1",
-              label: "PwrAgnt",
-              path: "/Users/huntharo/pwrdrvr/PwrAgnt",
-              worktreePath: "/Users/huntharo/.codex/worktrees/repo-one/PwrAgnt",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              worktreePath: "/Users/huntharo/.codex/worktrees/repo-one/PwrAgent",
               kind: "worktree",
             },
           ],
@@ -340,9 +340,9 @@ describe("buildDirectorySummaries", () => {
           linkedDirectories: [
             {
               id: "dir-2",
-              label: "PwrAgnt",
-              path: "/Users/huntharo/pwrdrvr/PwrAgnt",
-              worktreePath: "/Users/huntharo/.codex/worktrees/repo-two/PwrAgnt",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              worktreePath: "/Users/huntharo/.codex/worktrees/repo-two/PwrAgent",
               kind: "worktree",
             },
           ],
@@ -353,9 +353,9 @@ describe("buildDirectorySummaries", () => {
 
     expect(directories).toEqual([
       expect.objectContaining({
-        key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
-        label: "PwrAgnt",
-        path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+        label: "PwrAgent",
+        path: "/Users/huntharo/pwrdrvr/PwrAgent",
         threadKeys: ["codex:thread-1", "codex:thread-2"],
         latestUpdatedAt: 2_000,
       }),
@@ -370,15 +370,15 @@ describe("buildDirectorySummaries", () => {
           linkedDirectories: [
             {
               id: "backend-local",
-              label: "PwrAgnt",
+              label: "PwrAgent",
               path: "/repo",
               kind: "local",
             },
             {
-              id: "pwragnt-handoff:codex:thread-1",
-              label: "PwrAgnt",
+              id: "pwragent-handoff:codex:thread-1",
+              label: "PwrAgent",
               path: "/repo",
-              worktreePath: "/repo/.worktrees/pwragnt-feature",
+              worktreePath: "/repo/.worktrees/pwragent-feature",
               kind: "worktree",
             },
           ],

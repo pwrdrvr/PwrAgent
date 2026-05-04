@@ -224,11 +224,11 @@ The renderer should build an intermediate render model from transcript entries b
 
 ## Verification Plan
 
-- `pnpm --filter @pwragnt/desktop test -- apps/desktop/src/main/__tests__/codex-client.test.ts`
-- `pnpm --filter @pwragnt/desktop test -- apps/desktop/src/renderer/src/lib/__tests__/useThreadSessionState.test.tsx`
-- `pnpm --filter @pwragnt/desktop test -- apps/desktop/src/renderer/src/features/thread-detail/__tests__/transcript-render-items.test.ts`
-- `pnpm --filter @pwragnt/desktop test -- apps/desktop/src/renderer/src/features/thread-detail/__tests__/thread-view.test.tsx`
-- `pnpm --filter @pwragnt/desktop test:e2e -- live-agent-messages.spec.ts`
+- `pnpm --filter @pwragent/desktop test -- apps/desktop/src/main/__tests__/codex-client.test.ts`
+- `pnpm --filter @pwragent/desktop test -- apps/desktop/src/renderer/src/lib/__tests__/useThreadSessionState.test.tsx`
+- `pnpm --filter @pwragent/desktop test -- apps/desktop/src/renderer/src/features/thread-detail/__tests__/transcript-render-items.test.ts`
+- `pnpm --filter @pwragent/desktop test -- apps/desktop/src/renderer/src/features/thread-detail/__tests__/thread-view.test.tsx`
+- `pnpm --filter @pwragent/desktop test:e2e -- live-agent-messages.spec.ts`
 
 ## Risks and Mitigations
 

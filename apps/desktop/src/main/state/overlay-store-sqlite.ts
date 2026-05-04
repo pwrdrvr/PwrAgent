@@ -10,12 +10,12 @@ import type {
   ThreadExecutionMode,
   ThreadOverlayState,
   WorktreeSnapshotSummary,
-} from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import {
   buildNavigationSnapshot,
   buildNavigationSnapshotHash,
-} from "@pwragnt/agent-core";
+} from "@pwragent/agent-core";
 import type { StateDb } from "./state-db.js";
 
 export class SqliteOverlayStore {
@@ -172,7 +172,7 @@ export class SqliteOverlayStore {
     const nextDirectories = [
       ...current.extraLinkedDirectories.filter((directory) => {
         if (directory.id === params.directory.id) return false;
-        if (directory.id.startsWith("pwragnt-handoff:")) return false;
+        if (isHandoffDirectory(directory)) return false;
         return directory.path !== params.directory.path;
       }),
       params.directory,
@@ -515,12 +515,18 @@ export class SqliteOverlayStore {
   }
 }
 
+/** Check whether a linked directory was created by the handoff service. */
+function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
+  return (
+    directory.id.startsWith("pwragent-handoff:") ||
+    directory.id.startsWith("pwragnt-handoff:")  // legacy prefix from pre-rebrand data
+  );
+}
+
 function hasHandoffWorkspace(
   directories: ThreadOverlayState["extraLinkedDirectories"] = [],
 ): boolean {
-  return directories.some((directory) =>
-    directory.id.startsWith("pwragnt-handoff:"),
-  );
+  return directories.some(isHandoffDirectory);
 }
 
 export type OverlayStoreLike = Pick<

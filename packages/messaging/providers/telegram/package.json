@@ -1,5 +1,5 @@
 {
-  "name": "@pwragnt/messaging-provider-telegram",
+  "name": "@pwragent/messaging-provider-telegram",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@pwragnt/messaging-interface": "workspace:*",
+    "@pwragent/messaging-interface": "workspace:*",
     "grammy": "^1.42.0"
   },
   "devDependencies": {

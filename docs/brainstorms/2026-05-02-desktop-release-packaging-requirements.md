@@ -7,7 +7,7 @@ topic: desktop-release-packaging
 
 ## Problem Frame
 
-PwrAgnt is preparing its first user-facing macOS release. This is a first-time Electron-app
+PwrAgent is preparing its first user-facing macOS release. This is a first-time Electron-app
 shipment, and several first-release decisions need to be made coherently: how the binary is
 branded as a PwrDrvr LLC product, how it is signed and distributed outside the App Store,
 how updates reach users, and what optionality is preserved for future open-sourcing or
@@ -24,10 +24,10 @@ packaging + signing + distribution pipeline, not an Electron fork.
 
 ## Requirements
 
-- **R1.** The shipped artifact is a branded macOS `.app` named **PwrAgnt** throughout: main
+- **R1.** The shipped artifact is a branded macOS `.app` named **PwrAgent** throughout: main
   binary, every helper process, dock label, menu bar, About panel, window title, `.icns`
   icon, `Info.plist` `CFBundleName` / `CFBundleDisplayName` / `CFBundleExecutable`.
-- **R2.** Bundle identifier is `com.pwrdrvr.pwragnt` (reverse-DNS, owned by PwrDrvr LLC).
+- **R2.** Bundle identifier is `com.pwrdrvr.pwragent` (reverse-DNS, owned by PwrDrvr LLC).
 - **R3.** Copyright `Copyright © 2026 PwrDrvr LLC. All rights reserved.` appears in every
   surface that carries a copyright string: `Info.plist` `NSHumanReadableCopyright`, the
   About panel, `package.json` `author`, in-app About / Settings copyright row (if any),
@@ -43,10 +43,10 @@ packaging + signing + distribution pipeline, not an Electron fork.
 - **R7.** v1.0 ships **Apple Silicon (arm64) only**. Intel x64 is a deliberate non-goal for
   v1.0 and may be revisited if test users ask for it.
 - **R8.** The app supports **auto-update** via `electron-updater`. Phase 1 (solo
-  dogfooding) points the updater at the existing **private** `PwrAgnt` GitHub repo using
+  dogfooding) points the updater at the existing **private** `PwrAgent` GitHub repo using
   the `github` provider and a `GH_TOKEN` with read-only access to that repo. Phase 2 (just
   before onboarding any external test users) the distribution channel migrates to one of:
-  (a) opening the source repo, (b) a separate public `pwragnt-releases` repo, or (c) S3/R2
+  (a) opening the source repo, (b) a separate public `pwragent-releases` repo, or (c) S3/R2
   with the `generic` provider. The Phase 2 channel choice is deferred to a later
   brainstorm/decision once test-user readiness is closer.
 - **R9.** The production build is **minified and bundled** (electron-vite default Rollup +
@@ -72,19 +72,19 @@ packaging + signing + distribution pipeline, not an Electron fork.
 
 ## Success Criteria
 
-- A user with no prior PwrAgnt install double-clicks the v1.0 `.dmg` on a fresh Apple
-  Silicon Mac with internet, drags PwrAgnt to Applications, and launches with **no
+- A user with no prior PwrAgent install double-clicks the v1.0 `.dmg` on a fresh Apple
+  Silicon Mac with internet, drags PwrAgent to Applications, and launches with **no
   Gatekeeper warning, no right-click bypass, no quarantine prompt**.
-- `codesign -dv --verbose=4 /Applications/PwrAgnt.app` reports the Team Identifier and
+- `codesign -dv --verbose=4 /Applications/PwrAgent.app` reports the Team Identifier and
   Authority chain belonging to **PwrDrvr LLC**.
-- `spctl -a -vv /Applications/PwrAgnt.app` reports `accepted, source=Notarized Developer
+- `spctl -a -vv /Applications/PwrAgent.app` reports `accepted, source=Notarized Developer
   ID`.
 - Right-click → Get Info on the installed `.app` shows the `Copyright © 2026 PwrDrvr LLC`
   string from `NSHumanReadableCopyright`.
-- The PwrAgnt → About menu (and any in-app About surface) shows the same copyright and the
-  PwrAgnt product name; no "Electron" string is visible in user-facing UI.
-- Activity Monitor shows process names like `PwrAgnt`, `PwrAgnt Helper (Renderer)`,
-  `PwrAgnt Helper (GPU)`, etc. — never `Electron Helper`.
+- The PwrAgent → About menu (and any in-app About surface) shows the same copyright and the
+  PwrAgent product name; no "Electron" string is visible in user-facing UI.
+- Activity Monitor shows process names like `PwrAgent`, `PwrAgent Helper (Renderer)`,
+  `PwrAgent Helper (GPU)`, etc. — never `Electron Helper`.
 - Publishing v1.0.1 over an installed v1.0.0 results in the running app detecting the
   update via the configured feed, downloading it, and applying it on next restart with no
   user-visible re-signing or re-quarantine prompt.
@@ -123,7 +123,7 @@ packaging + signing + distribution pipeline, not an Electron fork.
   before any other release work — because nothing else can be signed until enrollment is
   approved. A personal Developer ID is rejected because re-signing later would force every
   installed user to re-install through a Gatekeeper warning.
-- **Phase 1 distribution = existing private `PwrAgnt` repo.** No second repo or S3 bucket
+- **Phase 1 distribution = existing private `PwrAgent` repo.** No second repo or S3 bucket
   is provisioned today. The user is the only consumer; `electron-updater`'s `github`
   provider with a `GH_TOKEN` works against private repos. Phase 2 channel is deferred.
 - **Architecture = arm64 only.** Saves ~50% on download size, matches the actual test
@@ -178,7 +178,7 @@ questions appropriately answered during planning)
   provider against a **private** repo: does it correctly handle a `GH_TOKEN` baked into
   the build, what scopes does the token need (read-only on the single repo), and what is
   the rotation story when the token expires? Best-practice may be a fine-grained PAT
-  scoped to read-only on contents of `PwrAgnt` only.
+  scoped to read-only on contents of `PwrAgent` only.
 - [Affects R8][Technical] Phase 1 → Phase 2 migration mechanics: does the v1.0 build need
   any runtime update-feed override capability, or is shipping a "bridge release" pointed
   at the new feed sufficient? (For solo-only Phase 1, fresh-install on Phase 2 is fine; the

@@ -6,8 +6,8 @@ import type {
   NavigationSnapshot,
   NavigationThreadSummary,
   ThreadExecutionMode,
-} from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 
 export type MessagingResolvedThreadState = {
   activeTurn?: MessagingActiveTurnSummary;

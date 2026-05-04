@@ -4,7 +4,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadCommandDetail,
   AppServerThreadTurnMetadata,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export function getNotificationItem(
   params: Record<string, unknown>

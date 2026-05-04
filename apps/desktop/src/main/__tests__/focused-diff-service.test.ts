@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createTemporaryTestDirectory } from "@pwragnt/agent-core";
+import { createTemporaryTestDirectory } from "@pwragent/agent-core";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { parseUnifiedDiff, summarizeHunksForFocus } from "../../shared/diff-focus";
 import { defaultGrokAppServerConfigPath } from "../../../../../packages/agent-core/src/config/grok-app-server-config.js";
@@ -97,8 +97,8 @@ function makeAiSdkXaiResponse(text: string, cachedTokens?: number): Record<strin
 
 describe("FocusedDiffService", () => {
   it("uses a test override response when configured", async () => {
-    const originalOverride = process.env.PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE;
-    process.env.PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE = JSON.stringify({
+    const originalOverride = process.env.PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE;
+    process.env.PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE = JSON.stringify({
       hiddenHunkIndices: [1],
       reason: "test override"
     });
@@ -121,9 +121,9 @@ describe("FocusedDiffService", () => {
       expect(client.generateObject).not.toHaveBeenCalled();
     } finally {
       if (originalOverride === undefined) {
-        delete process.env.PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE;
+        delete process.env.PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE;
       } else {
-        process.env.PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE = originalOverride;
+        process.env.PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE = originalOverride;
       }
     }
   });

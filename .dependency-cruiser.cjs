@@ -37,7 +37,7 @@ module.exports = {
       name: "messaging-providers-use-interface-not-shared",
       severity: "error",
       comment:
-        "Provider packages should depend on @pwragnt/messaging-interface, not shared app contracts directly.",
+        "Provider packages should depend on @pwragent/messaging-interface, not shared app contracts directly.",
       from: {
         path: "^packages/messaging/providers/",
       },

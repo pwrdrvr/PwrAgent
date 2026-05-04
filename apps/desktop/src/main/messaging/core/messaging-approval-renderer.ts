@@ -2,7 +2,7 @@ import type {
   AppServerPendingRequestNotification,
   MessagingApprovalDecision,
   MessagingApprovalIntent,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export function buildApprovalIntent(params: {
   createdAt: number;

@@ -46,8 +46,8 @@ describe("useThreadNavigation", () => {
           linkedDirectories: [
             {
               id: "dir-1",
-              label: "PwrAgnt",
-              path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
               kind: "local" as const,
             },
           ],
@@ -60,10 +60,10 @@ describe("useThreadNavigation", () => {
       ],
       directories: [
         {
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgnt",
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
           kind: "directory" as const,
-          label: "PwrAgnt",
-          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 1,
         },
@@ -371,8 +371,8 @@ describe("useThreadNavigation", () => {
           linkedDirectories: [
             {
               id: "dir-1",
-              label: "PwrAgnt",
-              path: "/Users/huntharo/github/PwrAgnt",
+              label: "PwrAgent",
+              path: "/Users/huntharo/github/PwrAgent",
               kind: "local" as const,
             },
           ],
@@ -397,10 +397,10 @@ describe("useThreadNavigation", () => {
       ],
       directories: [
         {
-          key: "directory:/Users/huntharo/github/PwrAgnt",
+          key: "directory:/Users/huntharo/github/PwrAgent",
           kind: "directory" as const,
-          label: "PwrAgnt",
-          path: "/Users/huntharo/github/PwrAgnt",
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
           threadKeys: ["codex:thread-archived"],
           needsAttentionCount: 1,
         },
@@ -596,17 +596,17 @@ describe("useThreadNavigation", () => {
       threads: [],
       directories: [
         {
-          key: "directory:/Users/huntharo/github/PwrAgnt",
+          key: "directory:/Users/huntharo/github/PwrAgent",
           kind: "directory" as const,
-          label: "PwrAgnt",
-          path: "/Users/huntharo/github/PwrAgnt",
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
           launchpad: {
-            directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+            directoryKey: "directory:/Users/huntharo/github/PwrAgent",
             directoryKind: "directory" as const,
-            directoryLabel: "PwrAgnt",
-            directoryPath: "/Users/huntharo/github/PwrAgnt",
+            directoryLabel: "PwrAgent",
+            directoryPath: "/Users/huntharo/github/PwrAgent",
             backend: "codex" as const,
             executionMode: "default" as const,
             prompt: "",
@@ -639,20 +639,20 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(result.current.directories[0]?.launchpad?.directoryKey).toBe(
-        "directory:/Users/huntharo/github/PwrAgnt"
+        "directory:/Users/huntharo/github/PwrAgent"
       );
     });
 
     await act(async () => {
       await result.current.materializeDirectoryLaunchpad(
-        "directory:/Users/huntharo/github/PwrAgnt"
+        "directory:/Users/huntharo/github/PwrAgent"
       );
     });
 
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
-      directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+      directoryKey: "directory:/Users/huntharo/github/PwrAgent",
       launchpad: expect.objectContaining({
-        directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+        directoryKey: "directory:/Users/huntharo/github/PwrAgent",
       }),
       input: undefined,
       collaborationMode: undefined,
@@ -666,7 +666,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("does not let a materialized thread refresh override a newer user thread selection", async () => {
-    const directoryKey = "directory:/Users/huntharo/github/PwrAgnt";
+    const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
     const refreshedSnapshot = createDeferred<Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshot"]>>>>();
     const initialSnapshot = {
       backend: "all" as const,
@@ -691,15 +691,15 @@ describe("useThreadNavigation", () => {
         {
           key: directoryKey,
           kind: "directory" as const,
-          label: "PwrAgnt",
-          path: "/Users/huntharo/github/PwrAgnt",
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
           threadKeys: ["codex:thread-existing"],
           needsAttentionCount: 0,
           launchpad: {
             directoryKey,
             directoryKind: "directory" as const,
-            directoryLabel: "PwrAgnt",
-            directoryPath: "/Users/huntharo/github/PwrAgnt",
+            directoryLabel: "PwrAgent",
+            directoryPath: "/Users/huntharo/github/PwrAgent",
             backend: "codex" as const,
             executionMode: "default" as const,
             prompt: "Start the focus regression thread",
@@ -803,9 +803,9 @@ describe("useThreadNavigation", () => {
           source: "codex" as const,
           linkedDirectories: [
             {
-              id: "launchpad:directory:/Users/huntharo/github/PwrAgnt",
-              label: "PwrAgnt",
-              path: "/Users/huntharo/github/PwrAgnt",
+              id: "launchpad:directory:/Users/huntharo/github/PwrAgent",
+              label: "PwrAgent",
+              path: "/Users/huntharo/github/PwrAgent",
               kind: "local" as const,
             },
           ],
@@ -817,17 +817,17 @@ describe("useThreadNavigation", () => {
       ],
       directories: [
         {
-          key: "directory:/Users/huntharo/github/PwrAgnt",
+          key: "directory:/Users/huntharo/github/PwrAgent",
           kind: "directory" as const,
-          label: "PwrAgnt",
-          path: "/Users/huntharo/github/PwrAgnt",
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           launchpad: {
-            directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+            directoryKey: "directory:/Users/huntharo/github/PwrAgent",
             directoryKind: "directory" as const,
-            directoryLabel: "PwrAgnt",
-            directoryPath: "/Users/huntharo/github/PwrAgnt",
+            directoryLabel: "PwrAgent",
+            directoryPath: "/Users/huntharo/github/PwrAgent",
             backend: "codex" as const,
             executionMode: "default" as const,
             prompt: "",
@@ -844,10 +844,10 @@ describe("useThreadNavigation", () => {
       },
     }));
     const launchpad = {
-      directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+      directoryKey: "directory:/Users/huntharo/github/PwrAgent",
       directoryKind: "directory" as const,
-      directoryLabel: "PwrAgnt",
-      directoryPath: "/Users/huntharo/github/PwrAgnt",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/huntharo/github/PwrAgent",
       backend: "codex" as const,
       executionMode: "default" as const,
       prompt: "",
@@ -885,7 +885,7 @@ describe("useThreadNavigation", () => {
     });
 
     expect(result.current.selectedLaunchpad?.directoryKey).toBe(
-      "directory:/Users/huntharo/github/PwrAgnt"
+      "directory:/Users/huntharo/github/PwrAgent"
     );
 
     act(() => {
@@ -902,10 +902,10 @@ describe("useThreadNavigation", () => {
       executionMode: "default" as const,
     };
     const launchpad = {
-      directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+      directoryKey: "directory:/Users/huntharo/github/PwrAgent",
       directoryKind: "directory" as const,
-      directoryLabel: "PwrAgnt",
-      directoryPath: "/Users/huntharo/github/PwrAgnt",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/huntharo/github/PwrAgent",
       backend: "codex" as const,
       executionMode: "default" as const,
       prompt: "",
@@ -934,10 +934,10 @@ describe("useThreadNavigation", () => {
       threads: [],
       directories: [
         {
-          key: "directory:/Users/huntharo/github/PwrAgnt",
+          key: "directory:/Users/huntharo/github/PwrAgent",
           kind: "directory" as const,
-          label: "PwrAgnt",
-          path: "/Users/huntharo/github/PwrAgnt",
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
           launchpad,
@@ -955,7 +955,7 @@ describe("useThreadNavigation", () => {
 
     await waitFor(() => {
       expect(result.current.selectedLaunchpad?.directoryKey).toBe(
-        "directory:/Users/huntharo/github/PwrAgnt"
+        "directory:/Users/huntharo/github/PwrAgent"
       );
     });
 
@@ -963,11 +963,11 @@ describe("useThreadNavigation", () => {
     let secondUpdate: Promise<void> | undefined;
     act(() => {
       firstUpdate = result.current.updateDirectoryLaunchpad(
-        "directory:/Users/huntharo/github/PwrAgnt",
+        "directory:/Users/huntharo/github/PwrAgent",
         { prompt: "older prompt" },
       );
       secondUpdate = result.current.updateDirectoryLaunchpad(
-        "directory:/Users/huntharo/github/PwrAgnt",
+        "directory:/Users/huntharo/github/PwrAgent",
         { prompt: "newer prompt" },
       );
     });
@@ -1007,10 +1007,10 @@ describe("useThreadNavigation", () => {
   it("opens masthead new-thread drafts inside the Workspaces directory", async () => {
     const ensureDirectoryLaunchpad = vi.fn(async () => ({
       launchpad: {
-        directoryKey: "workspace:/Users/test/.pwragnt/projects",
+        directoryKey: "workspace:/Users/test/.pwragent/projects",
         directoryKind: "workspace" as const,
         directoryLabel: "Workspaces",
-        directoryPath: "/Users/test/.pwragnt/projects",
+        directoryPath: "/Users/test/.pwragent/projects",
         backend: "codex" as const,
         executionMode: "default" as const,
         prompt: "",
@@ -1031,10 +1031,10 @@ describe("useThreadNavigation", () => {
       threads: [],
       directories: [
         {
-          key: "workspace:/Users/test/.pwragnt/projects",
+          key: "workspace:/Users/test/.pwragent/projects",
           kind: "workspace" as const,
           label: "Workspaces",
-          path: "/Users/test/.pwragnt/projects",
+          path: "/Users/test/.pwragent/projects",
           threadKeys: [],
           needsAttentionCount: 0,
         },
@@ -1062,14 +1062,14 @@ describe("useThreadNavigation", () => {
     });
 
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
-      directoryKey: "workspace:/Users/test/.pwragnt/projects",
+      directoryKey: "workspace:/Users/test/.pwragent/projects",
       directoryKind: "workspace",
       directoryLabel: "Workspaces",
-      directoryPath: "/Users/test/.pwragnt/projects",
+      directoryPath: "/Users/test/.pwragent/projects",
       preferredBackend: undefined,
     });
     expect(result.current.selectedItemKey).toBe(
-      "launchpad:workspace:/Users/test/.pwragnt/projects"
+      "launchpad:workspace:/Users/test/.pwragent/projects"
     );
     expect(result.current.selectedDirectory?.label).toBe("Workspaces");
     expect(result.current.selectedLaunchpad?.directoryKind).toBe("workspace");

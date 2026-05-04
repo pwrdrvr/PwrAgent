@@ -12,8 +12,8 @@ import type {
   ThreadWorkspaceHandoffStrategy,
   ThreadWorkspaceHandoffStashSummary,
   WorktreeSnapshotSummary,
-} from "@pwragnt/shared";
-import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
 import { computeWorktreePath } from "./git-directory-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 
@@ -537,7 +537,7 @@ export class GitWorkspaceHandoffService {
     kind: "source" | "destination",
   ): string {
     return [
-      "pwragnt handoff",
+      "pwragent handoff",
       kind,
       `${context.backend}:${context.threadId}`,
       context.branch,
@@ -551,7 +551,7 @@ export class GitWorkspaceHandoffService {
     targetPath: string;
   }): LinkedDirectorySummary {
     return {
-      id: `pwragnt-handoff:${params.context.backend}:${params.context.threadId}`,
+      id: `pwragent-handoff:${params.context.backend}:${params.context.threadId}`,
       kind: params.kind,
       label: pathBaseName(params.context.repositoryPath),
       path: params.context.repositoryPath,

@@ -72,7 +72,7 @@ import type {
   UpdateThreadExpectedBranchRequest,
   UpdateThreadExpectedBranchResponse,
   WriteDesktopSettingsConfigRequest,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 import type {
   AppMetadata,
@@ -196,7 +196,7 @@ export type DesktopApi = {
 };
 
 export function getDesktopApi(): DesktopApi | undefined {
-  return (window as Window & { pwragnt?: DesktopApi }).pwragnt;
+  return (window as Window & { pwragent?: DesktopApi }).pwragent;
 }
 
 export function useDesktopApi(): DesktopApi | undefined {

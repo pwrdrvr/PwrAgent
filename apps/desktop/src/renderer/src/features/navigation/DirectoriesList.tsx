@@ -3,8 +3,8 @@ import type {
   AppServerBackendKind,
   NavigationDirectorySummary,
   NavigationThreadSummary,
-} from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import { ThreadRow } from "./ThreadRow";
 
 type DirectoriesListProps = {

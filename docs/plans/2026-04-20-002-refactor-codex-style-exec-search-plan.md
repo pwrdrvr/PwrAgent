@@ -24,7 +24,7 @@ Current state:
 - `packages/shared/src/contracts/app-server.ts` already defines `item/commandExecution/outputDelta`, and the desktop hook has tests proving unrelated output deltas must not disturb thinking state, but Grok does not emit those deltas.
 - `apps/desktop/src/main/grok-app-server/client.ts` converts Grok `thread/read` mostly from `messages`, so persisted Grok `items` are not yet surfaced as desktop activity entries.
 
-The target is not to copy Codex wholesale. The target is to take Codex's process-output invariants and apply them to the smaller PwrAgnt/Grok tool surface.
+The target is not to copy Codex wholesale. The target is to take Codex's process-output invariants and apply them to the smaller PwrAgent/Grok tool surface.
 
 ## Requirements Trace
 
@@ -45,7 +45,7 @@ The target is not to copy Codex wholesale. The target is to take Codex's process
 - In scope: preserving the current Grok xAI Responses tool loop and max-round guard.
 - Out of scope: replacing the xAI Responses request model with true streaming model responses.
 - Out of scope: adding background process tools in this pass. Grok CLI has a useful background-process design, but the immediate bug is foreground output handling.
-- Out of scope: implementing Codex `command/exec` as a public standalone JSON-RPC API. PwrAgnt can add that later if desktop needs direct command execution outside turns.
+- Out of scope: implementing Codex `command/exec` as a public standalone JSON-RPC API. PwrAgent can add that later if desktop needs direct command execution outside turns.
 - Out of scope: changing `/Users/huntharo/github/codex` or `/Users/huntharo/github/grok-cli`.
 
 ## Context & Research
@@ -449,11 +449,11 @@ flowchart TB
 
 - Related plan: `docs/plans/2026-04-16-003-feat-grok-tool-usage-code-search-plan.md`
 - Adjacent protocol-parity requirements: `docs/brainstorms/2026-04-19-codex-desktop-protocol-parity-requirements.md`
-- PwrAgnt search tool: `packages/agent-core/src/tools/search-code-tool.ts`
-- PwrAgnt list tool: `packages/agent-core/src/tools/list-files-tool.ts`
-- PwrAgnt shell tool: `packages/agent-core/src/tools/shell-command-tool.ts`
-- PwrAgnt Grok tool loop: `packages/agent-core/src/providers/responses-tool-loop.ts`
-- PwrAgnt Grok desktop client: `apps/desktop/src/main/grok-app-server/client.ts`
+- PwrAgent search tool: `packages/agent-core/src/tools/search-code-tool.ts`
+- PwrAgent list tool: `packages/agent-core/src/tools/list-files-tool.ts`
+- PwrAgent shell tool: `packages/agent-core/src/tools/shell-command-tool.ts`
+- PwrAgent Grok tool loop: `packages/agent-core/src/providers/responses-tool-loop.ts`
+- PwrAgent Grok desktop client: `apps/desktop/src/main/grok-app-server/client.ts`
 - Codex shell runtime: `/Users/huntharo/github/codex/codex-rs/core/src/tools/runtimes/shell.rs`
 - Codex exec reader: `/Users/huntharo/github/codex/codex-rs/core/src/exec.rs`
 - Codex unified exec process: `/Users/huntharo/github/codex/codex-rs/core/src/unified_exec/process.rs`

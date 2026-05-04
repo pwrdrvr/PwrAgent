@@ -11,7 +11,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import type { AppServerSkillSummary } from "@pwragnt/shared";
+import type { AppServerSkillSummary } from "@pwragent/shared";
 import { SkillChip } from "./SkillChip";
 
 export type ComposerSkillToken = AppServerSkillSummary & {

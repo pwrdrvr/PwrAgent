@@ -12,7 +12,7 @@ import type {
   HydratedSessionState,
   StoredMessage,
 } from "../persistence/grok-rollout-store.js";
-import { shortenDerivedThreadTitle } from "@pwragnt/shared";
+import { shortenDerivedThreadTitle } from "@pwragent/shared";
 import type { ProviderActiveTurn } from "../providers/provider-contract.js";
 
 type ActiveRunRecord = {

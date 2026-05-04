@@ -5,7 +5,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
   AppServerThreadMessagePart,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptImage } from "./TranscriptImage";
 import { ThreadMarkdown } from "./ThreadMarkdown";

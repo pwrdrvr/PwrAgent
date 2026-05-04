@@ -15,7 +15,7 @@ Add a desktop integration testing pattern that can record real Codex App Server 
 
 ## Problem Frame
 
-The current desktop test surface is split between renderer tests that stub `window.pwragnt` and main-process tests that mock JSON-RPC payloads. That gives decent local confidence, but it does not prove the actual Electron app behaves correctly when fed the real Codex App Server protocol stream. The result is that bugs tied to message ordering, approval requests, unknown notifications, and transcript rendering are still discovered manually in live sessions.
+The current desktop test surface is split between renderer tests that stub `window.pwragent` and main-process tests that mock JSON-RPC payloads. That gives decent local confidence, but it does not prove the actual Electron app behaves correctly when fed the real Codex App Server protocol stream. The result is that bugs tied to message ordering, approval requests, unknown notifications, and transcript rendering are still discovered manually in live sessions.
 
 The origin requirements document defines the desired product shape: record what the desktop client actually sees, keep raw captures as evidence, replay derived scripted fixtures deterministically, and use Playwright-driven Electron tests as the first real consumer (see origin: `docs/brainstorms/2026-04-18-desktop-integration-test-replay-harness-requirements.md`).
 
@@ -343,7 +343,7 @@ flowchart TB
 - Happy path: unrelated transcript messages remain in their original order before and after expansion.
 - Edge case: replaying the same fixture twice in separate tests yields the same visible transcript ordering.
 - Error path: if the replay fixture is missing the edited-changes detail step, the test fails with a targeted fixture expectation rather than a generic timeout.
-- Integration: the regression runs through the real Electron shell, replay backend, preload bridge, navigation selection, and transcript renderer without mocking `window.pwragnt`.
+- Integration: the regression runs through the real Electron shell, replay backend, preload bridge, navigation selection, and transcript renderer without mocking `window.pwragent`.
 
 **Verification:**
 - The repo contains one replay-backed Electron regression that reproduces the original edited-changes scenario and fails if transcript ordering regresses.
@@ -353,7 +353,7 @@ flowchart TB
 - **Interaction graph:** `JsonRpcConnection` gains protocol observation, `CodexAppServerClient` gains optional capture wiring, `DesktopBackendRegistry` gains replay-mode client substitution, Electron boot gains test-mode selection, and Playwright becomes a new top-level desktop test surface.
 - **Error propagation:** recorder failures should not crash normal desktop usage; replay configuration failures should fail fast during test startup; pending-request errors should surface deterministically through the replay controller and `submitServerRequest`.
 - **State lifecycle risks:** raw captures will include real prompt and path data unless derivation or redaction removes them; replay state must fully reset between tests; capture indexes must not cross-wire backends or thread ids.
-- **API surface parity:** production renderer APIs exposed through preload should remain unchanged; test-only control should live in main-process replay helpers or explicit test mode rather than broadening `window.pwragnt`.
+- **API surface parity:** production renderer APIs exposed through preload should remain unchanged; test-only control should live in main-process replay helpers or explicit test mode rather than broadening `window.pwragent`.
 - **Integration coverage:** only Electron E2E tests will prove the full path from backend registry through preload and renderer. Existing Vitest suites still cover lower-level normalization and component behavior.
 - **Unchanged invariants:** backend-qualified thread identity, existing desktop IPC channel names, renderer component contracts, and current Vitest projects remain intact.
 
@@ -375,12 +375,12 @@ flowchart TB
 
 ## Sources & References
 
-- **Origin document:** [docs/brainstorms/2026-04-18-desktop-integration-test-replay-harness-requirements.md](/Users/huntharo/.codex/worktrees/ef86/PwrAgnt/docs/brainstorms/2026-04-18-desktop-integration-test-replay-harness-requirements.md)
-- Related code: [apps/desktop/src/main/codex-app-server/client.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgnt/apps/desktop/src/main/codex-app-server/client.ts)
-- Related code: [apps/desktop/src/main/codex-app-server/json-rpc.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgnt/apps/desktop/src/main/codex-app-server/json-rpc.ts)
-- Related code: [apps/desktop/src/main/app-server/backend-registry.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgnt/apps/desktop/src/main/app-server/backend-registry.ts)
-- Related code: [apps/desktop/src/main/window.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgnt/apps/desktop/src/main/window.ts)
-- Related code: [packages/agent-core/src/testing/test-harness.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgnt/packages/agent-core/src/testing/test-harness.ts)
+- **Origin document:** [docs/brainstorms/2026-04-18-desktop-integration-test-replay-harness-requirements.md](/Users/huntharo/.codex/worktrees/ef86/PwrAgent/docs/brainstorms/2026-04-18-desktop-integration-test-replay-harness-requirements.md)
+- Related code: [apps/desktop/src/main/codex-app-server/client.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgent/apps/desktop/src/main/codex-app-server/client.ts)
+- Related code: [apps/desktop/src/main/codex-app-server/json-rpc.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgent/apps/desktop/src/main/codex-app-server/json-rpc.ts)
+- Related code: [apps/desktop/src/main/app-server/backend-registry.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgent/apps/desktop/src/main/app-server/backend-registry.ts)
+- Related code: [apps/desktop/src/main/window.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgent/apps/desktop/src/main/window.ts)
+- Related code: [packages/agent-core/src/testing/test-harness.ts](/Users/huntharo/.codex/worktrees/ef86/PwrAgent/packages/agent-core/src/testing/test-harness.ts)
 - External docs: [Electron automated testing](https://www.electronjs.org/docs/latest/tutorial/automated-testing)
 - External docs: [Playwright Electron API](https://playwright.dev/docs/api/class-electron)
 - External docs: [Playwright best practices](https://playwright.dev/docs/best-practices)

@@ -3,7 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -2551,7 +2551,7 @@ describe("useThreadSessionState", () => {
               threadId: "thread-1",
               turnId: "turn-1",
               itemId: "call-1",
-              delta: "To github.com:pwrdrvr/PwrAgnt.git\n",
+              delta: "To github.com:pwrdrvr/PwrAgent.git\n",
             },
           } as any,
         });
@@ -3572,7 +3572,7 @@ describe("useThreadSessionState", () => {
               ...state.form,
               fields: state.form.fields.map((field) =>
                 field.key === "repo" && field.kind === "string"
-                  ? { ...field, value: "pwrdrvr/PwrAgnt" }
+                  ? { ...field, value: "pwrdrvr/PwrAgent" }
                   : field
               ),
             }
@@ -3582,7 +3582,7 @@ describe("useThreadSessionState", () => {
 
     expect(result.current.pendingMcpInteraction?.form?.fields[0]).toMatchObject({
       key: "repo",
-      value: "pwrdrvr/PwrAgnt",
+      value: "pwrdrvr/PwrAgent",
     });
 
     act(() => {

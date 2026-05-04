@@ -11,8 +11,10 @@ async function createBranchDriftFixture(): Promise<{
   fixturePath: string;
   homeDir: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-branch-drift-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-branch-drift-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
+  // Use the legacy "pwragnt" directory name because the migration code in
+  // migration.ts intentionally looks for legacy files at this path.
   const stateRoot = path.join(rootDir, ".local", "state", "pwragnt");
   await mkdir(repoDir, { recursive: true });
   await mkdir(stateRoot, { recursive: true });
@@ -26,9 +28,9 @@ async function createBranchDriftFixture(): Promise<{
     "git",
     [
       "-c",
-      "user.name=PwrAgnt Tests",
+      "user.name=PwrAgent Tests",
       "-c",
-      "user.email=pwragnt-tests@example.invalid",
+      "user.email=pwragent-tests@example.invalid",
       "commit",
       "--allow-empty",
       "-m",
@@ -61,7 +63,7 @@ async function createBranchDriftFixture(): Promise<{
             observedGitBranch: "codex/expected-branch",
             extraLinkedDirectories: [
               {
-                id: "pwragnt-handoff:codex:thread-branch-drift",
+                id: "pwragent-handoff:codex:thread-branch-drift",
                 kind: "worktree",
                 label: "FixtureRepo",
                 path: repoDir,
@@ -183,7 +185,7 @@ test("keeps the branch drift warning open after refreshing observed checkout sta
 
     const dbPath = path.join(
       fixture.homeDir,
-      ".pwragnt",
+      ".pwragent",
       "profiles",
       "default",
       "state",

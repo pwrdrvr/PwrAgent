@@ -4,7 +4,7 @@ import type {
   MessagingAuditContext,
   MessagingChannelRef,
   ThreadIdentifier,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export function buildMessagingAuditContext(params: {
   action: string;

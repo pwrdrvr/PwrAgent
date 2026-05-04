@@ -11,12 +11,12 @@ import type {
   AppServerThreadSummary,
   AppServerTurnInputItem,
   ThreadExecutionMode,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { ReplayClient } from "./replay-client";
 import type { ReplayFixture, ReplayStepOverride } from "./replay-fixture";
 import { validateReplayFixture } from "./replay-fixture";
 
-const REPLAY_FIXTURE_PATH_ENV = "PWRAGNT_REPLAY_FIXTURE_PATH";
+const REPLAY_FIXTURE_PATH_ENV = "PWRAGENT_REPLAY_FIXTURE_PATH";
 
 type ReplayDriver = {
   advance(params?: {
@@ -175,7 +175,7 @@ type ReplayRuntimeClient = {
 
 declare global {
   // eslint-disable-next-line no-var
-  var __PWRAGNT_REPLAY_DRIVER__: ReplayDriver | undefined;
+  var __PWRAGENT_REPLAY_DRIVER__: ReplayDriver | undefined;
 }
 
 export function createReplayClientsFromEnv():
@@ -194,7 +194,7 @@ export function createReplayClientsFromEnv():
   const fixture = loadReplayFixture(fixturePath);
   const clients = createReplayClients(fixture);
 
-  globalThis.__PWRAGNT_REPLAY_DRIVER__ = {
+  globalThis.__PWRAGENT_REPLAY_DRIVER__ = {
     advance: async (params) => {
       const client = getReplayClient(clients, {
         backend: params?.backend,

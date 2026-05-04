@@ -39,7 +39,7 @@ export class MainProcessCpuProfiler {
     now?: () => Date;
     profilerSession?: InspectorProfilerSession;
   }) {
-    this.logger = options.logger ?? getMainLogger("pwragnt:startup-cpu");
+    this.logger = options.logger ?? getMainLogger("pwragent:startup-cpu");
     this.now = options.now ?? (() => new Date());
     this.profilerSession =
       options.profilerSession ?? createInspectorProfilerSession();

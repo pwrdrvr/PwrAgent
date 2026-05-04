@@ -13,8 +13,8 @@ import type {
   NavigationSnapshot,
   NavigationThreadSummary,
   ThreadIdentifier,
-} from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 
 export const RESUME_BROWSER_PAGE_SIZE = 8;
 
@@ -410,12 +410,12 @@ function threadPickerPromptText(
 ): string {
   const pageLabel = `Page ${session.pageIndex + 1}/${totalPages}`;
   const scope = session.selectedProject
-    ? `Showing recent PwrAgnt threads for ${session.selectedProject.label}.`
-    : "Showing recent PwrAgnt threads.";
+    ? `Showing recent PwrAgent threads for ${session.selectedProject.label}.`
+    : "Showing recent PwrAgent threads.";
   return [
     `${scope} ${pageLabel}.`,
     "Choose a thread to resume. Use Projects to browse by project, New to start a thread, or Cancel to close this picker.",
-    totalItems === 0 ? "No matching PwrAgnt threads found." : "",
+    totalItems === 0 ? "No matching PwrAgent threads found." : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -459,14 +459,14 @@ function projectPickerPromptText(
   const pageLabel = `Page ${session.pageIndex + 1}/${totalPages}`;
   const opening =
     session.launchAction === "start_new_thread"
-      ? "Choose a project for the new PwrAgnt thread."
-      : "Choose a project to filter recent PwrAgnt threads.";
+      ? "Choose a project for the new PwrAgent thread."
+      : "Choose a project to filter recent PwrAgent threads.";
   return [
     `${opening} ${pageLabel}.`,
     session.launchAction === "start_new_thread"
       ? "Tap a project to start a fresh thread there."
       : "Tap a project to show only that project's threads.",
-    totalItems === 0 ? "No PwrAgnt projects found." : "",
+    totalItems === 0 ? "No PwrAgent projects found." : "",
   ]
     .filter(Boolean)
     .join("\n");

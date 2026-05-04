@@ -242,7 +242,7 @@ describe("messaging surface contract", () => {
       kind: "single_select",
       createdAt: 1000,
       bindingId: "binding-1",
-      prompt: "Workspace Handoff\nRepository: /repo/pwragnt\nBranch: feature/handoff",
+      prompt: "Workspace Handoff\nRepository: /repo/pwragent\nBranch: feature/handoff",
       fallbackText: "Reply with 1, Back, Refresh, or Cancel.",
       audit: {
         actor: {
@@ -270,8 +270,8 @@ describe("messaging surface contract", () => {
             backend: "codex",
             threadId: "thread-1",
             direction: "local-to-worktree",
-            repositoryPath: "/repo/pwragnt",
-            sourcePath: "/repo/pwragnt",
+            repositoryPath: "/repo/pwragent",
+            sourcePath: "/repo/pwragent",
             sourceBranch: "feature/handoff",
           },
         },
@@ -286,7 +286,7 @@ describe("messaging surface contract", () => {
 
     expect(intent.choices[0]?.value).toMatchObject({
       direction: "local-to-worktree",
-      repositoryPath: "/repo/pwragnt",
+      repositoryPath: "/repo/pwragent",
     });
     expect(JSON.stringify(intent)).not.toMatch(/callback_data|custom_id/);
   });
@@ -420,8 +420,8 @@ describe("messaging surface contract", () => {
       pageIndex: 1,
       pageSize: 8,
       selectedProject: {
-        directoryKey: "dir:pwragnt",
-        label: "PwrAgnt",
+        directoryKey: "dir:pwragent",
+        label: "PwrAgent",
       },
       surface: binding.statusSurface,
     } satisfies MessagingBrowseSessionRecord;
@@ -443,7 +443,7 @@ describe("messaging surface contract", () => {
     } satisfies MessagingCallbackHandleRecord;
 
     expect(callbackHandle.handle).not.toContain("thread-1");
-    expect(browseSession.selectedProject?.label).toBe("PwrAgnt");
+    expect(browseSession.selectedProject?.label).toBe("PwrAgent");
     expect(binding.preferences?.permissionsMode).toBe("full-access");
   });
 });

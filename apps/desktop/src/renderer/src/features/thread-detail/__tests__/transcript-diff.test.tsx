@@ -57,7 +57,7 @@ const DETAIL = {
 describe("TranscriptDiff", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    delete (window as Window & { pwragnt?: unknown }).pwragnt;
+    delete (window as Window & { pwragent?: unknown }).pwragent;
   });
 
   it("defaults to a focused view when analysis hides low-signal hunks", async () => {
@@ -68,7 +68,7 @@ describe("TranscriptDiff", () => {
       hiddenHunkCount: 1,
       decisions: []
     }));
-    (window as Window & { pwragnt?: unknown }).pwragnt = {
+    (window as Window & { pwragent?: unknown }).pwragent = {
       analyzeFocusedDiff
     };
 
@@ -89,7 +89,7 @@ describe("TranscriptDiff", () => {
     const analyzeFocusedDiff = vi.fn(async () => {
       throw new Error("network down");
     });
-    (window as Window & { pwragnt?: unknown }).pwragnt = {
+    (window as Window & { pwragent?: unknown }).pwragent = {
       analyzeFocusedDiff
     };
 

@@ -4,7 +4,7 @@ import type {
   AppServerPendingRequestNotification,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export type ReplayResponseMethod = string;
 

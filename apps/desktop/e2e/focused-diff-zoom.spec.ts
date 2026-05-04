@@ -47,7 +47,7 @@ test("focused diff overrides can hide low-signal hunks end-to-end", async () => 
       "fixtures/focused-diff-zoom/replay.fixture.json"
     ),
     env: {
-      PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE: JSON.stringify({
+      PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE: JSON.stringify({
         hiddenHunkIndices: [1],
         reason: "focused diff test override"
       })

@@ -8,7 +8,7 @@ async function createComposerImageThreadSwitchFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-composer-image-switch-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-composer-image-switch-"));
   const fixturePath = path.join(rootDir, "composer-image-thread-switch.fixture.json");
   await mkdir(rootDir, { recursive: true });
   await writeFile(

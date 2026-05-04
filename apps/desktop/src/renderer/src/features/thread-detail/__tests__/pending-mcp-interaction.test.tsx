@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PendingMcpInteraction } from "../PendingMcpInteraction";
 import { createMcpElicitationState } from "../mcp-elicitation";
-import type { AppServerMcpElicitationRequestNotification } from "@pwragnt/shared";
+import type { AppServerMcpElicitationRequestNotification } from "@pwragent/shared";
 
 afterEach(() => {
   cleanup();

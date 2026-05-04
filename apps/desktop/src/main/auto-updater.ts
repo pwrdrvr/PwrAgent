@@ -5,7 +5,7 @@ import { APP_UPDATE_CHECK_CHANNEL } from "../shared/ipc";
 import type { AppUpdateCheckResult } from "../shared/app-metadata";
 import { getMainLogger } from "./log";
 
-const log = getMainLogger("pwragnt:updater");
+const log = getMainLogger("pwragent:updater");
 
 let initialized = false;
 

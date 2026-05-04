@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppServerNotification, AppServerPendingRequestNotification } from "@pwragnt/shared";
+import type { AppServerNotification, AppServerPendingRequestNotification } from "@pwragent/shared";
 import type { PendingMcpInteractionState } from "../mcp-elicitation";
 import type { PendingQuestionnaireState } from "../questionnaire";
 import { ThreadView } from "../ThreadView";
@@ -223,7 +223,7 @@ describe("ThreadView", () => {
 
   it("shows missing recorded working directory details and copies the thread id", async () => {
     const copyText = vi.fn(async () => undefined);
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         copyText
@@ -1786,7 +1786,7 @@ describe("ThreadView", () => {
             turnId: "turn-1",
             itemId: "call-file-change",
             delta:
-              "Success. Updated the following files:\nA /Users/huntharo/github/PwrAgnt/.local/PR.md\nD /Users/huntharo/github/PwrAgnt/.local/PR.md\n"
+              "Success. Updated the following files:\nA /Users/huntharo/github/PwrAgent/.local/PR.md\nD /Users/huntharo/github/PwrAgent/.local/PR.md\n"
           },
         } as AppServerNotification,
       });

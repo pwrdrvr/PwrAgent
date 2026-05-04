@@ -7,13 +7,13 @@ import type {
   MessagingBrowseSessionRecord,
   MessagingCallbackHandleRecord,
   MessagingPendingIntentRecord,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { MessagingStore } from "../messaging/core/messaging-store";
 
 const tempDirs: string[] = [];
 
 async function createStore(): Promise<{ filePath: string; store: MessagingStore }> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-messaging-store-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-messaging-store-"));
   tempDirs.push(tempDir);
   const filePath = path.join(tempDir, "messaging-state.json");
   return {
@@ -90,8 +90,8 @@ function buildBrowseSession(
     pageIndex: 0,
     pageSize: 5,
     selectedProject: {
-      label: "PwrAgnt",
-      directoryKey: "directory:pwragnt",
+      label: "PwrAgent",
+      directoryKey: "directory:pwragent",
     },
     surface: {
       channel: "telegram",
@@ -172,7 +172,7 @@ describe("MessagingStore", () => {
         id: "browse-1",
         mode: "recents",
         selectedProject: {
-          label: "PwrAgnt",
+          label: "PwrAgent",
         },
       });
     await expect(

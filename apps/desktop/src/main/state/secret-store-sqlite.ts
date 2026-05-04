@@ -1,7 +1,7 @@
 import type {
   DesktopSettingsSecretName,
   DesktopSettingsSecretStorageState,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { DesktopSecretStore } from "../settings/desktop-secret-store";
 import type { StateDb } from "./state-db.js";
 
@@ -49,7 +49,14 @@ export class DbBackedSafeStorageSecretStore implements DesktopSecretStore {
   getSecretSync(name: DesktopSettingsSecretName): string | undefined {
     const ciphertext = this.stateDb.getSecret(name);
     if (!ciphertext) return undefined;
-    return this.safeStorage.decryptString(ciphertext);
+    try {
+      return this.safeStorage.decryptString(ciphertext);
+    } catch {
+      // Decryption fails when the ciphertext was encrypted under a different
+      // signing identity (e.g. dev build vs signed release). Return undefined
+      // so callers treat it as "secret not set" and prompt re-entry.
+      return undefined;
+    }
   }
 
   async getSecret(

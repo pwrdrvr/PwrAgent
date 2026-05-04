@@ -10,7 +10,7 @@ origin: docs/brainstorms/2026-04-16-thread-centric-agent-desktop-requirements.md
 
 ## Overview
 
-Add first-class transcript rendering for agent plans in the desktop app so historical replay and live updates can show the same task-list progress already present in the underlying app-server events. The immediate trigger is the Codex thread `019d99bf-f7f0-7531-99b9-850b300dde5a`, where around 2026-04-17 13:39 EDT another surface rendered a three-step task list while PwrAgnt showed only ordinary transcript content.
+Add first-class transcript rendering for agent plans in the desktop app so historical replay and live updates can show the same task-list progress already present in the underlying app-server events. The immediate trigger is the Codex thread `019d99bf-f7f0-7531-99b9-850b300dde5a`, where around 2026-04-17 13:39 EDT another surface rendered a three-step task list while PwrAgent showed only ordinary transcript content.
 
 ## Problem Frame
 

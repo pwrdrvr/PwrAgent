@@ -11,14 +11,14 @@ class MockTransport implements JsonRpcTransport {
   static threadStartResult: unknown = {
     thread: {
       id: "thread-3",
-      cwd: "/Users/huntharo/.pwragnt/projects/2026-04-16-ab12cd"
+      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd"
     },
     model: "gpt-5.4"
   };
   static threadResumeResult: unknown = {
     threadId: "thread-2",
     threadName: "Ship desktop shell",
-    cwd: "/Users/huntharo/pwrdrvr/PwrAgnt"
+    cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
   };
   static turnStartResult: unknown = {
     thread: {
@@ -224,7 +224,7 @@ class MockTransport implements JsonRpcTransport {
                       name: "Untitled thread",
                       preview: "Why do all the worktree-hashes start with `moi`?",
                       updatedAt: 1_777_401_255,
-                      cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
                     },
                   ],
             },
@@ -248,7 +248,7 @@ class MockTransport implements JsonRpcTransport {
                       preview:
                         "Let's make a button with an animated jaguar sipping tea. Just for grins.",
                       updatedAt: 1_777_401_256,
-                      cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
                     },
                   ],
             },
@@ -376,14 +376,14 @@ class MockTransport implements JsonRpcTransport {
                   preview:
                     "Name this thread something funny and spunky. Something about potatoes.",
                   updatedAt: 1_763_500_500,
-                  cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
                 },
                 {
                   id: "thread-archive",
                   name: "Retired archived thread",
                   preview: "This one should not appear in the active navigation list.",
                   updatedAt: 1_763_500_250,
-                  cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
                 }
               ]
             }
@@ -404,7 +404,7 @@ class MockTransport implements JsonRpcTransport {
                 summary: "Hook up Electron and the sidebar",
                 updatedAt: 1_763_500_000,
                 session: {
-                  cwd: "/Users/huntharo/pwrdrvr/PwrAgnt"
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
                 }
               },
               {
@@ -423,7 +423,7 @@ class MockTransport implements JsonRpcTransport {
                   "Name this thread something funny and spunky. Something about potatoes.",
                 updatedAt: 1_763_500_100,
                 session: {
-                  cwd: "/Users/huntharo/pwrdrvr/PwrAgnt"
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
                 }
               },
               {
@@ -432,7 +432,7 @@ class MockTransport implements JsonRpcTransport {
                 preview: "Investigate why new Codex threads keep showing as untitled",
                 updatedAt: 1_763_500_050,
                 session: {
-                  cwd: "/Users/huntharo/pwrdrvr/PwrAgnt"
+                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
                 }
               }
             ]
@@ -732,7 +732,7 @@ class MockTransport implements JsonRpcTransport {
           result: {
             data: [
               {
-                cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
                 skills: [
                   {
                     name: "frontend-design",
@@ -785,14 +785,14 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-3",
-        cwd: "/Users/huntharo/.pwragnt/projects/2026-04-16-ab12cd"
+        cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd"
       },
       model: "gpt-5.4"
     };
     MockTransport.threadResumeResult = {
       threadId: "thread-2",
       threadName: "Ship desktop shell",
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgnt"
+      cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
     };
     MockTransport.turnStartResult = {
       thread: {
@@ -846,10 +846,10 @@ describe("CodexAppServerClient", () => {
         projectKey
           ? [
               {
-                id: "/Users/huntharo/pwrdrvr/PwrAgnt",
-                label: "PwrAgnt",
-                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
-                worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
+                id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                label: "PwrAgent",
+                path: "/Users/huntharo/pwrdrvr/PwrAgent",
+                worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
                 kind: "worktree"
               }
             ]
@@ -871,10 +871,10 @@ describe("CodexAppServerClient", () => {
       source: "codex",
       linkedDirectories: [
         {
-          id: "/Users/huntharo/pwrdrvr/PwrAgnt",
-          label: "PwrAgnt",
-          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
-          worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgnt",
+          id: "/Users/huntharo/pwrdrvr/PwrAgent",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
           kind: "worktree"
         }
       ]
@@ -1373,9 +1373,9 @@ describe("CodexAppServerClient", () => {
         projectKey
           ? [
               {
-                id: "/Users/huntharo/pwrdrvr/PwrAgnt",
-                label: "PwrAgnt",
-                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                label: "PwrAgent",
+                path: "/Users/huntharo/pwrdrvr/PwrAgent",
                 kind: "local"
               }
             ]
@@ -1423,9 +1423,9 @@ describe("CodexAppServerClient", () => {
         linkedDirectories: projectKey
           ? [
               {
-                id: "/Users/huntharo/pwrdrvr/PwrAgnt",
-                label: "PwrAgnt",
-                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                label: "PwrAgent",
+                path: "/Users/huntharo/pwrdrvr/PwrAgent",
                 worktreePath: projectKey,
                 kind: "worktree",
               },
@@ -1489,9 +1489,9 @@ describe("CodexAppServerClient", () => {
         linkedDirectories: projectKey
           ? [
               {
-                id: "/Users/huntharo/pwrdrvr/PwrAgnt",
-                label: "PwrAgnt",
-                path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+                id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                label: "PwrAgent",
+                path: "/Users/huntharo/pwrdrvr/PwrAgent",
                 worktreePath: projectKey,
                 kind: "worktree",
               },
@@ -2835,12 +2835,12 @@ describe("CodexAppServerClient", () => {
     });
 
     const skills = await client.listSkills({
-      cwds: ["/Users/huntharo/pwrdrvr/PwrAgnt"],
+      cwds: ["/Users/huntharo/pwrdrvr/PwrAgent"],
     });
 
     expect(skills).toEqual([
       {
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
         skills: [
           {
             name: "frontend-design",
@@ -2866,7 +2866,7 @@ describe("CodexAppServerClient", () => {
     });
 
     const created = await client.startThread({
-      cwd: "/Users/huntharo/.pwragnt/projects/2026-04-16-ab12cd"
+      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd"
     });
 
     expect(created).toEqual({
@@ -2877,7 +2877,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("updates placeholder session index names after the first turn starts", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-session-index-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
     const sessionIndexPath = path.join(tempDir, "session_index.jsonl");
     MockTransport.threadStartResult = {
       thread: {
@@ -2886,7 +2886,7 @@ describe("CodexAppServerClient", () => {
           tempDir,
           "sessions/2026/04/27/rollout-2026-04-27T23-32-43-019dd225-74fb-7a83-b4e4-5970680d9382.jsonl"
         ),
-        cwd: "/Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moi2lzw4",
+        cwd: "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-moi2lzw4",
         preview: "",
         name: null,
         updatedAt: 1_777_347_163,
@@ -2904,14 +2904,14 @@ describe("CodexAppServerClient", () => {
       });
 
       await client.startThread({
-        cwd: "/Users/huntharo/github/PwrAgnt/.worktrees/launchpad-pwragnt-main-moi2lzw4",
+        cwd: "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-moi2lzw4",
       });
       await client.startTurn({
         threadId: "019dd225-74fb-7a83-b4e4-5970680d9382",
         input: [
           {
             type: "text",
-            text: "Figure out why new Codex threads keep showing as untitled in PwrAgnt",
+            text: "Figure out why new Codex threads keep showing as untitled in PwrAgent",
           },
         ],
       });
@@ -2925,14 +2925,14 @@ describe("CodexAppServerClient", () => {
       expect(indexLines).toEqual([
         {
           id: "019dd225-74fb-7a83-b4e4-5970680d9382",
-          source: "pwragnt",
+          source: "pwragent",
           thread_name: "Untitled thread",
           updated_at: "2026-04-28T03:32:43.000Z",
         },
         {
           id: "019dd225-74fb-7a83-b4e4-5970680d9382",
-          source: "pwragnt",
-          thread_name: "Figure out why new Codex threads keep showing as untitled in PwrAgnt",
+          source: "pwragent",
+          thread_name: "Figure out why new Codex threads keep showing as untitled in PwrAgent",
           updated_at: expect.any(String),
         },
       ]);
@@ -2942,13 +2942,13 @@ describe("CodexAppServerClient", () => {
   });
 
   it("records a derived session-index name when Codex returns the placeholder name", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-session-index-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
     const sessionIndexPath = path.join(tempDir, "session_index.jsonl");
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-placeholder-title",
         path: path.join(tempDir, "sessions/thread-placeholder-title.jsonl"),
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
         preview: "Why do all the worktree-hashes start with `moi`?",
         name: "Untitled thread",
         updatedAt: 1_777_401_255,
@@ -2966,7 +2966,7 @@ describe("CodexAppServerClient", () => {
       });
 
       await client.startThread({
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
       });
       await client.close();
 
@@ -2978,7 +2978,7 @@ describe("CodexAppServerClient", () => {
       expect(indexLines).toEqual([
         expect.objectContaining({
           id: "thread-placeholder-title",
-          source: "pwragnt",
+          source: "pwragent",
           thread_name: "Why do all the worktree-hashes start with `moi`?",
         }),
       ]);

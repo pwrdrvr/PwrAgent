@@ -1,6 +1,6 @@
 ---
 name: desktop-e2e-fixture-seeding
-description: Record, export, derive, and refresh desktop replay-backed E2E fixtures for PwrAgnt. Use when Codex needs to seed or update `apps/desktop/e2e/fixtures/*` from a live desktop session with Computer Use, add a new capture recipe, promote `raw.capture.jsonl` into `replay.fixture.json`, or wire a replay-backed Electron spec around a captured scenario.
+description: Record, export, derive, and refresh desktop replay-backed E2E fixtures for PwrAgent. Use when Codex needs to seed or update `apps/desktop/e2e/fixtures/*` from a live desktop session with Computer Use, add a new capture recipe, promote `raw.capture.jsonl` into `replay.fixture.json`, or wire a replay-backed Electron spec around a captured scenario.
 ---
 
 # Desktop E2E Fixture Seeding
@@ -33,7 +33,7 @@ shared fixture workflow doc.
 
    ```bash
    PWRAGNT_PROTOCOL_CAPTURE=true \
-   PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragnt-protocol-captures \
+   PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragent-protocol-captures \
    pnpm dev
    ```
 
@@ -48,8 +48,8 @@ shared fixture workflow doc.
 6. Export the raw session evidence:
 
    ```bash
-   pnpm --filter @pwragnt/desktop export:session-capture -- \
-     --capture-root /tmp/pwragnt-protocol-captures \
+   pnpm --filter @pwragent/desktop export:session-capture -- \
+     --capture-root /tmp/pwragent-protocol-captures \
      --session codex:<thread-id> \
      --output /tmp/<scenario>.raw.capture.jsonl
    ```
@@ -57,7 +57,7 @@ shared fixture workflow doc.
 7. Derive the curated replay fixture:
 
    ```bash
-   pnpm --filter @pwragnt/desktop derive:replay-fixture -- \
+   pnpm --filter @pwragent/desktop derive:replay-fixture -- \
      --input /tmp/<scenario>.raw.capture.jsonl \
      --output-dir apps/desktop/e2e/fixtures/<scenario> \
      --scenario <scenario> \

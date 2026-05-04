@@ -1,6 +1,6 @@
 # Messaging Adapter Contract
 
-Adapters translate PwrAgnt semantic messaging intents into a platform-native
+Adapters translate PwrAgent semantic messaging intents into a platform-native
 surface and translate platform events back into normalized inbound events. They
 must not make thread, project, questionnaire, or approval workflow decisions.
 
@@ -49,7 +49,7 @@ operator visibility only.
 
 ## Opaque State
 
-Adapters own routing and surface state. PwrAgnt may persist and echo
+Adapters own routing and surface state. PwrAgent may persist and echo
 `MessagingAdapterState`, but workflow code must not parse it. Platform message
 IDs, interaction tokens, thread IDs, callback payloads, and permission details
 belong inside adapter-owned opaque state.
@@ -68,7 +68,7 @@ Adapters own platform limits and degradation:
 - chunk long messages according to platform limits
 - preserve inline code and fenced code when supported
 - escape or neutralize markdown dialect hazards
-- keep scheme-less paths and domain-like text as text, not PwrAgnt-generated
+- keep scheme-less paths and domain-like text as text, not PwrAgent-generated
   HTTP links or platform anchor markup
 - avoid broad mentions by default
 - render buttons/components/selects when available
@@ -142,7 +142,7 @@ confirmation, and error intents as other messaging workflows. Adapters should
 render its `Handoff`, branch, confirm, back, refresh, and cancel actions like
 any other `MessagingSurfaceAction`; provider payloads must remain short opaque
 handles. If a platform cannot show every button, text fallback remains the
-required escape hatch until PwrAgnt has a generic low-button-count variation
+required escape hatch until PwrAgent has a generic low-button-count variation
 policy.
 
 ## Adding A New Adapter

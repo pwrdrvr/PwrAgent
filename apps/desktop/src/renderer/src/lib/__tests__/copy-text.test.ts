@@ -4,7 +4,7 @@ import { copyText, formatCopyTooltip } from "../copy-text";
 
 describe("copyText", () => {
   afterEach(() => {
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: undefined,
     });
@@ -13,7 +13,7 @@ describe("copyText", () => {
 
   it("uses the desktop bridge when available", async () => {
     const bridgeCopy = vi.fn(async () => undefined);
-    Object.defineProperty(window, "pwragnt", {
+    Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
         copyText: bridgeCopy,
@@ -41,10 +41,10 @@ describe("copyText", () => {
 
   it("formats tooltips with an elided path and copy hint", () => {
     expect(
-      formatCopyTooltip("/Users/huntharo/.codex/worktrees/0f38/PwrAgnt", 24)
+      formatCopyTooltip("/Users/huntharo/.codex/worktrees/0f38/PwrAgent", 24)
     ).toContain("Click to copy to clipboard");
     expect(
-      formatCopyTooltip("/Users/huntharo/.codex/worktrees/0f38/PwrAgnt", 24)
+      formatCopyTooltip("/Users/huntharo/.codex/worktrees/0f38/PwrAgent", 24)
     ).toContain("…");
   });
 });

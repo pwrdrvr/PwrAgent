@@ -17,7 +17,7 @@ The existing PR already establishes the right foundation: shared messaging contr
 
 ## Problem Frame
 
-The current implementation answers Telegram messages and can bind a conversation to a thread, but it does not yet recreate the old browser-like Telegram UX. The symptoms are visible in manual testing: the bot can present a Threads button, but the flow is too shallow, actions can expire into generic errors, and the command menu still feels unlike the intended PwrAgnt surface.
+The current implementation answers Telegram messages and can bind a conversation to a thread, but it does not yet recreate the old browser-like Telegram UX. The symptoms are visible in manual testing: the bot can present a Threads button, but the flow is too shallow, actions can expire into generic errors, and the command menu still feels unlike the intended PwrAgent surface.
 
 The user wants the old Codex/OpenClaw behavior as the baseline:
 
@@ -68,14 +68,14 @@ This remains a messaging-surface problem, not a Telegram one-off. Telegram is th
 - `docs/brainstorms/2026-04-30-openclaw-codex-conversation-ui-intent-interface-source.md` is valid source material for semantic intents, opaque surface IDs, and best-effort lifecycle semantics.
 - `docs/plans/2026-04-20-001-feat-plan-questionnaire-navigation-plan.md` established that interactive request flows should use pure state and response builders rather than platform-specific UI code.
 - `docs/plans/2026-04-28-001-feat-desktop-mcp-request-support-plan.md` reinforced that security-sensitive pending requests need distinct response shapes, preserved request context, and explicit cross-layer tests.
-- External prior art from the local OpenClaw App Server checkout shows useful behavior to borrow conceptually: parsed `/resume` flags, project grouping, paginated picker sessions, pinned binding messages, status-card subviews, permissions mode persistence, and approval command display cleanup. The implementation shape should not be copied wholesale because PwrAgnt already has a cleaner shared surface boundary.
+- External prior art from the local OpenClaw App Server checkout shows useful behavior to borrow conceptually: parsed `/resume` flags, project grouping, paginated picker sessions, pinned binding messages, status-card subviews, permissions mode persistence, and approval command display cleanup. The implementation shape should not be copied wholesale because PwrAgent already has a cleaner shared surface boundary.
 
 ### External References
 
 - Telegram Bot API supports removing webhooks before `getUpdates`, and notes that `getUpdates` cannot be used while a webhook is configured: https://core.telegram.org/bots/api
 - Telegram Bot API supports editing message text and reply markup, including inline keyboards, through `editMessageText` and `editMessageReplyMarkup`: https://core.telegram.org/bots/api
 - Telegram Bot API supports bot command registration through `setMyCommands` and chat pinning through `pinChatMessage` / `unpinChatMessage`: https://core.telegram.org/bots/api
-- Telegram inline keyboard callback data remains limited, so adapter-owned short callback handles must continue to back stored PwrAgnt interaction state: https://core.telegram.org/bots/api
+- Telegram inline keyboard callback data remains limited, so adapter-owned short callback handles must continue to back stored PwrAgent interaction state: https://core.telegram.org/bots/api
 - Discord supports message editing, pins, and interactive message components with developer-defined `custom_id` values: https://docs.discord.com/developers/resources/message and https://docs.discord.com/developers/components/reference
 - Discord interactions carry the user/channel/message/component context needed to authorize and route button callbacks: https://docs.discord.com/developers/interactions/receiving-and-responding
 
@@ -96,7 +96,7 @@ This remains a messaging-surface problem, not a Telegram one-off. Telegram is th
 
 ### Resolved During Planning
 
-- **Should Chat SDK be reconsidered for this richer command surface?** No. The user explicitly wants to skip it, and the first PR already chose a PwrAgnt-owned surface contract.
+- **Should Chat SDK be reconsidered for this richer command surface?** No. The user explicitly wants to skip it, and the first PR already chose a PwrAgent-owned surface contract.
 - **Should this be a settings-screen feature?** No. Bot setup and allowlists remain config/1Password driven for now. The command surfaces operate after the bot is configured.
 - **Should `/resume` replace or complement `/threads`?** Complement. `/resume` becomes the documented primary command, while `/threads`, `/thread`, and `/bind` remain aliases into the same browse surface where reasonable.
 - **Should status cards be Telegram-only?** No. The controller should own a generic status intent and stored status surface. Telegram implements pinning first; Discord can implement pinning/editing behind the same adapter methods.
@@ -279,7 +279,7 @@ flowchart TB
 - Telegram should use `editMessageText` for text+keyboard updates, add `editMessageReplyMarkup` when only buttons need repainting, and add `pinChatMessage` / `unpinChatMessage` for status cards.
 - If Telegram edit fails because the message is gone, too old, or no longer editable, send a fresh message and return `presented_new` with the new surface ref.
 - If pin/unpin fails because the bot lacks permission, keep the status surface functional but report the pin outcome as unsupported/failed without killing the binding.
-- Register PwrAgnt commands on startup: `resume`, `threads`, `status`, `detach`, and `bind` at minimum. Avoid old OpenClaw command names.
+- Register PwrAgent commands on startup: `resume`, `threads`, `status`, `detach`, and `bind` at minimum. Avoid old OpenClaw command names.
 - Keep callback payloads short and opaque; do not put thread IDs, project paths, model IDs, or decisions directly into Telegram `callback_data`.
 - Replace or wrap the current in-memory Telegram callback map with persisted callback-handle records so buttons on edited or pinned messages still resolve after app restart.
 - Add Discord edit/pin methods behind the same adapter capability where straightforward, but allow Telegram to be the first complete implementation.
@@ -396,7 +396,7 @@ flowchart TB
 - Integration: preferences set through status actions are applied to a later free-form text turn from the bound chat.
 
 **Verification:**
-- Status controls mutate real PwrAgnt binding/thread behavior and the visible card remains coherent after each callback.
+- Status controls mutate real PwrAgent binding/thread behavior and the visible card remains coherent after each callback.
 
 - [x] **Unit 6: Improve rich approval prompt rendering and action handling**
 
@@ -493,7 +493,7 @@ flowchart TB
 | New thread Local/New Worktree behavior is underspecified against current navigation metadata | Medium | Medium | Implement from existing directory/launchpad APIs first and defer exact UX details that require runtime discovery. |
 | Approval rendering accidentally changes approval semantics | Low | High | Separate display normalization from request context and test submitted backend responses exactly. |
 | Discord parity lags Telegram | Medium | Medium | Keep contracts generic, test fake adapter behavior, and document any Discord adapter gaps explicitly. |
-| Bot command menus appear stale in Telegram clients | Medium | Low | Register PwrAgnt commands on startup and document client caching behavior in the smoke checklist. |
+| Bot command menus appear stale in Telegram clients | Medium | Low | Register PwrAgent commands on startup and document client caching behavior in the smoke checklist. |
 
 ## Documentation / Operational Notes
 

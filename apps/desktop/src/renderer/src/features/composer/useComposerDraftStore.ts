@@ -1,5 +1,5 @@
 import { useMemo, useRef } from "react";
-import type { NavigationLaunchpadImageAttachment } from "@pwragnt/shared";
+import type { NavigationLaunchpadImageAttachment } from "@pwragent/shared";
 import type { ComposerSkillToken } from "./ComposerRichInput";
 
 export type ComposerDraftSnapshot = {

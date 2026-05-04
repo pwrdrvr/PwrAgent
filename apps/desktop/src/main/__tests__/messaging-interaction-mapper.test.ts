@@ -3,7 +3,7 @@ import type {
   MessagingApprovalIntent,
   MessagingQuestionnaireIntent,
   MessagingSingleSelectIntent,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { DeterministicInteractionMapper } from "../messaging/core/deterministic-interaction-mapper";
 
 describe("DeterministicInteractionMapper", () => {

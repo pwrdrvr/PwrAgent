@@ -1,7 +1,7 @@
 import type { JsonRpcObserver, JsonRpcObserverEvent } from "../codex-app-server/json-rpc";
 import { getMainLogger } from "../log";
 
-const PROTOCOL_LOG_ENV = "PWRAGNT_APP_SERVER_PROTOCOL_LOG";
+const PROTOCOL_LOG_ENV = "PWRAGENT_APP_SERVER_PROTOCOL_LOG";
 const STREAM_LOG_INTERVAL_MS = 500;
 const PREVIEW_LIMIT = 160;
 
@@ -69,7 +69,7 @@ export function createProtocolLogObserver(
   options: ProtocolLogObserverOptions,
 ): JsonRpcObserver {
   const logger =
-    options.logger ?? getMainLogger(`pwragnt:${options.backend}:protocol`);
+    options.logger ?? getMainLogger(`pwragent:${options.backend}:protocol`);
   const now = options.now ?? (() => Date.now());
   const streamLogIntervalMs =
     options.streamLogIntervalMs ?? STREAM_LOG_INTERVAL_MS;

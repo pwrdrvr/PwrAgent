@@ -422,9 +422,9 @@ Retire or quarantine the hand-rolled Responses client tests, add live-gated xAI 
 
 Run these after implementation, not during planning:
 
-- `pnpm --filter @pwragnt/agent-core test`
-- `pnpm --filter @pwragnt/agent-core typecheck` if the package exposes a typecheck script
-- `pnpm --filter @pwragnt/desktop test` for contract/client changes
+- `pnpm --filter @pwragent/agent-core test`
+- `pnpm --filter @pwragent/agent-core typecheck` if the package exposes a typecheck script
+- `pnpm --filter @pwragent/desktop test` for contract/client changes
 - Live-gated xAI smoke tests with `XAI_API_KEY` and the repository's existing live-test flag
 
 Manual smoke scenarios:

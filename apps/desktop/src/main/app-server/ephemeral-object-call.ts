@@ -3,7 +3,7 @@ import {
   XaiAiSdkObjectClient,
   type GrokAppServerRuntimeConfig,
   type XaiAiSdkObjectResult,
-} from "@pwragnt/agent-core";
+} from "@pwragent/agent-core";
 
 export type XaiObjectClientLike = Pick<XaiAiSdkObjectClient, "generateObject">;
 

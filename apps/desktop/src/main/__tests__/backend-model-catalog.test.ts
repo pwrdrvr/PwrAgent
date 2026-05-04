@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BackendModelOption } from "@pwragnt/shared";
+import type { BackendModelOption } from "@pwragent/shared";
 import { BackendModelCatalog } from "../app-server/backend-model-catalog";
 
 function createClient(params?: {

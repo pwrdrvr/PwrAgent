@@ -7,7 +7,7 @@ Capture a Codex inline review that returns both:
 - an `exitedReviewMode` item containing a plain-text review finding
 - a duplicate `agentMessage` containing the same review text
 
-The replay verifies that PwrAgnt renders the finding inside one review card and
+The replay verifies that PwrAgent renders the finding inside one review card and
 does not render the duplicate assistant transcript message.
 
 ## Steps

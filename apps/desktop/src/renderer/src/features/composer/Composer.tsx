@@ -28,7 +28,7 @@ import type {
   NavigationThreadSummary,
   ThreadWorkspaceHandoffStrategy,
   ThreadExecutionMode,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";

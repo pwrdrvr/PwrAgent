@@ -1,4 +1,4 @@
-import type { DesktopChatReplyComposer, DesktopSettingsSnapshot } from "@pwragnt/shared";
+import type { DesktopChatReplyComposer, DesktopSettingsSnapshot } from "@pwragent/shared";
 import { sourceBadge } from "./settings-fields";
 
 const COMPOSER_OPTIONS: Array<{

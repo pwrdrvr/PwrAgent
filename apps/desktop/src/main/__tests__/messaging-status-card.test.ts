@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MessagingBindingRecord, NavigationSnapshot } from "@pwragnt/shared";
+import type { MessagingBindingRecord, NavigationSnapshot } from "@pwragent/shared";
 import {
   buildBindingStatusIntent,
   buildHandoffBranchPickerIntent,
@@ -56,7 +56,7 @@ describe("buildBindingStatusIntent", () => {
       ]),
     });
     expect(intent.text).toContain("Binding: Thread one (codex)");
-    expect(intent.text).toContain("Project: PwrAgnt");
+    expect(intent.text).toContain("Project: PwrAgent");
     expect(intent.text).toContain("Branch: unavailable");
     expect(intent.text).toContain("Model: gpt-5.3-codex");
     expect(intent.text).toContain("Reasoning: high");
@@ -345,9 +345,9 @@ describe("buildBindingStatusIntent", () => {
         value: expect.objectContaining({
           backend: "codex",
           direction: "local-to-worktree",
-          repositoryPath: "/repo/pwragnt",
+          repositoryPath: "/repo/pwragent",
           sourceBranch: "feature/handoff",
-          sourcePath: "/repo/pwragnt",
+          sourcePath: "/repo/pwragent",
           threadId: "thread-1",
         }),
       }),
@@ -471,17 +471,17 @@ describe("buildBindingStatusIntent", () => {
       handoffRequestFromValue({
         backend: "codex",
         direction: "local-to-worktree",
-        repositoryPath: "/repo/pwragnt",
+        repositoryPath: "/repo/pwragent",
         sourceBranch: "feature/handoff",
-        sourcePath: "/repo/pwragnt",
+        sourcePath: "/repo/pwragent",
         threadId: "thread-1",
       }),
     ).toEqual({
       backend: "codex",
       direction: "local-to-worktree",
-      repositoryPath: "/repo/pwragnt",
+      repositoryPath: "/repo/pwragent",
       sourceBranch: "feature/handoff",
-      sourcePath: "/repo/pwragnt",
+      sourcePath: "/repo/pwragent",
       threadId: "thread-1",
     });
     expect(handoffRequestFromValue({ direction: "local-to-worktree" })).toBeUndefined();
@@ -511,11 +511,11 @@ function buildHandoffContext(): MessagingWorkspaceHandoffContext {
     backend: "codex",
     branch: "feature/handoff",
     leaveLocalBranches: ["main", "develop"],
-    projectLabel: "PwrAgnt",
-    repositoryPath: "/repo/pwragnt",
+    projectLabel: "PwrAgent",
+    repositoryPath: "/repo/pwragent",
     threadId: "thread-1",
     threadTitle: "Thread one",
-    workingDirectoryPath: "/repo/pwragnt",
+    workingDirectoryPath: "/repo/pwragent",
     workspaceKind: "local",
   };
 }
@@ -539,10 +539,10 @@ function buildNavigationSnapshot(): NavigationSnapshot {
         },
         linkedDirectories: [
           {
-            id: "directory:pwragnt",
+            id: "directory:pwragent",
             kind: "local",
-            label: "PwrAgnt",
-            path: "/repo/pwragnt",
+            label: "PwrAgent",
+            path: "/repo/pwragent",
           },
         ],
         source: "codex",

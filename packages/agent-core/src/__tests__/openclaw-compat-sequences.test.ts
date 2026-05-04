@@ -292,7 +292,7 @@ describe("OpenClaw compatibility sequences", () => {
     expect(initializeResult).toEqual(
       expect.objectContaining({
         serverInfo: {
-          name: "@pwragnt/grok-app-server",
+          name: "@pwragent/grok-app-server",
           version: "0.1.0",
         },
         methods: expect.arrayContaining([

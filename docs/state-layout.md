@@ -1,6 +1,6 @@
 # State Layout
 
-All PwrAgnt desktop state lives under a single root directory, defaulting to `~/.pwragnt/`.
+All PwrAgent desktop state lives under a single root directory, defaulting to `~/.pwragent/`.
 
 ## Component Storage Overview
 
@@ -55,7 +55,7 @@ graph TD
 ## Directory Structure
 
 ```
-~/.pwragnt/
+~/.pwragent/
 ├── profiles.toml                          # profile registry (name, display_name, last_used)
 └── profiles/
     └── default/
@@ -71,8 +71,8 @@ graph TD
 
 | Variable | Purpose |
 |----------|---------|
-| `PWRAGNT_HOME` | Override the root directory (default: `~/.pwragnt/`) |
-| `PWRAGNT_PROFILE` | Select a named profile (default: `default`) |
+| `PWRAGENT_HOME` | Override the root directory (default: `~/.pwragent/`) |
+| `PWRAGENT_PROFILE` | Select a named profile (default: `default`) |
 
 ## sqlite Database (`state.db`)
 
@@ -113,7 +113,7 @@ Legacy files are left in place (not renamed or deleted) so older app versions ca
 Run a second isolated instance for testing:
 
 ```bash
-PWRAGNT_HOME=~/.pwragnt-dev pnpm --filter @pwragnt/desktop dev
+PWRAGENT_HOME=~/.pwragent-dev pnpm --filter @pwragent/desktop dev
 ```
 
 This creates a fully independent state directory with its own `state.db`, config, and secrets.

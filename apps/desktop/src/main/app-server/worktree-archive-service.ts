@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import type {
   AppServerBackendKind,
   WorktreeSnapshotSummary,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 const execFileAsync = promisify(execFile);
 
@@ -71,7 +71,7 @@ function snapshotRefForBackend(
   backend: AppServerBackendKind,
   worktreePath: string,
 ): string {
-  const namespace = backend === "codex" ? "codex" : "pwragnt";
+  const namespace = backend === "codex" ? "codex" : "pwragent";
   return `refs/${namespace}/snapshots/${snapshotIdForPath(worktreePath)}`;
 }
 
@@ -236,7 +236,7 @@ export class WorktreeArchiveService {
     worktree: WorktreeInfo;
     worktreePath: string;
   }): Promise<string> {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-worktree-index-"));
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-index-"));
     const indexPath = path.join(tempDir, "index");
 
     try {
@@ -259,10 +259,10 @@ export class WorktreeArchiveService {
       }
       const commitEnv = {
         ...env,
-        GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME ?? "PwrAgnt",
-        GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL ?? "pwragnt@example.invalid",
-        GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME ?? "PwrAgnt",
-        GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL ?? "pwragnt@example.invalid",
+        GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME ?? "PwrAgent",
+        GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL ?? "pwragent@example.invalid",
+        GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME ?? "PwrAgent",
+        GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL ?? "pwragent@example.invalid",
       };
 
       return trimGitOutput(

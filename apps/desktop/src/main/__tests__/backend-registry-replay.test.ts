@@ -21,7 +21,7 @@ function createOverlayStoreMock() {
       executionMode,
       extraLinkedDirectories: [],
     }),
-  } as unknown as InstanceType<typeof import("@pwragnt/agent-core").OverlayStore>;
+  } as unknown as InstanceType<typeof import("@pwragent/agent-core").OverlayStore>;
 }
 
 function createPassiveClient() {

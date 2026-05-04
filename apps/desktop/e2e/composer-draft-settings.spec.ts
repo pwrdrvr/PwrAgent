@@ -8,7 +8,7 @@ async function createComposerDraftSettingsFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-composer-draft-settings-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-composer-draft-settings-"));
   const fixturePath = path.join(rootDir, "composer-draft-settings.fixture.json");
   await mkdir(rootDir, { recursive: true });
   await writeFile(
@@ -155,7 +155,7 @@ test("keeps a thread reply draft after opening settings and returning to the thr
   const fixture = await createComposerDraftSettingsFixture();
   const app = await launchElectronApp({
     env: {
-      PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-chips",
+      PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-chips",
     },
     fixturePath: fixture.fixturePath,
   });

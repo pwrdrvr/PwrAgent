@@ -33,7 +33,7 @@ This gives the agent a stable file to edit without touching product code.
 
 ```bash
 PWRAGNT_PROTOCOL_CAPTURE=true \
-PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragnt-protocol-captures \
+PWRAGNT_PROTOCOL_CAPTURE_ROOT=/tmp/pwragent-protocol-captures \
 pnpm dev
 ```
 
@@ -77,14 +77,14 @@ Stop after the assistant finishes and the transcript contains this full order:
 ## Promotion Commands
 
 ```bash
-pnpm --filter @pwragnt/desktop export:session-capture -- \
-  --capture-root /tmp/pwragnt-protocol-captures \
+pnpm --filter @pwragent/desktop export:session-capture -- \
+  --capture-root /tmp/pwragent-protocol-captures \
   --session codex:<thread-id> \
   --output /tmp/edited-changes-order.raw.capture.jsonl
 ```
 
 ```bash
-pnpm --filter @pwragnt/desktop derive:replay-fixture -- \
+pnpm --filter @pwragent/desktop derive:replay-fixture -- \
   --input /tmp/edited-changes-order.raw.capture.jsonl \
   --output-dir apps/desktop/e2e/fixtures/edited-changes-order \
   --scenario edited-changes-order \

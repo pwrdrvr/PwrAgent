@@ -154,8 +154,8 @@ describe("discord formatting", () => {
       createdAt: 1000,
       prompt: [
         "Workspace Handoff",
-        "Repository: /repo/pwragnt",
-        "Working directory: /repo/pwragnt/.worktrees/pwragnt-feature-handoff",
+        "Repository: /repo/pwragent",
+        "Working directory: /repo/pwragent/.worktrees/pwragent-feature-handoff",
         "Branch: feature/handoff",
       ].join("\n"),
       fallbackText: "Reply with 1, Back, Refresh, or Cancel.",
@@ -169,8 +169,8 @@ describe("discord formatting", () => {
             backend: "codex",
             threadId: "thread-1",
             direction: "worktree-to-local",
-            repositoryPath: "/repo/pwragnt",
-            sourcePath: "/repo/pwragnt/.worktrees/pwragnt-feature-handoff",
+            repositoryPath: "/repo/pwragent",
+            sourcePath: "/repo/pwragent/.worktrees/pwragent-feature-handoff",
             sourceBranch: "feature/handoff",
           },
         },
@@ -208,7 +208,7 @@ describe("discord formatting", () => {
       "Refresh",
       "Cancel",
     ]);
-    expect(JSON.stringify(components)).not.toContain("/repo/pwragnt");
+    expect(JSON.stringify(components)).not.toContain("/repo/pwragent");
   });
 
   it("preserves approval markdown code blocks", () => {

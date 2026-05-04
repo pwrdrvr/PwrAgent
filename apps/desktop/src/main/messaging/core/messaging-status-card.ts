@@ -9,8 +9,8 @@ import type {
   MessagingSurfaceAction,
   MessagingStatusIntent,
   ThreadIdentifier,
-} from "@pwragnt/shared";
-import { shortenDerivedThreadTitle } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { shortenDerivedThreadTitle } from "@pwragent/shared";
 import type { MessagingResolvedThreadState } from "./messaging-thread-state.js";
 
 export type MessagingWorkspaceHandoffContext = {

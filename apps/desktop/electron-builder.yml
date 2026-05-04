@@ -1,5 +1,5 @@
-appId: com.pwrdrvr.pwragnt
-productName: PwrAgnt
+appId: com.pwrdrvr.pwragent
+productName: PwrAgent
 copyright: "Copyright © 2026 PwrDrvr LLC. All rights reserved."
 
 # Pinned so `pnpm deploy --prod` works — electron lives in devDependencies
@@ -49,13 +49,13 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   # Helper bundle renames — verify post-build with Activity Monitor that all
-  # four child processes carry the PwrAgnt brand, not "Electron Helper".
+  # four child processes carry the PwrAgent brand, not "Electron Helper".
   # Note: the field is helperGPUBundleId (capital GPU) per electron-builder
   # source; lowercase 'gpu' silently no-ops.
-  helperBundleId: com.pwrdrvr.pwragnt.helper
-  helperRendererBundleId: com.pwrdrvr.pwragnt.helper.Renderer
-  helperGPUBundleId: com.pwrdrvr.pwragnt.helper.GPU
-  helperPluginBundleId: com.pwrdrvr.pwragnt.helper.Plugin
+  helperBundleId: com.pwrdrvr.pwragent.helper
+  helperRendererBundleId: com.pwrdrvr.pwragent.helper.Renderer
+  helperGPUBundleId: com.pwrdrvr.pwragent.helper.GPU
+  helperPluginBundleId: com.pwrdrvr.pwragent.helper.Plugin
   extendInfo:
     NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC. All rights reserved."
     LSMinimumSystemVersion: "12.0"
@@ -67,14 +67,28 @@ mac:
       arch: [arm64]
 
 dmg:
+  background: build/dmg-background.tiff
+  window:
+    width: 660
+    height: 400
+  iconSize: 112
+  iconTextSize: 12
+  contents:
+    - x: 170
+      y: 230
+      type: file
+    - x: 500
+      y: 230
+      type: link
+      path: /Applications
   writeUpdateInfo: false
 
-# Phase 1: github provider against the existing private pwrdrvr/PwrAgnt repo.
+# Phase 1: github provider against the existing private pwrdrvr/PwrAgent repo.
 # Phase 2 channel migration is documented in
 # docs/desktop-distribution-phase-2-runbook.md.
 publish:
   provider: github
   owner: pwrdrvr
-  repo: PwrAgnt
+  repo: PwrAgent
   private: true
   releaseType: release

@@ -11,7 +11,7 @@ deepened: 2026-04-22
 
 ## Context
 
-Codex Desktop can display review sessions, but PwrAgnt currently lacks an end-to-end `/review` path. The desktop composer only submits normal turns, the backend registry has no `startReview` abstraction, and the Grok-compatible app server implements only a minimal `review/start` runner with a generic prompt.
+Codex Desktop can display review sessions, but PwrAgent currently lacks an end-to-end `/review` path. The desktop composer only submits normal turns, the backend registry has no `startReview` abstraction, and the Grok-compatible app server implements only a minimal `review/start` runner with a generic prompt.
 
 The target behavior is Codex-compatible:
 

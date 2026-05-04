@@ -11,7 +11,7 @@ async function createThreadTitleGenerationFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
-  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-thread-title-"));
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-title-"));
   const fixturePath = path.join(rootDir, "thread-title-generation.fixture.json");
 
   await writeFile(
@@ -131,7 +131,7 @@ test("applies a generated title even when the latest title lookup has not caught
   const fixture = await createThreadTitleGenerationFixture();
   const app = await launchElectronApp({
     env: {
-      PWRAGNT_REPLAY_THREAD_TITLE: "Dive package lookup",
+      PWRAGENT_REPLAY_THREAD_TITLE: "Dive package lookup",
     },
     fixturePath: fixture.fixturePath,
   });

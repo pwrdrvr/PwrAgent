@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PwrAgnt desktop release orchestrator.
+ * PwrAgent desktop release orchestrator.
  *
  * Why this script exists:
  *   - electron-builder's default node_modules walk does not understand pnpm's
@@ -81,7 +81,7 @@ function maybeDecodeAppleApiKey() {
 
 // 2. Build (electron-vite -> apps/desktop/out/).
 step("electron-vite build");
-runChecked("pnpm", ["--filter", "@pwragnt/desktop", "build"], { cwd: repoRoot });
+runChecked("pnpm", ["--filter", "@pwragent/desktop", "build"], { cwd: repoRoot });
 
 // 3. Materialize a self-contained, flat node_modules under stage.
 step("pnpm deploy --prod -> release-stage");
@@ -91,7 +91,7 @@ if (existsSync(stageDir)) {
 mkdirSync(stageDir, { recursive: true });
 runChecked(
   "pnpm",
-  ["deploy", "--filter", "@pwragnt/desktop", "--prod", "--legacy", stageDir],
+  ["deploy", "--filter", "@pwragent/desktop", "--prod", "--legacy", stageDir],
   { cwd: repoRoot },
 );
 
@@ -111,11 +111,17 @@ for (const dir of ["out", "build"]) {
 run(`cp ${join(desktopRoot, "electron-builder.yml")} ${join(stageDir, "electron-builder.yml")}`);
 
 // 5. electron-builder.
-step(`electron-builder --mac --arm64 (${publish ? "publish" : "no publish"}, ${dryrun ? "unsigned" : "signed"})`);
+step(`electron-builder --mac --arm64 (${publish ? "publish" : "no publish"}, ${dryrun ? "ad-hoc signed" : "signed"})`);
 maybeDecodeAppleApiKey();
 const builderArgs = ["electron-builder", "--mac", "--arm64"];
 if (dryrun) {
-  builderArgs.push("--config.mac.identity=null", "--config.mac.notarize=false");
+  // Use ad-hoc signing (identity=-) instead of no signing (identity=null).
+  // electron-builder modifies the Electron binary to set fuses, which
+  // invalidates its original code signature. Without re-signing, macOS
+  // kills the app with SIGKILL (Code Signature Invalid) on launch.
+  // Ad-hoc signing creates a locally valid signature that satisfies
+  // macOS page validation without requiring a Developer ID certificate.
+  builderArgs.push("--config.mac.identity=-", "--config.mac.notarize=false");
 }
 builderArgs.push(publish ? "--publish" : "--publish=never", publish ? "always" : "");
 const cleanedArgs = builderArgs.filter((arg) => arg !== "");

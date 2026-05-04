@@ -235,7 +235,7 @@
             "output": [
               {
                 "type": "text",
-                "text": "Created /tmp/pwragnt-turn-lifecycle.txt with exactly the text lifecycle second turn."
+                "text": "Created /tmp/pwragent-turn-lifecycle.txt with exactly the text lifecycle second turn."
               }
             ]
           }

@@ -3,7 +3,7 @@ import type {
   DesktopCodexDiscoveryCandidate,
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { formatSourceLabel, sourceBadge } from "./settings-fields";
 
 type CodexPathMode = "auto" | "specified";

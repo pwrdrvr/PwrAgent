@@ -158,16 +158,11 @@ textarea,
 
 .sidebar__masthead {
   align-items: center;
-  padding: 10px 0 14px 80px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 10px 0 0 80px;
+  border-bottom: none;
 }
 
-.sidebar__identity {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 7px;
-}
+/* .sidebar__identity removed — brand is direct child of masthead */
 
 .sidebar__masthead-actions {
   display: flex;
@@ -279,19 +274,25 @@ textarea,
 
 .sidebar__brand {
   margin: 0;
-  color: var(--accent-bright);
+  color: var(--text-primary);
   font-size: 17px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1;
+  letter-spacing: -0.01em;
   text-transform: none;
+}
+
+.sidebar__brand-accent {
+  color: var(--accent);
 }
 
 .runtime-identity {
   display: flex;
-  max-width: min(320px, calc(var(--sidebar-width, 408px) - 136px));
   min-width: 0;
   align-items: center;
   gap: 6px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle);
   -webkit-app-region: no-drag;
 }
 
@@ -299,7 +300,6 @@ textarea,
   display: inline-flex;
   flex: 1 1 0;
   min-width: 0;
-  max-width: 170px;
   height: 22px;
   align-items: center;
   appearance: none;
@@ -331,8 +331,8 @@ textarea,
   top: calc(100% + 8px);
   bottom: auto;
   left: 0;
-  width: min(360px, calc(var(--sidebar-width, 408px) - 64px));
-  max-width: min(360px, calc(var(--sidebar-width, 408px) - 32px));
+  width: min(360px, calc(var(--sidebar-width, 408px) - 48px));
+  max-width: min(360px, calc(var(--sidebar-width, 408px) - 48px));
   transform: translateY(-4px);
 }
 
@@ -342,10 +342,10 @@ textarea,
 }
 
 .runtime-identity__icon {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
   color: var(--accent-bright);
-  font-family: var(--font-mono);
-  font-size: 10px;
   opacity: 0.9;
 }
 
@@ -3290,6 +3290,12 @@ textarea,
     transform 160ms ease,
     border-color 140ms ease,
     background 140ms ease;
+  -webkit-app-region: no-drag;
+}
+
+.context-rail,
+.context-rail * {
+  -webkit-app-region: no-drag;
 }
 
 .context-rail.is-open {

@@ -57,7 +57,7 @@ type CaptureIndexEntry = {
 };
 
 const indexWriteQueues = new Map<string, Promise<void>>();
-const protocolCaptureLog = getMainLogger("pwragnt:protocol-capture");
+const protocolCaptureLog = getMainLogger("pwragent:protocol-capture");
 
 export async function readProtocolCaptureFile(
   filePath: string,

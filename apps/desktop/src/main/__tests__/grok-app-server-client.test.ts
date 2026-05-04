@@ -10,8 +10,8 @@ import {
   createTemporaryTestDirectory,
   defaultGrokAppServerConfigPath,
   defaultGrokAppServerConfigPaths,
-} from "@pwragnt/agent-core";
-import type { AppServerNotification } from "@pwragnt/shared";
+} from "@pwragent/agent-core";
+import type { AppServerNotification } from "@pwragent/shared";
 import { GrokAppServerClient } from "../grok-app-server/client";
 import { ProtocolCaptureStore } from "../testing/capture-store";
 import { createProtocolCaptureObserver } from "../testing/protocol-capture";
@@ -27,11 +27,11 @@ async function flushAsync(): Promise<void> {
 describe("GrokAppServerClient", () => {
   it("labels worktree-backed Grok threads by the primary repo while preserving projectKey", async () => {
     const temp = await createTemporaryTestDirectory();
-    const repoPath = path.join(temp.path, "PwrAgnt");
+    const repoPath = path.join(temp.path, "PwrAgent");
     const worktreePath = path.join(
       repoPath,
       ".worktrees",
-      "launchpad-pwragnt-main-moohzbj1",
+      "launchpad-pwragent-main-moohzbj1",
     );
 
     try {
@@ -43,7 +43,7 @@ describe("GrokAppServerClient", () => {
         "-C",
         repoPath,
         "-c",
-        "user.name=PwrAgnt Tests",
+        "user.name=PwrAgent Tests",
         "-c",
         "user.email=tests@example.com",
         "commit",
@@ -56,7 +56,7 @@ describe("GrokAppServerClient", () => {
         "worktree",
         "add",
         "-b",
-        "launchpad-pwragnt-main-moohzbj1",
+        "launchpad-pwragent-main-moohzbj1",
         worktreePath,
       ]);
       const repoRealPath = await fs.realpath(repoPath);
@@ -83,7 +83,7 @@ describe("GrokAppServerClient", () => {
               id: repoRealPath,
               path: repoRealPath,
               worktreePath: worktreeRealPath,
-              label: "PwrAgnt",
+              label: "PwrAgent",
               kind: "worktree",
             },
           ],
@@ -105,7 +105,7 @@ describe("GrokAppServerClient", () => {
           initializeRequestCount += 1;
           await Promise.resolve();
           return {
-            serverInfo: { name: "@pwragnt/grok-app-server", version: "1.0.0" },
+            serverInfo: { name: "@pwragent/grok-app-server", version: "1.0.0" },
             methods: ["model/list"],
           };
         }
@@ -132,8 +132,8 @@ describe("GrokAppServerClient", () => {
     ]);
 
     expect(initializeRequestCount).toBe(1);
-    expect(initialize.serverInfo?.name).toBe("@pwragnt/grok-app-server");
-    expect(initializeAgain.serverInfo?.name).toBe("@pwragnt/grok-app-server");
+    expect(initialize.serverInfo?.name).toBe("@pwragent/grok-app-server");
+    expect(initializeAgain.serverInfo?.name).toBe("@pwragent/grok-app-server");
     expect(models).toMatchObject([
       {
         id: "grok-custom-reasoning",
@@ -153,7 +153,7 @@ describe("GrokAppServerClient", () => {
         if (method === "initialize") {
           initializeRequestCount += 1;
           return {
-            serverInfo: { name: "@pwragnt/grok-app-server", version: "1.0.0" },
+            serverInfo: { name: "@pwragent/grok-app-server", version: "1.0.0" },
             methods: ["thread/list"],
           };
         }
@@ -217,7 +217,7 @@ describe("GrokAppServerClient", () => {
     });
 
     const initialize = await client.getInitializeResult();
-    expect(initialize.serverInfo?.name).toBe("@pwragnt/grok-app-server");
+    expect(initialize.serverInfo?.name).toBe("@pwragent/grok-app-server");
     expect(initialize.methods).toContain("thread/list");
     expect(initialize.methods).toContain("turn/start");
 
@@ -535,7 +535,7 @@ describe("GrokAppServerClient", () => {
       request: async (method: string): Promise<unknown> => {
         if (method === "initialize") {
           return {
-            serverInfo: { name: "@pwragnt/grok-app-server", version: "1.0.0" },
+            serverInfo: { name: "@pwragent/grok-app-server", version: "1.0.0" },
             methods: ["thread/read"],
           };
         }
@@ -639,7 +639,7 @@ describe("GrokAppServerClient", () => {
       request: async (method: string): Promise<unknown> => {
         if (method === "initialize") {
           return {
-            serverInfo: { name: "@pwragnt/grok-app-server", version: "1.0.0" },
+            serverInfo: { name: "@pwragent/grok-app-server", version: "1.0.0" },
             methods: ["thread/read"],
           };
         }
@@ -740,7 +740,7 @@ describe("GrokAppServerClient", () => {
       request: async (method: string): Promise<unknown> => {
         if (method === "initialize") {
           return {
-            serverInfo: { name: "@pwragnt/grok-app-server", version: "1.0.0" },
+            serverInfo: { name: "@pwragent/grok-app-server", version: "1.0.0" },
             methods: ["thread/read"],
           };
         }
@@ -1114,7 +1114,7 @@ describe("GrokAppServerClient", () => {
       await expect(client.getInitializeResult()).resolves.toEqual(
         expect.objectContaining({
           serverInfo: expect.objectContaining({
-            name: "@pwragnt/grok-app-server",
+            name: "@pwragent/grok-app-server",
           }),
         }),
       );
@@ -1161,7 +1161,7 @@ describe("GrokAppServerClient", () => {
       await expect(client.getInitializeResult()).resolves.toEqual(
         expect.objectContaining({
           serverInfo: expect.objectContaining({
-            name: "@pwragnt/grok-app-server",
+            name: "@pwragent/grok-app-server",
           }),
         }),
       );
@@ -1351,7 +1351,7 @@ describe("GrokAppServerClient", () => {
   });
 
   it("records Grok boundary traffic for requests, notifications, and inbound requests", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-grok-recording-"));
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-grok-recording-"));
 
     try {
       const notificationListeners = new Set<
@@ -1369,7 +1369,7 @@ describe("GrokAppServerClient", () => {
           if (method === "initialize") {
             return {
               serverInfo: {
-                name: "@pwragnt/grok-app-server",
+                name: "@pwragent/grok-app-server",
                 version: "1.0.0"
               },
               methods: ["thread/list"]

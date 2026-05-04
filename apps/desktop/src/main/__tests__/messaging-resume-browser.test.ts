@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MessagingBrowseSessionRecord, NavigationSnapshot } from "@pwragnt/shared";
+import type { MessagingBrowseSessionRecord, NavigationSnapshot } from "@pwragent/shared";
 import {
   buildResumeIntent,
   parseResumeCommandArgs,
@@ -43,7 +43,7 @@ describe("messaging resume browser", () => {
 
     expect(intent).toMatchObject({
       kind: "thread_picker",
-      fallbackText: expect.stringContaining("Showing recent PwrAgnt threads"),
+      fallbackText: expect.stringContaining("Showing recent PwrAgent threads"),
       prompt: expect.stringContaining("Choose a thread to resume"),
       page: {
         actions: expect.arrayContaining([
@@ -66,16 +66,16 @@ describe("messaging resume browser", () => {
       session: buildBrowseSession({
         mode: "project_threads",
         selectedProject: {
-          directoryKey: "directory:pwragnt",
-          label: "PwrAgnt",
-          path: "/repo/pwragnt",
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
         },
       }),
     });
 
     expect(intent).toMatchObject({
       kind: "thread_picker",
-      fallbackText: expect.stringContaining("PwrAgnt"),
+      fallbackText: expect.stringContaining("PwrAgent"),
       page: {
         items: [
           expect.objectContaining({
@@ -97,14 +97,14 @@ describe("messaging resume browser", () => {
             title: "Messaging - Streaming Responses",
             titleSource: "explicit",
             source: "grok",
-            projectKey: "/repo/pwragnt/.worktrees/launchpad-pwragnt-main-moohzbj1",
+            projectKey: "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
             linkedDirectories: [
               {
-                id: "/repo/pwragnt",
+                id: "/repo/pwragent",
                 kind: "worktree",
-                label: "PwrAgnt",
-                path: "/repo/pwragnt",
-                worktreePath: "/repo/pwragnt/.worktrees/launchpad-pwragnt-main-moohzbj1",
+                label: "PwrAgent",
+                path: "/repo/pwragent",
+                worktreePath: "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
               },
             ],
             inbox: {
@@ -115,10 +115,10 @@ describe("messaging resume browser", () => {
         ],
         directories: [
           {
-            key: "directory:/repo/pwragnt",
+            key: "directory:/repo/pwragent",
             kind: "directory",
-            label: "PwrAgnt",
-            path: "/repo/pwragnt",
+            label: "PwrAgent",
+            path: "/repo/pwragent",
             threadKeys: ["grok:thread-eksfk3v0"],
             needsAttentionCount: 0,
             latestUpdatedAt: 1000,
@@ -132,9 +132,9 @@ describe("messaging resume browser", () => {
 
     expect(intent.kind).toBe("thread_picker");
     expect(intent.fallbackText).toContain(
-      "1. Messaging - Streaming Responses (PwrAgnt)",
+      "1. Messaging - Streaming Responses (PwrAgent)",
     );
-    expect(intent.fallbackText).not.toContain("launchpad-pwragnt-main-moohzbj1");
+    expect(intent.fallbackText).not.toContain("launchpad-pwragent-main-moohzbj1");
   });
 
   it("filters Grok worktree threads by the primary project selection", () => {
@@ -148,14 +148,14 @@ describe("messaging resume browser", () => {
             title: "Messaging - Streaming Responses",
             titleSource: "explicit",
             source: "grok",
-            projectKey: "/repo/pwragnt/.worktrees/launchpad-pwragnt-main-moohzbj1",
+            projectKey: "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
             linkedDirectories: [
               {
-                id: "/repo/pwragnt",
+                id: "/repo/pwragent",
                 kind: "worktree",
-                label: "PwrAgnt",
-                path: "/repo/pwragnt",
-                worktreePath: "/repo/pwragnt/.worktrees/launchpad-pwragnt-main-moohzbj1",
+                label: "PwrAgent",
+                path: "/repo/pwragent",
+                worktreePath: "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
               },
             ],
             inbox: {
@@ -166,10 +166,10 @@ describe("messaging resume browser", () => {
         ],
         directories: [
           {
-            key: "directory:/repo/pwragnt",
+            key: "directory:/repo/pwragent",
             kind: "directory",
-            label: "PwrAgnt",
-            path: "/repo/pwragnt",
+            label: "PwrAgent",
+            path: "/repo/pwragent",
             threadKeys: ["grok:thread-eksfk3v0"],
             needsAttentionCount: 0,
             latestUpdatedAt: 1000,
@@ -179,21 +179,21 @@ describe("messaging resume browser", () => {
       session: buildBrowseSession({
         mode: "project_threads",
         selectedProject: {
-          directoryKey: "directory:/repo/pwragnt",
-          label: "PwrAgnt",
-          path: "/repo/pwragnt",
+          directoryKey: "directory:/repo/pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
         },
       }),
     });
 
     expect(intent.kind).toBe("thread_picker");
     expect(intent.fallbackText).toContain(
-      "Showing recent PwrAgnt threads for PwrAgnt.",
+      "Showing recent PwrAgent threads for PwrAgent.",
     );
     expect(intent.fallbackText).toContain(
-      "1. Messaging - Streaming Responses (PwrAgnt)",
+      "1. Messaging - Streaming Responses (PwrAgent)",
     );
-    expect(intent.fallbackText).not.toContain("launchpad-pwragnt-main-moohzbj1");
+    expect(intent.fallbackText).not.toContain("launchpad-pwragent-main-moohzbj1");
   });
 
   it("renders a new-thread project picker", () => {
@@ -209,18 +209,18 @@ describe("messaging resume browser", () => {
 
     expect(intent).toMatchObject({
       kind: "project_picker",
-      fallbackText: expect.stringContaining("new PwrAgnt thread"),
+      fallbackText: expect.stringContaining("new PwrAgent thread"),
       prompt: expect.stringContaining("Choose a project"),
       page: {
         items: [
           expect.objectContaining({
-            label: "PwrAgnt",
+            label: "PwrAgent",
           }),
         ],
       },
     });
-    expect(intent.prompt).not.toContain("1. PwrAgnt");
-    expect(intent.fallbackText).toContain("1. PwrAgnt");
+    expect(intent.prompt).not.toContain("1. PwrAgent");
+    expect(intent.fallbackText).toContain("1. PwrAgent");
   });
 });
 
@@ -263,10 +263,10 @@ function buildNavigationSnapshot(
         source: "codex",
         linkedDirectories: [
           {
-            id: "directory:pwragnt",
+            id: "directory:pwragent",
             kind: "local",
-            label: "PwrAgnt",
-            path: "/repo/pwragnt",
+            label: "PwrAgent",
+            path: "/repo/pwragent",
           },
         ],
         inbox: {
@@ -278,10 +278,10 @@ function buildNavigationSnapshot(
     inboxThreadKeys: [],
     directories: [
       {
-        key: "directory:pwragnt",
+        key: "directory:pwragent",
         kind: "directory",
-        label: "PwrAgnt",
-        path: "/repo/pwragnt",
+        label: "PwrAgent",
+        path: "/repo/pwragent",
         threadKeys: ["codex:thread-1"],
         needsAttentionCount: 0,
         latestUpdatedAt: 1000,

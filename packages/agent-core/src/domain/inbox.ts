@@ -1,6 +1,6 @@
-import type { AppServerThreadSummary } from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
-import type { InboxReason, ThreadInboxState, ThreadOverlayState } from "@pwragnt/shared";
+import type { AppServerThreadSummary } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
+import type { InboxReason, ThreadInboxState, ThreadOverlayState } from "@pwragent/shared";
 
 function isSuppressed(
   overlay: ThreadOverlayState | undefined,

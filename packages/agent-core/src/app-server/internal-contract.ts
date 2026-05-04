@@ -5,7 +5,7 @@ import type {
   AppServerSource,
   AppServerTextInputItem,
   AppServerTurnInputItem,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 
 export type {
   AppServerCommandAction,

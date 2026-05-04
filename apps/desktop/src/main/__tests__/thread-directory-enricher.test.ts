@@ -16,7 +16,7 @@ describe("createThreadDirectoryEnricher", () => {
       ) => {
         if (args.includes("--show-toplevel")) {
           callback(null, {
-            stdout: "/Users/huntharo/pwrdrvr/PwrAgnt/.worktrees/feature-one\n",
+            stdout: "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one\n",
             stderr: "",
           });
           return;
@@ -24,8 +24,8 @@ describe("createThreadDirectoryEnricher", () => {
         if (args.includes("--porcelain")) {
           callback(null, {
             stdout: [
-              "worktree /Users/huntharo/pwrdrvr/PwrAgnt",
-              "worktree /Users/huntharo/pwrdrvr/PwrAgnt/.worktrees/feature-one",
+              "worktree /Users/huntharo/pwrdrvr/PwrAgent",
+              "worktree /Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one",
             ].join("\n"),
             stderr: "",
           });
@@ -57,16 +57,16 @@ describe("createThreadDirectoryEnricher", () => {
       cacheTtlMs: 60_000,
     });
 
-    const first = await enricher("/Users/huntharo/pwrdrvr/PwrAgnt/.worktrees/feature-one/apps");
-    const second = await enricher("/Users/huntharo/pwrdrvr/PwrAgnt/.worktrees/feature-one/apps");
+    const first = await enricher("/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one/apps");
+    const second = await enricher("/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one/apps");
 
     expect(first).toEqual({
       linkedDirectories: [
         {
-          id: "/Users/huntharo/pwrdrvr/PwrAgnt",
-          path: "/Users/huntharo/pwrdrvr/PwrAgnt",
-          worktreePath: "/Users/huntharo/pwrdrvr/PwrAgnt/.worktrees/feature-one",
-          label: "PwrAgnt",
+          id: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          worktreePath: "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one",
+          label: "PwrAgent",
           kind: "worktree",
         },
       ],
@@ -93,7 +93,7 @@ describe("createThreadDirectoryEnricher", () => {
     const enricher = createThreadDirectoryEnricher();
 
     await expect(
-      enricher("/Users/huntharo/.codex/worktrees/missing/PwrAgnt"),
+      enricher("/Users/huntharo/.codex/worktrees/missing/PwrAgent"),
     ).resolves.toEqual({
       linkedDirectories: [],
     });

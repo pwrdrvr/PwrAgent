@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import type { XaiAiSdkObjectResult } from "@pwragnt/agent-core";
+import type { XaiAiSdkObjectResult } from "@pwragent/agent-core";
 import type {
   FocusedDiffAnalysisRequest,
   FocusedDiffAnalysisResponse,
   FocusedDiffHunkDecision,
   FocusedDiffHunkSummary,
   FocusedDiffReasonCode
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import {
   getFocusedDiffEligibility,
   parseUnifiedDiff,
@@ -21,7 +21,7 @@ const FOCUSED_DIFF_PROMPT_VERSION = "focused-diff-v1";
 const FOCUSED_DIFF_MODEL = "grok-4-1-fast-reasoning";
 const FOCUSED_DIFF_TIMEOUT_MS = 5_000;
 const MIN_HIDE_CONFIDENCE = 0.8;
-const FOCUSED_DIFF_TEST_RESPONSE_ENV = "PWRAGNT_FOCUSED_DIFF_TEST_RESPONSE";
+const FOCUSED_DIFF_TEST_RESPONSE_ENV = "PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE";
 
 const FOCUSED_DIFF_REASON_CODES = [
   "comment_only",

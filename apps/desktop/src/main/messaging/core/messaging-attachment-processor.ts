@@ -1,7 +1,7 @@
 import type {
   AppServerTurnInputItem,
   MessagingAttachmentDescriptor,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { ImageUploadQualityProfile } from "../../../shared/image-normalization";
 import { normalizeMessagingImageAttachment } from "../attachment-image-normalization";
 import type { MessagingAdapter } from "./messaging-adapter";

@@ -7,15 +7,15 @@ import { analyzeProtocolCaptureTraffic } from "../testing/protocol-capture-analy
 import { createProtocolCaptureObserver, createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 
 async function createTempDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "pwragnt-protocol-capture-"));
+  return await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-protocol-capture-"));
 }
 
 describe("ProtocolCaptureStore", () => {
   const cleanupPaths: string[] = [];
 
   afterEach(async () => {
-    delete process.env.PWRAGNT_PROTOCOL_CAPTURE;
-    delete process.env.PWRAGNT_PROTOCOL_CAPTURE_ROOT;
+    delete process.env.PWRAGENT_PROTOCOL_CAPTURE;
+    delete process.env.PWRAGENT_PROTOCOL_CAPTURE_ROOT;
 
     await Promise.all(
       cleanupPaths.splice(0).map(async (target) => {
@@ -151,8 +151,8 @@ describe("ProtocolCaptureStore", () => {
       })
     ).toBeUndefined();
 
-    process.env.PWRAGNT_PROTOCOL_CAPTURE = "true";
-    process.env.PWRAGNT_PROTOCOL_CAPTURE_ROOT = rootDir;
+    process.env.PWRAGENT_PROTOCOL_CAPTURE = "true";
+    process.env.PWRAGENT_PROTOCOL_CAPTURE_ROOT = rootDir;
 
     const capture = createProtocolCaptureFromEnv({
       backend: "codex",
@@ -283,7 +283,7 @@ describe("ProtocolCaptureStore", () => {
           params: {
             archived: false,
             limit: 100,
-            cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
+            cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
           },
         }),
       })}\n`,
@@ -307,7 +307,7 @@ describe("ProtocolCaptureStore", () => {
         envelope: expect.objectContaining({
           method: "thread/list",
           params: expect.objectContaining({
-            cwd: "/repo-user/pwrdrvr/PwrAgnt",
+            cwd: "/repo-user/pwrdrvr/PwrAgent",
           }),
         }),
       }),
