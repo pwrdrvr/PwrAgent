@@ -1,15 +1,19 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { access, mkdir, rmdir } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type {
   AppServerThreadSummary,
   ArchiveThreadCleanupResult,
+  DesktopWorktreeStorageLocation,
   LaunchpadWorkMode,
   NavigationDirectoryGitStatus,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
 } from "@pwragnt/shared";
+import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragnt/shared";
+import { userHomeWorktreesRoot } from "../settings/desktop-config";
 
 const execFile = promisify(execFileCallback);
 
@@ -29,19 +33,58 @@ function sanitizeBranchName(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-function buildWorktreeDirectoryName(params: {
-  baseBranch: string;
-  directoryLabel: string;
-  timestamp?: number;
-}): string {
-  const base = sanitizeBranchName(params.baseBranch) || "main";
-  const label = sanitizeBranchName(params.directoryLabel.toLowerCase()) || "launchpad";
-  const suffix = (params.timestamp ?? Date.now()).toString(36);
-  return `launchpad-${label}-${base.replace(/\//g, "-")}-${suffix}`;
+function worktreesRootFor(
+  repoRoot: string,
+  storage: DesktopWorktreeStorageLocation,
+  homeDir?: string,
+): string {
+  return storage === "user-home"
+    ? userHomeWorktreesRoot(homeDir)
+    : path.join(repoRoot, ".worktrees");
 }
 
-function buildWorktreePath(repoRoot: string, worktreeName: string): string {
-  return path.join(repoRoot, ".worktrees", worktreeName.replace(/[\\/]/g, "-"));
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function pruneEmptyWorktreeParents(worktreePath: string): Promise<void> {
+  const hashParent = path.dirname(worktreePath);
+  if (path.basename(hashParent) === ".worktrees" || hashParent === "/") {
+    return;
+  }
+  try {
+    await rmdir(hashParent);
+  } catch {
+    // Parent is non-empty or already gone; either is fine.
+  }
+}
+
+export async function computeWorktreePath(params: {
+  repoRoot: string;
+  storage: DesktopWorktreeStorageLocation;
+  homeDir?: string;
+  timestamp?: number;
+}): Promise<string> {
+  const root = worktreesRootFor(params.repoRoot, params.storage, params.homeDir);
+  const projectName = path.basename(path.resolve(params.repoRoot)) || "project";
+  const baseHash = (params.timestamp ?? Date.now()).toString(36);
+
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const hash = attempt === 0 ? baseHash : `${baseHash}-${attempt + 1}`;
+    const candidate = path.join(root, hash, projectName);
+    if (!(await pathExists(candidate))) {
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    `Unable to allocate a unique worktree path under ${root} for ${projectName}`,
+  );
 }
 
 type WorktreeEntry = {
@@ -137,10 +180,29 @@ type CachedDirectoryStatus = {
   status?: NavigationDirectoryGitStatus;
 };
 
+type GitDirectoryServiceOptions = {
+  cacheTtlMs?: number;
+  resolveWorktreeStorage?: () =>
+    | DesktopWorktreeStorageLocation
+    | Promise<DesktopWorktreeStorageLocation>;
+  homeDir?: string;
+};
+
 export class GitDirectoryService {
   private readonly statusCache = new Map<string, CachedDirectoryStatus>();
+  private readonly cacheTtlMs: number;
+  private readonly resolveStorage: () => Promise<DesktopWorktreeStorageLocation>;
+  private readonly homeDir: string;
 
-  constructor(private readonly cacheTtlMs = 3_000) {}
+  constructor(options: GitDirectoryServiceOptions | number = {}) {
+    const normalized: GitDirectoryServiceOptions =
+      typeof options === "number" ? { cacheTtlMs: options } : options;
+    this.cacheTtlMs = normalized.cacheTtlMs ?? 3_000;
+    this.homeDir = normalized.homeDir ?? os.homedir();
+    const resolveStorage = normalized.resolveWorktreeStorage;
+    this.resolveStorage = async () =>
+      (await resolveStorage?.()) ?? DESKTOP_WORKTREE_STORAGE_DEFAULT;
+  }
 
   async readDirectoryStatuses(
     directories: NavigationDirectorySummary[],
@@ -320,11 +382,12 @@ export class GitDirectoryService {
       sanitizeBranchName(launchpad.branchName ?? "") ||
       sanitizeBranchName(await runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"])) ||
       "main";
-    const worktreeName = buildWorktreeDirectoryName({
-      baseBranch,
-      directoryLabel: launchpad.directoryLabel,
+    const storage = await this.resolveStorage();
+    const worktreePath = await computeWorktreePath({
+      repoRoot,
+      storage,
+      homeDir: this.homeDir,
     });
-    const worktreePath = buildWorktreePath(repoRoot, worktreeName);
     await mkdir(path.dirname(worktreePath), { recursive: true });
     await runGit(repoRoot, ["worktree", "add", "--detach", worktreePath, baseBranch]);
 
@@ -415,6 +478,7 @@ export class GitDirectoryService {
 
       const branch = entry.branch ?? thread.observedGitBranch ?? thread.gitBranch;
       await runGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
+      await pruneEmptyWorktreeParents(worktreePath);
 
       const result: ArchiveThreadCleanupResult = {
         ...base,

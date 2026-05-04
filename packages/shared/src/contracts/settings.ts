@@ -10,6 +10,17 @@ export const DESKTOP_CHAT_REPLY_COMPOSERS = [
 export type DesktopChatReplyComposer =
   (typeof DESKTOP_CHAT_REPLY_COMPOSERS)[number];
 
+export const DESKTOP_WORKTREE_STORAGE_LOCATIONS = [
+  "in-repo",
+  "user-home",
+] as const;
+
+export type DesktopWorktreeStorageLocation =
+  (typeof DESKTOP_WORKTREE_STORAGE_LOCATIONS)[number];
+
+export const DESKTOP_WORKTREE_STORAGE_DEFAULT: DesktopWorktreeStorageLocation =
+  "user-home";
+
 export type DesktopSettingsNonSecretSource = "default" | "config" | "env";
 export type DesktopSettingsSecretSource = "unset" | "keychain" | "env";
 export type DesktopSettingsSource =
@@ -139,6 +150,10 @@ export type DesktopSettingsSnapshot = {
     };
   };
   applications: DesktopApplicationsSnapshot;
+  worktrees: {
+    storage: DesktopSettingsValue<DesktopWorktreeStorageLocation>;
+    effectivePath: string;
+  };
 };
 
 export type DesktopSettingsConfigPatch = {
@@ -177,6 +192,9 @@ export type DesktopSettingsConfigPatch = {
     terminal?: {
       preferredId?: string;
     };
+  };
+  worktrees?: {
+    storage?: DesktopWorktreeStorageLocation;
   };
 };
 
@@ -220,5 +238,13 @@ export function isDesktopChatReplyComposer(
 ): value is DesktopChatReplyComposer {
   return DESKTOP_CHAT_REPLY_COMPOSERS.includes(
     value as DesktopChatReplyComposer,
+  );
+}
+
+export function isDesktopWorktreeStorageLocation(
+  value: string,
+): value is DesktopWorktreeStorageLocation {
+  return DESKTOP_WORKTREE_STORAGE_LOCATIONS.includes(
+    value as DesktopWorktreeStorageLocation,
   );
 }

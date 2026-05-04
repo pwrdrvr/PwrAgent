@@ -1,7 +1,9 @@
 import type {
   DesktopChatReplyComposer,
   DesktopMessagingImageProfile,
+  DesktopWorktreeStorageLocation,
 } from "@pwragnt/shared";
+import { isDesktopWorktreeStorageLocation } from "@pwragnt/shared";
 
 export const DESKTOP_CONFIG_PATH_ENV = "PWRAGNT_CONFIG_PATH";
 export const CHAT_REPLY_COMPOSER_ENV =
@@ -30,6 +32,7 @@ export const MESSAGING_ATTACHMENT_MAX_COUNT_ENV =
 export const MESSAGING_INPUT_DEBOUNCE_MS_ENV =
   "PWRAGNT_MESSAGING_INPUT_DEBOUNCE_MS";
 export const CODEX_COMMAND_ENV = "PWRAGNT_CODEX_COMMAND";
+export const WORKTREE_STORAGE_ENV = "PWRAGNT_WORKTREE_STORAGE";
 
 export type ParsedEnvValue<T> = {
   value?: T;
@@ -120,6 +123,21 @@ export function readEnvComposer(
   }
   if (!isDesktopChatReplyComposer(value)) {
     return { error: `Invalid composer value for ${CHAT_REPLY_COMPOSER_ENV}` };
+  }
+  return { value };
+}
+
+export function readEnvWorktreeStorage(
+  env: NodeJS.ProcessEnv,
+): ParsedEnvValue<DesktopWorktreeStorageLocation> {
+  const value = readEnvString(env, WORKTREE_STORAGE_ENV);
+  if (!value) {
+    return {};
+  }
+  if (!isDesktopWorktreeStorageLocation(value)) {
+    return {
+      error: `Invalid worktree storage value for ${WORKTREE_STORAGE_ENV}`,
+    };
   }
   return { value };
 }

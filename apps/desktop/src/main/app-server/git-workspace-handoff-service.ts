@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
-import { mkdir, realpath, stat } from "node:fs/promises";
+import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type {
   AppServerBackendKind,
+  DesktopWorktreeStorageLocation,
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
   ThreadIdentifier,
@@ -12,6 +13,8 @@ import type {
   ThreadWorkspaceHandoffStashSummary,
   WorktreeSnapshotSummary,
 } from "@pwragnt/shared";
+import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragnt/shared";
+import { computeWorktreePath } from "./git-directory-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 
 const execFileAsync = promisify(execFile);
@@ -56,6 +59,10 @@ type StashOptions = {
 
 type WorkspaceHandoffServiceOptions = {
   worktreeArchiveService?: WorktreeArchiveService;
+  resolveWorktreeStorage?: () =>
+    | DesktopWorktreeStorageLocation
+    | Promise<DesktopWorktreeStorageLocation>;
+  homeDir?: string;
 };
 
 async function runGit(cwd: string, args: string[]): Promise<GitResult> {
@@ -70,15 +77,6 @@ function trim(value: string): string {
   return value.trim();
 }
 
-function sanitizeSegment(value: string): string {
-  return value
-    .trim()
-    .replace(/^refs\/heads\//, "")
-    .replace(/[^a-zA-Z0-9._/-]+/g, "-")
-    .replace(/\//g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 function sanitizeBranchName(value: string): string {
   return value
     .trim()
@@ -91,19 +89,6 @@ function sanitizeBranchName(value: string): string {
 function pathBaseName(value: string): string {
   const normalized = value.replace(/[\\/]+$/, "");
   return normalized.split(/[\\/]/).filter(Boolean).at(-1) ?? normalized;
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await stat(filePath);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-
-    throw error;
-  }
 }
 
 function parseWorktreeList(output: string): WorktreeInfo[] {
@@ -231,10 +216,16 @@ async function applyVerifyAndDropStash(
 
 export class GitWorkspaceHandoffService {
   private readonly worktreeArchiveService: WorktreeArchiveService;
+  private readonly resolveStorage: () => Promise<DesktopWorktreeStorageLocation>;
+  private readonly homeDir: string | undefined;
 
   constructor(options: WorkspaceHandoffServiceOptions = {}) {
     this.worktreeArchiveService =
       options.worktreeArchiveService ?? new WorktreeArchiveService();
+    const resolveStorage = options.resolveWorktreeStorage;
+    this.resolveStorage = async () =>
+      (await resolveStorage?.()) ?? DESKTOP_WORKTREE_STORAGE_DEFAULT;
+    this.homeDir = options.homeDir;
   }
 
   async handoff(params: HandoffParams): Promise<HandoffThreadWorkspaceResponse> {
@@ -296,13 +287,14 @@ export class GitWorkspaceHandoffService {
     if (path.resolve(context.repositoryPath) !== path.resolve(context.sourcePath)) {
       throw new Error("Local-to-worktree handoff must start from the local checkout.");
     }
-    if (context.branch === "HEAD") {
-      throw new Error("Local-to-worktree handoff requires a named source branch.");
-    }
 
     const strategy = params.strategy ?? "move-branch";
     if (strategy === "detached-changes") {
       return await this.handoffLocalChangesToDetachedWorktree(params, context);
+    }
+
+    if (context.branch === "HEAD") {
+      throw new Error("Local-to-worktree handoff requires a named source branch.");
     }
 
     ensureBranchNotCheckedOutElsewhere({
@@ -319,14 +311,13 @@ export class GitWorkspaceHandoffService {
       throw new Error("Local cannot be left on the same branch being moved.");
     }
 
-    const targetPath = this.buildTargetWorktreePath({
-      repositoryPath: context.repositoryPath,
-      branch: context.branch,
-      now: context.now,
+    const storage = await this.resolveStorage();
+    const targetPath = await computeWorktreePath({
+      repoRoot: context.repositoryPath,
+      storage,
+      homeDir: this.homeDir,
+      timestamp: context.now,
     });
-    if (await pathExists(targetPath)) {
-      throw new Error(`Target worktree path already exists: ${targetPath}`);
-    }
 
     const warnings = ["Ignored files are not preserved by workspace handoff."];
     const sourceStash = await createNamedStashIfDirty({
@@ -366,14 +357,13 @@ export class GitWorkspaceHandoffService {
     context: HandoffContext,
   ): Promise<HandoffThreadWorkspaceResponse> {
     const baseSha = context.headSha;
-    const targetPath = this.buildTargetWorktreePath({
-      repositoryPath: context.repositoryPath,
-      branch: `${context.branch}-detached`,
-      now: context.now,
+    const storage = await this.resolveStorage();
+    const targetPath = await computeWorktreePath({
+      repoRoot: context.repositoryPath,
+      storage,
+      homeDir: this.homeDir,
+      timestamp: context.now,
     });
-    if (await pathExists(targetPath)) {
-      throw new Error(`Target worktree path already exists: ${targetPath}`);
-    }
 
     const warnings = [
       "Ignored files are not preserved by workspace handoff.",
@@ -540,20 +530,6 @@ export class GitWorkspaceHandoffService {
       warnings,
       completedAt: context.now,
     };
-  }
-
-  private buildTargetWorktreePath(params: {
-    repositoryPath: string;
-    branch: string;
-    now: number;
-  }): string {
-    const repoName = sanitizeSegment(pathBaseName(params.repositoryPath).toLowerCase()) || "repo";
-    const branchName = sanitizeSegment(params.branch) || "branch";
-    return path.join(
-      params.repositoryPath,
-      ".worktrees",
-      `${repoName}-${branchName}-${params.now.toString(36)}`,
-    );
   }
 
   private buildStashMessage(

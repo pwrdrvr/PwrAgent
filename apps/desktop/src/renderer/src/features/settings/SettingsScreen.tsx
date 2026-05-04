@@ -9,6 +9,7 @@ import { ExperimentalSettings } from "./ExperimentalSettings";
 import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
+import { WorktreesSettings } from "./WorktreesSettings";
 import { useState } from "react";
 
 type SettingsSection =
@@ -16,10 +17,12 @@ type SettingsSection =
   | "messaging"
   | "models"
   | "applications"
+  | "worktrees"
   | "about";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "applications", label: "Applications" },
+  { id: "worktrees", label: "Worktrees" },
   { id: "messaging", label: "Messaging" },
   { id: "models", label: "Models" },
   { id: "experimental", label: "Experimental" },
@@ -203,6 +206,20 @@ function SettingsSectionBody(props: {
               kind === "editor"
                 ? { editor: { preferredId } }
                 : { terminal: { preferredId } },
+          });
+        }}
+      />
+    );
+  }
+
+  if (props.section === "worktrees") {
+    return (
+      <WorktreesSettings
+        saving={props.settings.saving}
+        snapshot={props.snapshot}
+        onStorageChange={async (storage) => {
+          await props.settings.writeConfig({
+            worktrees: { storage },
           });
         }}
       />

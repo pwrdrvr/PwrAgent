@@ -103,6 +103,84 @@ describe("DesktopSettingsService", () => {
       value: "ghostty",
       source: "config",
     });
+    expect(snapshot.worktrees.storage).toEqual({
+      value: "user-home",
+      source: "default",
+    });
+    expect(snapshot.worktrees.effectivePath).toMatch(
+      /\.pwragnt\/worktrees$/,
+    );
+  });
+
+  it("loads the worktree storage location from TOML and exposes the effective path", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      ["[worktrees]", 'storage = "in-repo"'].join("\n"),
+      "utf8",
+    );
+
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettings();
+
+    expect(snapshot.worktrees.storage).toEqual({
+      value: "in-repo",
+      source: "config",
+    });
+    expect(snapshot.worktrees.effectivePath).toBe(".worktrees");
+    expect(service.resolveWorktreeStorage()).toBe("in-repo");
+  });
+
+  it("treats PWRAGNT_WORKTREE_STORAGE as a high-precedence override", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      ["[worktrees]", 'storage = "in-repo"'].join("\n"),
+      "utf8",
+    );
+
+    const service = new DesktopSettingsService({
+      configPath,
+      env: { PWRAGNT_WORKTREE_STORAGE: "user-home" },
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettings();
+
+    expect(snapshot.worktrees.storage).toMatchObject({
+      value: "user-home",
+      source: "env",
+      overriddenByEnv: true,
+    });
+    expect(snapshot.worktrees.effectivePath).toMatch(
+      /\.pwragnt\/worktrees$/,
+    );
+  });
+
+  it("round-trips the worktree storage setting through write + read", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await service.writeConfigPatch({ worktrees: { storage: "in-repo" } });
+
+    const tomlOnDisk = fs.readFileSync(configPath, "utf8");
+    expect(tomlOnDisk).toContain("[worktrees]");
+    expect(tomlOnDisk).toContain('storage = "in-repo"');
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.worktrees.storage.value).toBe("in-repo");
   });
 
   it("applies env overrides above TOML and keeps the Grok API key in keychain", async () => {

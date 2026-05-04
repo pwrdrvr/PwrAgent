@@ -116,6 +116,10 @@ function createSnapshot(
       preferredEditorId: { value: "", source: "default" },
       preferredTerminalId: { value: "", source: "default" },
     },
+    worktrees: {
+      storage: { value: "user-home", source: "default" },
+      effectivePath: "/home/example/.pwragnt/worktrees",
+    },
     ...overrides,
   };
 }

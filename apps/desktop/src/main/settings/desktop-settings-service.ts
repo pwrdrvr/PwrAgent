@@ -6,12 +6,15 @@ import type {
   DesktopSettingsSecretState,
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
+  DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
 } from "@pwragnt/shared";
+import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragnt/shared";
 import {
   mergeDesktopSettingsConfig,
   readDesktopSettingsConfig,
   resolveDesktopConfigPath,
+  userHomeWorktreesRoot,
   writeDesktopSettingsConfig,
   type DesktopSettingsConfig,
 } from "./desktop-config";
@@ -33,12 +36,14 @@ import {
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
+  WORKTREE_STORAGE_ENV,
   readEnvBoolean,
   readEnvComposer,
   readEnvInteger,
   readEnvList,
   readEnvMessagingImageProfile,
   readEnvString,
+  readEnvWorktreeStorage,
 } from "./desktop-settings-env";
 import { discoverCodexCommands } from "./codex-discovery";
 import { discoverDesktopApplications } from "./application-discovery";
@@ -206,7 +211,13 @@ export class DesktopSettingsService {
         preferredEditorId,
         preferredTerminalId,
       },
+      worktrees: this.resolveWorktrees(config.worktrees?.storage),
     };
+  }
+
+  resolveWorktreeStorage(): DesktopWorktreeStorageLocation {
+    return this.resolveWorktrees(this.readConfig().config.worktrees?.storage)
+      .storage.value;
   }
 
   async writeConfigPatch(
@@ -413,6 +424,34 @@ export class DesktopSettingsService {
     return {
       value: configValue ?? "show_some",
       source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveWorktrees(
+    configValue: DesktopWorktreeStorageLocation | undefined,
+  ): {
+    storage: DesktopSettingsValue<DesktopWorktreeStorageLocation>;
+    effectivePath: string;
+  } {
+    const envValue = readEnvWorktreeStorage(this.env);
+    const resolved: DesktopSettingsValue<DesktopWorktreeStorageLocation> =
+      envValue.value !== undefined
+        ? {
+            value: envValue.value,
+            source: "env",
+            overriddenByEnv: configValue !== undefined,
+          }
+        : {
+            value: configValue ?? DESKTOP_WORKTREE_STORAGE_DEFAULT,
+            source: configValue === undefined ? "default" : "config",
+            error: envValue.error,
+          };
+    return {
+      storage: resolved,
+      effectivePath:
+        resolved.value === "user-home"
+          ? userHomeWorktreesRoot()
+          : ".worktrees",
     };
   }
 

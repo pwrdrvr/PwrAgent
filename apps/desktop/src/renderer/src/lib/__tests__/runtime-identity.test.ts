@@ -41,6 +41,44 @@ describe("runtime identity formatting", () => {
     ).toBe("5d4b/PwrAgnt");
   });
 
+  it("shows hash/project for the new in-repo worktree layout", () => {
+    expect(
+      formatRuntimePath(
+        "/Users/huntharo/github/PwrAgnt/.worktrees/moit6ddw/PwrAgnt"
+      )
+    ).toBe("moit6ddw/PwrAgnt");
+  });
+
+  it("shows hash/project for the new in-repo layout with collision suffix", () => {
+    expect(
+      formatRuntimePath(
+        "/Users/huntharo/github/PwrAgnt/.worktrees/moit6ddw-2/PwrAgnt"
+      )
+    ).toBe("moit6ddw-2/PwrAgnt");
+  });
+
+  it("ignores the desktop app package below the new in-repo worktree layout", () => {
+    expect(
+      formatRuntimePath(
+        "/Users/huntharo/github/PwrAgnt/.worktrees/moit6ddw/PwrAgnt/apps/desktop"
+      )
+    ).toBe("moit6ddw/PwrAgnt");
+  });
+
+  it("shows hash/project for the user-home worktree layout", () => {
+    expect(
+      formatRuntimePath("/Users/huntharo/.pwragnt/worktrees/moit6ddw/PwrAgnt")
+    ).toBe("moit6ddw/PwrAgnt");
+  });
+
+  it("ignores the desktop app package below a user-home worktree", () => {
+    expect(
+      formatRuntimePath(
+        "/Users/huntharo/.pwragnt/worktrees/moit6ddw/PwrAgnt/apps/desktop"
+      )
+    ).toBe("moit6ddw/PwrAgnt");
+  });
+
   it("middle-truncates branch names", () => {
     expect(formatRuntimeBranch("codex/fix-thread-naming-ephemeral")).toBe(
       "codex/fix-thread-naming-ephemeral"
