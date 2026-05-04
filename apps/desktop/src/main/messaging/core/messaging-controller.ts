@@ -93,7 +93,9 @@ const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
-const STREAM_UPDATE_REFRESH_MS = 1_000;
+// Telegram's group broadcast guidance is 20 messages/minute; keep generic
+// streams below that so Telegram adapters can support streaming safely.
+const STREAM_UPDATE_REFRESH_MS = 3_100;
 const messagingControllerLog = getMainLogger("pwragnt:messaging");
 
 type AssistantStreamDelta = {
@@ -193,6 +195,7 @@ export class MessagingController {
   private readonly authorizedActorIds: Set<string>;
   private readonly deliveredAssistantMessageKeys = new Set<string>();
   private readonly assistantStreamBuffers = new Map<string, AssistantStreamBuffer>();
+  private readonly assistantStreamDeliveryQueues = new Map<string, Promise<void>>();
   private readonly now: () => number;
   private readonly pendingIntentTtlMs: number;
   private readonly interactionMapper: MessagingInteractionMapper;
@@ -1277,7 +1280,11 @@ export class MessagingController {
       return;
     }
 
-    await this.deliverAssistantStreamBuffer(buffer, binding, false);
+    this.assistantStreamBuffers.set(bufferKey, {
+      ...buffer,
+      lastEmittedAt: now,
+    });
+    await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, false);
   }
 
   private async flushAssistantStreamForEvent(
@@ -1291,15 +1298,17 @@ export class MessagingController {
       if (!buffer) {
         continue;
       }
-      const finalBuffer: AssistantStreamBuffer = {
+      this.assistantStreamBuffers.set(bufferKey, {
         ...buffer,
         delta: "",
+        lastEmittedAt: this.now(),
         sequence: buffer.sequence + 1,
         text: finalText,
-      };
-      const result = await this.deliverAssistantStreamBuffer(finalBuffer, binding, true);
+      });
+      const result = await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, true);
       deliveredFinalStream ||= isVisibleAssistantStreamDelivery(result);
       this.assistantStreamBuffers.delete(bufferKey);
+      this.assistantStreamDeliveryQueues.delete(bufferKey);
     }
     return deliveredFinalStream;
   }
@@ -1310,6 +1319,7 @@ export class MessagingController {
   ): void {
     for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
       this.assistantStreamBuffers.delete(bufferKey);
+      this.assistantStreamDeliveryQueues.delete(bufferKey);
     }
   }
 
@@ -1337,6 +1347,37 @@ export class MessagingController {
       }
     }
     return [...keys];
+  }
+
+  private async enqueueAssistantStreamBufferDelivery(
+    bufferKey: string,
+    binding: MessagingBindingRecord,
+    isFinal: boolean,
+  ): Promise<MessagingDeliveryResult> {
+    let result: MessagingDeliveryResult | undefined;
+    const previous = this.assistantStreamDeliveryQueues.get(bufferKey) ?? Promise.resolve();
+    const delivery = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const latest = this.assistantStreamBuffers.get(bufferKey);
+        if (!latest) {
+          return;
+        }
+        result = await this.deliverAssistantStreamBuffer(latest, binding, isFinal);
+      });
+    this.assistantStreamDeliveryQueues.set(bufferKey, delivery);
+    try {
+      await delivery;
+    } finally {
+      if (this.assistantStreamDeliveryQueues.get(bufferKey) === delivery) {
+        this.assistantStreamDeliveryQueues.delete(bufferKey);
+      }
+    }
+    return result ?? {
+      channel: binding.channel.channel,
+      deliveredAt: this.now(),
+      outcome: "discarded",
+    };
   }
 
   private async deliverAssistantStreamBuffer(
@@ -1377,8 +1418,10 @@ export class MessagingController {
       result.surface && isVisibleAssistantStreamDelivery(result)
         ? result.surface
         : buffer.surface;
-    this.assistantStreamBuffers.set(this.assistantStreamBufferKey(buffer.streamKey, binding), {
-      ...buffer,
+    const bufferKey = this.assistantStreamBufferKey(buffer.streamKey, binding);
+    const current = this.assistantStreamBuffers.get(bufferKey);
+    this.assistantStreamBuffers.set(bufferKey, {
+      ...(current && current.sequence >= buffer.sequence ? current : buffer),
       lastEmittedAt: now,
       surface,
     });
