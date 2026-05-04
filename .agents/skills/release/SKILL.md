@@ -34,7 +34,8 @@ Read these files before changing release metadata:
 - Always use a leading-`v` tag such as `v1.0.0-alpha.5`.
 - The tag version, `apps/desktop/package.json` version, and
   `CHANGELOG.md` release heading must match.
-- Do not create or push the tag until the version and changelog are committed.
+- Do not create or push the tag until the version and changelog are committed
+  and present on the repository default branch.
 - Do not use GitHub generated release notes as the final notes.
 - Do not force-push the default branch or rewrite an existing release tag
   without explicit user approval.
@@ -80,7 +81,7 @@ Read these files before changing release metadata:
    pnpm test
    ```
 
-## Commit And Tag
+## Commit, Merge, And Tag
 
 Commit the version and changelog together. Use a signed commit; this repo's git
 config should already sign commits with SSH.
@@ -90,7 +91,31 @@ git add apps/desktop/package.json CHANGELOG.md
 git commit -m "chore(release): prepare v<version>"
 ```
 
-Create exactly one tag on that exact commit.
+For this repo, `main` is branch-protected. Push the release metadata commit to a
+short-lived release branch, open a PR, wait for required checks, then **squash
+merge** the PR. Do not use rebase merge for release metadata PRs: GitHub may
+rewrite the commit SHA, which makes it too easy to tag the pre-merge commit
+instead of the actual default-branch release commit.
+
+```bash
+git switch -c release/v<version>
+git push -u origin release/v<version>
+gh pr create --base main --head release/v<version> \
+  --title "chore(release): prepare v<version>" \
+  --body-file .local/PR-v<version>.md
+gh pr checks <pr-number> --watch --interval 10
+gh pr merge <pr-number> --squash --delete-branch
+git fetch origin main --tags
+git switch main
+git pull --ff-only
+```
+
+After the squash merge, rerun the metadata gate on `main`, then create exactly
+one tag on the actual default-branch commit.
+
+```bash
+RELEASE_TAG=v<version> pnpm release:check
+```
 
 If signing tags is configured and works locally, prefer a signed annotated tag:
 
@@ -106,14 +131,19 @@ git tag v<version>
 ```
 
 Do not silently fall back from a failed signed tag to an unsigned tag. Ask the
-user which tag form to use.
+user which tag form to use. Before pushing, verify the tag points at
+`origin/main` or the intended default-branch release commit:
+
+```bash
+git tag -v v<version>
+git merge-base --is-ancestor v<version> origin/main
+```
 
 ## Publish
 
-Push the branch and tag together:
+Push the tag after the release metadata is already on `main`:
 
 ```bash
-git push origin HEAD:main
 git push origin v<version>
 ```
 
