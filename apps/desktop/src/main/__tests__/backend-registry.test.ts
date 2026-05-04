@@ -1471,6 +1471,8 @@ describe("DesktopBackendRegistry", () => {
     await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([
       expect.objectContaining({
         id: "thread-1",
+        title: "Untitled thread",
+        titleSource: "fallback",
         projectKey: "/repo-a",
         linkedDirectories: [
           {

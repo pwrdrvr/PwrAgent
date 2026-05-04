@@ -1476,7 +1476,7 @@ export class DesktopBackendRegistry {
       {
         id: result.threadId,
         source: backend,
-        title: result.threadId,
+        title: "Untitled thread",
         titleSource: "fallback",
         projectKey: cwd,
         createdAt: startedAt,
