@@ -1,7 +1,7 @@
 {
   "name": "@pwragent/desktop",
   "productName": "PwrAgent",
-  "version": "1.0.0-alpha.3",
+  "version": "1.0.0-alpha.4",
   "private": true,
   "description": "Thread-centric coding agent desktop app",
   "author": "PwrDrvr LLC",

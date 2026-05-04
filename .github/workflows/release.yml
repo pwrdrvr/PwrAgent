@@ -29,6 +29,11 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
 
+      - name: Check release metadata
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: pnpm release:check
+
       - name: Typecheck
         run: pnpm typecheck
 
