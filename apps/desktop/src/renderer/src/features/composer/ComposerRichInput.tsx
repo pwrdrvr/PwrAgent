@@ -12,11 +12,16 @@ import {
   type MouseEvent,
 } from "react";
 import type { AppServerSkillSummary } from "@pwragent/shared";
+import type { JSONContent } from "@tiptap/react";
 import { SkillChip } from "./SkillChip";
 
 export type ComposerSkillToken = AppServerSkillSummary & {
   id: string;
   index: number;
+};
+
+export type ComposerRichInputChangeMetadata = {
+  editorDocument?: JSONContent;
 };
 
 export type ComposerRichInputHandle = {
@@ -34,7 +39,11 @@ export type ComposerRichInputProps = {
   disabled?: boolean;
   id: string;
   label: string;
-  onChange: (value: string, skillTokens?: ComposerSkillToken[]) => void;
+  onChange: (
+    value: string,
+    skillTokens?: ComposerSkillToken[],
+    metadata?: ComposerRichInputChangeMetadata,
+  ) => void;
   onBeforeInput?: (event: FormEvent<HTMLDivElement>) => void;
   onBeforeInputCapture?: (event: FormEvent<HTMLDivElement>) => void;
   onClick?: (event: MouseEvent<HTMLDivElement>) => void;

@@ -2,12 +2,14 @@ import type { DesktopChatReplyComposer, DesktopSettingsSnapshot } from "@pwragen
 import { sourceBadge } from "./settings-fields";
 
 const COMPOSER_OPTIONS: Array<{
+  default?: boolean;
   label: string;
   value: DesktopChatReplyComposer;
 }> = [
   { label: "Textarea", value: "textarea" },
   { label: "TipTap raw Markdown + chips", value: "tiptap-chips" },
   {
+    default: true,
     label: "TipTap WYSIWYG Markdown + chips",
     value: "tiptap-wysiwyg-markdown-chips",
   },
@@ -51,7 +53,12 @@ export function ExperimentalSettings(props: {
                 void props.onComposerChange(option.value);
               }}
             >
-              {option.label}
+              <span>{option.label}</span>
+              {option.default ? (
+                <span aria-hidden="true" className="settings-segmented__meta">
+                  Default
+                </span>
+              ) : null}
             </button>
           ))}
         </div>

@@ -27,7 +27,7 @@ function createSnapshot(
     },
     experimental: {
       chatReplyComposer: {
-        value: "textarea",
+        value: "tiptap-wysiwyg-markdown-chips",
         source: "default",
       },
     },

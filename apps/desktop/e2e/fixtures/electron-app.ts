@@ -56,6 +56,7 @@ export async function launchElectronApp(params: {
   Object.assign(env, {
     HOME: homeRoot,
     NODE_ENV: "production",
+    PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "textarea",
     PWRAGENT_REPLAY_FIXTURE_PATH: params.fixturePath,
   });
   delete env.ELECTRON_RENDERER_URL;

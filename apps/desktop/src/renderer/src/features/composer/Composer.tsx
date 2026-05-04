@@ -44,6 +44,7 @@ import {
 import { parseReviewCommand } from "../../../../shared/review-command";
 import {
   ComposerRichInput,
+  type ComposerRichInputChangeMetadata,
   type ComposerRichInputHandle,
   type ComposerSkillToken,
 } from "./ComposerRichInput";
@@ -850,6 +851,7 @@ export function Composer(props: ComposerProps) {
     scopeKey: composerScopeKey,
     snapshot: {
       draft: savedInitialDraft?.draft ?? hydratedInitialLaunchpad?.draft ?? "",
+      editorDocument: savedInitialDraft?.editorDocument,
       imageAttachments:
         savedInitialDraft?.imageAttachments ??
         props.launchpad?.imageAttachments ??
@@ -863,6 +865,9 @@ export function Composer(props: ComposerProps) {
   const launchpadUpdateRef = useRef(props.onUpdateLaunchpad);
   const [draft, setDraft] = useState(
     latestDraftSnapshotRef.current.snapshot.draft
+  );
+  const [editorDocument, setEditorDocument] = useState(
+    latestDraftSnapshotRef.current.snapshot.editorDocument
   );
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const workspaceMenuRef = useDismissableMenu<HTMLDivElement>(
@@ -933,12 +938,14 @@ export function Composer(props: ComposerProps) {
     scopeKey: composerScopeKey,
     snapshot: {
       draft,
+      editorDocument,
       imageAttachments,
       skillTokens: composerSupportsSkillTokens ? skillTokens : [],
     },
   };
   const setComposerDraftFromCanonical = (nextDraft: string): void => {
     deletedSkillTokenHistoryRef.current = [];
+    setEditorDocument(undefined);
     if (!composerSupportsSkillTokens) {
       setDraft(nextDraft);
       setSkillTokens([]);
@@ -951,6 +958,7 @@ export function Composer(props: ComposerProps) {
   };
   const clearComposerDraft = (): void => {
     deletedSkillTokenHistoryRef.current = [];
+    setEditorDocument(undefined);
     setDraft("");
     setSkillTokens([]);
   };
@@ -959,6 +967,7 @@ export function Composer(props: ComposerProps) {
     nextSkillTokens?: ComposerSkillToken[],
   ): void => {
     deletedSkillTokenHistoryRef.current = [];
+    setEditorDocument(undefined);
     if (!composerSupportsSkillTokens) {
       setSkillTokens([]);
     } else if (nextSkillTokens) {
@@ -1012,6 +1021,7 @@ export function Composer(props: ComposerProps) {
   const clearSubmittedComposerDraft = (scopeKey: string): void => {
     const emptySnapshot: ComposerDraftSnapshot = {
       draft: "",
+      editorDocument: undefined,
       imageAttachments: [],
       skillTokens: [],
     };
@@ -1162,6 +1172,7 @@ export function Composer(props: ComposerProps) {
 
     const previousSnapshot = {
       draft,
+      editorDocument,
       imageAttachments,
       skillTokens,
     };
@@ -1177,6 +1188,7 @@ export function Composer(props: ComposerProps) {
     if (props.thread) {
       const saved = draftStore.get(composerScopeKey);
       setDraft(saved?.draft ?? "");
+      setEditorDocument(saved?.editorDocument);
       setImageAttachments(saved?.imageAttachments ?? []);
       setSkillTokens(saved?.skillTokens ?? []);
     }
@@ -1188,7 +1200,7 @@ export function Composer(props: ComposerProps) {
     setReviewConfig(undefined);
     setQueuedTurn(undefined);
     setPendingSteer(undefined);
-  }, [composerScopeKey, draft, imageAttachments, skillTokens]);
+  }, [composerScopeKey, draft, editorDocument, imageAttachments, skillTokens]);
 
   useEffect(() => {
     setActiveSkillIndex(0);
@@ -1281,6 +1293,7 @@ export function Composer(props: ComposerProps) {
     const saved = draftStore.get(composerScopeKey);
     if (saved) {
       setDraft(saved.draft);
+      setEditorDocument(saved.editorDocument);
       setImageAttachments(saved.imageAttachments);
       setSkillTokens(composerSupportsSkillTokens ? saved.skillTokens : []);
     } else {
@@ -2037,6 +2050,7 @@ export function Composer(props: ComposerProps) {
       const nextAttachments = current.filter((attachment) => attachment.id !== id);
       saveComposerDraftSnapshot(composerScopeKey, {
         draft,
+        editorDocument,
         imageAttachments: nextAttachments,
         skillTokens,
       });
@@ -2092,6 +2106,7 @@ export function Composer(props: ComposerProps) {
   const attachImages = async (files: ComposerImageFile[]): Promise<void> => {
     const pasteScope = pasteScopeRef.current;
     const pasteDraft = draft;
+    const pasteEditorDocument = editorDocument;
     const pasteImageAttachments = imageAttachments;
 
     try {
@@ -2145,11 +2160,13 @@ export function Composer(props: ComposerProps) {
       if (activeComposerScopeKeyRef.current !== pasteScope.key) {
         const saved = draftStore.get(pasteScope.key) ?? {
           draft: pasteDraft,
+          editorDocument: pasteEditorDocument,
           imageAttachments: pasteImageAttachments,
           skillTokens,
         };
         const nextSnapshot = {
           draft: saved.draft,
+          editorDocument: saved.editorDocument,
           imageAttachments: [...saved.imageAttachments, ...nextAttachments],
           skillTokens: saved.skillTokens,
         };
@@ -2162,6 +2179,7 @@ export function Composer(props: ComposerProps) {
         const mergedAttachments = [...current, ...nextAttachments];
         const nextSnapshot = {
           draft,
+          editorDocument,
           imageAttachments: mergedAttachments,
           skillTokens,
         };
@@ -2566,10 +2584,12 @@ export function Composer(props: ComposerProps) {
       skillTokens,
     });
     flushSync(() => {
+      setEditorDocument(undefined);
       setSkillTokens(nextSkillTokens);
     });
     saveComposerDraftSnapshot(composerScopeKey, {
       draft,
+      editorDocument: undefined,
       imageAttachments,
       skillTokens: nextSkillTokens,
     });
@@ -2852,6 +2872,7 @@ export function Composer(props: ComposerProps) {
   const handleComposerChange = (
     nextDraft: string,
     nextSkillTokens?: ComposerSkillToken[],
+    metadata?: ComposerRichInputChangeMetadata,
   ): void => {
     unmarkComposerDraftSubmitted(composerScopeKey);
     const pendingProgrammaticChange =
@@ -2894,8 +2915,10 @@ export function Composer(props: ComposerProps) {
       : [];
 
     updateVisibleDraft(nextDraft, nextSkillTokens);
+    setEditorDocument(metadata?.editorDocument);
     saveComposerDraftSnapshot(composerScopeKey, {
       draft: nextDraft,
+      editorDocument: metadata?.editorDocument,
       imageAttachments,
       skillTokens: storedSkillTokens,
     });
@@ -3293,6 +3316,7 @@ export function Composer(props: ComposerProps) {
               composerImplementation === "tiptap-wysiwyg-markdown-chips"
             }
             placeholder={composerPlaceholder}
+            editorDocument={editorDocument}
             skillTokens={skillTokens}
             value={draft}
             onChange={handleComposerChange}

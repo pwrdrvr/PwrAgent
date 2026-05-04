@@ -10,6 +10,9 @@ export const DESKTOP_CHAT_REPLY_COMPOSERS = [
 export type DesktopChatReplyComposer =
   (typeof DESKTOP_CHAT_REPLY_COMPOSERS)[number];
 
+export const DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT: DesktopChatReplyComposer =
+  "tiptap-wysiwyg-markdown-chips";
+
 export const DESKTOP_WORKTREE_STORAGE_LOCATIONS = [
   "in-repo",
   "user-home",
