@@ -277,6 +277,152 @@ async function createDirectoryLaunchpadFixture(): Promise<{
   };
 }
 
+async function createLocalHandoffSessionFixture(): Promise<{
+  cleanup: () => Promise<void>;
+  codexHome: string;
+  fixturePath: string;
+  repoDir: string;
+  sessionPath: string;
+  threadId: string;
+}> {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-e2e-"));
+  const repoDir = path.join(rootDir, "FixtureRepo");
+  const codexHome = path.join(rootDir, ".codex");
+  const threadId = "thread-local-handoff";
+  await mkdir(repoDir, { recursive: true });
+
+  execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore" });
+  execFileSync("git", ["checkout", "-B", "main"], { cwd: repoDir, stdio: "ignore" });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=pwragent-tests@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "Seed handoff fixture repo",
+    ],
+    { cwd: repoDir, stdio: "ignore" },
+  );
+
+  const sessionDir = path.join(codexHome, "sessions", "2026", "05", "04");
+  const sessionPath = path.join(
+    sessionDir,
+    `rollout-2026-05-04T13-22-52-${threadId}.jsonl`,
+  );
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(
+    sessionPath,
+    `${JSON.stringify({
+      timestamp: "2026-05-04T17:22:52.000Z",
+      type: "session_meta",
+      payload: {
+        id: threadId,
+        cwd: repoDir,
+        originator: "pwragent-desktop",
+      },
+    })}\n`,
+    "utf8",
+  );
+
+  const fixturePath = path.join(rootDir, "local-handoff-session.fixture.json");
+  const thread = {
+    id: threadId,
+    title: "Local handoff thread",
+    titleSource: "explicit",
+    summary: "Move this local thread into a worktree",
+    source: "codex",
+    executionMode: "default",
+    gitBranch: "main",
+    observedGitBranch: "main",
+    linkedDirectories: [
+      {
+        id: "fixture-repo",
+        label: "FixtureRepo",
+        path: repoDir,
+        kind: "local",
+      },
+    ],
+    updatedAt: 1760000000000,
+  };
+  await writeFile(
+    fixturePath,
+    JSON.stringify(
+      {
+        metadata: {
+          backend: "codex",
+          scenario: "local-handoff-session-cwd",
+          threadId,
+        },
+        steps: [
+          {
+            id: "initialize-1",
+            kind: "response",
+            method: "initialize",
+            result: {
+              serverInfo: {
+                name: "Replay Codex",
+                version: "1.0.0",
+              },
+              methods: ["thread/list", "thread/read", "skills/list", "turn/start"],
+            },
+          },
+          {
+            id: "thread-list-1",
+            kind: "response",
+            method: "thread/list",
+            result: [thread],
+          },
+          {
+            id: "thread-read-1",
+            kind: "response",
+            method: "thread/read",
+            result: {
+              entries: [
+                {
+                  type: "message",
+                  id: "message-1",
+                  role: "user",
+                  text: "Keep this thread visible after handoff.",
+                },
+              ],
+              messages: [
+                {
+                  id: "message-1",
+                  role: "user",
+                  text: "Keep this thread visible after handoff.",
+                },
+              ],
+              lastUserMessage: "Keep this thread visible after handoff.",
+              pagination: {
+                supportsPagination: false,
+                hasPreviousPage: false,
+              },
+            },
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
+  return {
+    cleanup: async () => {
+      await rm(rootDir, { recursive: true, force: true });
+    },
+    codexHome,
+    fixturePath,
+    repoDir,
+    sessionPath,
+    threadId,
+  };
+}
+
 function readOverlayState(homeRoot: string): {
   directoryLaunchpads: Record<string, unknown>;
 } {
@@ -561,6 +707,59 @@ test("directory launchpad keeps new worktree as the sticky default after startin
 
     await expect(settings.getByLabel("Workspace mode")).toHaveAttribute("data-value", "worktree");
     await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("local-to-worktree handoff updates Codex session cwd metadata", async () => {
+  const fixture = await createLocalHandoffSessionFixture();
+  const app = await launchElectronApp({
+    env: {
+      CODEX_HOME: fixture.codexHome,
+    },
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await app.window
+      .getByRole("button", { name: "Local handoff thread" })
+      .click();
+
+    const workspaceMode = app.window.getByLabel("Workspace mode");
+    await workspaceMode.click();
+    await app.window
+      .getByRole("menuitem", { name: "Handoff to New Worktree" })
+      .click();
+
+    const dialog = app.window.getByRole("dialog", { name: "Handoff to New Worktree" });
+    await expect(dialog).toBeVisible();
+    await expect(
+      dialog.getByRole("radio", { name: /Handoff to Detached HEAD/ }),
+    ).toHaveAttribute("aria-checked", "true");
+    await dialog.getByRole("button", { name: "Handoff" }).click();
+
+    await expect
+      .poll(async () => {
+        const firstLine = (await readFile(fixture.sessionPath, "utf8")).split("\n")[0]!;
+        return JSON.parse(firstLine).payload.cwd as string;
+      })
+      .toContain(`${path.sep}.codex${path.sep}worktrees${path.sep}`);
+
+    const firstLine = (await readFile(fixture.sessionPath, "utf8")).split("\n")[0]!;
+    const cwd = JSON.parse(firstLine).payload.cwd as string;
+    expect(cwd).not.toBe(fixture.repoDir);
+
+    const ownerFile = execFileSync(
+      "git",
+      ["-C", cwd, "rev-parse", "--git-path", "codex-thread.json"],
+      { encoding: "utf8" },
+    ).trim();
+    await expect(readFile(ownerFile, "utf8").then(JSON.parse)).resolves.toEqual({
+      version: 1,
+      ownerThreadId: fixture.threadId,
+    });
   } finally {
     await app.close();
     await fixture.cleanup();

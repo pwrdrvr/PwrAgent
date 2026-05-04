@@ -2646,6 +2646,7 @@ describe("DesktopBackendRegistry", () => {
       completedAt: 1000,
     }));
     const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
+    const updateThreadCwd = vi.fn(async () => ({ updated: true }));
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [thread],
@@ -2662,6 +2663,9 @@ describe("DesktopBackendRegistry", () => {
       overlayStore,
       gitDirectoryService: {
         recordCodexWorktreeOwnerThread,
+      } as never,
+      codexSessionMetadataService: {
+        updateThreadCwd,
       } as never,
       gitWorkspaceHandoffService: {
         handoff,
@@ -2687,6 +2691,10 @@ describe("DesktopBackendRegistry", () => {
     expect(response.workMode).toBe("worktree");
     expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
       worktreePath: "/repo/app/.worktrees/app-feature-handoff",
+      threadId: "thread-1",
+    });
+    expect(updateThreadCwd).toHaveBeenCalledWith({
+      cwd: "/repo/app/.worktrees/app-feature-handoff",
       threadId: "thread-1",
     });
     expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
@@ -2749,6 +2757,7 @@ describe("DesktopBackendRegistry", () => {
       warnings: [],
       completedAt: 1000,
     }));
+    const updateThreadCwd = vi.fn(async () => ({ updated: true }));
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [thread],
@@ -2763,6 +2772,9 @@ describe("DesktopBackendRegistry", () => {
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore,
+      codexSessionMetadataService: {
+        updateThreadCwd,
+      } as never,
       gitWorkspaceHandoffService: {
         handoff,
       } as never,
@@ -2779,6 +2791,10 @@ describe("DesktopBackendRegistry", () => {
       gitInfo: {
         branch: "HEAD",
       },
+    });
+    expect(updateThreadCwd).toHaveBeenCalledWith({
+      cwd: "/repo/app",
+      threadId: "thread-1",
     });
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
