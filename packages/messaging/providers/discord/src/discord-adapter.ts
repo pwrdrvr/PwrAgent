@@ -535,6 +535,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       } else {
         this.streamSurfaces.set(intent.stream.key, message.id);
       }
+      this.options.logger?.debug(
+        `discord stream update ${existingMessageId ? "edited" : "sent"} final=${intent.stream.isFinal} sequence=${intent.stream.sequence} channel=${target.channelId} message=${message.id} stream=${intent.stream.key}`,
+      );
       return {
         channel: this.channel,
         deliveredAt: this.now(),
