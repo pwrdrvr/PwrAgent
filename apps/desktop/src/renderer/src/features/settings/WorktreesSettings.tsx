@@ -46,7 +46,7 @@ export function WorktreesSettings(props: {
 
       <div className="settings-field">
         <div
-          className="settings-segmented"
+          className="settings-segmented settings-segmented--two"
           role="radiogroup"
           aria-label="Worktree storage location"
         >
