@@ -1229,10 +1229,56 @@ textarea,
 
 .settings-header {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
+  gap: 24px;
   padding-right: 8px;
+  -webkit-app-region: drag;
+}
+
+.settings-header__identity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  -webkit-app-region: no-drag;
+}
+
+.settings-header__brand {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+.settings-header__exit {
+  display: inline-flex;
+  align-items: center;
+  appearance: none;
+  cursor: pointer;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-header__exit:hover,
+.settings-header__exit:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
+.settings-header__exit:focus-visible {
+  text-decoration: underline;
+}
+
+.settings-header__title {
+  text-align: right;
 }
 
 .settings-header h1 {
@@ -1361,6 +1407,40 @@ textarea,
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 650;
+}
+
+.settings-row__label-text {
+  display: block;
+}
+
+.settings-row__help {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.settings-row--inline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+}
+
+.settings-section__description {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.settings-section__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
 }
 
 .settings-source {

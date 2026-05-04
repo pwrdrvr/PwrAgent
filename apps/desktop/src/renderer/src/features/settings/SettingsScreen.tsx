@@ -40,15 +40,24 @@ export function SettingsScreen(props: {
   return (
     <section className="settings-screen" aria-label="Settings">
       <header className="settings-header">
-        <div>
+        <div className="settings-header__identity">
+          <p className="settings-header__brand">
+            Pwr<span className="sidebar__brand-accent">Agent</span>
+          </p>
+          {props.onClose ? (
+            <button
+              className="settings-header__exit"
+              type="button"
+              onClick={props.onClose}
+            >
+              <span aria-hidden="true">←</span> Exit Settings
+            </button>
+          ) : null}
+        </div>
+        <div className="settings-header__title">
           <p className="eyebrow">Settings</p>
           <h1>Settings</h1>
         </div>
-        {props.onClose ? (
-          <button className="button button--secondary" type="button" onClick={props.onClose}>
-            Back
-          </button>
-        ) : null}
       </header>
 
       <div className="settings-layout">
