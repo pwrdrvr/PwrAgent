@@ -424,6 +424,7 @@ describe("TelegramAdapter", () => {
 
   it("uses a stream target surface to edit even when the stream key changes", async () => {
     const api = createApi();
+    let now = 1000;
     const adapter = new TelegramAdapter({
       api: api as unknown as TelegramBotApi,
       config: {
@@ -432,7 +433,7 @@ describe("TelegramAdapter", () => {
         authorizedActorIds: ["42"],
         streamingResponses: true,
       },
-      now: () => 1000,
+      now: () => now,
     });
     const baseIntent = {
       audit: {
@@ -466,6 +467,7 @@ describe("TelegramAdapter", () => {
     if (!first.surface) {
       throw new Error("expected first stream surface");
     }
+    now += 1000;
     await adapter.deliver({
       ...baseIntent,
       delivery: {
@@ -490,6 +492,278 @@ describe("TelegramAdapter", () => {
         text: "Hello again",
       }),
     );
+  });
+
+  it("throttles non-final Telegram group stream updates adaptively", async () => {
+    const api = createApi();
+    let now = 1000;
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+        streamingResponses: true,
+      },
+      now: () => now,
+    });
+    const baseIntent = {
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "5642",
+            kind: "topic",
+            parentId: "-1003841603622",
+          },
+        },
+        occurredAt: 1000,
+      },
+      bindingId: "binding-1",
+      createdAt: 1000,
+      id: "stream-1",
+      kind: "stream_update",
+      markdown: "plain",
+      role: "assistant",
+      stream: {
+        isFinal: false,
+        key: "stream-key-1",
+        sequence: 1,
+      },
+      text: "The",
+    } satisfies MessagingSurfaceIntent;
+
+    await adapter.deliver(baseIntent);
+    now += 1000;
+    await adapter.deliver({
+      ...baseIntent,
+      id: "stream-2",
+      stream: {
+        ...baseIntent.stream,
+        sequence: 2,
+      },
+      text: "The bagels",
+    } satisfies MessagingSurfaceIntent);
+    now += 1000;
+    await adapter.deliver({
+      ...baseIntent,
+      id: "stream-3",
+      stream: {
+        ...baseIntent.stream,
+        sequence: 3,
+      },
+      text: "The bagels wait",
+    } satisfies MessagingSurfaceIntent);
+    now += 1000;
+    const throttled = await adapter.deliver({
+      ...baseIntent,
+      id: "stream-4",
+      stream: {
+        ...baseIntent.stream,
+        sequence: 4,
+      },
+      text: "The bagels wait behind",
+    } satisfies MessagingSurfaceIntent);
+    now += 1000;
+    await adapter.deliver({
+      ...baseIntent,
+      id: "stream-5",
+      stream: {
+        ...baseIntent.stream,
+        sequence: 5,
+      },
+      text: "The bagels wait behind the glass",
+    } satisfies MessagingSurfaceIntent);
+
+    expect(throttled).toMatchObject({
+      outcome: "discarded",
+    });
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: -1003841603622,
+        message_thread_id: 5642,
+      }),
+    );
+    expect(api.editMessageText).toHaveBeenCalledTimes(3);
+    expect(api.editMessageText).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        text: "The bagels wait behind the glass",
+      }),
+    );
+  });
+
+  it("honors Telegram retry_after before sending more stream updates", async () => {
+    const retryAfterError = {
+      error: {
+        parameters: {
+          retry_after: 2,
+        },
+      },
+    };
+    const api = createApi({
+      editMessageText: vi
+        .fn()
+        .mockRejectedValueOnce(retryAfterError)
+        .mockResolvedValue({
+          chat: {
+            id: 777,
+            type: "private",
+          },
+          message_id: 200,
+        }),
+    });
+    let now = 1000;
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+        streamingResponses: true,
+      },
+      now: () => now,
+    });
+    const baseIntent = {
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      bindingId: "binding-1",
+      createdAt: 1000,
+      id: "stream-1",
+      kind: "stream_update",
+      markdown: "plain",
+      role: "assistant",
+      stream: {
+        isFinal: false,
+        key: "stream-key-1",
+        sequence: 1,
+      },
+      text: "Hello",
+    } satisfies MessagingSurfaceIntent;
+
+    await adapter.deliver(baseIntent);
+    now += 1000;
+    await expect(
+      adapter.deliver({
+        ...baseIntent,
+        id: "stream-2",
+        stream: {
+          ...baseIntent.stream,
+          sequence: 2,
+        },
+        text: "Hello there",
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({
+      outcome: "failed",
+    });
+
+    now += 1000;
+    await expect(
+      adapter.deliver({
+        ...baseIntent,
+        id: "stream-3",
+        stream: {
+          ...baseIntent.stream,
+          sequence: 3,
+        },
+        text: "Hello there again",
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({
+      outcome: "discarded",
+    });
+
+    now += 1100;
+    await expect(
+      adapter.deliver({
+        ...baseIntent,
+        id: "stream-4",
+        stream: {
+          ...baseIntent.stream,
+          sequence: 4,
+        },
+        text: "Hello there again.",
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({
+      outcome: "updated",
+    });
+    expect(api.editMessageText).toHaveBeenCalledTimes(2);
+  });
+
+  it("delivers final Telegram stream edits without waiting for soft cadence", async () => {
+    const api = createApi();
+    let now = 1000;
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+        streamingResponses: true,
+      },
+      now: () => now,
+    });
+    const baseIntent = {
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "5642",
+            kind: "topic",
+            parentId: "-1003841603622",
+          },
+        },
+        occurredAt: 1000,
+      },
+      bindingId: "binding-1",
+      createdAt: 1000,
+      id: "stream-1",
+      kind: "stream_update",
+      markdown: "plain",
+      role: "assistant",
+      stream: {
+        isFinal: false,
+        key: "stream-key-1",
+        sequence: 1,
+      },
+      text: "The coffee",
+    } satisfies MessagingSurfaceIntent;
+
+    await adapter.deliver(baseIntent);
+    now += 100;
+    await expect(
+      adapter.deliver({
+        ...baseIntent,
+        id: "stream-2",
+        stream: {
+          ...baseIntent.stream,
+          isFinal: true,
+          sequence: 2,
+        },
+        text: "The coffee wakes before the sun.",
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({
+      outcome: "updated",
+    });
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).toHaveBeenCalledTimes(1);
   });
 
   it("renames Telegram forum topics without allowing plain chat renames", async () => {
@@ -1863,7 +2137,21 @@ async function createControllerHarness(): Promise<{
   };
 }
 
-function createApi(): {
+function createApi(overrides?: Partial<{
+  answerCallbackQuery: ReturnType<typeof vi.fn>;
+  deleteWebhook: ReturnType<typeof vi.fn>;
+  editForumTopic: ReturnType<typeof vi.fn>;
+  editMessageText: ReturnType<typeof vi.fn>;
+  getWebhookInfo: ReturnType<typeof vi.fn>;
+  getFile: ReturnType<typeof vi.fn>;
+  pinChatMessage: ReturnType<typeof vi.fn>;
+  sendChatAction: ReturnType<typeof vi.fn>;
+  sendDocument: ReturnType<typeof vi.fn>;
+  sendMessage: ReturnType<typeof vi.fn>;
+  sendPhoto: ReturnType<typeof vi.fn>;
+  setMyCommands: ReturnType<typeof vi.fn>;
+  unpinChatMessage: ReturnType<typeof vi.fn>;
+}>): {
   answerCallbackQuery: ReturnType<typeof vi.fn>;
   deleteWebhook: ReturnType<typeof vi.fn>;
   editForumTopic: ReturnType<typeof vi.fn>;
@@ -1916,6 +2204,7 @@ function createApi(): {
     })),
     setMyCommands: vi.fn(async () => true),
     unpinChatMessage: vi.fn(async (_request: TelegramUnpinChatMessageRequest) => true),
+    ...overrides,
   };
 }
 

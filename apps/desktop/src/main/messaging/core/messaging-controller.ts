@@ -93,9 +93,9 @@ const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
-// Telegram's group broadcast guidance is 20 messages/minute; keep generic
-// streams below that so Telegram adapters can support streaming safely.
-const STREAM_UPDATE_REFRESH_MS = 3_100;
+// Provider adapters own stricter platform pacing; the generic layer only
+// coalesces noisy token deltas into human-visible refreshes.
+const STREAM_UPDATE_REFRESH_MS = 1_000;
 const messagingControllerLog = getMainLogger("pwragnt:messaging");
 
 type AssistantStreamDelta = {

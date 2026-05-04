@@ -1496,7 +1496,7 @@ describe("MessagingController", () => {
     } satisfies AgentEvent);
     expect(harness.delivered).toHaveLength(1);
 
-    now += 2700;
+    now += 600;
     await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
