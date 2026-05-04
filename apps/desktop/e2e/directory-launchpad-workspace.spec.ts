@@ -541,7 +541,7 @@ test("directory launchpad keeps new worktree as the sticky default after startin
       }),
     ).toBeVisible();
     const startTurn = (await app.getLastStartTurn()) as { cwd?: string } | undefined;
-    expect(startTurn?.cwd).toContain(`${path.sep}.pwragent${path.sep}worktrees${path.sep}`);
+    expect(startTurn?.cwd).toContain(`${path.sep}.codex${path.sep}worktrees${path.sep}`);
     const ownerFile = execFileSync(
       "git",
       ["-C", startTurn!.cwd!, "rev-parse", "--git-path", "codex-thread.json"],

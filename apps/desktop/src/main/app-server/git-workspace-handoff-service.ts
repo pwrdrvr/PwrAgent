@@ -313,6 +313,7 @@ export class GitWorkspaceHandoffService {
 
     const storage = await this.resolveStorage();
     const targetPath = await computeWorktreePath({
+      backend: context.backend,
       repoRoot: context.repositoryPath,
       storage,
       homeDir: this.homeDir,
@@ -359,6 +360,7 @@ export class GitWorkspaceHandoffService {
     const baseSha = context.headSha;
     const storage = await this.resolveStorage();
     const targetPath = await computeWorktreePath({
+      backend: context.backend,
       repoRoot: context.repositoryPath,
       storage,
       homeDir: this.homeDir,
