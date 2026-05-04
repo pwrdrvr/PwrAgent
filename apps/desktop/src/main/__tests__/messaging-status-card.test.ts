@@ -100,6 +100,39 @@ describe("buildBindingStatusIntent", () => {
     });
   });
 
+  it("does not request a repin when updating an already pinned status surface", () => {
+    const binding = {
+      ...buildBinding(),
+      pinnedStatusSurface: {
+        channel: "telegram",
+        id: "42",
+      },
+      statusSurface: {
+        channel: "telegram",
+        id: "42",
+      },
+    } satisfies MessagingBindingRecord;
+    const navigation = buildNavigationSnapshot();
+    const intent = buildBindingStatusIntent({
+      id: "status-pinned-update",
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation }),
+    });
+
+    expect(intent).toMatchObject({
+      delivery: {
+        fallback: "present_new",
+        mode: "update",
+      },
+      targetSurface: {
+        channel: "telegram",
+        id: "42",
+      },
+    });
+    expect(intent.delivery?.pin).toBeUndefined();
+  });
+
   it("shortens derived thread titles in the compact status binding line", () => {
     const binding = buildBinding();
     const navigation = buildNavigationSnapshot();
