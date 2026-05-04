@@ -112,8 +112,12 @@ export function bootstrapApp(): void {
         reason: messagingOverride.reason,
       });
     } else {
-      await getDesktopMessagingRuntime(() =>
-        loadDesktopMessagingConfigFromSettings(getDesktopSettingsService()),
+      await getDesktopMessagingRuntime((options) =>
+        loadDesktopMessagingConfigFromSettings(
+          getDesktopSettingsService(),
+          process.env,
+          options,
+        ),
       ).start();
     }
     createMainWindow({

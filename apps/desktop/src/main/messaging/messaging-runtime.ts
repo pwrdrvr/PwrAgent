@@ -16,6 +16,7 @@ import type {
 import { getMainLogger } from "../log";
 import { getDesktopMessagingStore } from "./desktop-messaging-store";
 import {
+  type DesktopMessagingConfigLoadOptions,
   loadDesktopMessagingConfig,
   redactDesktopMessagingConfig,
   type DesktopMessagingConfig,
@@ -40,7 +41,9 @@ export type DesktopMessagingAdapterFactory = (params: {
   store: MessagingStoreLike;
 }) => DesktopMessagingAdapter[] | Promise<DesktopMessagingAdapter[]>;
 
-export type DesktopMessagingConfigLoader = () =>
+export type DesktopMessagingConfigLoader = (
+  options?: DesktopMessagingConfigLoadOptions,
+) =>
   | DesktopMessagingConfig
   | Promise<DesktopMessagingConfig>;
 
@@ -69,7 +72,7 @@ export class DesktopMessagingRuntime {
     this.started = true;
 
     const store = getDesktopMessagingStore();
-    const config = await this.loadConfig();
+    const config = await this.loadConfig({ logStartupEligibility: true });
     const configuredAdapters = await this.options.adapterFactory({
       config,
       store,
@@ -188,9 +191,11 @@ export class DesktopMessagingRuntime {
     this.controllers = [];
   }
 
-  private async loadConfig(): Promise<DesktopMessagingConfig> {
+  private async loadConfig(
+    options?: DesktopMessagingConfigLoadOptions,
+  ): Promise<DesktopMessagingConfig> {
     return typeof this.options.config === "function"
-      ? await this.options.config()
+      ? await this.options.config(options)
       : this.options.config;
   }
 }
@@ -204,7 +209,7 @@ export function getDesktopMessagingRuntime(
     runtime = new DesktopMessagingRuntime({
       adapterFactory: createConfiguredAdapters,
       backendBridge: new DesktopMessagingBackendBridge(),
-      config: config ?? loadDesktopMessagingConfig,
+      config: config ?? (() => loadDesktopMessagingConfig()),
     });
   }
 
