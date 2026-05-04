@@ -422,6 +422,76 @@ describe("TelegramAdapter", () => {
     );
   });
 
+  it("uses a stream target surface to edit even when the stream key changes", async () => {
+    const api = createApi();
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+        streamingResponses: true,
+      },
+      now: () => 1000,
+    });
+    const baseIntent = {
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      bindingId: "binding-1",
+      createdAt: 1000,
+      id: "stream-1",
+      kind: "stream_update",
+      markdown: "plain",
+      role: "assistant",
+      stream: {
+        isFinal: false,
+        key: "stream-key-1",
+        sequence: 1,
+      },
+      text: "Hello",
+    } satisfies MessagingSurfaceIntent;
+
+    const first = await adapter.deliver(baseIntent);
+    if (!first.surface) {
+      throw new Error("expected first stream surface");
+    }
+    await adapter.deliver({
+      ...baseIntent,
+      delivery: {
+        mode: "update",
+        fallback: "fail",
+      },
+      id: "stream-2",
+      stream: {
+        ...baseIntent.stream,
+        key: "stream-key-2",
+        sequence: 2,
+      },
+      targetSurface: first.surface,
+      text: "Hello again",
+    } satisfies MessagingSurfaceIntent);
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: 777,
+        message_id: 200,
+        text: "Hello again",
+      }),
+    );
+  });
+
   it("renames Telegram forum topics without allowing plain chat renames", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({

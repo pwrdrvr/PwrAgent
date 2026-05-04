@@ -1476,6 +1476,10 @@ describe("MessagingController", () => {
         }),
       }),
     ]);
+    const firstStream = harness.delivered[0];
+    if (firstStream?.kind !== "stream_update") {
+      throw new Error("expected first stream update");
+    }
 
     now += 500;
     await harness.controller.handleBackendEvent({
@@ -1485,7 +1489,7 @@ describe("MessagingController", () => {
         params: {
           threadId: "thread-1",
           turnId: "turn-1",
-          itemId: "item-1",
+          itemId: "item-2",
           delta: " world",
         },
       },
@@ -1507,10 +1511,18 @@ describe("MessagingController", () => {
     } satisfies AgentEvent);
 
     expect(harness.delivered.at(-1)).toMatchObject({
+      delivery: {
+        mode: "update",
+        fallback: "fail",
+      },
       kind: "stream_update",
+      targetSurface: {
+        id: `surface:${firstStream.id}`,
+      },
       text: "Hello world.",
       stream: {
         isFinal: false,
+        key: firstStream.stream.key,
         sequence: 3,
       },
     });
@@ -1540,12 +1552,24 @@ describe("MessagingController", () => {
     const streamUpdates = harness.delivered.filter(
       (intent) => intent.kind === "stream_update",
     );
+    const previousStream = streamUpdates.at(-2);
+    if (!previousStream) {
+      throw new Error("expected previous stream update");
+    }
     expect(streamUpdates.at(-1)).toMatchObject({
+      delivery: {
+        mode: "update",
+        fallback: "fail",
+      },
       kind: "stream_update",
       markdown: "markdown",
+      targetSurface: {
+        id: `surface:${previousStream.id}`,
+      },
       text: "Hello world.\n\nFinal answer.",
       stream: {
         isFinal: true,
+        key: firstStream.stream.key,
         sequence: 4,
       },
     });

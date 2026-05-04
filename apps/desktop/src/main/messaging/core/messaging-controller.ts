@@ -24,6 +24,7 @@ import type {
   MessagingMessageIntent,
   MessagingPendingIntentRecord,
   MessagingStreamUpdateIntent,
+  MessagingSurfaceRef,
   MessagingSurfaceIntent,
   MessagingToolUpdateMode,
   NavigationDirectorySummary,
@@ -106,6 +107,7 @@ type AssistantStreamDelta = {
 type AssistantStreamBuffer = AssistantStreamDelta & {
   lastEmittedAt: number;
   sequence: number;
+  surface?: MessagingSurfaceRef;
   text: string;
 };
 
@@ -1348,6 +1350,15 @@ export class MessagingController {
       kind: "stream_update",
       bindingId: binding.id,
       createdAt: now,
+      ...(buffer.surface
+        ? {
+            delivery: {
+              mode: "update",
+              fallback: "fail",
+            },
+            targetSurface: buffer.surface,
+          }
+        : {}),
       role: "assistant",
       markdown: isFinal ? "markdown" : "plain",
       policy: binding.preferences?.streamingResponses ?? "inherit",
@@ -1362,9 +1373,14 @@ export class MessagingController {
       },
     };
     const result = await this.deliver(intent, binding);
+    const surface =
+      result.surface && isVisibleAssistantStreamDelivery(result)
+        ? result.surface
+        : buffer.surface;
     this.assistantStreamBuffers.set(this.assistantStreamBufferKey(buffer.streamKey, binding), {
       ...buffer,
       lastEmittedAt: now,
+      surface,
     });
     return result;
   }
@@ -3474,7 +3490,6 @@ function assistantDeltaForBackendEvent(
     itemId: params.itemId,
     streamKey: assistantStreamKey({
       backend: event.backend,
-      itemId: params.itemId,
       threadId: params.threadId,
       turnId,
     }),
@@ -3485,22 +3500,11 @@ function assistantDeltaForBackendEvent(
 
 function assistantStreamKeysForBackendEvent(event: AgentEvent): string[] {
   const params = event.notification.params as {
-    item?: { id?: unknown };
-    itemId?: unknown;
     threadId?: unknown;
     turn?: { id?: unknown };
     turnId?: unknown;
   };
   if (typeof params.threadId !== "string") {
-    return [];
-  }
-  const itemId =
-    typeof params.itemId === "string"
-      ? params.itemId
-      : typeof params.item?.id === "string"
-        ? params.item.id
-        : undefined;
-  if (!itemId) {
     return [];
   }
   const turnId =
@@ -3512,7 +3516,6 @@ function assistantStreamKeysForBackendEvent(event: AgentEvent): string[] {
   return [
     assistantStreamKey({
       backend: event.backend,
-      itemId,
       threadId: params.threadId,
       turnId,
     }),
@@ -3542,7 +3545,6 @@ function assistantStreamFilterForBackendEvent(
 
 function assistantStreamKey(params: {
   backend: AppServerBackendKind;
-  itemId: string;
   threadId: ThreadIdentifier;
   turnId?: string;
 }): string {
@@ -3550,7 +3552,6 @@ function assistantStreamKey(params: {
     params.backend,
     params.threadId,
     params.turnId ?? "",
-    params.itemId,
     "assistant-text",
   ].join(":");
 }

@@ -676,7 +676,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
 
     try {
-      const existing = this.streamSurfaces.get(intent.stream.key);
+      const existing =
+        this.streamSurfaces.get(intent.stream.key) ??
+        (target.messageId ? target : undefined);
       const message = existing?.messageId
         ? await this.bot.api.editMessageText({
             chat_id: existing.chatId,
@@ -703,6 +705,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       } else {
         this.streamSurfaces.set(intent.stream.key, surfaceTarget);
       }
+      this.options.logger?.debug(
+        `telegram stream update ${existing?.messageId ? "edited" : "sent"} final=${intent.stream.isFinal} sequence=${intent.stream.sequence} target=${this.compactTypingTarget(surfaceTarget)} stream=${intent.stream.key}`,
+      );
       return {
         channel: this.channel,
         deliveredAt: this.now(),

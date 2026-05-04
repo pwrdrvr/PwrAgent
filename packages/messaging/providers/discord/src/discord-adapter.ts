@@ -498,7 +498,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   private async deliverStreamUpdate(
     intent: Extract<MessagingSurfaceIntent, { kind: "stream_update" }>,
-    target: { channelId: string; guildId?: string },
+    target: { channelId: string; guildId?: string; messageId?: string },
   ): Promise<MessagingDeliveryResult> {
     if (
       this.options.config.streamingResponses !== true ||
@@ -521,7 +521,8 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
 
     try {
-      const existingMessageId = this.streamSurfaces.get(intent.stream.key);
+      const existingMessageId =
+        this.streamSurfaces.get(intent.stream.key) ?? target.messageId;
       const request: DiscordCreateMessageRequest = {
         allowed_mentions: defensiveAllowedMentions(),
         content: chunks[0] ?? " ",
