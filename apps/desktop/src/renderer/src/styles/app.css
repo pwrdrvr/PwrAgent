@@ -743,13 +743,19 @@ textarea,
   top: calc(100% + 6px);
   left: 0;
   z-index: 30;
-  align-items: center;
+  flex-direction: column;
   gap: 4px;
-  padding: 6px;
+  padding: 8px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: rgba(10, 10, 10, 0.98);
   box-shadow: var(--shadow-popover);
+}
+
+.reaction-picker__row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
 }
 
 .reaction-picker__option {
@@ -781,6 +787,68 @@ textarea,
 .reaction-picker__option.is-active {
   border-color: var(--accent-border);
   background: var(--accent-soft);
+}
+
+.reaction-picker__custom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.reaction-picker__custom-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1;
+  font-family: inherit;
+}
+
+.reaction-picker__custom-input::placeholder {
+  color: var(--text-muted);
+}
+
+.reaction-picker__custom-input:focus-visible {
+  border-color: var(--accent-border);
+  outline: none;
+}
+
+.reaction-picker__custom-submit {
+  flex: 0 0 auto;
+  appearance: none;
+  cursor: pointer;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  transition:
+    background 100ms ease,
+    border-color 100ms ease;
+}
+
+.reaction-picker__custom-submit:hover:not(:disabled),
+.reaction-picker__custom-submit:focus-visible {
+  background: var(--accent);
+  color: var(--button-text);
+  outline: none;
+}
+
+.reaction-picker__custom-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .thread-row.is-selected::before {
