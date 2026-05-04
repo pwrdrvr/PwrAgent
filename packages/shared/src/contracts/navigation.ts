@@ -26,6 +26,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
     imageParts?: AppServerThreadImagePart[];
     createdAt?: number;
   };
+  /** Per-thread emoji reactions, ordered by insertion. */
+  reactions?: string[];
 };
 
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
@@ -138,6 +140,20 @@ export type MarkThreadSeenResponse = {
   seenUpdatedAt?: number;
 };
 
+export type SetThreadReactionRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  emoji: string;
+  /** true → add the reaction; false → remove it */
+  present: boolean;
+};
+
+export type SetThreadReactionResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  reactions: string[];
+};
+
 export type ThreadOverlayState = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -155,6 +171,12 @@ export type ThreadOverlayState = {
   retainedBranchDriftPairs?: ThreadBranchDriftPair[];
   extraLinkedDirectories: LinkedDirectorySummary[];
   worktreeSnapshots?: WorktreeSnapshotSummary[];
+  /**
+   * Per-thread emoji reactions. Single-user model: each emoji appears at
+   * most once, ordered by insertion. Used as personal status markers
+   * (e.g., "needs follow-up"), not multi-user voting.
+   */
+  reactions?: string[];
 };
 
 export type ThreadBranchDriftPair = {

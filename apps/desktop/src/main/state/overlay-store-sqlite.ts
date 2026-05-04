@@ -203,6 +203,30 @@ export class SqliteOverlayStore {
     return this.getThread(threadKey);
   }
 
+  async setThreadReaction(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    emoji: string;
+    present: boolean;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const existing = current.reactions ?? [];
+    const filtered = existing.filter((emoji) => emoji !== params.emoji);
+    const nextReactions = params.present ? [...filtered, params.emoji] : filtered;
+    const nextState: ThreadOverlayState = {
+      ...current,
+      reactions: nextReactions,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async getThreadOverlayStates(params: {
     backend: ThreadOverlayState["backend"];
     threadIds: string[];
@@ -538,6 +562,7 @@ export type OverlayStoreLike = Pick<
   | "getThreadExecutionMode"
   | "getThreadOverlayState"
   | "getThreadOverlayStates"
+  | "setThreadReaction"
   | "upsertWorktreeSnapshot"
   | "setThreadExecutionMode"
   | "setThreadModelSettings"

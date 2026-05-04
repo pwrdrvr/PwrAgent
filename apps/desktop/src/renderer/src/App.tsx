@@ -122,6 +122,7 @@ function DesktopAppShell(props: {
         }}
         onArchiveThread={navigation.archiveThread}
         onRenameThread={navigation.renameThread}
+        onSetThreadReaction={navigation.setThreadReaction}
         onResizeStart={startSidebarResize}
         onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidth + delta)}
       />

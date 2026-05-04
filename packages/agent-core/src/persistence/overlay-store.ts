@@ -359,6 +359,34 @@ export class OverlayStore {
     });
   }
 
+  async setThreadReaction(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    emoji: string;
+    present: boolean;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const existing = current.reactions ?? [];
+      const filtered = existing.filter((emoji) => emoji !== params.emoji);
+      const nextReactions = params.present
+        ? [...filtered, params.emoji]
+        : filtered;
+      const nextState: ThreadOverlayState = {
+        ...current,
+        reactions: nextReactions,
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
+  }
+
   async setThreadObservedBranch(params: {
     backend: ThreadOverlayState["backend"];
     branch?: string;

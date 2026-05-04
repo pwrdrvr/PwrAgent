@@ -34,6 +34,8 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   MarkThreadSeenRequest,
+  SetThreadReactionRequest,
+  SetThreadReactionResponse,
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
@@ -168,6 +170,9 @@ export type DesktopApi = {
     request?: AppServerListThreadsRequest
   ) => Promise<AppServerListThreadsResponse>;
   markThreadSeen?: (request: MarkThreadSeenRequest) => Promise<unknown>;
+  setThreadReaction?: (
+    request: SetThreadReactionRequest
+  ) => Promise<SetThreadReactionResponse>;
   ensureDirectoryLaunchpad?: (
     request: EnsureDirectoryLaunchpadRequest
   ) => Promise<EnsureDirectoryLaunchpadResponse>;

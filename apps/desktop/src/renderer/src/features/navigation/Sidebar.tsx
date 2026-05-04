@@ -57,6 +57,11 @@ type SidebarProps = {
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRenameThread?: (thread: NavigationThreadSummary, name: string) => Promise<void>;
+  onSetThreadReaction?: (
+    thread: NavigationThreadSummary,
+    emoji: string,
+    present: boolean,
+  ) => Promise<void>;
   onResizeStart?: (event: PointerEvent<HTMLElement>) => void;
   onResizeByKeyboard?: (delta: number) => void;
 };
@@ -351,6 +356,7 @@ export function Sidebar(props: SidebarProps) {
               threads={props.inboxThreads}
               onOpenThreadContextMenu={openThreadContextMenu}
               onSelectThread={props.onSelectThread}
+              onSetReaction={props.onSetThreadReaction}
             />
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
@@ -362,6 +368,7 @@ export function Sidebar(props: SidebarProps) {
               onOpenThreadContextMenu={openThreadContextMenu}
               onOpenLaunchpad={props.onOpenLaunchpad}
               onSelectThread={props.onSelectThread}
+              onSetReaction={props.onSetThreadReaction}
             />
           ) : (
             props.threads.length === 0 ? (
@@ -374,6 +381,7 @@ export function Sidebar(props: SidebarProps) {
                 threads={props.threads}
                 onOpenThreadContextMenu={openThreadContextMenu}
                 onSelectThread={props.onSelectThread}
+                onSetReaction={props.onSetThreadReaction}
               />
             )
           )}

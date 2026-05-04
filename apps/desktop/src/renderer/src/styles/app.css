@@ -661,6 +661,128 @@ textarea,
   color: var(--accent-bright);
 }
 
+/* Reactions on thread rows. The strip sits as a sibling of the main row
+   button (not nested) because HTML disallows nested interactives. The
+   picker popover is anchored to the add-reaction button. */
+
+.thread-row__reactions {
+  display: flex;
+  position: absolute;
+  bottom: 8px;
+  left: 14px;
+  z-index: 2;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Reserve bottom space inside the row button so the reactions strip
+   (absolute-positioned at bottom-left) does not crash into the chip row. */
+.thread-row-shell:has(.thread-row__reactions) .thread-row {
+  padding-bottom: 34px;
+}
+
+.thread-row__reaction,
+.thread-row__add-reaction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.thread-row__reaction:hover,
+.thread-row__reaction:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  outline: none;
+}
+
+.thread-row__add-reaction {
+  width: 22px;
+  padding: 0;
+  font-weight: 700;
+  font-size: 14px;
+  opacity: 0;
+}
+
+.thread-row-shell:hover .thread-row__add-reaction,
+.thread-row__add-reaction:focus-visible,
+.thread-row__add-reaction[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.thread-row__add-reaction:hover,
+.thread-row__add-reaction:focus-visible,
+.thread-row__add-reaction[aria-expanded="true"] {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
+  outline: none;
+}
+
+.thread-row__reaction-picker-wrap {
+  position: relative;
+}
+
+.reaction-picker {
+  display: flex;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: rgba(10, 10, 10, 0.98);
+  box-shadow: var(--shadow-popover);
+}
+
+.reaction-picker__option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 100ms ease,
+    border-color 100ms ease;
+}
+
+.reaction-picker__option:hover,
+.reaction-picker__option:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  outline: none;
+}
+
+.reaction-picker__option.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
 .thread-row.is-selected::before {
   position: absolute;
   top: 8px;

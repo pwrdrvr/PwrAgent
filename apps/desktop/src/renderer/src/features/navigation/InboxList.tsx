@@ -12,6 +12,11 @@ type InboxListProps = {
     position: { x: number; y: number }
   ) => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
+  onSetReaction?: (
+    thread: NavigationThreadSummary,
+    emoji: string,
+    present: boolean,
+  ) => Promise<void>;
 };
 
 export function InboxList(props: InboxListProps) {
@@ -35,6 +40,7 @@ export function InboxList(props: InboxListProps) {
           thread={thread}
           onOpenContextMenu={props.onOpenThreadContextMenu}
           onSelectThread={props.onSelectThread}
+          onSetReaction={props.onSetReaction}
         />
       ))}
     </div>

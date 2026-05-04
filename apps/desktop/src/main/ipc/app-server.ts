@@ -22,6 +22,8 @@ import type {
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   NavigationSnapshot,
+  SetThreadReactionRequest,
+  SetThreadReactionResponse,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
   RenameThreadRequest,
@@ -50,6 +52,7 @@ import {
   APP_SERVER_READ_THREAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
+  NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
@@ -367,6 +370,33 @@ class DesktopAppServerService {
     return response;
   }
 
+  async setThreadReaction(
+    request: SetThreadReactionRequest,
+  ): Promise<SetThreadReactionResponse> {
+    const backend = request.backend ?? "codex";
+
+    const overlay = await this.getOverlayStore().setThreadReaction({
+      backend,
+      threadId: request.threadId,
+      emoji: request.emoji,
+      present: request.present,
+    });
+
+    logDebug("setThreadReaction", {
+      backend,
+      threadId: request.threadId,
+      emoji: request.emoji,
+      present: request.present,
+      reactionCount: overlay.reactions?.length ?? 0,
+    });
+
+    return {
+      backend,
+      threadId: request.threadId,
+      reactions: overlay.reactions ?? [],
+    };
+  }
+
   async ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> {
@@ -596,6 +626,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.markThreadSeen(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+    async (
+      _event,
+      request: SetThreadReactionRequest,
+    ): Promise<SetThreadReactionResponse> => {
+      return await appServerService.setThreadReaction(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.handle(
     NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -641,6 +681,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);

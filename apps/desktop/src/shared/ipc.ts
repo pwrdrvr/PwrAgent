@@ -28,6 +28,8 @@ export const AGENT_SUBMIT_SERVER_REQUEST_CHANNEL = "agent:submit-server-request"
 export const AGENT_EVENT_CHANNEL = "agent:event";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
+export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
+  "navigation:set-thread-reaction";
 export const NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "navigation:ensure-directory-launchpad";
 export const NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL =

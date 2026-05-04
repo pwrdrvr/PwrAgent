@@ -12,6 +12,11 @@ type RecentsListProps = {
     position: { x: number; y: number }
   ) => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
+  onSetReaction?: (
+    thread: NavigationThreadSummary,
+    emoji: string,
+    present: boolean,
+  ) => Promise<void>;
 };
 
 export function RecentsList(props: RecentsListProps) {
@@ -27,6 +32,7 @@ export function RecentsList(props: RecentsListProps) {
           thread={thread}
           onOpenContextMenu={props.onOpenThreadContextMenu}
           onSelectThread={props.onSelectThread}
+          onSetReaction={props.onSetReaction}
         />
       ))}
     </div>

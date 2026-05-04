@@ -186,6 +186,42 @@ function reconcileNavigationSnapshot(
   };
 }
 
+function updateThreadReactionsInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    reactions: string[];
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (buildThreadIdentityKey(thread.source, thread.id) !== threadKey) {
+      return thread;
+    }
+    const current = thread.reactions ?? [];
+    if (
+      current.length === params.reactions.length &&
+      current.every((emoji, index) => emoji === params.reactions[index])
+    ) {
+      return thread;
+    }
+    changed = true;
+    return { ...thread, reactions: params.reactions };
+  });
+
+  if (!changed) {
+    return snapshot;
+  }
+
+  return { ...snapshot, threads };
+}
+
 function markThreadSeenInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
@@ -787,6 +823,11 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
   ) => Promise<void>;
   renameThread: (thread: NavigationThreadSummary, name: string) => Promise<void>;
+  setThreadReaction: (
+    thread: NavigationThreadSummary,
+    emoji: string,
+    present: boolean,
+  ) => Promise<void>;
   snapshot?: NavigationSnapshot;
   threads: NavigationThreadSummary[];
 } {
@@ -1825,6 +1866,54 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     [refresh, renameThreadRequest]
   );
 
+  const setThreadReactionRequest = desktopApi?.setThreadReaction;
+  const setThreadReaction = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      emoji: string,
+      present: boolean,
+    ): Promise<void> => {
+      if (!setThreadReactionRequest) {
+        return;
+      }
+
+      // Optimistic update so the chip appears/disappears instantly.
+      const currentReactions = thread.reactions ?? [];
+      const optimisticReactions = present
+        ? [...currentReactions.filter((existing) => existing !== emoji), emoji]
+        : currentReactions.filter((existing) => existing !== emoji);
+      setState((current) => ({
+        ...current,
+        response: updateThreadReactionsInSnapshot(current.response, {
+          backend: thread.source,
+          threadId: thread.id,
+          reactions: optimisticReactions,
+        }),
+      }));
+
+      try {
+        const result = await setThreadReactionRequest({
+          backend: thread.source,
+          threadId: thread.id,
+          emoji,
+          present,
+        });
+        // Reconcile with the authoritative server response (handles races).
+        setState((current) => ({
+          ...current,
+          response: updateThreadReactionsInSnapshot(current.response, {
+            backend: thread.source,
+            threadId: thread.id,
+            reactions: result.reactions,
+          }),
+        }));
+      } catch {
+        // On failure, fall back to the next snapshot poll.
+      }
+    },
+    [setThreadReactionRequest],
+  );
+
   const updateThreadExecutionMode = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -1976,6 +2065,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     restoreWorktree,
     handoffThreadWorkspace,
     renameThread,
+    setThreadReaction,
     snapshot: state.response,
     threads,
   };
