@@ -13,12 +13,20 @@ import { buildThreadIdentityKey } from "@pwragent/shared";
 import { deriveInboxState, rankInboxThreadKeys } from "./inbox";
 import { buildDirectorySummaries } from "./directory-navigation";
 
+/** Check whether a linked directory was created by the handoff service. */
+function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
+  return (
+    directory.id.startsWith("pwragent-handoff:") ||
+    directory.id.startsWith("pwragnt-handoff:")  // legacy prefix from pre-rebrand data
+  );
+}
+
 function dedupeLinkedDirectories(
   directories: LinkedDirectorySummary[],
 ): LinkedDirectorySummary[] {
   let overlayWorkspace: LinkedDirectorySummary | undefined;
   for (const directory of directories) {
-    if (directory.id.startsWith("pwragent-handoff:")) {
+    if (isHandoffDirectory(directory)) {
       overlayWorkspace = directory;
     }
   }
@@ -41,7 +49,7 @@ function dedupeLinkedDirectories(
 }
 
 function hasHandoffWorkspace(directories: LinkedDirectorySummary[]): boolean {
-  return directories.some((directory) => directory.id.startsWith("pwragent-handoff:"));
+  return directories.some(isHandoffDirectory);
 }
 
 export function materializeNavigationThreads(params: {

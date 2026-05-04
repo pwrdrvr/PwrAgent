@@ -172,7 +172,7 @@ export class SqliteOverlayStore {
     const nextDirectories = [
       ...current.extraLinkedDirectories.filter((directory) => {
         if (directory.id === params.directory.id) return false;
-        if (directory.id.startsWith("pwragent-handoff:")) return false;
+        if (isHandoffDirectory(directory)) return false;
         return directory.path !== params.directory.path;
       }),
       params.directory,
@@ -515,12 +515,18 @@ export class SqliteOverlayStore {
   }
 }
 
+/** Check whether a linked directory was created by the handoff service. */
+function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
+  return (
+    directory.id.startsWith("pwragent-handoff:") ||
+    directory.id.startsWith("pwragnt-handoff:")  // legacy prefix from pre-rebrand data
+  );
+}
+
 function hasHandoffWorkspace(
   directories: ThreadOverlayState["extraLinkedDirectories"] = [],
 ): boolean {
-  return directories.some((directory) =>
-    directory.id.startsWith("pwragent-handoff:"),
-  );
+  return directories.some(isHandoffDirectory);
 }
 
 export type OverlayStoreLike = Pick<

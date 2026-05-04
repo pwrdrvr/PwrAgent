@@ -232,7 +232,11 @@ function resolveThreadGitSourcePath(
 function hasHandoffWorkspace(
   directories: AppServerThreadSummary["linkedDirectories"] = [],
 ): boolean {
-  return directories.some((directory) => directory.id.startsWith("pwragent-handoff:"));
+  return directories.some(
+    (directory) =>
+      directory.id.startsWith("pwragent-handoff:") ||
+      directory.id.startsWith("pwragnt-handoff:"),  // legacy prefix from pre-rebrand data
+  );
 }
 
 function buildLocalLinkedDirectory(cwd: string | undefined): LinkedDirectorySummary[] {
