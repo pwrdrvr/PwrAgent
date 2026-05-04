@@ -349,6 +349,7 @@ export class MessagingController {
           await this.deliverAssistantMessage(assistantText, event, binding);
         }
       } else if (isTerminalTurnLifecycle(activeTurn)) {
+        await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
         this.clearAssistantStreamsForEvent(event, binding);
       }
 
@@ -1321,6 +1322,19 @@ export class MessagingController {
       this.assistantStreamBuffers.delete(bufferKey);
       this.assistantStreamDeliveryQueues.delete(bufferKey);
     }
+  }
+
+  private async waitForAssistantStreamDeliveriesForEvent(
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    const deliveries = this.assistantStreamBufferKeysForEvent(event, binding)
+      .map((bufferKey) => this.assistantStreamDeliveryQueues.get(bufferKey))
+      .filter((delivery): delivery is Promise<void> => Boolean(delivery));
+    if (deliveries.length === 0) {
+      return;
+    }
+    await Promise.allSettled(deliveries);
   }
 
   private assistantStreamBufferKeysForEvent(
