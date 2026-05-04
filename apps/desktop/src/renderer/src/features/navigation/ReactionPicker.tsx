@@ -38,8 +38,12 @@ const REACTION_GROUPS: { label: string; emojis: string[] }[] = [
     ],
   },
   {
+    // Negative-circled Latin capitals (U+1F150-…). Render as solid black
+    // chips with a white letter — matches the visual weight of the keycap
+    // numbers above. Regional-indicator letters (🇦 🇧 …) were tried first
+    // but render extremely faintly when used singly, so they're skipped.
     label: "Letters",
-    emojis: ["🇦", "🇧", "🇨", "🇩", "🇪", "🇫"],
+    emojis: ["🅐", "🅑", "🅒", "🅓", "🅔", "🅕", "🅖", "🅗", "🅘", "🅙", "🅚"],
   },
 ];
 
