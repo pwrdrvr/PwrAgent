@@ -3494,7 +3494,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("starts plan-mode turns with a collaboration mode payload", async () => {
+  it("maps plan-mode turns onto supported model and reasoning overrides", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadResumeResult = {
       thread: {
@@ -3534,14 +3534,8 @@ describe("CodexAppServerClient", () => {
     expect(startPayload?.params).toMatchObject({
       threadId: "thread-2",
       input: [{ type: "text", text: "Plan the fix" }],
-      collaborationMode: {
-        mode: "plan",
-        settings: {
-          model: "gpt-5.4",
-          reasoning_effort: "high",
-          developer_instructions: null
-        }
-      }
+      model: "gpt-5.4",
+      effort: "high"
     });
 
     await client.close();

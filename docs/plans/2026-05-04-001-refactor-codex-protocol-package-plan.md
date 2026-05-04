@@ -1,7 +1,7 @@
 ---
 title: refactor: Extract Codex App Server protocol package
 type: refactor
-status: active
+status: completed
 date: 2026-05-04
 ---
 
@@ -162,7 +162,7 @@ flowchart TB
 - The workspace builds and typechecks against the moved generated files before any regeneration occurs.
 - The diff is suitable for a checkpoint commit representing only package extraction and import updates.
 
-- [ ] **Unit 2: Regenerate package source from the package script**
+- [x] **Unit 2: Regenerate package source from the package script**
 
 **Goal:** Refresh the dedicated package's generated `src/` tree from the current Codex Desktop generator and document the generator source/version used.
 
@@ -196,7 +196,7 @@ flowchart TB
 - The package can regenerate from an empty generated `src/` tree and typecheck by itself.
 - README metadata matches the generator version and generated file count used in the refresh.
 
-- [ ] **Unit 3: Adapt consumers to regenerated protocol drift**
+- [x] **Unit 3: Adapt consumers to regenerated protocol drift**
 
 **Goal:** Make current PwrAgent consumers compile and behave the same after the regenerated protocol update.
 
