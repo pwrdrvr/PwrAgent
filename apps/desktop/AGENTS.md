@@ -46,6 +46,7 @@ pnpm --filter @pwragnt/desktop dev:no-messaging
 - `dev:no-messaging` disables the Telegram/Discord messaging interface, which avoids bot-token prompts and Keychain access issues during development.
 - For visual verification of UI changes, use this command so you can see real threads in the sidebar and thread detail pane.
 - The `dev` script (without `no-messaging`) also works but will attempt to connect messaging providers.
+- If the app starts but shows no threads, you are likely running from the wrong directory or with overridden env vars.
 
 ## Implementation Notes
 
@@ -53,6 +54,13 @@ pnpm --filter @pwragnt/desktop dev:no-messaging
 - Reuse shell primitives instead of adding one-off page styling.
 - When in doubt, make the interface calmer, denser, and more editorial.
 - Use the project-local [desktop E2E fixture seeding skill](../../.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when capturing or refreshing replay-backed desktop E2E fixtures.
+
+## Worktree Path Computation
+
+- **All worktree paths** must use the shared `computeWorktreePath` from `src/main/app-server/git-directory-service.ts`.
+- There are two code paths that create worktrees: `prepareLaunchpadWorkspace` (in `git-directory-service.ts`) and `handoffLocalToWorktree` / `handoffLocalChangesToDetachedWorktree` (in `git-workspace-handoff-service.ts`). Both must use the same path builder.
+- The naming pattern is `<root>/<hash>/<project-folder-name>` where `<hash>` is `Date.now().toString(36)` and `<project-folder-name>` is `path.basename(repoRoot)` preserving original casing.
+- Do not introduce additional worktree path builders — centralize in `computeWorktreePath`.
 
 ## Release Notes
 

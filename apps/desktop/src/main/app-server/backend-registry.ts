@@ -1074,6 +1074,8 @@ export class DesktopBackendRegistry {
       options?.gitWorkspaceHandoffService ??
       new GitWorkspaceHandoffService({
         worktreeArchiveService: this.worktreeArchiveService,
+        resolveWorktreeStorage: () =>
+          getDesktopSettingsService().resolveWorktreeStorage(),
       });
     this.createScratchProjectDirectory =
       options?.createScratchProjectDirectory ?? createScratchProjectDirectory;
