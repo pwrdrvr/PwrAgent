@@ -866,7 +866,9 @@ test("directory launchpad Tiptap composer select all delete clears chips without
 test("directory launchpad Tiptap composer deletes a persisted skill chip with repeated backspace", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-tiptap-saved-"));
-  const stateRoot = path.join(homeDir, ".local", "state", "pwragent");
+  // Use the legacy "pwragnt" directory name because the migration code in
+  // migration.ts intentionally looks for legacy files at this path.
+  const stateRoot = path.join(homeDir, ".local", "state", "pwragnt");
   await seedPersistedDirectoryLaunchpad({
     repoDir: fixture.repoDir,
     stateRoot,
@@ -1218,7 +1220,9 @@ test("directory launchpad types at the clicked text caret between skill chips", 
 test("directory launchpad deletes a persisted skill chip with repeated backspace", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-saved-launchpad-"));
-  const stateRoot = path.join(homeDir, ".local", "state", "pwragent");
+  // Use the legacy "pwragnt" directory name because the migration code in
+  // migration.ts intentionally looks for legacy files at this path.
+  const stateRoot = path.join(homeDir, ".local", "state", "pwragnt");
   await seedPersistedDirectoryLaunchpad({
     repoDir: fixture.repoDir,
     stateRoot,

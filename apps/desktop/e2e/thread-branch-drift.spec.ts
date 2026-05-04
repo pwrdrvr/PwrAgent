@@ -13,7 +13,9 @@ async function createBranchDriftFixture(): Promise<{
 }> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-branch-drift-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
-  const stateRoot = path.join(rootDir, ".local", "state", "pwragent");
+  // Use the legacy "pwragnt" directory name because the migration code in
+  // migration.ts intentionally looks for legacy files at this path.
+  const stateRoot = path.join(rootDir, ".local", "state", "pwragnt");
   await mkdir(repoDir, { recursive: true });
   await mkdir(stateRoot, { recursive: true });
 

@@ -30,7 +30,9 @@ async function createProviderSelectorFixture(params: {
 }> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-provider-model-selectors-"));
   const fixturePath = path.join(rootDir, "provider-model-selectors.fixture.json");
-  const stateRoot = path.join(rootDir, ".local", "state", "pwragent");
+  // Use the legacy "pwragnt" directory name because the migration code in
+  // migration.ts intentionally looks for legacy files at this path.
+  const stateRoot = path.join(rootDir, ".local", "state", "pwragnt");
 
   if (params.launchpadDefaults) {
     await mkdir(stateRoot, { recursive: true });
