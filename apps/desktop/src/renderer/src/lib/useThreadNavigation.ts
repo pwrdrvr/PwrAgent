@@ -1140,12 +1140,25 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   }, [optimisticThread, state.response?.threads]);
 
   const directories = useMemo(
-    () =>
-      projectOptimisticThreadIntoDirectories(
+    () => {
+      if (!optimisticThread) {
+        return state.response?.directories ?? [];
+      }
+
+      const optimisticThreadKey = buildThreadIdentityKey(
+        optimisticThread.source,
+        optimisticThread.id
+      );
+      const hasHydratedThread = state.response?.threads.some(
+        (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+      );
+
+      return projectOptimisticThreadIntoDirectories(
         state.response?.directories ?? [],
-        optimisticThread
-      ),
-    [optimisticThread, state.response?.directories]
+        hasHydratedThread ? undefined : optimisticThread
+      );
+    },
+    [optimisticThread, state.response?.directories, state.response?.threads]
   );
 
   const inboxThreads = useMemo(() => {

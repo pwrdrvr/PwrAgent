@@ -138,7 +138,12 @@ function splitTextContent(text: string): JSONContent[] {
 function buildTiptapContent(
   value: string,
   skillTokens: ComposerSkillToken[],
+  options?: { markdownConversion?: boolean },
 ): JSONContent {
+  if (options?.markdownConversion && skillTokens.length === 0) {
+    return buildMarkdownTiptapContent(value);
+  }
+
   const sortedTokens = [...skillTokens].sort((left, right) => {
     if (left.index !== right.index) {
       return left.index - right.index;
@@ -173,6 +178,69 @@ function buildTiptapContent(
         content: content.length > 0 ? content : undefined,
       },
     ],
+  };
+}
+
+function buildMarkdownTiptapContent(value: string): JSONContent {
+  const lines = value.replace(/\r\n/g, "\n").split("\n");
+  const content: JSONContent[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index] ?? "";
+    const codeFence = line.match(/^```([A-Za-z0-9_-]*)\s*$/);
+    if (codeFence) {
+      index += 1;
+      const codeLines: string[] = [];
+      while (index < lines.length && !/^```\s*$/.test(lines[index] ?? "")) {
+        codeLines.push(lines[index] ?? "");
+        index += 1;
+      }
+      if (index < lines.length) {
+        index += 1;
+      }
+      content.push({
+        type: "codeBlock",
+        attrs: { language: codeFence[1] || null },
+        content: codeLines.length > 0
+          ? [{ type: "text", text: codeLines.join("\n") }]
+          : undefined,
+      });
+      continue;
+    }
+
+    if (line.trim().length === 0) {
+      content.push({ type: "paragraph" });
+      index += 1;
+      continue;
+    }
+
+    const paragraphLines: string[] = [];
+    while (
+      index < lines.length &&
+      (lines[index] ?? "").trim().length > 0 &&
+      !/^```([A-Za-z0-9_-]*)\s*$/.test(lines[index] ?? "")
+    ) {
+      paragraphLines.push(lines[index] ?? "");
+      index += 1;
+    }
+    content.push({
+      type: "paragraph",
+      content: splitTextContent(paragraphLines.join("\n")),
+    });
+  }
+
+  while (
+    content.length > 1 &&
+    content.at(-1)?.type === "paragraph" &&
+    !content.at(-1)?.content
+  ) {
+    content.pop();
+  }
+
+  return {
+    type: "doc",
+    content: content.length > 0 ? content : [{ type: "paragraph" }],
   };
 }
 
@@ -727,8 +795,12 @@ export const ComposerTiptapInput = forwardRef<
 
   propsRef.current = props;
   const initialContent = useMemo(
-    () => props.editorDocument ?? buildTiptapContent(props.value, props.skillTokens),
-    []
+    () =>
+      props.editorDocument ??
+      buildTiptapContent(props.value, props.skillTokens, {
+        markdownConversion: props.markdownConversion,
+      }),
+    [],
   );
   const editor = useEditor({
     content: initialContent,
@@ -904,7 +976,9 @@ export const ComposerTiptapInput = forwardRef<
 
     pendingExternalSignatureRef.current = propsSignature;
     editor.commands.setContent(
-      buildTiptapContent(props.value, props.skillTokens),
+      buildTiptapContent(props.value, props.skillTokens, {
+        markdownConversion: props.markdownConversion,
+      }),
       { emitUpdate: false },
     );
     pendingExternalSignatureRef.current = undefined;

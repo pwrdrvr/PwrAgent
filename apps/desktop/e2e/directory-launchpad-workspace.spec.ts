@@ -25,6 +25,7 @@ async function createDirectoryLaunchpadFixture(): Promise<{
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-launchpad-e2e-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
   const otherRepoDir = path.join(rootDir, "OtherRepo");
+  const worktreeDir = path.join(rootDir, ".pwragent", "worktrees", "mord46hf", "FixtureRepo");
   await mkdir(repoDir, { recursive: true });
   await mkdir(otherRepoDir, { recursive: true });
 
@@ -187,10 +188,10 @@ async function createDirectoryLaunchpadFixture(): Promise<{
                 gitBranch: "HEAD",
                 linkedDirectories: [
                   {
-                    id: "fixture-repo",
+                    id: worktreeDir,
                     label: "FixtureRepo",
-                    path: repoDir,
-                    kind: "worktree",
+                    path: worktreeDir,
+                    kind: "local",
                   },
                 ],
                 updatedAt: 1760000001000,
@@ -549,6 +550,99 @@ test("directory launchpad keeps new worktree as the sticky default after startin
 
     await expect(settings.getByLabel("Workspace mode")).toHaveAttribute("data-value", "worktree");
     await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad does not duplicate a materialized worktree thread under path-shaped directory rows", async () => {
+  const fixture = await createDirectoryLaunchpadFixture();
+  const app = await launchElectronApp({
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window
+      .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
+      .click();
+
+    const settings = app.window.getByLabel("New thread settings");
+    await selectComposerOption({
+      select: settings.getByLabel("Workspace mode"),
+      window: app.window,
+      option: "New worktree",
+    });
+
+    await app.window
+      .getByRole("textbox", { name: "New thread" })
+      .fill("Use a sticky worktree default");
+    await app.window.getByRole("button", { name: "Start thread" }).click();
+
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Use a sticky worktree default",
+      }),
+    ).toBeVisible();
+
+    await app.window.getByRole("button", { name: "directories" }).click();
+    await expect(app.window.locator(".directory-row").filter({
+      has: app.window.getByText("FixtureRepo", { exact: true }),
+    })).toHaveCount(1);
+    await expect(
+      app.window.getByRole("button", { name: /Use a sticky worktree default/ }),
+    ).toHaveCount(1);
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("directory launchpad keeps Tiptap Markdown focus and fenced-code formatting after changing workspace mode", async () => {
+  const fixture = await createDirectoryLaunchpadFixture();
+  const app = await launchElectronApp({
+    env: {
+      PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-wysiwyg-markdown-chips",
+    },
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await app.window.getByRole("button", { name: "directories" }).click();
+    await app.window
+      .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
+      .click();
+
+    const textbox = app.window.getByRole("textbox", { name: "New thread" });
+    await textbox.click();
+    await app.window.keyboard.type("```ts ");
+    await app.window.keyboard.type("const answer = 42;");
+
+    const composer = app.window.getByTestId("composer-tiptap-input");
+    await expect(composer.locator("pre")).toBeVisible();
+
+    const settings = app.window.getByLabel("New thread settings");
+    await selectComposerOption({
+      select: settings.getByLabel("Workspace mode"),
+      window: app.window,
+      option: "New worktree",
+    });
+
+    await expect(composer.locator("pre")).toBeVisible();
+    await expect(textbox).toBeFocused();
+
+    await app.window
+      .getByRole("button", { name: /Directory launchpad replay/ })
+      .first()
+      .click();
+    await app.window
+      .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
+      .click();
+
+    await expect(app.window.getByTestId("composer-tiptap-input").locator("pre")).toBeVisible();
+    await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeFocused();
   } finally {
     await app.close();
     await fixture.cleanup();
