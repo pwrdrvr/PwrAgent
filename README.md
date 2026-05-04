@@ -58,11 +58,11 @@ graph TD
 
 | Layer | Storage | Purpose |
 |-------|---------|---------|
-| Desktop state | `~/.pwragnt/profiles/<name>/state/state.db` | Messaging bindings, thread overlay, secrets, launchpad settings |
-| Desktop config | `~/.pwragnt/profiles/<name>/config.toml` | Desktop settings (messaging, models, worktrees) |
+| Desktop state | `~/.pwragent/profiles/<name>/state/state.db` | Messaging bindings, thread overlay, secrets, launchpad settings |
+| Desktop config | `~/.pwragent/profiles/<name>/config.toml` | Desktop settings (messaging, models, worktrees) |
 | Agent-Core threads | `<state_root>/threads/<id>/rollout.jsonl` | Append-only message + replay-item log per thread |
 | Agent-Core metadata | `<state_root>/threads/<id>/thread.toml` | Thread config (model, cwd, approval policy) |
-| Protocol captures | `~/.pwragnt/profiles/<name>/state/protocol-captures/` | Dev-only JSON-RPC session recordings |
+| Protocol captures | `~/.pwragent/profiles/<name>/state/protocol-captures/` | Dev-only JSON-RPC session recordings |
 
 See [docs/state-layout.md](docs/state-layout.md) for full directory layout, environment variables, and migration details.
 
@@ -105,7 +105,7 @@ Desktop replay-backed Electron coverage lives under `apps/desktop/e2e`.
 To record real Codex App Server traffic from the desktop client boundary, launch
 the desktop app with `PWRAGNT_PROTOCOL_CAPTURE=true`. Captures are written under
 the active profile's state directory at `protocol-captures/` by default
-(`~/.pwragnt/profiles/default/state/protocol-captures/`). Override that root with
+(`~/.pwragent/profiles/default/state/protocol-captures/`). Override that root with
 `PWRAGNT_PROTOCOL_CAPTURE_ROOT=/absolute/path` when you want a stable local
 export location.
 

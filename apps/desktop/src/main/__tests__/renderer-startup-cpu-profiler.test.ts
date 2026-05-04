@@ -8,7 +8,7 @@ import { resolveStartupCpuProfileConfig } from "../diagnostics/startup-cpu-profi
 function createEnabledConfig(repoRoot: string) {
   const config = resolveStartupCpuProfileConfig({
     env: {
-      PWRAGNT_STARTUP_CPU_PROFILING: "1",
+      PWRAGENT_STARTUP_CPU_PROFILING: "1",
     },
     repoRoot,
   });

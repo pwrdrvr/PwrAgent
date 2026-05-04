@@ -52,7 +52,7 @@ export function formatRuntimePath(cwd: string): string {
   const bareWorktreesIndex = segments.lastIndexOf("worktrees");
   if (
     bareWorktreesIndex >= 1 &&
-    (segments[bareWorktreesIndex - 1] === ".pwragnt" ||
+    (segments[bareWorktreesIndex - 1] === ".pwragent" ||
       segments[bareWorktreesIndex - 1] === ".codex") &&
     segments[bareWorktreesIndex + 1] &&
     segments[bareWorktreesIndex + 2]

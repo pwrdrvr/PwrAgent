@@ -249,7 +249,7 @@ test("keeps Tiptap launchpad and reply drafts with pasted images across switchin
   const fixture = await createComposerDraftPersistenceFixture();
   const app = await launchElectronApp({
     env: {
-      PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-chips",
+      PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-chips",
     },
     fixturePath: fixture.fixturePath,
   });

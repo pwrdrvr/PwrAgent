@@ -13,7 +13,7 @@ async function createBranchDriftFixture(): Promise<{
 }> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-branch-drift-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
-  const stateRoot = path.join(rootDir, ".local", "state", "pwragnt");
+  const stateRoot = path.join(rootDir, ".local", "state", "pwragent");
   await mkdir(repoDir, { recursive: true });
   await mkdir(stateRoot, { recursive: true });
 
@@ -183,7 +183,7 @@ test("keeps the branch drift warning open after refreshing observed checkout sta
 
     const dbPath = path.join(
       fixture.homeDir,
-      ".pwragnt",
+      ".pwragent",
       "profiles",
       "default",
       "state",

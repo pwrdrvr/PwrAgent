@@ -42,7 +42,7 @@ describe("Codex discovery", () => {
     const snapshot = await discoverCodexCommands({
       configuredCommand: "codex-config",
       env: {
-        PWRAGNT_CODEX_COMMAND: "codex-env",
+        PWRAGENT_CODEX_COMMAND: "codex-env",
       },
     });
 

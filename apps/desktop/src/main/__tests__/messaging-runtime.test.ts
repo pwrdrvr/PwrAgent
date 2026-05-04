@@ -629,7 +629,7 @@ async function createRuntimeHarness(): Promise<{
 async function prepareRuntimeStore(): Promise<void> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-runtime-"));
   tempDirs.push(tempDir);
-  vi.stubEnv("PWRAGNT_HOME", tempDir);
+  vi.stubEnv("PWRAGENT_HOME", tempDir);
   const { initializeAppState, resetAppStateForTests } = await import(
     "../state/app-state"
   );

@@ -128,7 +128,7 @@ describe("GitDirectoryService", () => {
   it("creates a worktree under a user-home root when storage is user-home", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
-    const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-worktree-home-"));
+    const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-home-"));
     cleanupPaths.push(homeDir);
     const service = new GitDirectoryService({
       resolveWorktreeStorage: () => "user-home",
@@ -143,7 +143,7 @@ describe("GitDirectoryService", () => {
       branchName: "main",
     });
 
-    const expectedRoot = path.join(homeDir, ".pwragnt", "worktrees");
+    const expectedRoot = path.join(homeDir, ".pwragent", "worktrees");
     expect(workspace.cwd!.startsWith(`${expectedRoot}${path.sep}`)).toBe(true);
     expect(path.basename(workspace.cwd!)).toBe(path.basename(repoDir));
   });

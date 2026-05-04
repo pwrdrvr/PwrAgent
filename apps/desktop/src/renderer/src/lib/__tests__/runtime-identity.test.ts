@@ -67,14 +67,14 @@ describe("runtime identity formatting", () => {
 
   it("shows hash/project for the user-home worktree layout", () => {
     expect(
-      formatRuntimePath("/Users/huntharo/.pwragnt/worktrees/moit6ddw/PwrAgnt")
+      formatRuntimePath("/Users/huntharo/.pwragent/worktrees/moit6ddw/PwrAgnt")
     ).toBe("moit6ddw/PwrAgnt");
   });
 
   it("ignores the desktop app package below a user-home worktree", () => {
     expect(
       formatRuntimePath(
-        "/Users/huntharo/.pwragnt/worktrees/moit6ddw/PwrAgnt/apps/desktop"
+        "/Users/huntharo/.pwragent/worktrees/moit6ddw/PwrAgnt/apps/desktop"
       )
     ).toBe("moit6ddw/PwrAgnt");
   });

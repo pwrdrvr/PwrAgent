@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 
-const REPLAY_FIXTURE_PATH_ENV = "PWRAGNT_REPLAY_FIXTURE_PATH";
+const REPLAY_FIXTURE_PATH_ENV = "PWRAGENT_REPLAY_FIXTURE_PATH";
 
 const constructorState = vi.hoisted(() => ({
   codexCount: 0,
@@ -152,7 +152,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env[REPLAY_FIXTURE_PATH_ENV];
-  delete globalThis.__PWRAGNT_REPLAY_DRIVER__;
+  delete globalThis.__PWRAGENT_REPLAY_DRIVER__;
 
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });

@@ -178,7 +178,7 @@ describe("bootstrapApp", () => {
     startupProfilerInstance.attachWindow.mockReset();
     StartupCpuProfilerMock.mockClear();
     vi.resetModules();
-    vi.stubEnv("PWRAGNT_DISABLE_MESSAGING", undefined);
+    vi.stubEnv("PWRAGENT_DISABLE_MESSAGING", undefined);
   });
 
   afterEach(() => {
@@ -259,7 +259,7 @@ describe("bootstrapApp", () => {
   });
 
   it("skips messaging runtime startup when messaging is disabled for the app instance", async () => {
-    vi.stubEnv("PWRAGNT_DISABLE_MESSAGING", "1");
+    vi.stubEnv("PWRAGENT_DISABLE_MESSAGING", "1");
     startupProfilerInstance.start.mockResolvedValue();
 
     await import("../index");
@@ -269,7 +269,7 @@ describe("bootstrapApp", () => {
     expect(mainLogInfoMock).toHaveBeenCalledWith(
       "messaging runtime disabled for this app instance",
       expect.objectContaining({
-        reason: "PWRAGNT_DISABLE_MESSAGING is enabled",
+        reason: "PWRAGENT_DISABLE_MESSAGING is enabled",
       }),
     );
     expect(createMainWindowMock).toHaveBeenCalledWith({

@@ -39,12 +39,12 @@ export function resolveStartupCpuProfileConfig(options?: {
   repoRoot?: string;
 }): StartupCpuProfileConfig {
   const env = options?.env ?? process.env;
-  if (!isEnabled(env.PWRAGNT_STARTUP_CPU_PROFILING)) {
+  if (!isEnabled(env.PWRAGENT_STARTUP_CPU_PROFILING)) {
     return { enabled: false };
   }
 
   const repoRoot = path.resolve(
-    env.PWRAGNT_STARTUP_CPU_PROFILE_ROOT ?? options?.repoRoot ?? process.cwd(),
+    env.PWRAGENT_STARTUP_CPU_PROFILE_ROOT ?? options?.repoRoot ?? process.cwd(),
   );
 
   return {
@@ -52,11 +52,11 @@ export function resolveStartupCpuProfileConfig(options?: {
     repoRoot,
     outputRoot: path.join(repoRoot, ".local"),
     postLoadDurationMs: parsePositiveInteger(
-      env.PWRAGNT_STARTUP_CPU_PROFILE_POST_LOAD_MS,
+      env.PWRAGENT_STARTUP_CPU_PROFILE_POST_LOAD_MS,
       DEFAULT_POST_LOAD_DURATION_MS,
     ),
     hardTimeoutMs: parsePositiveInteger(
-      env.PWRAGNT_STARTUP_CPU_PROFILE_HARD_TIMEOUT_MS,
+      env.PWRAGENT_STARTUP_CPU_PROFILE_HARD_TIMEOUT_MS,
       DEFAULT_HARD_TIMEOUT_MS,
     ),
   };

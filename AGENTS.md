@@ -45,10 +45,10 @@
 
 ## Runtime Config
 
-- All desktop config and state lives under `~/.pwragnt/` (the "PwrAgnt root").
-- Override the root with `PWRAGNT_HOME=/path/to/root` for isolated E2E or dev-profile use.
-- Select a named profile with `PWRAGNT_PROFILE=<name>` (defaults to `default`).
-- Per-profile layout: `~/.pwragnt/profiles/<name>/config.toml` (settings), `~/.pwragnt/profiles/<name>/state/state.db` (sqlite).
+- All desktop config and state lives under `~/.pwragent/` (the "PwrAgent root").
+- Override the root with `PWRAGENT_HOME=/path/to/root` for isolated E2E or dev-profile use.
+- Select a named profile with `PWRAGENT_PROFILE=<name>` (defaults to `default`).
+- Per-profile layout: `~/.pwragent/profiles/<name>/config.toml` (settings), `~/.pwragent/profiles/<name>/state/state.db` (sqlite).
 - Grok app-server config lives at `~/.config/grok-app-server/config.toml` (legacy path, still read).
 - Runtime config keys in the grok config: `xai_api_key`, `grok_model`, `xai_base_url`, `state_root`.
 - Environment variables (`XAI_API_KEY`, `GROK_MODEL`, `XAI_BASE_URL`) still override the toml config.

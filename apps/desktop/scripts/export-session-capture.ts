@@ -13,10 +13,10 @@ async function main(): Promise<void> {
 
   const captureRoot =
     optionalString(args["capture-root"])
-    ?? process.env.PWRAGNT_PROTOCOL_CAPTURE_ROOT?.trim();
+    ?? process.env.PWRAGENT_PROTOCOL_CAPTURE_ROOT?.trim();
   if (!captureRoot) {
     throw new Error(
-      "Missing --capture-root and PWRAGNT_PROTOCOL_CAPTURE_ROOT is not set"
+      "Missing --capture-root and PWRAGENT_PROTOCOL_CAPTURE_ROOT is not set"
     );
   }
 

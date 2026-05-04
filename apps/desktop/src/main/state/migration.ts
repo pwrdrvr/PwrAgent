@@ -4,7 +4,7 @@ import path from "node:path";
 import type BetterSqlite3 from "better-sqlite3";
 import Database from "better-sqlite3";
 import { migrateMessagingStoreData } from "../messaging/core/messaging-migrations.js";
-import { resolveActiveProfilePath, resolvePwragntRoot } from "../profile";
+import { resolveActiveProfilePath, resolvePwragentRoot } from "../profile";
 import { getNativeBinding } from "./native-binding.js";
 import { StateDb } from "./state-db.js";
 
@@ -493,7 +493,7 @@ function copyGrokConfig(
   options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
 ): void {
   if (!srcPath) return;
-  const root = resolvePwragntRoot(options);
+  const root = resolvePwragentRoot(options);
   const destPath = path.join(root, "grok-app-server", "config.toml");
   if (fs.existsSync(destPath)) return;
   fs.mkdirSync(path.dirname(destPath), { recursive: true });

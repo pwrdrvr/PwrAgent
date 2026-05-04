@@ -56,7 +56,7 @@ export async function launchElectronApp(params: {
   Object.assign(env, {
     HOME: homeRoot,
     NODE_ENV: "production",
-    PWRAGNT_REPLAY_FIXTURE_PATH: params.fixturePath,
+    PWRAGENT_REPLAY_FIXTURE_PATH: params.fixturePath,
   });
   delete env.ELECTRON_RENDERER_URL;
   for (const [key, value] of Object.entries(params.env ?? {})) {
@@ -77,7 +77,7 @@ export async function launchElectronApp(params: {
   await expect
     .poll(async () =>
       await electronApp.evaluate(() =>
-        Boolean(globalThis.__PWRAGNT_REPLAY_DRIVER__)
+        Boolean(globalThis.__PWRAGENT_REPLAY_DRIVER__)
       )
     )
     .toBe(true);
@@ -115,42 +115,42 @@ export async function launchElectronApp(params: {
     window,
     advance: async (advanceParams) => {
       await electronApp.evaluate(async (_electron, value) => {
-        await globalThis.__PWRAGNT_REPLAY_DRIVER__?.advance(value);
+        await globalThis.__PWRAGENT_REPLAY_DRIVER__?.advance(value);
       }, advanceParams);
     },
     getPendingRequest: async (requestParams) =>
       await electronApp.evaluate(
         (_electron, value) =>
-          globalThis.__PWRAGNT_REPLAY_DRIVER__?.getPendingRequest(value),
+          globalThis.__PWRAGENT_REPLAY_DRIVER__?.getPendingRequest(value),
         requestParams
       ),
     getLastStartTurn: async (requestParams) =>
       await electronApp.evaluate(
         (_electron, value) =>
-          globalThis.__PWRAGNT_REPLAY_DRIVER__?.getLastStartTurn(value),
+          globalThis.__PWRAGENT_REPLAY_DRIVER__?.getLastStartTurn(value),
         requestParams
       ),
     getLastStartReview: async (requestParams) =>
       await electronApp.evaluate(
         (_electron, value) =>
-          globalThis.__PWRAGNT_REPLAY_DRIVER__?.getLastStartReview(value),
+          globalThis.__PWRAGENT_REPLAY_DRIVER__?.getLastStartReview(value),
         requestParams
       ),
     getLastRenameThread: async (requestParams) =>
       await electronApp.evaluate(
         (_electron, value) =>
-          globalThis.__PWRAGNT_REPLAY_DRIVER__?.getLastRenameThread(value),
+          globalThis.__PWRAGENT_REPLAY_DRIVER__?.getLastRenameThread(value),
         requestParams
       ),
     getInterruptTurnCalls: async (requestParams) =>
       await electronApp.evaluate(
         (_electron, value) =>
-          globalThis.__PWRAGNT_REPLAY_DRIVER__?.getInterruptTurnCalls(value),
+          globalThis.__PWRAGENT_REPLAY_DRIVER__?.getInterruptTurnCalls(value),
         requestParams
       ),
     respondToPendingRequest: async (requestParams) => {
       await electronApp.evaluate(async (_electron, value) => {
-        await globalThis.__PWRAGNT_REPLAY_DRIVER__?.respondToPendingRequest(value);
+        await globalThis.__PWRAGENT_REPLAY_DRIVER__?.respondToPendingRequest(value);
       }, requestParams);
     },
     close: async () => {

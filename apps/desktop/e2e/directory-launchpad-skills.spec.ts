@@ -6,13 +6,13 @@ import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const CUSTOM_WIDGET_COMPOSER_ENV = {
-  PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "custom-widget-chips",
+  PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "custom-widget-chips",
 };
 const TIPTAP_COMPOSER_ENV = {
-  PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-chips",
+  PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-chips",
 };
 const TIPTAP_WYSIWYG_COMPOSER_ENV = {
-  PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-wysiwyg-markdown-chips",
+  PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-wysiwyg-markdown-chips",
 };
 
 async function createDirectoryLaunchpadSkillsFixture(): Promise<{
@@ -866,7 +866,7 @@ test("directory launchpad Tiptap composer select all delete clears chips without
 test("directory launchpad Tiptap composer deletes a persisted skill chip with repeated backspace", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-tiptap-saved-"));
-  const stateRoot = path.join(homeDir, ".local", "state", "pwragnt");
+  const stateRoot = path.join(homeDir, ".local", "state", "pwragent");
   await seedPersistedDirectoryLaunchpad({
     repoDir: fixture.repoDir,
     stateRoot,
@@ -1218,7 +1218,7 @@ test("directory launchpad types at the clicked text caret between skill chips", 
 test("directory launchpad deletes a persisted skill chip with repeated backspace", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-saved-launchpad-"));
-  const stateRoot = path.join(homeDir, ".local", "state", "pwragnt");
+  const stateRoot = path.join(homeDir, ".local", "state", "pwragent");
   await seedPersistedDirectoryLaunchpad({
     repoDir: fixture.repoDir,
     stateRoot,

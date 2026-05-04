@@ -16,7 +16,7 @@
     "build": "electron-vite build",
     "codex:generate-protocol": "pnpm --filter @pwragent/shared codex:generate-app-server-protocol",
     "dev": "electron-vite dev",
-    "dev:no-messaging": "PWRAGNT_DISABLE_MESSAGING=1 electron-vite dev -- --disable-messaging",
+    "dev:no-messaging": "PWRAGENT_DISABLE_MESSAGING=1 electron-vite dev -- --disable-messaging",
     "derive:replay-fixture": "tsx ./scripts/derive-replay-fixture.ts",
     "export:session-capture": "tsx ./scripts/export-session-capture.ts",
     "generate:dmg-background": "swift ./scripts/generate-dmg-background.swift ./build/dmg-background.tiff",

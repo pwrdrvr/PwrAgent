@@ -75,7 +75,7 @@ export function defaultDesktopConfigDir(
 }
 
 export function userHomeWorktreesRoot(homeDir?: string): string {
-  return path.join(homeDir ?? os.homedir(), ".pwragnt", "worktrees");
+  return path.join(homeDir ?? os.homedir(), ".pwragent", "worktrees");
 }
 
 export function resolveDesktopConfigPath(

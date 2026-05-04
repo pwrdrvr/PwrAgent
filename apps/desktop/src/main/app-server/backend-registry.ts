@@ -105,7 +105,7 @@ type InitializeResult = {
 };
 
 const isDevelopment = process.env.NODE_ENV !== "production";
-const REPLAY_THREAD_TITLE_ENV = "PWRAGNT_REPLAY_THREAD_TITLE";
+const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
 const THREAD_LIST_REUSE_WINDOW_MS = 750;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const execFile = promisify(execFileCallback);

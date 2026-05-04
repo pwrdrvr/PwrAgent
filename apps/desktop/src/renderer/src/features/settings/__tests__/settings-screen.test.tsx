@@ -120,7 +120,7 @@ function createSnapshot(
     },
     worktrees: {
       storage: { value: "user-home", source: "default" },
-      effectivePath: "/home/example/.pwragnt/worktrees",
+      effectivePath: "/home/example/.pwragent/worktrees",
     },
     ...overrides,
   };
@@ -261,7 +261,7 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("radio", { name: "In repository" }),
     ).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByText("/home/example/.pwragnt/worktrees")).toBeInTheDocument();
+    expect(screen.getByText("/home/example/.pwragent/worktrees")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("radio", { name: "In repository" }));
     await waitFor(() => {

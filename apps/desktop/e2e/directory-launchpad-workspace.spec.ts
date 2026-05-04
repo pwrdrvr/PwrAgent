@@ -281,7 +281,7 @@ function readOverlayState(homeRoot: string): {
 } {
   const dbPath = path.join(
     homeRoot,
-    ".pwragnt",
+    ".pwragent",
     "profiles",
     "default",
     "state",

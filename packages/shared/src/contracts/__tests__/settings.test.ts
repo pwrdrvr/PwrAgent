@@ -92,7 +92,7 @@ describe("desktop settings contracts", () => {
       },
       worktrees: {
         storage: { value: "user-home", source: "default" },
-        effectivePath: "/home/example/.pwragnt/worktrees",
+        effectivePath: "/home/example/.pwragent/worktrees",
       },
     };
 

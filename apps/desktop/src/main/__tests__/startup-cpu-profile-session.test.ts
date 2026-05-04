@@ -8,7 +8,7 @@ import { resolveStartupCpuProfileConfig } from "../diagnostics/startup-cpu-profi
 function createEnabledConfig(repoRoot: string) {
   const config = resolveStartupCpuProfileConfig({
     env: {
-      PWRAGNT_STARTUP_CPU_PROFILING: "1",
+      PWRAGENT_STARTUP_CPU_PROFILING: "1",
     },
     repoRoot,
   });
@@ -214,9 +214,9 @@ describe("startup CPU profiling session", () => {
 
     const config = resolveStartupCpuProfileConfig({
       env: {
-        PWRAGNT_STARTUP_CPU_PROFILING: "1",
-        PWRAGNT_STARTUP_CPU_PROFILE_POST_LOAD_MS: "8000",
-        PWRAGNT_STARTUP_CPU_PROFILE_HARD_TIMEOUT_MS: "25000",
+        PWRAGENT_STARTUP_CPU_PROFILING: "1",
+        PWRAGENT_STARTUP_CPU_PROFILE_POST_LOAD_MS: "8000",
+        PWRAGENT_STARTUP_CPU_PROFILE_HARD_TIMEOUT_MS: "25000",
       },
       repoRoot: workspace.path,
     });

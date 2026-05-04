@@ -1,7 +1,7 @@
 import type {
   DesktopSettingsSecretName,
   DesktopSettingsSecretStorageState,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import type { DesktopSecretStore } from "../settings/desktop-secret-store";
 import type { StateDb } from "./state-db.js";
 

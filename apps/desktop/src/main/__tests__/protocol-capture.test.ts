@@ -14,8 +14,8 @@ describe("ProtocolCaptureStore", () => {
   const cleanupPaths: string[] = [];
 
   afterEach(async () => {
-    delete process.env.PWRAGNT_PROTOCOL_CAPTURE;
-    delete process.env.PWRAGNT_PROTOCOL_CAPTURE_ROOT;
+    delete process.env.PWRAGENT_PROTOCOL_CAPTURE;
+    delete process.env.PWRAGENT_PROTOCOL_CAPTURE_ROOT;
 
     await Promise.all(
       cleanupPaths.splice(0).map(async (target) => {
@@ -151,8 +151,8 @@ describe("ProtocolCaptureStore", () => {
       })
     ).toBeUndefined();
 
-    process.env.PWRAGNT_PROTOCOL_CAPTURE = "true";
-    process.env.PWRAGNT_PROTOCOL_CAPTURE_ROOT = rootDir;
+    process.env.PWRAGENT_PROTOCOL_CAPTURE = "true";
+    process.env.PWRAGENT_PROTOCOL_CAPTURE_ROOT = rootDir;
 
     const capture = createProtocolCaptureFromEnv({
       backend: "codex",

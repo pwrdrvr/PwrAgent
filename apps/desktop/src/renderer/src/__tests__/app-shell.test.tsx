@@ -102,7 +102,7 @@ describe("App", () => {
       },
       worktrees: {
         storage: { value: "user-home", source: "default" },
-        effectivePath: "/home/example/.pwragnt/worktrees",
+        effectivePath: "/home/example/.pwragent/worktrees",
       },
     } satisfies DesktopSettingsSnapshot;
 

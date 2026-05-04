@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const PWRAGNT_PROFILE_ENV = "PWRAGNT_PROFILE";
-export const PWRAGNT_HOME_ENV = "PWRAGNT_HOME";
+export const PWRAGENT_PROFILE_ENV = "PWRAGENT_PROFILE";
+export const PWRAGENT_HOME_ENV = "PWRAGENT_HOME";
 
 const PROFILE_NAME_REGEX = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const RESERVED_NAMES = new Set(["con", "nul", "aux", "prn", ".", ".."]);
@@ -22,15 +22,15 @@ export function isValidProfileName(name: string): boolean {
   return PROFILE_NAME_REGEX.test(name) && !RESERVED_NAMES.has(name);
 }
 
-export function resolvePwragntRoot(options?: {
+export function resolvePwragentRoot(options?: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
 }): string {
   const env = options?.env ?? process.env;
-  const pwragntHome = env[PWRAGNT_HOME_ENV]?.trim();
-  if (pwragntHome) return path.resolve(pwragntHome);
+  const pwragentHome = env[PWRAGENT_HOME_ENV]?.trim();
+  if (pwragentHome) return path.resolve(pwragentHome);
   const homeDir = options?.homeDir ?? os.homedir();
-  return path.join(homeDir, ".pwragnt");
+  return path.join(homeDir, ".pwragent");
 }
 
 export function resolveActiveProfileName(options?: {
@@ -48,11 +48,11 @@ export function resolveActiveProfileName(options?: {
   }
 
   const env = options?.env ?? process.env;
-  const envProfile = env[PWRAGNT_PROFILE_ENV]?.trim();
+  const envProfile = env[PWRAGENT_PROFILE_ENV]?.trim();
   if (envProfile) {
     if (!isValidProfileName(envProfile)) {
       throw new Error(
-        `Invalid PWRAGNT_PROFILE="${envProfile}". Must match ${PROFILE_NAME_REGEX.source} and not be a reserved name.`,
+        `Invalid PWRAGENT_PROFILE="${envProfile}". Must match ${PROFILE_NAME_REGEX.source} and not be a reserved name.`,
       );
     }
     return envProfile;
@@ -66,7 +66,7 @@ export function resolveActiveProfileDir(options?: {
   homeDir?: string;
   cliProfile?: string;
 }): string {
-  const root = resolvePwragntRoot(options);
+  const root = resolvePwragentRoot(options);
   const profileName = resolveActiveProfileName(options);
   return path.join(root, "profiles", profileName);
 }
@@ -86,7 +86,7 @@ export function resolveProfilesRegistryPath(options?: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
 }): string {
-  return path.join(resolvePwragntRoot(options), "profiles.toml");
+  return path.join(resolvePwragentRoot(options), "profiles.toml");
 }
 
 export function readProfilesRegistry(options?: {

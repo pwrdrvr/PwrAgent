@@ -155,7 +155,7 @@ test("keeps a thread reply draft after opening settings and returning to the thr
   const fixture = await createComposerDraftSettingsFixture();
   const app = await launchElectronApp({
     env: {
-      PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-chips",
+      PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-chips",
     },
     fixturePath: fixture.fixturePath,
   });

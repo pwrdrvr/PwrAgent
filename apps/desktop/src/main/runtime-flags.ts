@@ -1,5 +1,5 @@
 export const DISABLE_MESSAGING_ARG = "--disable-messaging";
-export const DISABLE_MESSAGING_ENV = "PWRAGNT_DISABLE_MESSAGING";
+export const DISABLE_MESSAGING_ENV = "PWRAGENT_DISABLE_MESSAGING";
 
 export type RuntimeMessagingOverride = {
   disabled: boolean;
