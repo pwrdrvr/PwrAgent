@@ -1,0 +1,17 @@
+{
+  "name": "@pwragent/codex-app-server-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript types for the Codex App Server JSON-RPC protocol, generated from `codex app-server generate-ts`.",
+  "author": "PwrDrvr LLC",
+  "license": "UNLICENSED",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./v2": "./src/v2/index.ts"
+  },
+  "scripts": {
+    "generate": "${PWRAGENT_CODEX_BIN:-/Applications/Codex.app/Contents/Resources/codex} app-server generate-ts --out ./src",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

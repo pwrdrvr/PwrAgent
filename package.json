@@ -9,7 +9,7 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "pnpm --filter @pwragent/desktop build",
-    "codex:generate-app-server-protocol": "pnpm --filter @pwragent/shared codex:generate-app-server-protocol",
+    "codex:generate-app-server-protocol": "pnpm --filter @pwragent/codex-app-server-protocol generate",
     "dev": "pnpm --filter @pwragent/desktop dev",
     "dev:no-messaging": "PWRAGENT_DISABLE_MESSAGING=1 pnpm --filter @pwragent/desktop dev -- --disable-messaging",
     "dev:op": "node ./scripts/op-run.mjs dev",

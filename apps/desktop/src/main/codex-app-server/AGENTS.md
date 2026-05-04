@@ -1,6 +1,6 @@
 # Codex App Server Adapter Guidance
 
-The Codex App Server wire protocol types are generated in `@pwragent/shared/codex-app-server-protocol`. Do not add desktop-local protocol mirrors here.
+The Codex App Server wire protocol types are generated in `@pwragent/codex-app-server-protocol`. Do not add desktop-local protocol mirrors here.
 
 Regenerate the stable TypeScript bindings from the repo root with:
 

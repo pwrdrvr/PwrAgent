@@ -29,6 +29,9 @@ importers:
       '@pwragent/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
+      '@pwragent/codex-app-server-protocol':
+        specifier: workspace:*
+        version: link:../../packages/codex-app-server-protocol
       '@pwragent/messaging-interface':
         specifier: workspace:*
         version: link:../../packages/messaging/interface
@@ -132,6 +135,8 @@ importers:
       ai:
         specifier: ^6.0.168
         version: 6.0.168(zod@4.3.6)
+
+  packages/codex-app-server-protocol: {}
 
   packages/messaging/interface:
     dependencies:
