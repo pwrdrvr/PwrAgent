@@ -44,7 +44,7 @@ import type {
   ReasoningEffort as CodexReasoningEffort,
   ServerRequest as CodexServerRequest,
   ServiceTier as CodexServiceTier,
-} from "@pwragent/shared/codex-app-server-protocol";
+} from "@pwragent/codex-app-server-protocol";
 import type {
   AskForApproval as CodexAskForApproval,
   ModelListParams as CodexModelListParams,
@@ -59,7 +59,7 @@ import type {
   TurnStartParams as CodexTurnStartParams,
   TurnSteerParams as CodexTurnSteerParams,
   UserInput as CodexUserInput,
-} from "@pwragent/shared/codex-app-server-protocol/v2";
+} from "@pwragent/codex-app-server-protocol/v2";
 import {
   JsonRpcConnection,
   type JsonRpcId,

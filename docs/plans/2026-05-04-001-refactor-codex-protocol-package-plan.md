@@ -109,7 +109,7 @@ flowchart TB
     U3 --> C2["Checkpoint: refreshed protocol builds"]
 ```
 
-- [ ] **Unit 1: Extract protocol package without regenerating**
+- [x] **Unit 1: Extract protocol package without regenerating**
 
 **Goal:** Move the existing generated protocol files into a dedicated workspace package, update imports/scripts/docs, and prove the unchanged generated baseline still builds.
 

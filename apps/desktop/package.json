@@ -14,7 +14,7 @@
     "analyze:protocol-capture": "tsx ./scripts/analyze-protocol-capture.ts",
     "analyze:startup-cpu-profile": "tsx ./scripts/analyze-startup-cpu-profile.ts",
     "build": "electron-vite build",
-    "codex:generate-protocol": "pnpm --filter @pwragent/shared codex:generate-app-server-protocol",
+    "codex:generate-protocol": "pnpm --filter @pwragent/codex-app-server-protocol generate",
     "dev": "node scripts/rebuild-native-for-electron.mjs && electron-vite dev",
     "dev:no-messaging": "node scripts/rebuild-native-for-electron.mjs && PWRAGENT_DISABLE_MESSAGING=1 electron-vite dev -- --disable-messaging",
     "derive:replay-fixture": "tsx ./scripts/derive-replay-fixture.ts",
@@ -31,6 +31,7 @@
   },
   "dependencies": {
     "@pwragent/agent-core": "workspace:*",
+    "@pwragent/codex-app-server-protocol": "workspace:*",
     "@pwragent/messaging-interface": "workspace:*",
     "@pwragent/messaging-provider-discord": "workspace:*",
     "@pwragent/messaging-provider-telegram": "workspace:*",

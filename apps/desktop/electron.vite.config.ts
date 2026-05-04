@@ -24,6 +24,7 @@ export default defineConfig(({ command }) => {
         externalizeDepsPlugin({
           exclude: [
             "@pwragent/shared",
+            "@pwragent/codex-app-server-protocol",
             "@pwragent/agent-core",
             "@pwragent/messaging-interface",
             "@pwragent/messaging-provider-discord",
