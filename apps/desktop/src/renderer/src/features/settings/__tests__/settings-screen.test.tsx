@@ -238,6 +238,23 @@ describe("SettingsScreen", () => {
       });
     });
 
+    fireEvent.click(within(sections).getByRole("button", { name: "Worktrees" }));
+    expect(screen.getByRole("heading", { name: "Storage location" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("radio", { name: "User home" }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(
+      screen.getByRole("radio", { name: "In repository" }),
+    ).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("/home/example/.pwragnt/worktrees")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("radio", { name: "In repository" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        worktrees: { storage: "in-repo" },
+      });
+    });
+
     fireEvent.click(within(sections).getByRole("button", { name: "Applications" }));
     expect(within(sections).getByRole("button", { name: "Experimental" })).not.toHaveAttribute(
       "aria-current",
