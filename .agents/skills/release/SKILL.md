@@ -90,16 +90,19 @@ git add apps/desktop/package.json CHANGELOG.md
 git commit -m "chore(release): prepare v<version>"
 ```
 
-Create the tag on that exact commit:
-
-```bash
-git tag v<version>
-```
+Create exactly one tag on that exact commit.
 
 If signing tags is configured and works locally, prefer a signed annotated tag:
 
 ```bash
 git tag -s v<version> -m "v<version>"
+```
+
+If signed tags are not available and the user approves an unsigned release tag,
+create a lightweight tag instead:
+
+```bash
+git tag v<version>
 ```
 
 Do not silently fall back from a failed signed tag to an unsigned tag. Ask the
