@@ -45,10 +45,15 @@
 
 ## Runtime Config
 
-- Grok app-server user config lives at `~/.config/grok-app-server/config.toml`.
-- Runtime config keys in that file are `xai_api_key`, `grok_model`, `xai_base_url`, and `state_root`.
-- Environment variables still override the user config.
-- Legacy `~/.config/grok-app-server/config.env` and related env files remain fallback-compatible, but `config.toml` is the current source of truth.
+- All desktop config and state lives under `~/.pwragnt/` (the "PwrAgnt root").
+- Override the root with `PWRAGNT_HOME=/path/to/root` for isolated E2E or dev-profile use.
+- Select a named profile with `PWRAGNT_PROFILE=<name>` (defaults to `default`).
+- Per-profile layout: `~/.pwragnt/profiles/<name>/config.toml` (settings), `~/.pwragnt/profiles/<name>/state/state.db` (sqlite).
+- Grok app-server config lives at `~/.config/grok-app-server/config.toml` (legacy path, still read).
+- Runtime config keys in the grok config: `xai_api_key`, `grok_model`, `xai_base_url`, `state_root`.
+- Environment variables (`XAI_API_KEY`, `GROK_MODEL`, `XAI_BASE_URL`) still override the toml config.
+- Removed env vars (no longer honored): `PWRAGNT_STATE_ROOT`, `PWRAGNT_CONFIG_PATH`, `GROK_APP_SERVER_STATE_ROOT`.
+- Multiple instances can share the same profile DB safely (sqlite WAL mode); no lockfile needed.
 
 ## Frontend and Desktop UI
 

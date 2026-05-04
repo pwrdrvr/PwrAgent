@@ -9,7 +9,6 @@ import type {
 } from "@pwragnt/shared";
 import { isDesktopWorktreeStorageLocation } from "@pwragnt/shared";
 import { resolveActiveProfilePath } from "../profile";
-import { DESKTOP_CONFIG_PATH_ENV } from "./desktop-settings-env";
 
 type DesktopConfigPathOptions = {
   env?: NodeJS.ProcessEnv;
@@ -80,9 +79,6 @@ export function userHomeWorktreesRoot(homeDir?: string): string {
 export function resolveDesktopConfigPath(
   options?: DesktopConfigPathOptions,
 ): string {
-  const env = options?.env ?? process.env;
-  const explicit = env[DESKTOP_CONFIG_PATH_ENV]?.trim();
-  if (explicit) return explicit;
   return resolveActiveProfilePath("config.toml", options);
 }
 

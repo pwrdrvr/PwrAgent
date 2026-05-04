@@ -58,7 +58,7 @@ Multi-profile UX is process-per-profile: clicking "Open in profile X" from the p
   - `profiles.toml` registry created on first launch (with one `default` entry).
   - All four Phase 1 resolvers re-pointed at `resolveActiveProfilePath(...)` instead of `pwragntPath(...)`.
   - `PWRAGNT_PROFILE` env var honored for E2E auto-create (PR9).
-  - Per-profile lockfile (PR13) — `electron app.requestSingleInstanceLock` keyed on profile.
+  - ~~Per-profile lockfile~~ — **Dropped.** sqlite WAL mode handles multi-process concurrent access safely. Multiple instances sharing the same profile DB is supported; writes are naturally convergent (same backend data) or single-writer (messaging).
   - **No picker UI in this phase.** Profiles work via env/CLI only. Tomorrow's users get a single `default` profile and the cleaner directory layout.
 - **Phase 3:** E2E harness flips to `PWRAGNT_PROFILE=e2e-<runid>` (auto-create). Old escape hatches removed. Specs reading `overlay-state.json` directly migrated to `state.db`.
 - **Phase 4:** the user-facing surface — profile picker menu, "Open in profile" via new-process spawn, "Manage profiles…" widget, window-title injection (PR12). Ships after the core relocation has soaked. This is also where `--profile` becomes a documented user feature rather than a dev knob.

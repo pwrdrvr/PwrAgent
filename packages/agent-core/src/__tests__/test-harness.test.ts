@@ -21,7 +21,6 @@ const tempEnvKeys = [
   "XAI_API_KEY",
   "GROK_MODEL",
   "XAI_BASE_URL",
-  "GROK_APP_SERVER_STATE_ROOT",
   "PWRAGNT_HOME",
 ];
 
@@ -206,14 +205,12 @@ describe("test harness helpers", () => {
         XAI_API_KEY: "env-key",
         XAI_BASE_URL: "https://override.example.test/v1",
         GROK_MODEL: "grok-4.20-reasoning",
-        GROK_APP_SERVER_STATE_ROOT: "/tmp/from-env",
       } as NodeJS.ProcessEnv,
     });
 
     expect(runtimeConfig.apiKey).toBe("env-key");
     expect(runtimeConfig.baseUrl).toBe("https://override.example.test/v1");
     expect(runtimeConfig.model).toBe("grok-4.20-reasoning");
-    expect(runtimeConfig.stateRoot).toBe("/tmp/from-env");
 
     await temp.cleanup();
   });

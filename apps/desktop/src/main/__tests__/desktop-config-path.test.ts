@@ -4,7 +4,6 @@ import {
   defaultDesktopConfigDir,
   resolveDesktopConfigPath,
 } from "../settings/desktop-config";
-import { DESKTOP_CONFIG_PATH_ENV } from "../settings/desktop-settings-env";
 import { PWRAGNT_HOME_ENV } from "../profile";
 
 describe("desktop config path", () => {
@@ -36,18 +35,6 @@ describe("desktop config path", () => {
         homeDir: "/Users/tester",
       }),
     ).toBe(path.join("/tmp/pwragnt-home/profiles/default", "config.toml"));
-  });
-
-  it("prefers PWRAGNT_CONFIG_PATH over profile path for backward compatibility", () => {
-    expect(
-      resolveDesktopConfigPath({
-        env: {
-          [DESKTOP_CONFIG_PATH_ENV]: "/tmp/explicit/config.toml",
-          [PWRAGNT_HOME_ENV]: "/tmp/pwragnt-home",
-        } as NodeJS.ProcessEnv,
-        homeDir: "/Users/tester",
-      }),
-    ).toBe("/tmp/explicit/config.toml");
   });
 
   it("defaults to the profile path under ~/.pwragnt/", () => {

@@ -69,8 +69,6 @@ export function resolveGrokAppServerRuntimeConfig(
 ): GrokAppServerRuntimeConfig {
   const env = options?.env ?? process.env;
   const configPath = defaultGrokAppServerConfigPath(options);
-  const stateRoot =
-    env.GROK_APP_SERVER_STATE_ROOT?.trim() || undefined;
   const parsedConfig = readConfigToml(configPath);
   const legacyConfig = readLegacyEnvConfig(options);
 
@@ -89,8 +87,7 @@ export function resolveGrokAppServerRuntimeConfig(
       || legacyConfig.GROK_MODEL,
     configPath,
     stateRoot:
-      stateRoot
-      || readString(parsedConfig.state_root)
+      readString(parsedConfig.state_root)
       || defaultGrokAppServerStateDir(options),
   };
 }

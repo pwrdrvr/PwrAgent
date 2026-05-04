@@ -977,7 +977,6 @@ export class DesktopBackendRegistry {
       : createProtocolCaptureFromEnv({
           backend: "codex",
           backendInstance: "default",
-          userDataPath: app.getPath("userData"),
         });
     if (codexDefaultCapture) {
       this.captureStores.push(codexDefaultCapture.store);
@@ -994,7 +993,6 @@ export class DesktopBackendRegistry {
       : createProtocolCaptureFromEnv({
           backend: "codex",
           backendInstance: "full-access",
-          userDataPath: app.getPath("userData"),
         });
     if (codexFullAccessCapture) {
       this.captureStores.push(codexFullAccessCapture.store);
@@ -1011,7 +1009,6 @@ export class DesktopBackendRegistry {
       : createProtocolCaptureFromEnv({
           backend: "grok",
           backendInstance: "default",
-          userDataPath: app.getPath("userData"),
         });
     if (grokCapture) {
       this.captureStores.push(grokCapture.store);
