@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { resolveActiveProfilePath } from "../profile";
 
 function formatLocalDatePrefix(date: Date): string {
   const year = String(date.getFullYear());
@@ -10,10 +10,17 @@ function formatLocalDatePrefix(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+export function resolveScratchProjectsRoot(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): string {
+  return resolveActiveProfilePath("projects", options);
+}
+
 export async function createScratchProjectDirectory(
   now = new Date()
 ): Promise<string> {
-  const projectsRoot = path.join(os.homedir(), ".pwragnt", "projects");
+  const projectsRoot = resolveScratchProjectsRoot();
   await fs.mkdir(projectsRoot, { recursive: true });
 
   const prefix = formatLocalDatePrefix(now);

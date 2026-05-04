@@ -30,7 +30,7 @@ async function createProviderSelectorFixture(params: {
 }> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-provider-model-selectors-"));
   const fixturePath = path.join(rootDir, "provider-model-selectors.fixture.json");
-  const stateRoot = path.join(rootDir, "state");
+  const stateRoot = path.join(rootDir, ".local", "state", "pwragnt");
 
   if (params.launchpadDefaults) {
     await mkdir(stateRoot, { recursive: true });
@@ -90,7 +90,7 @@ async function createProviderSelectorFixture(params: {
     fixturePath,
     env: params.launchpadDefaults
       ? {
-          PWRAGNT_STATE_ROOT: stateRoot,
+          HOME: rootDir,
         }
       : undefined,
     cleanup: async () => {

@@ -40,6 +40,7 @@ import {
 import { loadDesktopMessagingConfigFromSettings } from "./messaging/messaging-config";
 import { resolveRuntimeMessagingOverride } from "./runtime-flags";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
+import { disposeAppState, initializeAppState } from "./state/app-state";
 import { createMainWindow } from "./window";
 
 const APP_NAME = "PwrAgnt";
@@ -91,6 +92,7 @@ export function bootstrapApp(): void {
   app.whenReady().then(async () => {
     const startupCpuProfiler = new StartupCpuProfiler();
     await startupCpuProfiler.start();
+    initializeAppState();
     installApplicationMenu();
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();
@@ -150,6 +152,7 @@ export function bootstrapApp(): void {
     }
     void disposeDesktopMessagingRuntime();
     void disposeAppServerIpcHandlers();
+    disposeAppState();
   });
 }
 

@@ -1,5 +1,5 @@
 import { ipcMain } from "electron";
-import { OverlayStore } from "@pwragnt/agent-core";
+import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type {
   AppServerBackendScope,
   ArchiveWorktreeRequest,
@@ -406,7 +406,7 @@ class DesktopAppServerService {
     await disposeDesktopBackendRegistry();
   }
 
-  private getOverlayStore(): OverlayStore {
+  private getOverlayStore(): OverlayStoreLike {
     return getDesktopOverlayStore();
   }
 

@@ -178,11 +178,11 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("@pwragnt/agent-core", () => ({
-  OverlayStore: class MockOverlayStore {
-    reconcileNavigationSnapshot = reconcileNavigationSnapshot;
-    markThreadSeen = markThreadSeen;
-  },
+vi.mock("../app-server/desktop-overlay-store", () => ({
+  getDesktopOverlayStore: () => ({
+    reconcileNavigationSnapshot,
+    markThreadSeen,
+  }),
 }));
 
 vi.mock("../app-server/backend-registry", () => ({

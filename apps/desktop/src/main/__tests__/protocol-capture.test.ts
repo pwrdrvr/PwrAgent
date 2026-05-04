@@ -148,7 +148,6 @@ describe("ProtocolCaptureStore", () => {
       createProtocolCaptureFromEnv({
         backend: "codex",
         backendInstance: "default",
-        userDataPath: rootDir
       })
     ).toBeUndefined();
 
@@ -158,7 +157,6 @@ describe("ProtocolCaptureStore", () => {
     const capture = createProtocolCaptureFromEnv({
       backend: "codex",
       backendInstance: "default",
-      userDataPath: "/unused"
     });
 
     expect(capture).toBeDefined();

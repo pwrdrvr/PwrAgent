@@ -5,7 +5,6 @@ import type {
 } from "@pwragnt/shared";
 import { isDesktopWorktreeStorageLocation } from "@pwragnt/shared";
 
-export const DESKTOP_CONFIG_PATH_ENV = "PWRAGNT_CONFIG_PATH";
 export const CHAT_REPLY_COMPOSER_ENV =
   "PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER";
 export const TELEGRAM_ENABLED_ENV = "PWRAGNT_MESSAGING_TELEGRAM_ENABLED";

@@ -39,6 +39,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  const { resetAppStateForTests } = await import("../state/app-state");
+  resetAppStateForTests();
   vi.unstubAllEnvs();
   vi.resetModules();
   await Promise.all(
@@ -627,7 +629,12 @@ async function createRuntimeHarness(): Promise<{
 async function prepareRuntimeStore(): Promise<void> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-runtime-"));
   tempDirs.push(tempDir);
-  vi.stubEnv("PWRAGNT_STATE_ROOT", tempDir);
+  vi.stubEnv("PWRAGNT_HOME", tempDir);
+  const { initializeAppState, resetAppStateForTests } = await import(
+    "../state/app-state"
+  );
+  resetAppStateForTests();
+  initializeAppState();
   const { resetDesktopMessagingStoreForTests } = await import(
     "../messaging/desktop-messaging-store"
   );

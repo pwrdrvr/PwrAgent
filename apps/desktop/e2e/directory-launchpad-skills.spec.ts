@@ -865,7 +865,8 @@ test("directory launchpad Tiptap composer select all delete clears chips without
 
 test("directory launchpad Tiptap composer deletes a persisted skill chip with repeated backspace", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
-  const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-tiptap-saved-"));
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-tiptap-saved-"));
+  const stateRoot = path.join(homeDir, ".local", "state", "pwragnt");
   await seedPersistedDirectoryLaunchpad({
     repoDir: fixture.repoDir,
     stateRoot,
@@ -874,7 +875,7 @@ test("directory launchpad Tiptap composer deletes a persisted skill chip with re
     fixturePath: fixture.fixturePath,
     env: {
       ...TIPTAP_COMPOSER_ENV,
-      PWRAGNT_STATE_ROOT: stateRoot,
+      HOME: homeDir,
     },
   });
 
@@ -898,7 +899,7 @@ test("directory launchpad Tiptap composer deletes a persisted skill chip with re
   } finally {
     await app.close();
     await fixture.cleanup();
-    await rm(stateRoot, { recursive: true, force: true });
+    await rm(homeDir, { recursive: true, force: true });
   }
 });
 
@@ -1216,7 +1217,8 @@ test("directory launchpad types at the clicked text caret between skill chips", 
 
 test("directory launchpad deletes a persisted skill chip with repeated backspace", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
-  const stateRoot = await mkdtemp(path.join(os.tmpdir(), "pwragnt-saved-launchpad-"));
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-saved-launchpad-"));
+  const stateRoot = path.join(homeDir, ".local", "state", "pwragnt");
   await seedPersistedDirectoryLaunchpad({
     repoDir: fixture.repoDir,
     stateRoot,
@@ -1225,7 +1227,7 @@ test("directory launchpad deletes a persisted skill chip with repeated backspace
     fixturePath: fixture.fixturePath,
     env: {
       ...CUSTOM_WIDGET_COMPOSER_ENV,
-      PWRAGNT_STATE_ROOT: stateRoot,
+      HOME: homeDir,
     },
   });
 
@@ -1253,7 +1255,7 @@ test("directory launchpad deletes a persisted skill chip with repeated backspace
   } finally {
     await app.close();
     await fixture.cleanup();
-    await rm(stateRoot, { recursive: true, force: true });
+    await rm(homeDir, { recursive: true, force: true });
   }
 });
 

@@ -2,7 +2,7 @@ import { app } from "electron";
 import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-import { OverlayStore } from "@pwragnt/agent-core";
+import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import {
   shortenDerivedThreadTitle,
   type AgentEvent,
@@ -932,7 +932,7 @@ export class DesktopBackendRegistry {
   private readonly codexDefaultClient: BackendClient;
   private readonly codexFullAccessClient: BackendClient;
   private readonly grokClient: BackendClient;
-  private readonly overlayStore: OverlayStore;
+  private readonly overlayStore: OverlayStoreLike;
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
@@ -963,7 +963,7 @@ export class DesktopBackendRegistry {
     codexClient?: BackendClient;
     codexFullAccessClient?: BackendClient;
     grokClient?: BackendClient;
-    overlayStore?: OverlayStore;
+    overlayStore?: OverlayStoreLike;
     gitDirectoryService?: GitDirectoryService;
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
     worktreeArchiveService?: WorktreeArchiveService;
@@ -977,7 +977,6 @@ export class DesktopBackendRegistry {
       : createProtocolCaptureFromEnv({
           backend: "codex",
           backendInstance: "default",
-          userDataPath: app.getPath("userData"),
         });
     if (codexDefaultCapture) {
       this.captureStores.push(codexDefaultCapture.store);
@@ -994,7 +993,6 @@ export class DesktopBackendRegistry {
       : createProtocolCaptureFromEnv({
           backend: "codex",
           backendInstance: "full-access",
-          userDataPath: app.getPath("userData"),
         });
     if (codexFullAccessCapture) {
       this.captureStores.push(codexFullAccessCapture.store);
@@ -1011,7 +1009,6 @@ export class DesktopBackendRegistry {
       : createProtocolCaptureFromEnv({
           backend: "grok",
           backendInstance: "default",
-          userDataPath: app.getPath("userData"),
         });
     if (grokCapture) {
       this.captureStores.push(grokCapture.store);

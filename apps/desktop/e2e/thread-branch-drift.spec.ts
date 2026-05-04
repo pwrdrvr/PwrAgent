@@ -1,18 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
+import Database from "better-sqlite3";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 async function createBranchDriftFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
-  stateRoot: string;
+  homeDir: string;
 }> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragnt-branch-drift-"));
   const repoDir = path.join(rootDir, "FixtureRepo");
-  const stateRoot = path.join(rootDir, "state");
+  const stateRoot = path.join(rootDir, ".local", "state", "pwragnt");
   await mkdir(repoDir, { recursive: true });
   await mkdir(stateRoot, { recursive: true });
 
@@ -155,7 +156,7 @@ async function createBranchDriftFixture(): Promise<{
       await rm(rootDir, { force: true, recursive: true });
     },
     fixturePath,
-    stateRoot,
+    homeDir: rootDir,
   };
 }
 
@@ -164,7 +165,7 @@ test("keeps the branch drift warning open after refreshing observed checkout sta
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
     env: {
-      PWRAGNT_STATE_ROOT: fixture.stateRoot,
+      HOME: fixture.homeDir,
     },
   });
 
@@ -180,15 +181,28 @@ test("keeps the branch drift warning open after refreshing observed checkout sta
 
     await expect(dialog).toBeVisible();
 
-    const overlay = JSON.parse(
-      await readFile(path.join(fixture.stateRoot, "overlay-state.json"), "utf8"),
-    ) as {
-      threads: Record<string, { gitBranch?: string; observedGitBranch?: string }>;
-    };
-    expect(overlay.threads["codex:thread-branch-drift"]).toMatchObject({
-      gitBranch: "codex/expected-branch",
-      observedGitBranch: "codex/current-branch",
-    });
+    const dbPath = path.join(
+      fixture.homeDir,
+      ".pwragnt",
+      "profiles",
+      "default",
+      "state",
+      "state.db",
+    );
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const row = db
+        .prepare("SELECT payload FROM threads WHERE thread_id = ?")
+        .get("codex:thread-branch-drift") as { payload: string } | undefined;
+      expect(row).toBeDefined();
+      const thread = JSON.parse(row!.payload);
+      expect(thread).toMatchObject({
+        gitBranch: "codex/expected-branch",
+        observedGitBranch: "codex/current-branch",
+      });
+    } finally {
+      db.close();
+    }
   } finally {
     await app.close();
     await fixture.cleanup();

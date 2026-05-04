@@ -1,5 +1,5 @@
 import { MessagingController } from "./core/messaging-controller";
-import type { MessagingStore } from "./core/messaging-store";
+import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import type {
   MessagingAdapter,
   MessagingBackendBridge,
@@ -37,7 +37,7 @@ export type DesktopMessagingAdapter = {
 
 export type DesktopMessagingAdapterFactory = (params: {
   config: DesktopMessagingConfig;
-  store: MessagingStore;
+  store: MessagingStoreLike;
 }) => DesktopMessagingAdapter[] | Promise<DesktopMessagingAdapter[]>;
 
 export type DesktopMessagingConfigLoader = () =>
@@ -215,7 +215,7 @@ export function resetDesktopMessagingRuntimeForTests(): void {
 
 function createConfiguredAdapters(params: {
   config: DesktopMessagingConfig;
-  store: MessagingStore;
+  store: MessagingStoreLike;
 }): Promise<DesktopMessagingAdapter[]> {
   return loadConfiguredMessagingAdapters(params);
 }

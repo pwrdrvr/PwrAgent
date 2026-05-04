@@ -3,20 +3,23 @@ import os from "node:os";
 import path from "node:path";
 import { parseFlatToml } from "./simple-toml.js";
 
+const PWRAGNT_HOME_ENV = "PWRAGNT_HOME";
+
 type ConfigDirOptions = {
   homeDir?: string;
   xdgConfigHome?: string;
+  pwragntHome?: string;
+  env?: NodeJS.ProcessEnv;
 };
 
 type StateDirOptions = {
   homeDir?: string;
   xdgStateHome?: string;
+  pwragntHome?: string;
+  env?: NodeJS.ProcessEnv;
 };
 
-type ResolveConfigOptions = ConfigDirOptions &
-  StateDirOptions & {
-    env?: NodeJS.ProcessEnv;
-  };
+type ResolveConfigOptions = ConfigDirOptions & StateDirOptions;
 
 export type GrokAppServerRuntimeConfig = {
   apiKey?: string;
@@ -26,7 +29,19 @@ export type GrokAppServerRuntimeConfig = {
   stateRoot: string;
 };
 
+function readPwragntHomeFromOptions(options?: {
+  pwragntHome?: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  if (options?.pwragntHome?.trim()) return path.resolve(options.pwragntHome.trim());
+  const env = options?.env ?? process.env;
+  const value = env[PWRAGNT_HOME_ENV]?.trim();
+  return value ? path.resolve(value) : undefined;
+}
+
 export function defaultGrokAppServerConfigDir(options?: ConfigDirOptions): string {
+  const pwragntHome = readPwragntHomeFromOptions(options);
+  if (pwragntHome) return path.join(pwragntHome, "grok-app-server");
   const homeDir = options?.homeDir ?? os.homedir();
   const xdgConfigHome =
     options?.xdgConfigHome?.trim() || process.env.XDG_CONFIG_HOME?.trim();
@@ -38,6 +53,8 @@ export function defaultGrokAppServerConfigPath(options?: ConfigDirOptions): stri
 }
 
 export function defaultGrokAppServerStateDir(options?: StateDirOptions): string {
+  const pwragntHome = readPwragntHomeFromOptions(options);
+  if (pwragntHome) return path.join(pwragntHome, "grok-app-server");
   const homeDir = options?.homeDir ?? os.homedir();
   const xdgStateHome =
     options?.xdgStateHome?.trim() || process.env.XDG_STATE_HOME?.trim();
@@ -52,8 +69,6 @@ export function resolveGrokAppServerRuntimeConfig(
 ): GrokAppServerRuntimeConfig {
   const env = options?.env ?? process.env;
   const configPath = defaultGrokAppServerConfigPath(options);
-  const stateRoot =
-    env.GROK_APP_SERVER_STATE_ROOT?.trim() || undefined;
   const parsedConfig = readConfigToml(configPath);
   const legacyConfig = readLegacyEnvConfig(options);
 
@@ -72,8 +87,7 @@ export function resolveGrokAppServerRuntimeConfig(
       || legacyConfig.GROK_MODEL,
     configPath,
     stateRoot:
-      stateRoot
-      || readString(parsedConfig.state_root)
+      readString(parsedConfig.state_root)
       || defaultGrokAppServerStateDir(options),
   };
 }
