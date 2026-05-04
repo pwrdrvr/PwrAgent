@@ -46,6 +46,13 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   directoryKind: DirectorySummaryKind;
   directoryLabel: string;
   directoryPath?: string;
+  /**
+   * Tiptap JSON document for the rich-text composer. When present, the
+   * renderer restores the editor state directly instead of re-parsing
+   * `prompt` as markdown — round-tripping markdown is lossy for inline
+   * marks and creates phantom blank lines for empty paragraphs.
+   */
+  editorDocument?: Record<string, unknown>;
   imageAttachments?: NavigationLaunchpadImageAttachment[];
   prompt: string;
   settingsTouchedAt?: number;

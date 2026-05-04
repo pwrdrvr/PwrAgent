@@ -93,4 +93,34 @@ describe("ComposerTiptapInput", () => {
     });
     expect(container.querySelector("a")).not.toBeInTheDocument();
   });
+
+  it("renders multi-paragraph markdown without phantom empty paragraphs", async () => {
+    const original =
+      "Hi Mom! New Thread Launchpad\n\n`abc123` is probably the best ID I can come up with";
+    const { container } = renderTiptapInput({ value: original });
+
+    await screen.findByRole("textbox", { name: "Reply" });
+
+    // The blank line between the two text blocks is a markdown
+    // paragraph SEPARATOR, not its own empty <p>. If we created an empty
+    // paragraph node for it, every round trip would double-space the doc
+    // (1 → 3 → 7 blank lines after each reopen).
+    const paragraphs = container.querySelectorAll(".composer-tiptap-input__editor > p");
+    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs[0]?.textContent).toContain("Hi Mom!");
+    expect(paragraphs[1]?.textContent).toContain("abc123");
+  });
+
+  it("preserves inline marks on markdown round trip", async () => {
+    const original =
+      "Look at **this bold word** and *this italic* and `inline code`.";
+    const { container } = renderTiptapInput({ value: original });
+
+    await screen.findByRole("textbox", { name: "Reply" });
+
+    expect(container.querySelector("strong")).toHaveTextContent("this bold word");
+    expect(container.querySelector("em")).toHaveTextContent("this italic");
+    expect(container.querySelector("code")).toHaveTextContent("inline code");
+  });
+
 });
