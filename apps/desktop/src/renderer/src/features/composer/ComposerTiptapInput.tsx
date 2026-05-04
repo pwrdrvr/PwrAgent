@@ -22,6 +22,7 @@ import type {
 } from "./ComposerRichInput";
 
 type ComposerTiptapInputProps = ComposerRichInputProps & {
+  editorDocument?: JSONContent;
   markdownConversion?: boolean;
 };
 
@@ -726,7 +727,7 @@ export const ComposerTiptapInput = forwardRef<
 
   propsRef.current = props;
   const initialContent = useMemo(
-    () => buildTiptapContent(props.value, props.skillTokens),
+    () => props.editorDocument ?? buildTiptapContent(props.value, props.skillTokens),
     []
   );
   const editor = useEditor({
@@ -801,7 +802,10 @@ export const ComposerTiptapInput = forwardRef<
       const pendingSignature = pendingExternalSignatureRef.current;
       if (
         pendingSignature &&
-        getContentSignature(next) !== pendingSignature
+        getContentSignature({
+          value: next.value,
+          skillTokens: next.skillTokens,
+        }) !== pendingSignature
       ) {
         return;
       }
@@ -811,7 +815,9 @@ export const ComposerTiptapInput = forwardRef<
         nextEditor.state.selection.from,
         readMode,
       );
-      propsRef.current.onChange(next.value, next.skillTokens);
+      propsRef.current.onChange(next.value, next.skillTokens, {
+        editorDocument: nextEditor.getJSON(),
+      });
     },
     onSelectionUpdate: ({ editor: nextEditor }) => {
       selectionIndexRef.current = getDraftIndexAtPosition(
@@ -857,7 +863,26 @@ export const ComposerTiptapInput = forwardRef<
 
     const current = readTiptapContent(editor, readMode);
     const currentSignature = getContentSignature(current);
+    const currentEditorDocumentSignature = JSON.stringify(editor.getJSON());
+    const nextEditorDocumentSignature = props.editorDocument
+      ? JSON.stringify(props.editorDocument)
+      : undefined;
     if (currentSignature === propsSignature) {
+      if (
+        !nextEditorDocumentSignature ||
+        currentEditorDocumentSignature === nextEditorDocumentSignature
+      ) {
+        pendingExternalSignatureRef.current = undefined;
+        return;
+      }
+    }
+
+    if (
+      nextEditorDocumentSignature &&
+      currentEditorDocumentSignature !== nextEditorDocumentSignature
+    ) {
+      pendingExternalSignatureRef.current = propsSignature;
+      editor.commands.setContent(props.editorDocument!, { emitUpdate: false });
       pendingExternalSignatureRef.current = undefined;
       return;
     }
@@ -892,7 +917,14 @@ export const ComposerTiptapInput = forwardRef<
         getPositionAtDraftIndex(editor, nextSelectionIndex, readMode),
       );
     }
-  }, [editor, props.skillTokens, props.value, propsSignature, readMode]);
+  }, [
+    editor,
+    props.editorDocument,
+    props.skillTokens,
+    props.value,
+    propsSignature,
+    readMode,
+  ]);
 
   useEffect(() => {
     if (!editor) {

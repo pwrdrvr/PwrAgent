@@ -9,7 +9,10 @@ import type {
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
-import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
+import {
+  DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
+  DESKTOP_WORKTREE_STORAGE_DEFAULT,
+} from "@pwragent/shared";
 import {
   mergeDesktopSettingsConfig,
   readDesktopSettingsConfig,
@@ -313,7 +316,7 @@ export class DesktopSettingsService {
     }
 
     return {
-      value: configValue ?? "textarea",
+      value: configValue ?? DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
       source: configValue === undefined ? "default" : "config",
       error: envValue.error,
     };

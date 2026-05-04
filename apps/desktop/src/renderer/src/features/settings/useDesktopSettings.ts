@@ -8,6 +8,7 @@ import type {
   ReplaceDesktopSettingsSecretRequest,
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared";
+import { DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 
@@ -138,7 +139,10 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
     () => ({
       clearSecret,
       composerImplementation:
-        snapshot?.experimental.chatReplyComposer.value ?? "textarea",
+        snapshot?.experimental.chatReplyComposer.value ??
+        (desktopApi?.readSettings
+          ? DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT
+          : "textarea"),
       error,
       loading,
       refresh,
@@ -149,6 +153,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
     }),
     [
       clearSecret,
+      desktopApi?.readSettings,
       error,
       loading,
       refresh,

@@ -1461,6 +1461,11 @@ textarea,
 }
 
 .settings-segmented__button {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
   min-height: 34px;
   appearance: none;
   cursor: pointer;
@@ -1473,6 +1478,13 @@ textarea,
   font-weight: 650;
 }
 
+.settings-segmented__meta {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .settings-segmented__button:hover,
 .settings-segmented__button:focus-visible,
 .settings-segmented__button.is-active {
@@ -1480,6 +1492,12 @@ textarea,
   background: var(--accent-soft);
   color: var(--text-primary);
   outline: none;
+}
+
+.settings-segmented__button:hover .settings-segmented__meta,
+.settings-segmented__button:focus-visible .settings-segmented__meta,
+.settings-segmented__button.is-active .settings-segmented__meta {
+  color: var(--text-secondary);
 }
 
 .settings-secret {

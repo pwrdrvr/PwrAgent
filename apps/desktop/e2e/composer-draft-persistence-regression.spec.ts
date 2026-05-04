@@ -297,3 +297,52 @@ test("keeps Tiptap launchpad and reply drafts with pasted images across switchin
     await fixture.cleanup();
   }
 });
+
+test("restores an already-open Tiptap WYSIWYG reply as rendered markdown after switching away", async () => {
+  const fixture = await createComposerDraftPersistenceFixture();
+  const app = await launchElectronApp({
+    env: {
+      PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER:
+        "tiptap-wysiwyg-markdown-chips",
+    },
+    fixturePath: fixture.fixturePath,
+  });
+
+  try {
+    await openExistingThread(app);
+
+    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
+    const textbox = app.window.getByRole("textbox", { name: "Reply" });
+    await textbox.focus();
+    await app.window.keyboard.type("```ts ");
+    await app.window.keyboard.type("const threadId = 'thread-existing';");
+    await app.window.keyboard.press("Shift+Enter");
+    await app.window.keyboard.type("return threadId;");
+
+    const expectedMarkdown =
+      "```ts\nconst threadId = 'thread-existing';\nreturn threadId;\n```";
+    await expect(
+      tiptapInput.locator("pre", {
+        hasText: "const threadId = 'thread-existing';\nreturn threadId;",
+      }),
+    ).toBeVisible();
+    await expect(tiptapInput).toHaveAttribute("data-value", expectedMarkdown);
+
+    await openDirectoryLaunchpad(app);
+    await openExistingThread(app);
+
+    const restoredTiptapInput = app.window.getByTestId("composer-tiptap-input");
+    await expect(restoredTiptapInput).toHaveAttribute(
+      "data-value",
+      expectedMarkdown,
+    );
+    await expect(
+      restoredTiptapInput.locator("pre", {
+        hasText: "const threadId = 'thread-existing';\nreturn threadId;",
+      }),
+    ).toBeVisible();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});

@@ -371,7 +371,7 @@ describe("DesktopSettingsService", () => {
 
     expect(snapshot.configError).toContain("Invalid TOML line");
     expect(snapshot.experimental.chatReplyComposer).toEqual({
-      value: "textarea",
+      value: "tiptap-wysiwyg-markdown-chips",
       source: "default",
     });
   });
