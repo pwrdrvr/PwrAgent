@@ -265,6 +265,44 @@ function buildLocalLinkedDirectory(cwd: string | undefined): LinkedDirectorySumm
   ];
 }
 
+function buildWorktreeLinkedDirectory(params: {
+  repositoryPath?: string;
+  worktreePath?: string;
+  label?: string;
+}): LinkedDirectorySummary[] {
+  const normalizedWorktreePath = params.worktreePath?.trim();
+  if (!normalizedWorktreePath) {
+    return [];
+  }
+
+  const worktreePath = path.resolve(normalizedWorktreePath);
+  const repositoryPath = path.resolve(params.repositoryPath?.trim() || worktreePath);
+  const label = params.label?.trim() || path.basename(repositoryPath) || repositoryPath;
+
+  return [
+    {
+      id: repositoryPath,
+      kind: "worktree",
+      label,
+      path: repositoryPath,
+      worktreePath,
+    },
+  ];
+}
+
+function normalizeLinkedDirectoryKind(
+  directory: LinkedDirectorySummary,
+): LinkedDirectorySummary {
+  if (directory.kind === "local" && directory.worktreePath?.trim()) {
+    return {
+      ...directory,
+      kind: "worktree",
+    };
+  }
+
+  return directory;
+}
+
 function pendingStartedThreadMatchesFilter(
   thread: AppServerThreadSummary,
   filter: string | undefined,
@@ -1480,8 +1518,9 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
-    const { backend, executionMode = "default", ...request } = params;
+    const { backend, executionMode = "default", linkedDirectories, ...request } = params;
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const modelSettings = await this.resolveModelSettings(backend, request);
     const cwd =
@@ -1509,7 +1548,9 @@ export class DesktopBackendRegistry {
         updatedAt: startedAt,
         executionMode,
         ...modelSettings,
-        linkedDirectories: buildLocalLinkedDirectory(cwd),
+        linkedDirectories: (
+          linkedDirectories?.length ? linkedDirectories : buildLocalLinkedDirectory(cwd)
+        ).map(normalizeLinkedDirectoryKind),
         gitBranch: cwd ? await readCurrentGitBranch(cwd).catch(() => undefined) : undefined,
       },
     );
@@ -2146,6 +2187,14 @@ export class DesktopBackendRegistry {
       backend: launchpad.backend,
       executionMode: launchpad.executionMode,
       cwd: workspace.cwd,
+      linkedDirectories:
+        workspace.workMode === "worktree"
+          ? buildWorktreeLinkedDirectory({
+              label: launchpad.directoryLabel,
+              repositoryPath: workspace.repositoryPath ?? launchpad.directoryPath,
+              worktreePath: workspace.cwd,
+            })
+          : undefined,
       model: launchpad.model,
       reasoningEffort: launchpad.reasoningEffort,
       serviceTier: launchpad.serviceTier,

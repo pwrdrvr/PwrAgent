@@ -188,10 +188,11 @@ async function createDirectoryLaunchpadFixture(): Promise<{
                 gitBranch: "HEAD",
                 linkedDirectories: [
                   {
-                    id: worktreeDir,
+                    id: repoDir,
                     label: "FixtureRepo",
-                    path: worktreeDir,
-                    kind: "local",
+                    path: repoDir,
+                    worktreePath: worktreeDir,
+                    kind: "worktree",
                   },
                 ],
                 updatedAt: 1760000001000,
@@ -697,6 +698,24 @@ test("directory launchpad keeps new worktree as the sticky default after startin
       version: 1,
       ownerThreadId: "thread-new-worktree",
     });
+
+    const startedThreadRow = app.window
+      .getByRole("button", { name: /Use a sticky worktree default/ })
+      .first();
+    const startedThreadMeta = startedThreadRow.locator(".thread-row__meta");
+    await expect(startedThreadMeta.getByText("worktree", { exact: true })).toBeVisible();
+    await expect(startedThreadMeta.getByText("local", { exact: true })).toHaveCount(0);
+
+    await app.window.getByRole("button", { name: "Open context rail" }).click();
+    const contextRail = app.window.getByRole("complementary", {
+      name: "Thread context",
+    });
+    await expect(
+      contextRail.getByLabel("Path for worktree FixtureRepo", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      contextRail.getByLabel("Path for local FixtureRepo", { exact: true }),
+    ).toHaveCount(0);
 
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })

@@ -1580,6 +1580,67 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("keeps materialized worktree threads linked as worktrees before the backend list catches up", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/start"] },
+      threads: [],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list", "thread/start"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/app/.worktrees/thread-1/app",
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: "directory:/repo/app",
+      launchpad: {
+        directoryKey: "directory:/repo/app",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "worktree",
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        projectKey: "/repo/app/.worktrees/thread-1/app",
+        linkedDirectories: [
+          {
+            id: "/repo/app",
+            kind: "worktree",
+            label: "app",
+            path: "/repo/app",
+            worktreePath: "/repo/app/.worktrees/thread-1/app",
+          },
+        ],
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("materializes Grok workspace launchpads into a scratch directory", async () => {
     const grokClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },
