@@ -1442,6 +1442,444 @@ describe("MessagingController", () => {
     expect(binding).not.toHaveProperty("activeTurn");
   });
 
+  it("coalesces assistant stream deltas and flushes the final turn text", async () => {
+    let now = 1000;
+    const harness = await createHarness({
+      now: () => now,
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "Hello",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "stream_update",
+        markdown: "plain",
+        text: "Hello",
+        stream: expect.objectContaining({
+          isFinal: false,
+          itemId: "item-1",
+          sequence: 1,
+          turnId: "turn-1",
+        }),
+      }),
+    ]);
+    const firstStream = harness.delivered[0];
+    if (firstStream?.kind !== "stream_update") {
+      throw new Error("expected first stream update");
+    }
+
+    now += 500;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-2",
+          delta: " world",
+        },
+      },
+    } satisfies AgentEvent);
+    expect(harness.delivered).toHaveLength(1);
+
+    now += 600;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: ".",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      delivery: {
+        mode: "update",
+        fallback: "fail",
+      },
+      kind: "stream_update",
+      targetSurface: {
+        id: `surface:${firstStream.id}`,
+      },
+      text: "Hello world.",
+      stream: {
+        isFinal: false,
+        key: firstStream.stream.key,
+        sequence: 3,
+      },
+    });
+
+    now += 100;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [
+              {
+                type: "text",
+                text: "Hello world.\n\nFinal answer.",
+              },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const streamUpdates = harness.delivered.filter(
+      (intent) => intent.kind === "stream_update",
+    );
+    const previousStream = streamUpdates.at(-2);
+    if (!previousStream) {
+      throw new Error("expected previous stream update");
+    }
+    expect(streamUpdates.at(-1)).toMatchObject({
+      delivery: {
+        mode: "update",
+        fallback: "fail",
+      },
+      kind: "stream_update",
+      markdown: "markdown",
+      targetSurface: {
+        id: `surface:${previousStream.id}`,
+      },
+      text: "Hello world.\n\nFinal answer.",
+      stream: {
+        isFinal: true,
+        key: firstStream.stream.key,
+        sequence: 4,
+      },
+    });
+    expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([]);
+  });
+
+  it("serializes concurrent assistant stream deliveries onto one surface", async () => {
+    let now = 1000;
+    let releaseFirstDelivery: (() => void) | undefined;
+    let resolveFirstDeliveryStarted: (() => void) | undefined;
+    const firstStreamStarted = new Promise<void>((resolve) => {
+      resolveFirstDeliveryStarted = resolve;
+    });
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      now: () => now,
+      deliver: async (intent) => {
+        delivered.push(intent);
+        if (
+          intent.kind === "stream_update" &&
+          intent.stream.sequence === 1 &&
+          !releaseFirstDelivery
+        ) {
+          resolveFirstDeliveryStarted?.();
+          await new Promise<void>((resolve) => {
+            releaseFirstDelivery = resolve;
+          });
+        }
+        return {
+          channel: "telegram",
+          deliveredAt: now,
+          outcome: intent.kind === "stream_update" && intent.delivery?.mode === "update"
+            ? "updated"
+            : "presented",
+          surface: {
+            channel: "telegram",
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    await bindThread(harness);
+    delivered.length = 0;
+
+    const first = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "Hello",
+        },
+      },
+    } satisfies AgentEvent);
+    await firstStreamStarted;
+
+    now += 100;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: " world",
+        },
+      },
+    } satisfies AgentEvent);
+
+    now += 100;
+    const final = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [
+              {
+                type: "text",
+                text: "Hello world.",
+              },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(delivered).toHaveLength(1);
+    releaseFirstDelivery?.();
+    await Promise.all([first, final]);
+
+    const streamUpdates = delivered.filter(
+      (intent) => intent.kind === "stream_update",
+    );
+    expect(streamUpdates).toHaveLength(2);
+    expect(streamUpdates[1]).toMatchObject({
+      delivery: {
+        mode: "update",
+        fallback: "fail",
+      },
+      targetSurface: {
+        id: `surface:${streamUpdates[0]!.id}`,
+      },
+      text: "Hello world.",
+      stream: {
+        isFinal: true,
+        sequence: 3,
+      },
+    });
+    expect(delivered.filter((intent) => intent.kind === "message")).toEqual([]);
+  });
+
+  it("waits for a pending final stream edit before clearing typing on idle", async () => {
+    let now = 1000;
+    let releaseFinalStream!: () => void;
+    let resolveFinalStreamStarted!: () => void;
+    const finalStreamStarted = new Promise<void>((resolve) => {
+      resolveFinalStreamStarted = resolve;
+    });
+    const finalStreamDelivery = new Promise<void>((resolve) => {
+      releaseFinalStream = resolve;
+    });
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      now: () => now,
+      deliver: async (intent) => {
+        delivered.push(intent);
+        if (intent.kind === "stream_update" && intent.stream.isFinal) {
+          resolveFinalStreamStarted();
+          await finalStreamDelivery;
+        }
+        return {
+          channel: "telegram",
+          deliveredAt: now,
+          outcome: intent.kind === "stream_update" && intent.delivery?.mode === "update"
+            ? "updated"
+            : intent.kind === "status" && intent.delivery?.pin
+              ? "pinned"
+              : "presented",
+          surface: {
+            channel: "telegram",
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    await bindThread(harness);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "running",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "Hello",
+        },
+      },
+    } satisfies AgentEvent);
+
+    now += 100;
+    const final = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "item-1",
+            type: "agentMessage",
+            text: "Hello world.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await finalStreamStarted;
+
+    const idle = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "thread-1",
+          status: {
+            type: "idle",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await Promise.resolve();
+
+    expect(
+      delivered.find((intent) => intent.kind === "activity" && intent.state === "idle"),
+    ).toBeUndefined();
+
+    releaseFinalStream();
+    await Promise.all([final, idle]);
+
+    const finalStreamIndex = delivered.findIndex(
+      (intent) => intent.kind === "stream_update" && intent.stream.isFinal,
+    );
+    const idleActivityIndex = delivered.findIndex(
+      (intent) => intent.kind === "activity" && intent.state === "idle",
+    );
+    expect(finalStreamIndex).toBeGreaterThanOrEqual(0);
+    expect(idleActivityIndex).toBeGreaterThan(finalStreamIndex);
+  });
+
+  it("delivers the final assistant message when stream updates are discarded", async () => {
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      deliver: async (intent) => {
+        delivered.push(intent);
+        return {
+          channel: "telegram",
+          deliveredAt: 1000,
+          outcome: intent.kind === "stream_update" ? "discarded" : "presented",
+          surface: {
+            channel: "telegram",
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    await bindThread(harness);
+    delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "Hello",
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [
+              {
+                type: "text",
+                text: "Hello final.",
+              },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(delivered.filter((intent) => intent.kind === "stream_update")).toEqual([
+      expect.objectContaining({
+        stream: expect.objectContaining({
+          isFinal: false,
+        }),
+      }),
+      expect.objectContaining({
+        stream: expect.objectContaining({
+          isFinal: true,
+        }),
+        text: "Hello final.",
+      }),
+    ]);
+    expect(delivered.filter((intent) => intent.kind === "message")).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            text: "Hello final.",
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("keeps typing active after assistant item text until terminal completion", async () => {
     let now = 1000;
     const harness = await createHarness({

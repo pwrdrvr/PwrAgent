@@ -128,12 +128,14 @@ export type DesktopSettingsSnapshot = {
     attachments: DesktopMessagingAttachmentSettingsSnapshot;
     telegram: {
       enabled: DesktopSettingsValue<boolean>;
+      streamingResponses: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
       authorizedUserIds: DesktopSettingsValue<string[]>;
       authorizedSupergroups: DesktopSettingsValue<string[]>;
     };
     discord: {
       enabled: DesktopSettingsValue<boolean>;
+      streamingResponses: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
       applicationId: DesktopSettingsValue<string>;
       authorizedUserIds: DesktopSettingsValue<string[]>;
@@ -170,11 +172,13 @@ export type DesktopSettingsConfigPatch = {
     };
     telegram?: {
       enabled?: boolean;
+      streamingResponses?: boolean;
       authorizedUserIds?: string[];
       authorizedSupergroups?: string[];
     };
     discord?: {
       enabled?: boolean;
+      streamingResponses?: boolean;
       applicationId?: string;
       authorizedUserIds?: string[];
       authorizedGuilds?: string[];

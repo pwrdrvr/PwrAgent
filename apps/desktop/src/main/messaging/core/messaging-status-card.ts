@@ -73,7 +73,7 @@ export function buildBindingStatusIntent(params: {
     delivery: {
       mode: params.binding.statusSurface ? "update" : "present",
       fallback: "present_new",
-      pin: true,
+      pin: params.binding.pinnedStatusSurface ? undefined : true,
     },
     targetSurface: params.binding.statusSurface,
     status: statusForThreadState(params.threadState),

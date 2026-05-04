@@ -6,6 +6,7 @@ import { MessagingController } from "../messaging/core/messaging-controller";
 import { MessagingStore } from "../messaging/core/messaging-store";
 import type {
   MessagingInboundEvent,
+  MessagingSurfaceIntent,
 } from "@pwragnt/messaging-interface";
 import type {
   NavigationSnapshot,
@@ -330,6 +331,141 @@ describe("DiscordAdapter", () => {
     expect(customId).not.toContain("thread-1");
     expect(secondCustomId).toMatch(/^dc:/);
     expect(secondCustomId).not.toBe(customId);
+  });
+
+  it("discards stream updates unless streaming responses are enabled", async () => {
+    const api = createApi();
+    const adapter = new DiscordAdapter({
+      api: api as unknown as DiscordApi,
+      config: {
+        channel: "discord",
+        botToken: "discord-token",
+        authorizedActorIds: ["42"],
+      },
+      gateway: createGateway(),
+      now: () => 1000,
+    });
+
+    const result = await adapter.deliver({
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "discord",
+          conversation: {
+            id: "channel-1",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      bindingId: "binding-1",
+      createdAt: 1000,
+      id: "stream-1",
+      kind: "stream_update",
+      role: "assistant",
+      stream: {
+        isFinal: false,
+        key: "stream-key-1",
+        sequence: 1,
+      },
+      text: "Hello",
+    } satisfies MessagingSurfaceIntent);
+
+    expect(result).toMatchObject({
+      channel: "discord",
+      outcome: "discarded",
+    });
+    expect(api.createMessage).not.toHaveBeenCalled();
+    expect(api.updateMessage).not.toHaveBeenCalled();
+  });
+
+  it("creates and updates one Discord message for enabled stream updates", async () => {
+    const api = createApi();
+    const adapter = new DiscordAdapter({
+      api: api as unknown as DiscordApi,
+      config: {
+        channel: "discord",
+        botToken: "discord-token",
+        authorizedActorIds: ["42"],
+        streamingResponses: true,
+      },
+      gateway: createGateway(),
+      now: () => 1000,
+    });
+
+    const baseIntent = {
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "discord",
+          conversation: {
+            id: "channel-1",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      bindingId: "binding-1",
+      createdAt: 1000,
+      id: "stream-1",
+      kind: "stream_update",
+      role: "assistant",
+      stream: {
+        isFinal: false,
+        key: "stream-key-1",
+        sequence: 1,
+      },
+      text: "Hello",
+    } satisfies MessagingSurfaceIntent;
+
+    const first = await adapter.deliver(baseIntent);
+    const second = await adapter.deliver({
+      ...baseIntent,
+      id: "stream-2",
+      stream: {
+        ...baseIntent.stream,
+        isFinal: true,
+        sequence: 2,
+      },
+      text: "Hello world",
+    } satisfies MessagingSurfaceIntent);
+
+    expect(first).toMatchObject({
+      outcome: "presented",
+      surface: {
+        id: "message-1",
+      },
+    });
+    expect(second).toMatchObject({
+      outcome: "updated",
+      surface: {
+        id: "message-1",
+      },
+    });
+    expect(api.createMessage).toHaveBeenCalledTimes(1);
+    expect(api.createMessage).toHaveBeenCalledWith(
+      "channel-1",
+      expect.objectContaining({
+        allowed_mentions: {
+          parse: [],
+          replied_user: false,
+          roles: [],
+          users: [],
+        },
+        content: "Hello",
+      }),
+    );
+    expect(api.updateMessage).toHaveBeenCalledWith(
+      "channel-1",
+      "message-1",
+      expect.objectContaining({
+        content: "Hello world",
+      }),
+    );
   });
 
   it("rewrites the Discord picker message when navigating pages", async () => {

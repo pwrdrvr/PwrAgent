@@ -12,6 +12,7 @@ import {
   type MessagingInboundMediaEvent,
   type MessagingMessageIntent,
   type MessagingSingleSelectIntent,
+  type MessagingStreamUpdateIntent,
   type MessagingThreadPickerIntent,
 } from "../index";
 
@@ -20,6 +21,7 @@ describe("messaging surface contract", () => {
     expect(MESSAGING_SURFACE_INTENT_KINDS).toEqual([
       "activity",
       "message",
+      "stream_update",
       "status",
       "progress",
       "thread_picker",
@@ -43,6 +45,7 @@ describe("messaging surface contract", () => {
     expect(MESSAGING_DELIVERY_OUTCOMES).toContain("signaled");
     expect(MESSAGING_DELIVERY_OUTCOMES).toContain("pinned");
     expect(MESSAGING_DELIVERY_OUTCOMES).toContain("unpinned");
+    expect(MESSAGING_DELIVERY_OUTCOMES).toContain("discarded");
     expect(MESSAGING_DELIVERY_OUTCOMES).toContain("unsupported");
     expect(MESSAGING_TOOL_UPDATE_MODES).toEqual([
       "show_none",
@@ -160,6 +163,30 @@ describe("messaging surface contract", () => {
 
     expect(intent.parts).toHaveLength(2);
     expect(intent.parts[0]).toMatchObject({ markdown: "markdown" });
+  });
+
+  it("describes assistant stream updates without backend protocol names", () => {
+    const intent = {
+      id: "intent-stream-1",
+      kind: "stream_update",
+      createdAt: 1000,
+      bindingId: "binding-1",
+      role: "assistant",
+      markdown: "plain",
+      delta: "world",
+      text: "hello world",
+      stream: {
+        key: "codex:thread-1:turn-1:item-1:text",
+        turnId: "turn-1",
+        itemId: "item-1",
+        sequence: 2,
+        isFinal: false,
+      },
+      policy: "inherit",
+    } satisfies MessagingStreamUpdateIntent;
+
+    expect(intent.text).toBe("hello world");
+    expect(JSON.stringify(intent)).not.toMatch(/agentMessage\/delta|telegram|discord/);
   });
 
   it("keeps approval audit data separate from adapter action payloads", () => {

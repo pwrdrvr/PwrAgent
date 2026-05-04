@@ -58,6 +58,21 @@ fails, is interrupted, or enters a pending user-input break such as a Plan
 questionnaire or approval prompt. After the user answers that prompt, typing can
 resume for the same turn until terminal completion.
 
+## Streaming Responses
+
+Telegram and Discord can optionally show live assistant response text while
+backend `item/agentMessage/delta` events are arriving. The controller emits a
+generic stream update intent with accumulated assistant text; each provider then
+renders it only when that provider's streaming setting is enabled. When
+streaming is disabled or an update exceeds a safe platform edit limit, the
+provider discards the stream update and waits for the normal final assistant
+message.
+
+Streaming is separate from typing indicators and tool update notifications.
+Typing still reflects turn lifecycle, and the completed assistant message
+remains authoritative. Stream surfaces are transient runtime state and are not
+persisted as restart-safe managed messages.
+
 ## Tool Update Verbosity
 
 PwrAgnt can send generated tool-use progress messages to bound conversations.
@@ -158,12 +173,14 @@ Telegram:
 
 - `PWRAGNT_MESSAGING_TELEGRAM_BOT_TOKEN`
 - `PWRAGNT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS`
+- `PWRAGNT_MESSAGING_TELEGRAM_STREAMING_RESPONSES`
 
 Discord:
 
 - `PWRAGNT_MESSAGING_DISCORD_BOT_TOKEN`
 - `PWRAGNT_MESSAGING_DISCORD_APPLICATION_ID`
 - `PWRAGNT_MESSAGING_DISCORD_AUTHORIZED_USER_IDS`
+- `PWRAGNT_MESSAGING_DISCORD_STREAMING_RESPONSES`
 
 Attachment policy:
 
@@ -179,6 +196,11 @@ while keeping active-turn queueing enabled.
 The authorized ID variables are comma-separated lists. Bot tokens are redacted
 from runtime logs. Telegram also accepts `TELEGRAM_BOT_TOKEN` and Discord also
 accepts `DISCORD_BOT_TOKEN` as local migration fallbacks.
+
+The TOML equivalents are `streaming_responses = true` under
+`[messaging.telegram]` or `[messaging.discord]`. Both providers default to
+`false`; the Settings > Messaging toggles and environment overrides expose the
+same booleans.
 
 Discord slash commands are reconciled on adapter startup when an Application ID
 is configured. The reconciler reads existing commands and only creates, patches,
@@ -227,24 +249,26 @@ Telegram:
    recoverable error without detaching the conversation.
 11. Send free-form text and verify a PwrAgnt turn starts in the bound thread.
 12. Verify typing continues through an intermediate assistant update and stops at turn completion.
-13. Run a quiet command sequence and verify `Show Some` sends individual tool updates.
-14. Run a noisy command or file-read sequence and verify remaining tool updates batch before the final assistant response.
-15. Cycle Tools through `Show All`, `Show Less`, and `Show None`; verify all, batched, and suppressed behavior respectively.
-16. Trigger a Plan questionnaire and answer with both a button and text fallback.
-17. Trigger an approval request and test accept, session accept, decline, and cancel with both buttons and text.
-18. Verify markdown, inline code, fenced code, long responses, and image output render.
-19. Restart PwrAgnt and verify the same Telegram conversation still routes to the bound thread.
-20. Send `/detach` and verify the status card is unpinned and free-form text asks for `/resume`.
-21. Send a small `.txt` attachment and verify a turn starts with the extracted text.
-22. Send an image attachment and verify a turn starts with normalized image input.
-23. Send an oversized file or voice message and verify it is rejected without model upload.
-24. Verify assistant image and file parts render as Telegram photo/document attachments.
-25. Send a long or split code-block request as two quick messages and verify only one turn starts.
-26. Send a text attachment and a follow-up text message inside the debounce window and verify one turn starts with both inputs.
-27. While a turn is active, send a follow-up message and verify the queued notice shows a quoted preview plus Steer and Cancel controls.
-28. Click Steer and verify the follow-up is sent into the active turn and the queued controls disappear.
-29. Repeat with Cancel and verify the queued input is not submitted after the active turn completes.
-30. Repeat without clicking either action and verify completion starts the queued input as the next turn.
+13. With streaming disabled, trigger a long response and verify no live response message is created or edited before the final answer appears once.
+14. Enable Streaming Responses, trigger a long response, and verify Telegram creates then edits one in-progress response before the final answer appears once.
+15. Run a quiet command sequence and verify `Show Some` sends individual tool updates.
+16. Run a noisy command or file-read sequence and verify remaining tool updates batch before the final assistant response.
+17. Cycle Tools through `Show All`, `Show Less`, and `Show None`; verify all, batched, and suppressed behavior respectively.
+18. Trigger a Plan questionnaire and answer with both a button and text fallback.
+19. Trigger an approval request and test accept, session accept, decline, and cancel with both buttons and text.
+20. Verify markdown, inline code, fenced code, long responses, and image output render.
+21. Restart PwrAgnt and verify the same Telegram conversation still routes to the bound thread.
+22. Send `/detach` and verify the status card is unpinned and free-form text asks for `/resume`.
+23. Send a small `.txt` attachment and verify a turn starts with the extracted text.
+24. Send an image attachment and verify a turn starts with normalized image input.
+25. Send an oversized file or voice message and verify it is rejected without model upload.
+26. Verify assistant image and file parts render as Telegram photo/document attachments.
+27. Send a long or split code-block request as two quick messages and verify only one turn starts.
+28. Send a text attachment and a follow-up text message inside the debounce window and verify one turn starts with both inputs.
+29. While a turn is active, send a follow-up message and verify the queued notice shows a quoted preview plus Steer and Cancel controls.
+30. Click Steer and verify the follow-up is sent into the active turn and the queued controls disappear.
+31. Repeat with Cancel and verify the queued input is not submitted after the active turn completes.
+32. Repeat without clicking either action and verify completion starts the queued input as the next turn.
 
 Discord:
 
@@ -263,21 +287,23 @@ Discord:
    recoverable error without detaching the conversation.
 9. Send free-form text and verify a PwrAgnt turn starts in the bound thread.
 10. Verify typing continues through an intermediate assistant update and stops at turn completion.
-11. Run quiet and noisy tool sequences and verify the selected Tools mode controls individual, batched, or suppressed generated updates.
-12. Trigger a Plan questionnaire and answer with both a component and text fallback.
-13. Trigger an approval request and test accept, session accept, decline, and cancel.
-14. Verify markdown, inline code, fenced code, long responses, and image output render.
-15. Restart PwrAgnt and verify the same Discord channel still routes to the bound thread.
-16. Send a small `.txt` attachment and verify a turn starts with the extracted text.
-17. Send an image attachment and verify a turn starts with normalized image input.
-18. Send an oversized attachment and verify it is rejected without model upload.
-19. Verify assistant image and file parts render as Discord embeds/uploads.
-20. Send a long or split code-block request as two quick messages and verify only one turn starts.
-21. Send a text attachment and a follow-up text message inside the debounce window and verify one turn starts with both inputs.
-22. While a turn is active, send a follow-up message and verify the queued notice shows a quoted preview plus Steer and Cancel controls.
-23. Click Steer and verify the follow-up is sent into the active turn and the queued controls disappear.
-24. Repeat with Cancel and verify the queued input is not submitted after the active turn completes.
-25. Repeat without clicking either action and verify completion starts the queued input as the next turn.
+11. With streaming disabled, trigger a long response and verify no live response message is created or edited before the final answer appears once.
+12. Enable Streaming Responses, trigger a long response, and verify Discord creates then edits one in-progress response before the final answer appears once.
+13. Run quiet and noisy tool sequences and verify the selected Tools mode controls individual, batched, or suppressed generated updates.
+14. Trigger a Plan questionnaire and answer with both a component and text fallback.
+15. Trigger an approval request and test accept, session accept, decline, and cancel.
+16. Verify markdown, inline code, fenced code, long responses, and image output render.
+17. Restart PwrAgnt and verify the same Discord channel still routes to the bound thread.
+18. Send a small `.txt` attachment and verify a turn starts with the extracted text.
+19. Send an image attachment and verify a turn starts with normalized image input.
+20. Send an oversized attachment and verify it is rejected without model upload.
+21. Verify assistant image and file parts render as Discord embeds/uploads.
+22. Send a long or split code-block request as two quick messages and verify only one turn starts.
+23. Send a text attachment and a follow-up text message inside the debounce window and verify one turn starts with both inputs.
+24. While a turn is active, send a follow-up message and verify the queued notice shows a quoted preview plus Steer and Cancel controls.
+25. Click Steer and verify the follow-up is sent into the active turn and the queued controls disappear.
+26. Repeat with Cancel and verify the queued input is not submitted after the active turn completes.
+27. Repeat without clicking either action and verify completion starts the queued input as the next turn.
 
 Discord currently has parity for the shared workflow and button actions, but it
 does not pin or edit status cards yet; status updates degrade to normal

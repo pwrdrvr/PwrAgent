@@ -3,4 +3,5 @@ export type TelegramMessagingConfig = {
   botToken: string;
   channel: "telegram";
   enabled?: boolean;
+  streamingResponses?: boolean;
 };

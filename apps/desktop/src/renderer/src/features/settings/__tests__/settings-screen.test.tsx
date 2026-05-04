@@ -36,12 +36,14 @@ function createSnapshot(
       toolUpdateMode: { value: "show_some", source: "default" },
       telegram: {
         enabled: { value: false, source: "default" },
+        streamingResponses: { value: false, source: "default" },
         botToken: { configured: false, source: "unset", writable: true },
         authorizedUserIds: { value: [], source: "default" },
         authorizedSupergroups: { value: [], source: "default" },
       },
       discord: {
         enabled: { value: false, source: "default" },
+        streamingResponses: { value: false, source: "default" },
         botToken: { configured: false, source: "unset", writable: true },
         applicationId: { value: "", source: "default" },
         authorizedUserIds: { value: [], source: "default" },
@@ -214,6 +216,19 @@ describe("SettingsScreen", () => {
     });
     expect(screen.getByRole("heading", { name: "Telegram" })).toBeInTheDocument();
     expect(screen.getByText("Authorized SuperGroups")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("checkbox", { name: "Streaming Responses" })[0]!);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          telegram: {
+            authorizedSupergroups: [],
+            authorizedUserIds: [],
+            enabled: false,
+            streamingResponses: true,
+          },
+        },
+      });
+    });
     expect(screen.getAllByText("unset").length).toBeGreaterThanOrEqual(5);
     expect(screen.getAllByText("default").length).toBeGreaterThanOrEqual(2);
 

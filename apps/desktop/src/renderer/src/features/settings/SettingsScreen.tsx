@@ -176,6 +176,7 @@ function SettingsSectionBody(props: {
                 authorizedGuilds: discord.authorizedGuilds.value,
                 authorizedUserIds: discord.authorizedUserIds.value,
                 enabled: discord.enabled.value,
+                streamingResponses: discord.streamingResponses.value,
               },
             },
           });
@@ -187,6 +188,7 @@ function SettingsSectionBody(props: {
                 authorizedSupergroups: telegram.authorizedSupergroups.value,
                 authorizedUserIds: telegram.authorizedUserIds.value,
                 enabled: telegram.enabled.value,
+                streamingResponses: telegram.streamingResponses.value,
               },
             },
           });

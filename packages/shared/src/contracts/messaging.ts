@@ -15,6 +15,7 @@ import type {
 export const MESSAGING_SURFACE_INTENT_KINDS = [
   "activity",
   "message",
+  "stream_update",
   "status",
   "progress",
   "thread_picker",
@@ -44,6 +45,7 @@ export const MESSAGING_DELIVERY_OUTCOMES = [
   "pinned",
   "unpinned",
   "dismissed",
+  "discarded",
   "unsupported",
   "failed",
 ] as const;
@@ -64,6 +66,7 @@ export type MessagingDeliveryOutcome =
   (typeof MESSAGING_DELIVERY_OUTCOMES)[number];
 export type MessagingToolUpdateMode =
   (typeof MESSAGING_TOOL_UPDATE_MODES)[number];
+export type MessagingStreamingResponseMode = "inherit" | "enabled" | "disabled";
 
 export type MessagingChannelKind =
   | "telegram"
@@ -253,6 +256,22 @@ export type MessagingMessageIntent = MessagingBaseSurfaceIntent & {
   role?: "assistant" | "user" | "system";
 };
 
+export type MessagingStreamUpdateIntent = MessagingBaseSurfaceIntent & {
+  kind: "stream_update";
+  stream: {
+    isFinal: boolean;
+    key: string;
+    sequence: number;
+    itemId?: string;
+    turnId?: string;
+  };
+  delta?: string;
+  markdown?: MessagingMarkdownPolicy;
+  policy?: MessagingStreamingResponseMode;
+  role?: "assistant" | "user" | "system";
+  text: string;
+};
+
 export type MessagingActivityIntent = MessagingBaseSurfaceIntent & {
   kind: "activity";
   activity: "typing";
@@ -341,6 +360,7 @@ export type MessagingDismissIntent = MessagingBaseSurfaceIntent & {
 export type MessagingSurfaceIntent =
   | MessagingActivityIntent
   | MessagingMessageIntent
+  | MessagingStreamUpdateIntent
   | MessagingStatusIntent
   | MessagingProgressIntent
   | MessagingThreadPickerIntent
@@ -462,6 +482,7 @@ export type MessagingBindingPreferences = {
   permissionsMode?: MessagingPermissionsMode;
   reasoningEffort?: string;
   serviceTier?: string;
+  streamingResponses?: MessagingStreamingResponseMode;
   toolUpdateMode?: MessagingToolUpdateMode;
   updatedAt: number;
 };

@@ -41,6 +41,7 @@ describe("desktop messaging config", () => {
         channel: "telegram",
         enabled: true,
         botToken: "tg-token",
+        streamingResponses: false,
         authorizedActorIds: ["user-1", "user-2"],
       },
     });
@@ -58,11 +59,13 @@ describe("desktop messaging config", () => {
     expect(config).toMatchObject({
       telegram: {
         botToken: "legacy-tg-token",
+        streamingResponses: false,
         authorizedActorIds: ["42"],
       },
       discord: {
         applicationId: "discord-app",
         botToken: "legacy-discord-token",
+        streamingResponses: false,
         authorizedActorIds: ["100", "200"],
       },
     });
@@ -76,10 +79,12 @@ describe("desktop messaging config", () => {
       [
         "[messaging.telegram]",
         "enabled = true",
+        "streaming_responses = true",
         'authorized_user_ids = ["111111111"]',
         "",
         "[messaging.discord]",
         "enabled = true",
+        "streaming_responses = true",
         'application_id = "discord-app"',
         'authorized_user_ids = ["222222222"]',
       ].join("\n"),
@@ -108,6 +113,7 @@ describe("desktop messaging config", () => {
         channel: "telegram",
         enabled: true,
         botToken: "settings-telegram-token",
+        streamingResponses: true,
         authorizedActorIds: ["111111111"],
       },
       discord: {
@@ -115,6 +121,7 @@ describe("desktop messaging config", () => {
         enabled: true,
         applicationId: "discord-app",
         botToken: "settings-discord-token",
+        streamingResponses: true,
         authorizedActorIds: ["222222222"],
       },
     });
@@ -134,6 +141,7 @@ describe("desktop messaging config", () => {
 
     expect(config.telegram).toMatchObject({
       botToken: "env-telegram-token",
+      streamingResponses: false,
       authorizedActorIds: ["42"],
     });
   });
@@ -161,12 +169,14 @@ describe("desktop messaging config", () => {
       telegram: {
         channel: "telegram",
         botToken: "secret-token",
+        streamingResponses: true,
         authorizedActorIds: ["1", "2"],
       },
       discord: {
         channel: "discord",
         applicationId: "app-id",
         botToken: "discord-secret",
+        streamingResponses: false,
         authorizedActorIds: ["3"],
       },
     });
@@ -177,6 +187,7 @@ describe("desktop messaging config", () => {
         channel: "telegram",
         enabled: true,
         botToken: "[REDACTED]",
+        streamingResponses: true,
         authorizedActorCount: 2,
       },
       toolUpdateDefaultMode: "show_some",
@@ -186,6 +197,7 @@ describe("desktop messaging config", () => {
         enabled: true,
         applicationId: "app-id",
         botToken: "[REDACTED]",
+        streamingResponses: false,
         authorizedActorCount: 1,
       },
     });

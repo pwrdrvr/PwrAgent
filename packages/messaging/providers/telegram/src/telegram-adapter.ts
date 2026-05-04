@@ -20,8 +20,10 @@ import { layoutMessagingActionRows } from "@pwragnt/messaging-interface";
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
   actionsForTelegramIntent,
+  renderTelegramHtml,
   splitTelegramHtml,
   TELEGRAM_CALLBACK_DATA_LIMIT_BYTES,
+  TELEGRAM_MESSAGE_TEXT_LIMIT,
   type TelegramInlineKeyboardMarkup,
   textForTelegramIntent,
 } from "./telegram-formatting.ts";
@@ -29,6 +31,15 @@ import {
 const TELEGRAM_ALLOWED_UPDATES = ["message", "callback_query"];
 const TELEGRAM_DEFAULT_TYPING_SIGNAL_LEASE_MS = 15_000;
 const TELEGRAM_TYPING_SIGNAL_INTERVAL_MS = 4_000;
+const TELEGRAM_STREAM_DM_MIN_INTERVAL_MS = 1_000;
+const TELEGRAM_STREAM_GROUP_WINDOW_MS = 60_000;
+const TELEGRAM_STREAM_GROUP_MAX_PER_WINDOW = 20;
+const TELEGRAM_STREAM_GROUP_FAST_COUNT = 3;
+const TELEGRAM_STREAM_GROUP_MEDIUM_COUNT = 6;
+const TELEGRAM_STREAM_GROUP_FAST_INTERVAL_MS = 1_000;
+const TELEGRAM_STREAM_GROUP_MEDIUM_INTERVAL_MS = 2_000;
+const TELEGRAM_STREAM_GROUP_SLOW_INTERVAL_MS = 3_100;
+const TELEGRAM_STREAM_RETRY_AFTER_BUFFER_MS = 100;
 
 type TelegramCallbackBinding = {
   actionId: string;
@@ -39,6 +50,18 @@ type TelegramDeliveryTarget = {
   chatId: number | string;
   messageId?: number;
   messageThreadId?: number;
+};
+
+type TelegramStreamRateLimitState = {
+  blockedUntil?: number;
+  timestamps: number[];
+};
+
+type TelegramStreamRateLimitDecision = {
+  allowed: boolean;
+  hard: boolean;
+  policy: "dm" | "group";
+  waitMs: number;
 };
 
 type FetchLike = (url: string) => Promise<{
@@ -329,6 +352,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private callbackBindings = new Map<string, TelegramCallbackBinding>();
   private defaultBot?: TelegramBotLike;
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
+  private streamRateLimits = new Map<string, TelegramStreamRateLimitState>();
+  private streamSurfaces = new Map<string, TelegramDeliveryTarget>();
   private readonly options: {
     api?: TelegramBotApi;
     bot?: TelegramBotLike;
@@ -476,6 +501,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     if (intent.kind === "activity") {
       return await this.deliverActivity(intent, target);
+    }
+
+    if (intent.kind === "stream_update") {
+      return await this.deliverStreamUpdate(intent, target);
     }
 
     if (intent.kind === "dismiss") {
@@ -642,6 +671,140 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           }
         : undefined,
     };
+  }
+
+  private async deliverStreamUpdate(
+    intent: Extract<MessagingSurfaceIntent, { kind: "stream_update" }>,
+    target: TelegramDeliveryTarget,
+  ): Promise<MessagingDeliveryResult> {
+    if (
+      this.options.config.streamingResponses !== true ||
+      intent.policy === "disabled"
+    ) {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
+    }
+
+    const text = renderTelegramHtml(intent.text, intent.markdown ?? "plain") || " ";
+    if (Buffer.byteLength(text, "utf8") > TELEGRAM_MESSAGE_TEXT_LIMIT) {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
+    }
+
+    const rateLimit = this.evaluateStreamRateLimit(target, intent.stream.isFinal);
+    if (!rateLimit.allowed) {
+      if (intent.stream.isFinal && rateLimit.hard) {
+        await this.sleep(rateLimit.waitMs);
+      } else {
+        this.options.logger?.debug(
+          `telegram stream update throttled final=${intent.stream.isFinal} sequence=${intent.stream.sequence} waitMs=${rateLimit.waitMs} policy=${rateLimit.policy} target=${this.compactTypingTarget(target)} stream=${intent.stream.key}`,
+        );
+        return {
+          channel: this.channel,
+          deliveredAt: this.now(),
+          outcome: "discarded",
+          surface: intent.targetSurface,
+        };
+      }
+    }
+
+    const existing =
+      this.streamSurfaces.get(intent.stream.key) ??
+      (target.messageId ? target : undefined);
+    try {
+      const message = existing?.messageId
+        ? await this.bot.api.editMessageText({
+            chat_id: existing.chatId,
+            disable_web_page_preview: true,
+            message_id: existing.messageId,
+            message_thread_id: existing.messageThreadId,
+            parse_mode: "HTML",
+            text,
+          })
+        : await this.bot.api.sendMessage({
+            chat_id: target.chatId,
+            disable_web_page_preview: true,
+            message_thread_id: target.messageThreadId,
+            parse_mode: "HTML",
+            text,
+          });
+      const surfaceTarget = {
+        chatId: target.chatId,
+        messageId: message.message_id,
+        messageThreadId: target.messageThreadId,
+      };
+      if (intent.stream.isFinal) {
+        this.streamSurfaces.delete(intent.stream.key);
+      } else {
+        this.streamSurfaces.set(intent.stream.key, surfaceTarget);
+      }
+      this.options.logger?.debug(
+        `telegram stream update ${existing?.messageId ? "edited" : "sent"} final=${intent.stream.isFinal} sequence=${intent.stream.sequence} target=${this.compactTypingTarget(surfaceTarget)} stream=${intent.stream.key}`,
+      );
+      this.recordStreamRateLimitDelivery(surfaceTarget);
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: existing?.messageId ? "updated" : "presented",
+        surface: {
+          channel: this.channel,
+          id: String(message.message_id),
+          state: {
+            opaque: {
+              chatId: surfaceTarget.chatId,
+              messageId: surfaceTarget.messageId,
+              messageThreadId: surfaceTarget.messageThreadId ?? null,
+            },
+          },
+        },
+      };
+    } catch (error) {
+      if (existing?.messageId && isTelegramMessageNotModifiedError(error)) {
+        if (intent.stream.isFinal) {
+          this.streamSurfaces.delete(intent.stream.key);
+        } else {
+          this.streamSurfaces.set(intent.stream.key, existing);
+        }
+        this.options.logger?.debug(
+          `telegram stream update unchanged final=${intent.stream.isFinal} sequence=${intent.stream.sequence} target=${this.compactTypingTarget(existing)} stream=${intent.stream.key}`,
+        );
+        return {
+          channel: this.channel,
+          deliveredAt: this.now(),
+          outcome: "updated",
+          surface: {
+            channel: this.channel,
+            id: String(existing.messageId),
+            state: {
+              opaque: {
+                chatId: existing.chatId,
+                messageId: existing.messageId,
+                messageThreadId: existing.messageThreadId ?? null,
+              },
+            },
+          },
+        };
+      }
+      const retryAfterMs = telegramRetryAfterMs(error);
+      if (retryAfterMs !== undefined) {
+        this.blockStreamRateLimitTarget(target, retryAfterMs);
+        this.options.logger?.warn?.(
+          `telegram stream update rate limited retryAfterMs=${retryAfterMs} target=${this.compactTypingTarget(target)} stream=${intent.stream.key}`,
+        );
+      }
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: errorMessage(error),
+        outcome: "failed",
+      };
+    }
   }
 
   async setConversationTitle(
@@ -1254,6 +1417,123 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return `${target.chatId}:${target.messageThreadId ?? ""}`;
   }
 
+  private evaluateStreamRateLimit(
+    target: TelegramDeliveryTarget,
+    isFinal: boolean,
+  ): TelegramStreamRateLimitDecision {
+    const now = this.now();
+    const key = this.streamRateLimitKey(target);
+    const policy = this.streamRateLimitPolicy(target);
+    const state = this.streamRateLimitState(key, now);
+    if (state.blockedUntil !== undefined && state.blockedUntil > now) {
+      return {
+        allowed: false,
+        hard: true,
+        policy,
+        waitMs: state.blockedUntil - now,
+      };
+    }
+
+    if (policy === "group" && state.timestamps.length >= TELEGRAM_STREAM_GROUP_MAX_PER_WINDOW) {
+      const oldest = state.timestamps[0] ?? now;
+      const waitMs = Math.max(
+        0,
+        oldest + TELEGRAM_STREAM_GROUP_WINDOW_MS - now + TELEGRAM_STREAM_RETRY_AFTER_BUFFER_MS,
+      );
+      if (waitMs > 0) {
+        return {
+          allowed: false,
+          hard: true,
+          policy,
+          waitMs,
+        };
+      }
+    }
+
+    if (!isFinal) {
+      const minIntervalMs =
+        policy === "group"
+          ? telegramGroupStreamMinIntervalMs(state.timestamps.length)
+          : TELEGRAM_STREAM_DM_MIN_INTERVAL_MS;
+      const last = state.timestamps.at(-1);
+      const waitMs =
+        last === undefined ? 0 : Math.max(0, last + minIntervalMs - now);
+      if (waitMs > 0) {
+        return {
+          allowed: false,
+          hard: false,
+          policy,
+          waitMs,
+        };
+      }
+    }
+
+    return {
+      allowed: true,
+      hard: false,
+      policy,
+      waitMs: 0,
+    };
+  }
+
+  private recordStreamRateLimitDelivery(target: TelegramDeliveryTarget): void {
+    const now = this.now();
+    const key = this.streamRateLimitKey(target);
+    const state = this.streamRateLimitState(key, now);
+    state.timestamps.push(now);
+  }
+
+  private blockStreamRateLimitTarget(
+    target: TelegramDeliveryTarget,
+    retryAfterMs: number,
+  ): void {
+    const now = this.now();
+    const key = this.streamRateLimitKey(target);
+    const state = this.streamRateLimitState(key, now);
+    state.blockedUntil = Math.max(
+      state.blockedUntil ?? 0,
+      now + retryAfterMs + TELEGRAM_STREAM_RETRY_AFTER_BUFFER_MS,
+    );
+  }
+
+  private streamRateLimitState(
+    key: string,
+    now: number,
+  ): TelegramStreamRateLimitState {
+    let state = this.streamRateLimits.get(key);
+    if (!state) {
+      state = { timestamps: [] };
+      this.streamRateLimits.set(key, state);
+    }
+    const cutoff = now - TELEGRAM_STREAM_GROUP_WINDOW_MS;
+    state.timestamps = state.timestamps.filter((timestamp) => timestamp > cutoff);
+    if (state.blockedUntil !== undefined && state.blockedUntil <= now) {
+      state.blockedUntil = undefined;
+    }
+    return state;
+  }
+
+  private streamRateLimitKey(target: TelegramDeliveryTarget): string {
+    return String(target.chatId);
+  }
+
+  private streamRateLimitPolicy(
+    target: TelegramDeliveryTarget,
+  ): TelegramStreamRateLimitDecision["policy"] {
+    if (target.messageThreadId !== undefined) {
+      return "group";
+    }
+    const chatId =
+      typeof target.chatId === "number" ? target.chatId : Number(target.chatId);
+    return Number.isFinite(chatId) && chatId < 0 ? "group" : "dm";
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
+
   private compactTypingTarget(target: TelegramDeliveryTarget): string {
     return target.messageThreadId
       ? `${target.chatId}/${target.messageThreadId}`
@@ -1530,8 +1810,55 @@ function sanitizeTelegramTopicName(title: string): string {
   return Array.from(normalized || "PwrAgnt thread").slice(0, 128).join("");
 }
 
+function telegramGroupStreamMinIntervalMs(deliveriesInWindow: number): number {
+  if (deliveriesInWindow < TELEGRAM_STREAM_GROUP_FAST_COUNT) {
+    return TELEGRAM_STREAM_GROUP_FAST_INTERVAL_MS;
+  }
+  if (deliveriesInWindow < TELEGRAM_STREAM_GROUP_MEDIUM_COUNT) {
+    return TELEGRAM_STREAM_GROUP_MEDIUM_INTERVAL_MS;
+  }
+  return TELEGRAM_STREAM_GROUP_SLOW_INTERVAL_MS;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isTelegramMessageNotModifiedError(error: unknown): boolean {
+  const text = [
+    errorMessage(error),
+    diagnosticErrorMessage(readErrorProperty(error)),
+    readStringProperty(error, "description"),
+    readStringProperty(readErrorProperty(error), "description"),
+  ]
+    .filter((message): message is string => Boolean(message))
+    .join("\n")
+    .toLowerCase();
+  return text.includes("message is not modified");
+}
+
+function telegramRetryAfterMs(error: unknown): number | undefined {
+  const seconds =
+    telegramRetryAfterSeconds(error) ??
+    telegramRetryAfterSeconds(readErrorProperty(error));
+  return seconds !== undefined && seconds > 0
+    ? Math.ceil(seconds * 1000)
+    : undefined;
+}
+
+function telegramRetryAfterSeconds(value: unknown): number | undefined {
+  return (
+    readNumberProperty(value, "retry_after") ??
+    readNumberProperty(readObjectProperty(value, "parameters"), "retry_after") ??
+    readNumberProperty(
+      readObjectProperty(readObjectProperty(value, "payload"), "parameters"),
+      "retry_after",
+    ) ??
+    readNumberProperty(
+      readObjectProperty(readObjectProperty(value, "response"), "parameters"),
+      "retry_after",
+    )
+  );
 }
 
 function telegramBotTokenDiagnostics(token: string): Record<string, unknown> {
@@ -1571,6 +1898,14 @@ function readErrorProperty(error: unknown): unknown {
     return undefined;
   }
   return (error as { error?: unknown }).error;
+}
+
+function readObjectProperty(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object" || !(key in value)) {
+    return undefined;
+  }
+  const property = (value as Record<string, unknown>)[key];
+  return property && typeof property === "object" ? property : undefined;
 }
 
 function diagnosticErrorMessage(error: unknown): string | undefined {

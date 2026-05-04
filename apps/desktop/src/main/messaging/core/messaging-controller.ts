@@ -23,6 +23,8 @@ import type {
   MessagingJsonValue,
   MessagingMessageIntent,
   MessagingPendingIntentRecord,
+  MessagingStreamUpdateIntent,
+  MessagingSurfaceRef,
   MessagingSurfaceIntent,
   MessagingToolUpdateMode,
   NavigationDirectorySummary,
@@ -91,7 +93,25 @@ const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
+// Provider adapters own stricter platform pacing; the generic layer only
+// coalesces noisy token deltas into human-visible refreshes.
+const STREAM_UPDATE_REFRESH_MS = 1_000;
 const messagingControllerLog = getMainLogger("pwragnt:messaging");
+
+type AssistantStreamDelta = {
+  delta: string;
+  itemId: string;
+  streamKey: string;
+  threadId: ThreadIdentifier;
+  turnId?: string;
+};
+
+type AssistantStreamBuffer = AssistantStreamDelta & {
+  lastEmittedAt: number;
+  sequence: number;
+  surface?: MessagingSurfaceRef;
+  text: string;
+};
 
 function executionModeForBinding(
   binding: MessagingBindingRecord,
@@ -174,6 +194,8 @@ export type MessagingControllerOptions = {
 export class MessagingController {
   private readonly authorizedActorIds: Set<string>;
   private readonly deliveredAssistantMessageKeys = new Set<string>();
+  private readonly assistantStreamBuffers = new Map<string, AssistantStreamBuffer>();
+  private readonly assistantStreamDeliveryQueues = new Map<string, Promise<void>>();
   private readonly now: () => number;
   private readonly pendingIntentTtlMs: number;
   private readonly interactionMapper: MessagingInteractionMapper;
@@ -309,9 +331,26 @@ export class MessagingController {
         });
       }
 
+      const assistantDelta = assistantDeltaForBackendEvent(event);
+      if (assistantDelta) {
+        await this.deliverAssistantStreamUpdate(assistantDelta, binding);
+      }
+
       const assistantText = assistantTextForBackendEvent(event);
       if (assistantText) {
-        await this.deliverAssistantMessage(assistantText, event, binding);
+        const deliveredFinalStream = await this.flushAssistantStreamForEvent(
+          event,
+          binding,
+          assistantText,
+        );
+        if (deliveredFinalStream) {
+          this.markAssistantMessageDelivered(event, assistantText);
+        } else {
+          await this.deliverAssistantMessage(assistantText, event, binding);
+        }
+      } else if (isTerminalTurnLifecycle(activeTurn)) {
+        await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
+        this.clearAssistantStreamsForEvent(event, binding);
       }
 
       if (isThreadNameUpdatedEvent(event)) {
@@ -1213,16 +1252,211 @@ export class MessagingController {
     return binding;
   }
 
+  private async deliverAssistantStreamUpdate(
+    delta: AssistantStreamDelta,
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    const bufferKey = this.assistantStreamBufferKey(delta.streamKey, binding);
+    const now = this.now();
+    const existing = this.assistantStreamBuffers.get(bufferKey);
+    const buffer: AssistantStreamBuffer = existing
+      ? {
+          ...existing,
+          delta: delta.delta,
+          sequence: existing.sequence + 1,
+          text: `${existing.text}${delta.delta}`,
+        }
+      : {
+          ...delta,
+          lastEmittedAt: 0,
+          sequence: 1,
+          text: delta.delta,
+        };
+    this.assistantStreamBuffers.set(bufferKey, buffer);
+
+    if (
+      buffer.text.trim().length === 0 ||
+      (buffer.lastEmittedAt > 0 && now - buffer.lastEmittedAt < STREAM_UPDATE_REFRESH_MS)
+    ) {
+      return;
+    }
+
+    this.assistantStreamBuffers.set(bufferKey, {
+      ...buffer,
+      lastEmittedAt: now,
+    });
+    await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, false);
+  }
+
+  private async flushAssistantStreamForEvent(
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+    finalText: string,
+  ): Promise<boolean> {
+    let deliveredFinalStream = false;
+    for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
+      const buffer = this.assistantStreamBuffers.get(bufferKey);
+      if (!buffer) {
+        continue;
+      }
+      this.assistantStreamBuffers.set(bufferKey, {
+        ...buffer,
+        delta: "",
+        lastEmittedAt: this.now(),
+        sequence: buffer.sequence + 1,
+        text: finalText,
+      });
+      const result = await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, true);
+      deliveredFinalStream ||= isVisibleAssistantStreamDelivery(result);
+      this.assistantStreamBuffers.delete(bufferKey);
+      this.assistantStreamDeliveryQueues.delete(bufferKey);
+    }
+    return deliveredFinalStream;
+  }
+
+  private clearAssistantStreamsForEvent(
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+  ): void {
+    for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
+      this.assistantStreamBuffers.delete(bufferKey);
+      this.assistantStreamDeliveryQueues.delete(bufferKey);
+    }
+  }
+
+  private async waitForAssistantStreamDeliveriesForEvent(
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    const deliveries = this.assistantStreamBufferKeysForEvent(event, binding)
+      .map((bufferKey) => this.assistantStreamDeliveryQueues.get(bufferKey))
+      .filter((delivery): delivery is Promise<void> => Boolean(delivery));
+    if (deliveries.length === 0) {
+      return;
+    }
+    await Promise.allSettled(deliveries);
+  }
+
+  private assistantStreamBufferKeysForEvent(
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+  ): string[] {
+    const keys = new Set(
+      assistantStreamKeysForBackendEvent(event).map((streamKey) =>
+        this.assistantStreamBufferKey(streamKey, binding),
+      ),
+    );
+    const filter = assistantStreamFilterForBackendEvent(event);
+    if (!filter) {
+      return [...keys];
+    }
+    for (const [bufferKey, buffer] of this.assistantStreamBuffers) {
+      if (
+        bufferKey.startsWith(`${binding.id}\0`) &&
+        buffer.streamKey.startsWith(`${event.backend}:`) &&
+        buffer.threadId === filter.threadId &&
+        (!filter.turnId || buffer.turnId === filter.turnId)
+      ) {
+        keys.add(bufferKey);
+      }
+    }
+    return [...keys];
+  }
+
+  private async enqueueAssistantStreamBufferDelivery(
+    bufferKey: string,
+    binding: MessagingBindingRecord,
+    isFinal: boolean,
+  ): Promise<MessagingDeliveryResult> {
+    let result: MessagingDeliveryResult | undefined;
+    const previous = this.assistantStreamDeliveryQueues.get(bufferKey) ?? Promise.resolve();
+    const delivery = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const latest = this.assistantStreamBuffers.get(bufferKey);
+        if (!latest) {
+          return;
+        }
+        result = await this.deliverAssistantStreamBuffer(latest, binding, isFinal);
+      });
+    this.assistantStreamDeliveryQueues.set(bufferKey, delivery);
+    try {
+      await delivery;
+    } finally {
+      if (this.assistantStreamDeliveryQueues.get(bufferKey) === delivery) {
+        this.assistantStreamDeliveryQueues.delete(bufferKey);
+      }
+    }
+    return result ?? {
+      channel: binding.channel.channel,
+      deliveredAt: this.now(),
+      outcome: "discarded",
+    };
+  }
+
+  private async deliverAssistantStreamBuffer(
+    buffer: AssistantStreamBuffer,
+    binding: MessagingBindingRecord,
+    isFinal: boolean,
+  ): Promise<MessagingDeliveryResult> {
+    const now = this.now();
+    const intent: MessagingStreamUpdateIntent = {
+      id: this.newIntentId(isFinal ? "assistant-stream-final" : "assistant-stream"),
+      kind: "stream_update",
+      bindingId: binding.id,
+      createdAt: now,
+      ...(buffer.surface
+        ? {
+            delivery: {
+              mode: "update",
+              fallback: "fail",
+            },
+            targetSurface: buffer.surface,
+          }
+        : {}),
+      role: "assistant",
+      markdown: isFinal ? "markdown" : "plain",
+      policy: binding.preferences?.streamingResponses ?? "inherit",
+      delta: buffer.delta,
+      text: buffer.text,
+      stream: {
+        key: buffer.streamKey,
+        turnId: buffer.turnId,
+        itemId: buffer.itemId,
+        sequence: buffer.sequence,
+        isFinal,
+      },
+    };
+    const result = await this.deliver(intent, binding);
+    const surface =
+      result.surface && isVisibleAssistantStreamDelivery(result)
+        ? result.surface
+        : buffer.surface;
+    const bufferKey = this.assistantStreamBufferKey(buffer.streamKey, binding);
+    const current = this.assistantStreamBuffers.get(bufferKey);
+    this.assistantStreamBuffers.set(bufferKey, {
+      ...(current && current.sequence >= buffer.sequence ? current : buffer),
+      lastEmittedAt: now,
+      surface,
+    });
+    return result;
+  }
+
+  private assistantStreamBufferKey(
+    streamKey: string,
+    binding: MessagingBindingRecord,
+  ): string {
+    return `${binding.id}\0${streamKey}`;
+  }
+
   private async deliverAssistantMessage(
     text: string,
     event: AgentEvent,
     binding: MessagingBindingRecord,
   ): Promise<void> {
-    const key = assistantMessageDeliveryKey(event, text);
-    if (this.deliveredAssistantMessageKeys.has(key)) {
+    if (!this.markAssistantMessageDelivered(event, text)) {
       return;
     }
-    this.deliveredAssistantMessageKeys.add(key);
     this.logger.debug?.(
       `messaging assistant deliver thread=${binding.threadId} binding=${binding.id} chars=${text.length} preview="${compactLogPreview(text)}"`,
     );
@@ -1244,6 +1478,15 @@ export class MessagingController {
       },
       binding,
     );
+  }
+
+  private markAssistantMessageDelivered(event: AgentEvent, text: string): boolean {
+    const key = assistantMessageDeliveryKey(event, text);
+    if (this.deliveredAssistantMessageKeys.has(key)) {
+      return false;
+    }
+    this.deliveredAssistantMessageKeys.add(key);
+    return true;
   }
 
   dispose(): void {
@@ -3278,6 +3521,98 @@ function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
   return undefined;
 }
 
+function assistantDeltaForBackendEvent(
+  event: AgentEvent,
+): AssistantStreamDelta | undefined {
+  if (event.notification.method !== "item/agentMessage/delta") {
+    return undefined;
+  }
+  const params = event.notification.params as {
+    delta?: unknown;
+    itemId?: unknown;
+    threadId?: unknown;
+    turnId?: unknown;
+  };
+  if (
+    typeof params.threadId !== "string" ||
+    typeof params.itemId !== "string" ||
+    typeof params.delta !== "string" ||
+    params.delta.length === 0
+  ) {
+    return undefined;
+  }
+  const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
+  return {
+    delta: params.delta,
+    itemId: params.itemId,
+    streamKey: assistantStreamKey({
+      backend: event.backend,
+      threadId: params.threadId,
+      turnId,
+    }),
+    threadId: params.threadId,
+    turnId,
+  };
+}
+
+function assistantStreamKeysForBackendEvent(event: AgentEvent): string[] {
+  const params = event.notification.params as {
+    threadId?: unknown;
+    turn?: { id?: unknown };
+    turnId?: unknown;
+  };
+  if (typeof params.threadId !== "string") {
+    return [];
+  }
+  const turnId =
+    typeof params.turnId === "string"
+      ? params.turnId
+      : typeof params.turn?.id === "string"
+        ? params.turn.id
+        : undefined;
+  return [
+    assistantStreamKey({
+      backend: event.backend,
+      threadId: params.threadId,
+      turnId,
+    }),
+  ];
+}
+
+function assistantStreamFilterForBackendEvent(
+  event: AgentEvent,
+): { threadId: ThreadIdentifier; turnId?: string } | undefined {
+  const params = event.notification.params as {
+    threadId?: unknown;
+    turn?: { id?: unknown };
+    turnId?: unknown;
+  };
+  if (typeof params.threadId !== "string") {
+    return undefined;
+  }
+  return {
+    threadId: params.threadId,
+    turnId: typeof params.turnId === "string"
+      ? params.turnId
+      : typeof params.turn?.id === "string"
+        ? params.turn.id
+        : undefined,
+  };
+}
+
+function assistantStreamKey(params: {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId?: string;
+}): string {
+  return [
+    params.backend,
+    params.threadId,
+    params.turnId ?? "",
+    "assistant-text",
+  ].join(":");
+}
+
 function compactLogPreview(text: string, limit = 96): string {
   const compact = text.replace(/\s+/g, " ").trim();
   const preview = compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
@@ -3320,6 +3655,15 @@ function isPermanentMessagingTargetFailure(result: MessagingDeliveryResult): boo
   return (
     result.outcome === "failed" &&
     Boolean(result.errorMessage?.match(/\bUnknown Channel\b|chat not found/i))
+  );
+}
+
+function isVisibleAssistantStreamDelivery(result: MessagingDeliveryResult): boolean {
+  return (
+    result.outcome === "presented" ||
+    result.outcome === "presented_new" ||
+    result.outcome === "updated" ||
+    result.outcome === "pinned"
   );
 }
 

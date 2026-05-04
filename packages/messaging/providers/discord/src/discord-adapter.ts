@@ -249,6 +249,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private defaultGateway?: DiscordGatewayConnection;
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private readonly options: DiscordAdapterOptions;
+  private streamSurfaces = new Map<string, string>();
   private typingSignalSequence = 0;
   private typingSignals = new Map<string, DiscordTypingSignal>();
   private unsubscribeGateway?: () => void;
@@ -348,6 +349,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
     if (intent.kind === "activity") {
       return await this.deliverActivity(intent, target);
+    }
+
+    if (intent.kind === "stream_update") {
+      return await this.deliverStreamUpdate(intent, target);
     }
 
     try {
@@ -488,6 +493,64 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         `discord pin failed channel=${message.channel_id || target.channelId} message=${message.id} error=${errorMessage(error)}`,
       );
       return false;
+    }
+  }
+
+  private async deliverStreamUpdate(
+    intent: Extract<MessagingSurfaceIntent, { kind: "stream_update" }>,
+    target: { channelId: string; guildId?: string; messageId?: string },
+  ): Promise<MessagingDeliveryResult> {
+    if (
+      this.options.config.streamingResponses !== true ||
+      intent.policy === "disabled"
+    ) {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
+    }
+
+    const chunks = splitDiscordContent(intent.text || " ");
+    if (chunks.length !== 1) {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
+    }
+
+    try {
+      const existingMessageId =
+        this.streamSurfaces.get(intent.stream.key) ?? target.messageId;
+      const request: DiscordCreateMessageRequest = {
+        allowed_mentions: defensiveAllowedMentions(),
+        content: chunks[0] ?? " ",
+      };
+      const message = existingMessageId
+        ? await this.api.updateMessage(target.channelId, existingMessageId, request)
+        : await this.api.createMessage(target.channelId, request);
+      if (intent.stream.isFinal) {
+        this.streamSurfaces.delete(intent.stream.key);
+      } else {
+        this.streamSurfaces.set(intent.stream.key, message.id);
+      }
+      this.options.logger?.debug(
+        `discord stream update ${existingMessageId ? "edited" : "sent"} final=${intent.stream.isFinal} sequence=${intent.stream.sequence} channel=${target.channelId} message=${message.id} stream=${intent.stream.key}`,
+      );
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: existingMessageId ? "updated" : "presented",
+        surface: this.surfaceForMessage(message, target),
+      };
+    } catch (error) {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: errorMessage(error),
+        outcome: "failed",
+      };
     }
   }
 
