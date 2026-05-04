@@ -5,6 +5,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
+import { FolderIcon, UnlinkedDotIcon, WorkspaceIcon } from "../../icons";
 import { ThreadRow } from "./ThreadRow";
 
 type DirectoriesListProps = {
@@ -118,7 +119,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
               >
                 <span className="directory-row__summary-main">
                   <span aria-hidden="true" className="directory-row__icon">
-                    {directory.kind === "workspace" ? "🗂" : directory.kind === "unlinked" ? "•" : "📁"}
+                    {directory.kind === "workspace" ? (
+                      <WorkspaceIcon size={14} />
+                    ) : directory.kind === "unlinked" ? (
+                      <UnlinkedDotIcon size={14} />
+                    ) : (
+                      <FolderIcon size={14} />
+                    )}
                   </span>
                   <span className="directory-row__title-wrap">
                     <span className="thread-row__title">{directory.label}</span>

@@ -1,4 +1,5 @@
 import type { NavigationThreadSummary } from "@pwragent/shared";
+import { BranchIcon, FolderIcon, WorktreeIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 
@@ -104,7 +105,7 @@ export function ThreadMetaChips({
                 }}
               >
                 <span aria-hidden="true" className="thread-row__chip-icon">
-                  {directory.kind === "worktree" ? "🔀" : "📁"}
+                  {directory.kind === "worktree" ? <WorktreeIcon size={12} /> : <FolderIcon size={12} />}
                 </span>
                 {directory.label}
               </span>
@@ -138,7 +139,7 @@ export function ThreadMetaChips({
       {thread.gitBranch ? (
         <span className="thread-row__chip thread-row__chip--mono">
           <span aria-hidden="true" className="thread-row__chip-icon">
-            🌿
+            <BranchIcon size={12} />
           </span>
           {thread.gitBranch}
         </span>
