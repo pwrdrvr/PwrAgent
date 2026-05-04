@@ -1,7 +1,7 @@
 import type {
   DesktopSettingsSnapshot,
   DesktopWorktreeStorageLocation,
-} from "@pwragnt/shared";
+} from "@pwragent/shared";
 import { sourceBadge } from "./settings-fields";
 
 const STORAGE_OPTIONS: Array<{

@@ -4,8 +4,8 @@ import type {
   MessagingInboundMediaEvent,
   MessagingInboundTextEvent,
   MessagingSurfaceRef,
-} from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
+} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 
 export type MessagingTurnInputEvent =
   | MessagingInboundTextEvent
