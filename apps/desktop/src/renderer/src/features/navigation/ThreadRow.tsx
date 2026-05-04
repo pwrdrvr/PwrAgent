@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { ReactionPicker } from "./ReactionPicker";
@@ -31,6 +31,7 @@ export function ThreadRow(props: ThreadRowProps) {
     threadKey === props.selectedThreadKey;
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const addReactionRef = useRef<HTMLButtonElement>(null);
   const reactions = props.thread.reactions ?? [];
   const canReact = Boolean(props.onSetReaction);
 
@@ -100,6 +101,7 @@ export function ThreadRow(props: ThreadRowProps) {
           {canReact ? (
             <div className="thread-row__reaction-picker-wrap">
               <button
+                ref={addReactionRef}
                 type="button"
                 aria-haspopup="menu"
                 aria-expanded={pickerOpen}
@@ -115,6 +117,7 @@ export function ThreadRow(props: ThreadRowProps) {
               <ReactionPicker
                 open={pickerOpen}
                 current={reactions}
+                anchorRef={addReactionRef}
                 onSelect={(emoji) => {
                   toggleReaction(emoji);
                   setPickerOpen(false);

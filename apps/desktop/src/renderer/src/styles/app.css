@@ -679,7 +679,7 @@ textarea,
 /* Reserve bottom space inside the row button so the reactions strip
    (absolute-positioned at bottom-left) does not crash into the chip row. */
 .thread-row-shell:has(.thread-row__reactions) .thread-row {
-  padding-bottom: 34px;
+  padding-bottom: 42px;
 }
 
 .thread-row__reaction,
@@ -687,13 +687,14 @@ textarea,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 22px;
-  padding: 0 6px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 8px;
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   background: var(--bg-panel-elevated);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 16px;
   line-height: 1;
   cursor: pointer;
   transition:
@@ -711,10 +712,10 @@ textarea,
 }
 
 .thread-row__add-reaction {
-  width: 22px;
+  width: 28px;
   padding: 0;
   font-weight: 700;
-  font-size: 14px;
+  font-size: 16px;
   opacity: 0;
 }
 
@@ -739,10 +740,8 @@ textarea,
 
 .reaction-picker {
   display: flex;
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 30;
+  position: fixed;
+  z-index: 50;
   flex-direction: column;
   gap: 4px;
   padding: 8px;

@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
+import { createPortal } from "react-dom";
 
 /**
  * Quick-pick reaction groups, organized by row. Reactions are content
@@ -40,13 +47,42 @@ type ReactionPickerProps = {
   open: boolean;
   /** Emoji currently present on the thread; shown as toggled-on. */
   current: string[];
+  /** Element whose top-edge the picker anchors to (the add-reaction button). */
+  anchorRef: React.RefObject<HTMLElement | null>;
   onSelect: (emoji: string) => void;
   onDismiss: () => void;
 };
 
+type PickerPosition = { top: number; left: number };
+
 export function ReactionPicker(props: ReactionPickerProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [customDraft, setCustomDraft] = useState("");
+  const [position, setPosition] = useState<PickerPosition>();
+
+  // The picker is portaled to <body> with position:fixed because the sidebar
+  // scroll container clips overflow on both axes — an absolute child loses
+  // its rightmost emoji to the clip box. Anchor by computing rect from the
+  // add-reaction button on open and on layout changes.
+  useLayoutEffect(() => {
+    if (!props.open) {
+      setPosition(undefined);
+      return;
+    }
+    const update = (): void => {
+      const anchor = props.anchorRef.current;
+      if (!anchor) return;
+      const rect = anchor.getBoundingClientRect();
+      setPosition({ top: rect.bottom + 6, left: rect.left });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, { capture: true });
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, { capture: true });
+    };
+  }, [props.open, props.anchorRef]);
 
   useEffect(() => {
     if (!props.open) {
@@ -72,7 +108,7 @@ export function ReactionPicker(props: ReactionPickerProps) {
     };
   }, [props.open, props.onDismiss, props]);
 
-  if (!props.open) {
+  if (!props.open || !position) {
     return null;
   }
 
@@ -95,12 +131,13 @@ export function ReactionPicker(props: ReactionPickerProps) {
     setCustomDraft("");
   };
 
-  return (
+  return createPortal(
     <div
       ref={ref}
       className="reaction-picker"
       role="menu"
       aria-label="Add reaction"
+      style={{ top: position.top, left: position.left }}
       onClick={(event) => event.stopPropagation()}
     >
       {REACTION_GROUPS.map((group) => (
@@ -154,6 +191,7 @@ export function ReactionPicker(props: ReactionPickerProps) {
           Add
         </button>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
