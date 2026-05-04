@@ -362,6 +362,45 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("groups PwrAgent-managed worktree paths under the stable same-label home repo row", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-home",
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/claude-worktrees/PwrAgnt/modest/apps/desktop",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/claude-worktrees/PwrAgnt/modest/apps/desktop",
+              kind: "local",
+            },
+          ],
+        }),
+        buildThread({
+          id: "thread-worktree",
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.pwragent/worktrees/mord46hf/PwrAgnt",
+              label: "PwrAgnt",
+              path: "/Users/huntharo/.pwragent/worktrees/mord46hf/PwrAgnt",
+              kind: "local",
+            },
+          ],
+          updatedAt: 2_000,
+        }),
+      ],
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "directory:/Users/huntharo/claude-worktrees/PwrAgnt/modest/apps/desktop",
+        label: "PwrAgnt",
+        path: "/Users/huntharo/claude-worktrees/PwrAgnt/modest/apps/desktop",
+        threadKeys: ["codex:thread-home", "codex:thread-worktree"],
+      }),
+    ]);
+  });
+
   it("uses handoff overlay workspace metadata as the active local/worktree directory", () => {
     const directories = buildDirectorySummaries({
       threads: [

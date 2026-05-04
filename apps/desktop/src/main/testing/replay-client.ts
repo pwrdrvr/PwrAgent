@@ -41,6 +41,7 @@ export class ReplayClient {
   private lastStartTurnParams?: {
     threadId: string;
     input: AppServerTurnInputItem[];
+    cwd?: string;
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
     serviceTier?: string;
@@ -141,6 +142,7 @@ export class ReplayClient {
   async startTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
+    cwd?: string;
     model?: string;
     collaborationMode?: AppServerCollaborationModeRequest;
     serviceTier?: string;
@@ -228,6 +230,7 @@ export class ReplayClient {
     | {
         threadId: string;
         input: AppServerTurnInputItem[];
+        cwd?: string;
         model?: string;
         collaborationMode?: AppServerCollaborationModeRequest;
         serviceTier?: string;

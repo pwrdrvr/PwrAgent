@@ -52,6 +52,12 @@ function pathFromDirectoryKey(directoryKey: string): string | undefined {
   return directoryPath?.trim() || undefined;
 }
 
+function isToolManagedWorktreePath(value: string): boolean {
+  return /[\\/]\.(?:codex|pwrag(?:ent|nt))[\\/]worktrees[\\/][^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/.test(
+    value,
+  );
+}
+
 function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescriptor {
   // Match both current ".pwragent" and legacy ".pwragnt" home directory names
   // so pre-rebrand thread data classifies correctly.
@@ -126,6 +132,9 @@ function collectStablePathByLabel(
     for (const directory of thread.linkedDirectories) {
       const descriptor = classifyDirectory(directory);
       if (!descriptor.path || descriptor.kind !== "directory") {
+        continue;
+      }
+      if (isToolManagedWorktreePath(descriptor.path)) {
         continue;
       }
 
@@ -206,14 +215,21 @@ export function buildDirectorySummaries(params: {
     const seenDescriptors = new Set<string>();
     for (const directory of thread.linkedDirectories) {
       const descriptor = classifyDirectory(directory);
+      const stablePath = stablePathByLabel.get(descriptor.label);
       const normalizedDescriptor =
-        descriptor.path || descriptor.kind !== "directory"
+        descriptor.path && isToolManagedWorktreePath(descriptor.path) && stablePath
+          ? {
+              ...descriptor,
+              key: `directory:${stablePath}`,
+              path: stablePath,
+            }
+          : descriptor.path || descriptor.kind !== "directory"
           ? descriptor
-          : stablePathByLabel.get(descriptor.label)
+          : stablePath
             ? {
                 ...descriptor,
-                key: `directory:${stablePathByLabel.get(descriptor.label)}`,
-                path: stablePathByLabel.get(descriptor.label),
+                key: `directory:${stablePath}`,
+                path: stablePath,
               }
             : descriptor;
       if (seenDescriptors.has(normalizedDescriptor.key)) {

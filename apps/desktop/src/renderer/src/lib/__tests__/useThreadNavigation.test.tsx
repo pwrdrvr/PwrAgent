@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { shortenDerivedThreadTitle } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useThreadNavigation } from "../useThreadNavigation";
@@ -663,6 +664,113 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread?.observedGitBranch).toBe("HEAD");
     expect(result.current.directories[0]?.threadKeys).toEqual(["codex:thread-new"]);
     expect(result.current.directories[0]?.needsAttentionCount).toBe(1);
+  });
+
+  it("keeps a launchpad prompt-derived title when the hydrated thread only has a fallback id title", async () => {
+    const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
+    const threadId = "019df3a2-75b2-73d1-a273-5f94ac425966";
+    const prompt =
+      "What went wrong with Discord? Investigate the adapter path and explain the failure";
+    const initialSnapshot = {
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey,
+            directoryKind: "directory" as const,
+            directoryLabel: "PwrAgent",
+            directoryPath: "/Users/huntharo/github/PwrAgent",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt,
+            workMode: "worktree" as const,
+            branchName: "main",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    };
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce({
+        ...initialSnapshot,
+        inboxThreadKeys: [`codex:${threadId}`],
+        threads: [
+          {
+            id: threadId,
+            title: threadId,
+            titleSource: "fallback" as const,
+            summary: undefined,
+            source: "codex" as const,
+            linkedDirectories: [
+              {
+                id: directoryKey,
+                label: "PwrAgent",
+                path: "/Users/huntharo/github/PwrAgent",
+                kind: "worktree" as const,
+              },
+            ],
+            gitBranch: "HEAD",
+            observedGitBranch: "HEAD",
+            inbox: {
+              inInbox: true,
+              reason: "new-thread" as const,
+            },
+            updatedAt: 2,
+          },
+        ],
+        directories: [
+          {
+            ...initialSnapshot.directories[0]!,
+            threadKeys: [`codex:${threadId}`],
+            needsAttentionCount: 1,
+            launchpad: undefined,
+          },
+        ],
+      });
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId,
+      executionMode: "default" as const,
+      workMode: "worktree" as const,
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.directories[0]?.launchpad?.prompt).toBe(prompt);
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(directoryKey);
+    });
+
+    expect(result.current.selectedThread?.id).toBe(threadId);
+    expect(result.current.selectedThread?.title).toBe(shortenDerivedThreadTitle(prompt));
+    expect(result.current.selectedThread?.titleSource).toBe("derived");
+    expect(result.current.selectedThread?.title).not.toBe(threadId);
   });
 
   it("does not let a materialized thread refresh override a newer user thread selection", async () => {

@@ -14,7 +14,7 @@ import type {
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { buildThreadIdentityKey, shortenDerivedThreadTitle } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 
 export type BrowseMode = "inbox" | "recents" | "directories";
@@ -149,6 +149,13 @@ function threadSummariesEqual(
     linkedDirectoriesEqual(left.linkedDirectories, right.linkedDirectories) &&
     worktreeSnapshotsEqual(left.worktreeSnapshots, right.worktreeSnapshots) &&
     threadInboxEqual(left.inbox, right.inbox)
+  );
+}
+
+function hasPlaceholderThreadTitle(thread: NavigationThreadSummary): boolean {
+  return (
+    thread.titleSource === "fallback" &&
+    (thread.title === thread.id || thread.title === "Untitled thread")
   );
 }
 
@@ -611,11 +618,15 @@ function buildOptimisticThreadFromLaunchpad(params: {
   workMode: NavigationLaunchpadDraft["workMode"];
   optimisticUserMessage?: NavigationThreadSummary["optimisticUserMessage"];
 }): NavigationThreadSummary {
+  const titlePrompt =
+    params.optimisticUserMessage?.text?.trim() || params.launchpad.prompt.trim();
+  const derivedTitle = shortenDerivedThreadTitle(titlePrompt);
+
   return {
     id: params.threadId,
-    title: "Untitled thread",
-    titleSource: "fallback",
-    summary: params.launchpad.prompt.trim() || undefined,
+    title: derivedTitle ?? "Untitled thread",
+    titleSource: derivedTitle ? "derived" : "fallback",
+    summary: titlePrompt || undefined,
     projectKey: params.launchpad.directoryPath,
     source: params.backend,
     executionMode: params.executionMode,
@@ -644,6 +655,26 @@ function buildOptimisticThreadFromLaunchpad(params: {
       inInbox: true,
       reason: "new-thread",
     },
+  };
+}
+
+function mergeHydratedThreadWithOptimisticTitle(
+  thread: NavigationThreadSummary,
+  optimisticThread: NavigationThreadSummary,
+): NavigationThreadSummary {
+  if (optimisticThread.titleSource !== "derived") {
+    return thread;
+  }
+
+  if (!hasPlaceholderThreadTitle(thread)) {
+    return thread;
+  }
+
+  return {
+    ...thread,
+    summary: thread.summary ?? optimisticThread.summary,
+    title: optimisticThread.title,
+    titleSource: optimisticThread.titleSource,
   };
 }
 
@@ -895,9 +926,25 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
             (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
           )
         ) {
-          setOptimisticThread((current) =>
-            current?.optimisticUserMessage ? current : undefined
+          const hydratedOptimisticThread = response.threads.find(
+            (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
           );
+
+          setOptimisticThread((current) => {
+            if (current?.optimisticUserMessage) {
+              return current;
+            }
+
+            if (
+              current?.titleSource === "derived" &&
+              hydratedOptimisticThread &&
+              hasPlaceholderThreadTitle(hydratedOptimisticThread)
+            ) {
+              return current;
+            }
+
+            return undefined;
+          });
         }
 
         setSelectedItemKey((current) => {
@@ -1121,14 +1168,10 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
       (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
     );
     if (hasHydratedThread) {
-      if (!optimisticThread.optimisticUserMessage) {
-        return currentThreads;
-      }
-
       return currentThreads.map((thread) =>
         buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
           ? {
-              ...thread,
+              ...mergeHydratedThreadWithOptimisticTitle(thread, optimisticThread),
               optimisticUserMessage:
                 thread.optimisticUserMessage ?? optimisticThread.optimisticUserMessage,
             }
@@ -1140,12 +1183,25 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   }, [optimisticThread, state.response?.threads]);
 
   const directories = useMemo(
-    () =>
-      projectOptimisticThreadIntoDirectories(
+    () => {
+      if (!optimisticThread) {
+        return state.response?.directories ?? [];
+      }
+
+      const optimisticThreadKey = buildThreadIdentityKey(
+        optimisticThread.source,
+        optimisticThread.id
+      );
+      const hasHydratedThread = state.response?.threads.some(
+        (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+      );
+
+      return projectOptimisticThreadIntoDirectories(
         state.response?.directories ?? [],
-        optimisticThread
-      ),
-    [optimisticThread, state.response?.directories]
+        hasHydratedThread ? undefined : optimisticThread
+      );
+    },
+    [optimisticThread, state.response?.directories, state.response?.threads]
   );
 
   const inboxThreads = useMemo(() => {

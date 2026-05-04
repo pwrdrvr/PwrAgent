@@ -1308,6 +1308,9 @@ export function Composer(props: ComposerProps) {
     setReviewConfig(undefined);
     setQueuedTurn(undefined);
     setPendingSteer(undefined);
+    window.setTimeout(() => {
+      inputRef.current?.focus();
+    }, 0);
   }, [
     composerScopeKey,
     composerSupportsSkillTokens,
@@ -2230,6 +2233,9 @@ export function Composer(props: ComposerProps) {
         stickySettingsChanged: true,
       },
     );
+    window.setTimeout(() => {
+      inputRef.current?.focus();
+    }, 0);
   };
 
   const handleThreadModelSettingsPatch = (

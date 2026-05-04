@@ -1,10 +1,11 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { access, mkdir, rmdir } from "node:fs/promises";
+import { access, mkdir, rmdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type {
   AppServerThreadSummary,
+  AppServerBackendKind,
   ArchiveThreadCleanupResult,
   DesktopWorktreeStorageLocation,
   LaunchpadWorkMode,
@@ -24,6 +25,33 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
   return stdout.trim();
 }
 
+export async function recordCodexWorktreeOwnerThread(params: {
+  worktreePath: string;
+  threadId: string;
+}): Promise<void> {
+  const worktreePath = params.worktreePath.trim();
+  const threadId = params.threadId.trim();
+  if (!worktreePath || !threadId) {
+    return;
+  }
+
+  const ownerFile = await runGit(worktreePath, [
+    "rev-parse",
+    "--git-path",
+    "codex-thread.json",
+  ]);
+  if (!ownerFile) {
+    throw new Error(`Unable to resolve Codex worktree owner file for ${worktreePath}`);
+  }
+
+  await mkdir(path.dirname(ownerFile), { recursive: true });
+  await writeFile(
+    ownerFile,
+    `${JSON.stringify({ version: 1, ownerThreadId: threadId }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 function sanitizeBranchName(value: string): string {
   return value
     .trim()
@@ -36,11 +64,24 @@ function sanitizeBranchName(value: string): string {
 function worktreesRootFor(
   repoRoot: string,
   storage: DesktopWorktreeStorageLocation,
-  homeDir?: string,
+  options?: {
+    backend?: AppServerBackendKind;
+    homeDir?: string;
+  },
 ): string {
+  if (storage === "user-home" && options?.backend === "codex") {
+    return codexHomeWorktreesRoot(options.homeDir);
+  }
+
   return storage === "user-home"
-    ? userHomeWorktreesRoot(homeDir)
+    ? userHomeWorktreesRoot(options?.homeDir)
     : path.join(repoRoot, ".worktrees");
+}
+
+function codexHomeWorktreesRoot(homeDir?: string): string {
+  const codexHome =
+    homeDir === undefined ? process.env.CODEX_HOME?.trim() : undefined;
+  return path.join(codexHome || path.join(homeDir ?? os.homedir(), ".codex"), "worktrees");
 }
 
 async function pathExists(target: string): Promise<boolean> {
@@ -65,12 +106,16 @@ async function pruneEmptyWorktreeParents(worktreePath: string): Promise<void> {
 }
 
 export async function computeWorktreePath(params: {
+  backend?: AppServerBackendKind;
   repoRoot: string;
   storage: DesktopWorktreeStorageLocation;
   homeDir?: string;
   timestamp?: number;
 }): Promise<string> {
-  const root = worktreesRootFor(params.repoRoot, params.storage, params.homeDir);
+  const root = worktreesRootFor(params.repoRoot, params.storage, {
+    backend: params.backend,
+    homeDir: params.homeDir,
+  });
   const projectName = path.basename(path.resolve(params.repoRoot)) || "project";
   const baseHash = (params.timestamp ?? Date.now()).toString(36);
 
@@ -353,7 +398,8 @@ export class GitDirectoryService {
     launchpad: Pick<
       NavigationLaunchpadDraft,
       "branchName" | "directoryKind" | "directoryLabel" | "directoryPath" | "workMode"
-    >,
+    > &
+      Partial<Pick<NavigationLaunchpadDraft, "backend">>,
   ): Promise<{ cwd?: string; workMode: LaunchpadWorkMode }> {
     if (launchpad.directoryKind === "workspace") {
       return {
@@ -384,6 +430,7 @@ export class GitDirectoryService {
       "main";
     const storage = await this.resolveStorage();
     const worktreePath = await computeWorktreePath({
+      backend: launchpad.backend,
       repoRoot,
       storage,
       homeDir: this.homeDir,
@@ -395,6 +442,13 @@ export class GitDirectoryService {
       cwd: worktreePath,
       workMode: "worktree",
     };
+  }
+
+  async recordCodexWorktreeOwnerThread(params: {
+    worktreePath: string;
+    threadId: string;
+  }): Promise<void> {
+    await recordCodexWorktreeOwnerThread(params);
   }
 
   async cleanupThreadWorktrees(

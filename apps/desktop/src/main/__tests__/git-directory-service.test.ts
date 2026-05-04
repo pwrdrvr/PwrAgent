@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -146,6 +146,60 @@ describe("GitDirectoryService", () => {
     const expectedRoot = path.join(homeDir, ".pwragent", "worktrees");
     expect(workspace.cwd!.startsWith(`${expectedRoot}${path.sep}`)).toBe(true);
     expect(path.basename(workspace.cwd!)).toBe(path.basename(repoDir));
+  });
+
+  it("creates Codex user-home worktrees under the Codex worktree root", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const homeDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-codex-home-"));
+    cleanupPaths.push(homeDir);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "user-home",
+      homeDir,
+    });
+
+    const workspace = await service.prepareLaunchpadWorkspace({
+      backend: "codex",
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      branchName: "main",
+    });
+
+    const expectedRoot = path.join(homeDir, ".codex", "worktrees");
+    expect(workspace.cwd!.startsWith(`${expectedRoot}${path.sep}`)).toBe(true);
+    expect(path.basename(workspace.cwd!)).toBe(path.basename(repoDir));
+  });
+
+  it("records Codex owner metadata in the worktree git directory", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      branchName: "main",
+    });
+
+    await service.recordCodexWorktreeOwnerThread({
+      worktreePath: workspace.cwd!,
+      threadId: "thread-1",
+    });
+
+    const ownerFile = runGit(workspace.cwd!, [
+      "rev-parse",
+      "--git-path",
+      "codex-thread.json",
+    ]);
+    await expect(readFile(ownerFile, "utf8").then(JSON.parse)).resolves.toEqual({
+      version: 1,
+      ownerThreadId: "thread-1",
+    });
   });
 
   it("computeWorktreePath suffixes the hash when the path already exists", async () => {
