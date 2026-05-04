@@ -3412,6 +3412,7 @@ describe("CodexAppServerClient", () => {
     const result = await client.startTurn({
       threadId: "thread-2",
       input: [{ type: "text", text: "Reply to the existing thread" }],
+      cwd: "/repo/app/.worktrees/thread-2/app",
       model: "gpt-5.4"
     });
 
@@ -3435,6 +3436,20 @@ describe("CodexAppServerClient", () => {
     const startIndex = rpcMethods.indexOf("turn/start");
     expect(resumeIndex).toBeGreaterThan(-1);
     expect(startIndex).toBeGreaterThan(resumeIndex);
+    const resumePayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "thread/resume");
+    const turnStartPayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "turn/start");
+    expect(resumePayload?.params).toMatchObject({
+      threadId: "thread-2",
+      cwd: "/repo/app/.worktrees/thread-2/app",
+    });
+    expect(turnStartPayload?.params).toMatchObject({
+      threadId: "thread-2",
+      cwd: "/repo/app/.worktrees/thread-2/app",
+    });
 
     await client.close();
   });

@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { access, mkdir, rmdir } from "node:fs/promises";
+import { access, mkdir, rmdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -22,6 +22,33 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
     env: process.env,
   });
   return stdout.trim();
+}
+
+export async function recordCodexWorktreeOwnerThread(params: {
+  worktreePath: string;
+  threadId: string;
+}): Promise<void> {
+  const worktreePath = params.worktreePath.trim();
+  const threadId = params.threadId.trim();
+  if (!worktreePath || !threadId) {
+    return;
+  }
+
+  const ownerFile = await runGit(worktreePath, [
+    "rev-parse",
+    "--git-path",
+    "codex-thread.json",
+  ]);
+  if (!ownerFile) {
+    throw new Error(`Unable to resolve Codex worktree owner file for ${worktreePath}`);
+  }
+
+  await mkdir(path.dirname(ownerFile), { recursive: true });
+  await writeFile(
+    ownerFile,
+    `${JSON.stringify({ version: 1, ownerThreadId: threadId }, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 function sanitizeBranchName(value: string): string {
@@ -395,6 +422,13 @@ export class GitDirectoryService {
       cwd: worktreePath,
       workMode: "worktree",
     };
+  }
+
+  async recordCodexWorktreeOwnerThread(params: {
+    worktreePath: string;
+    threadId: string;
+  }): Promise<void> {
+    await recordCodexWorktreeOwnerThread(params);
   }
 
   async cleanupThreadWorktrees(

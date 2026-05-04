@@ -166,6 +166,7 @@ type BackendClient = {
   startTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
+    cwd?: string;
     approvalPolicy?: string;
     sandbox?: string;
     model?: string;
@@ -221,12 +222,19 @@ function resolveThreadGitSourcePath(
     ...overlayDirectories,
     ...thread.linkedDirectories,
   ];
+
+  return resolveLinkedDirectoryCwd(linkedDirectories) ?? thread.projectKey;
+}
+
+function resolveLinkedDirectoryCwd(
+  linkedDirectories: AppServerThreadSummary["linkedDirectories"] = [],
+): string | undefined {
   const directory =
     linkedDirectories.find((candidate) => candidate.kind === "worktree") ??
     linkedDirectories.find((candidate) => candidate.kind === "local") ??
     linkedDirectories[0];
 
-  return directory?.worktreePath ?? directory?.path ?? thread.projectKey;
+  return directory?.worktreePath ?? directory?.path;
 }
 
 function hasHandoffWorkspace(
@@ -1379,6 +1387,13 @@ export class DesktopBackendRegistry {
       threadId: request.threadId,
       branch: resultBranch,
     });
+    if (result.workMode === "worktree") {
+      await this.recordCodexWorktreeOwnerThread({
+        backend: request.backend,
+        threadId: request.threadId,
+        worktreePath: result.linkedDirectory.worktreePath ?? result.targetPath,
+      });
+    }
 
     if (result.archivedSourceWorktree) {
       await this.overlayStore.upsertWorktreeSnapshot({
@@ -1540,6 +1555,10 @@ export class DesktopBackendRegistry {
       reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
       fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
     });
+    const cwd =
+      params.backend === "codex"
+        ? await this.resolveCodexThreadTurnCwd(params.threadId, overlay)
+        : undefined;
     let activeTurnMode: ThreadExecutionMode | undefined;
     const result =
       params.backend === "codex"
@@ -1549,6 +1568,7 @@ export class DesktopBackendRegistry {
             const started = await client.startTurn({
               threadId: params.threadId,
               input: params.input,
+              ...(cwd ? { cwd } : {}),
               collaborationMode: params.collaborationMode,
               ...turnParams,
               approvalPolicy: params.approvalPolicy ?? modeSettings.approvalPolicy,
@@ -2121,6 +2141,13 @@ export class DesktopBackendRegistry {
       serviceTier: launchpad.serviceTier,
       fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
     });
+    if (workspace.workMode === "worktree") {
+      await this.recordCodexWorktreeOwnerThread({
+        backend: launchpad.backend,
+        threadId: startThreadResponse.threadId,
+        worktreePath: workspace.cwd,
+      });
+    }
 
     const input =
       request.input ??
@@ -2636,6 +2663,53 @@ export class DesktopBackendRegistry {
     })
       .then((threads) => threads.find((thread) => thread.id === params.threadId))
       .catch(() => undefined);
+  }
+
+  private async resolveCodexThreadTurnCwd(
+    threadId: string,
+    overlay?: ThreadOverlayState,
+  ): Promise<string | undefined> {
+    const overlayCwd = resolveLinkedDirectoryCwd(overlay?.extraLinkedDirectories);
+    if (overlayCwd?.trim()) {
+      return overlayCwd.trim();
+    }
+
+    const pendingThread = this.pendingStartedThreads.get(`codex:${threadId}`);
+    const pendingCwd = resolveThreadGitSourcePath(pendingThread);
+    if (pendingCwd?.trim()) {
+      return pendingCwd.trim();
+    }
+
+    const thread = await this.findThreadForWorkspaceHandoff({
+      backend: "codex",
+      callerReason: "turn-cwd",
+      threadId,
+    });
+    return resolveThreadGitSourcePath(thread)?.trim() || undefined;
+  }
+
+  private async recordCodexWorktreeOwnerThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    worktreePath?: string;
+  }): Promise<void> {
+    const worktreePath = params.worktreePath?.trim();
+    if (params.backend !== "codex" || !worktreePath) {
+      return;
+    }
+
+    try {
+      await this.gitDirectoryService.recordCodexWorktreeOwnerThread({
+        worktreePath,
+        threadId: params.threadId,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("failed to record Codex worktree owner thread", {
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+        worktreePath,
+      });
+    }
   }
 
   private resolveHandoffWorkspaceCandidate(

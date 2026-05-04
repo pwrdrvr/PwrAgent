@@ -3125,6 +3125,7 @@ function toCodexUserInput(input: AppServerTurnInputItem): CodexUserInput {
 function buildTurnStartPayload(params: {
   threadId: string;
   input: AppServerTurnInputItem[];
+  cwd?: string;
   model?: string;
   reasoningEffort?: string;
   serviceTier?: string;
@@ -3138,6 +3139,9 @@ function buildTurnStartPayload(params: {
     input: params.input.map(toCodexUserInput),
   };
 
+  if (params.cwd?.trim()) {
+    base.cwd = params.cwd.trim();
+  }
   if (params.model?.trim()) {
     base.model = params.model.trim();
   }
@@ -3835,6 +3839,7 @@ export class CodexAppServerClient {
   async startTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
+    cwd?: string;
     approvalPolicy?: string;
     sandbox?: string;
     model?: string;
@@ -3850,6 +3855,7 @@ export class CodexAppServerClient {
       methods: ["thread/resume"],
       payloads: buildThreadResumePayloads({
         threadId: params.threadId,
+        cwd: params.cwd,
         approvalPolicy: params.approvalPolicy,
         sandbox: params.sandbox,
         model: params.model,
@@ -3867,8 +3873,10 @@ export class CodexAppServerClient {
         buildTurnStartPayload({
           threadId: params.threadId,
           input: params.input,
+          cwd: params.cwd,
           model: params.model,
           reasoningEffort: params.reasoningEffort,
+          serviceTier: params.serviceTier,
           collaborationMode: params.collaborationMode,
           collaborationFallbackModel:
             params.model?.trim() || extractStringProperty(resumeResult, "model"),

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -540,6 +540,17 @@ test("directory launchpad keeps new worktree as the sticky default after startin
         name: "Use a sticky worktree default",
       }),
     ).toBeVisible();
+    const startTurn = (await app.getLastStartTurn()) as { cwd?: string } | undefined;
+    expect(startTurn?.cwd).toContain(`${path.sep}.pwragent${path.sep}worktrees${path.sep}`);
+    const ownerFile = execFileSync(
+      "git",
+      ["-C", startTurn!.cwd!, "rev-parse", "--git-path", "codex-thread.json"],
+      { encoding: "utf8" },
+    ).trim();
+    await expect(readFile(ownerFile, "utf8").then(JSON.parse)).resolves.toEqual({
+      version: 1,
+      ownerThreadId: "thread-new-worktree",
+    });
 
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })

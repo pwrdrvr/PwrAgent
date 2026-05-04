@@ -503,9 +503,11 @@ class MockBackendClient {
     threadId: string;
     input: AppServerTurnInputItem[];
     executionMode?: "default" | "full-access";
+    cwd?: string;
     approvalPolicy?: string;
     sandbox?: string;
     model?: string;
+    collaborationMode?: unknown;
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
@@ -1529,6 +1531,55 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("records Codex owner metadata when materializing a worktree launchpad", async () => {
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/app/.worktrees/thread-1/app",
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread,
+      } as never,
+    });
+
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: "directory:/repo/app",
+      launchpad: {
+        directoryKey: "directory:/repo/app",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "worktree",
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
+      worktreePath: "/repo/app/.worktrees/thread-1/app",
+      threadId: "thread-1",
+    });
+
+    await registry.close();
+  });
+
   it("materializes Grok workspace launchpads into a scratch directory", async () => {
     const grokClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },
@@ -1639,6 +1690,52 @@ describe("DesktopBackendRegistry", () => {
       serviceTier: undefined,
       reasoningEffort: "medium",
       fastMode: undefined,
+    });
+
+    await registry.close();
+  });
+
+  it("resumes Codex turns in the current handoff worktree cwd", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["turn/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [
+              {
+                id: "pwragent-handoff:codex:thread-1",
+                label: "app",
+                path: "/repo/app",
+                worktreePath: "/repo/app/.worktrees/thread-1/app",
+                kind: "worktree",
+              },
+            ],
+          },
+        },
+      }),
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "What is the CWD?" }],
+    });
+
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-1",
+      cwd: "/repo/app/.worktrees/thread-1/app",
     });
 
     await registry.close();
@@ -2548,6 +2645,7 @@ describe("DesktopBackendRegistry", () => {
       warnings: [],
       completedAt: 1000,
     }));
+    const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [thread],
@@ -2562,6 +2660,9 @@ describe("DesktopBackendRegistry", () => {
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore,
+      gitDirectoryService: {
+        recordCodexWorktreeOwnerThread,
+      } as never,
       gitWorkspaceHandoffService: {
         handoff,
       } as never,
@@ -2584,6 +2685,10 @@ describe("DesktopBackendRegistry", () => {
       sourceBranch: undefined,
     });
     expect(response.workMode).toBe("worktree");
+    expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
+      worktreePath: "/repo/app/.worktrees/app-feature-handoff",
+      threadId: "thread-1",
+    });
     expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
       threadId: "thread-1",
       gitInfo: {
