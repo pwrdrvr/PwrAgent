@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { flushSync } from "react-dom";
+import type { JSONContent } from "@tiptap/react";
 import type {
   AppServerCollaborationModeRequest,
   AppServerReviewTarget,
@@ -91,6 +92,7 @@ type ComposerProps = {
       Pick<
         NavigationLaunchpadDraft,
         | "prompt"
+        | "editorDocument"
         | "backend"
         | "executionMode"
         | "model"
@@ -851,7 +853,9 @@ export function Composer(props: ComposerProps) {
     scopeKey: composerScopeKey,
     snapshot: {
       draft: savedInitialDraft?.draft ?? hydratedInitialLaunchpad?.draft ?? "",
-      editorDocument: savedInitialDraft?.editorDocument,
+      editorDocument:
+        savedInitialDraft?.editorDocument ??
+        (props.launchpad?.editorDocument as JSONContent | undefined),
       imageAttachments:
         savedInitialDraft?.imageAttachments ??
         props.launchpad?.imageAttachments ??
@@ -1298,6 +1302,9 @@ export function Composer(props: ComposerProps) {
       setSkillTokens(composerSupportsSkillTokens ? saved.skillTokens : []);
     } else {
       setComposerDraftFromCanonical(props.launchpad?.prompt ?? "");
+      setEditorDocument(
+        props.launchpad?.editorDocument as JSONContent | undefined,
+      );
       setImageAttachments(props.launchpad?.imageAttachments ?? []);
     }
     setSending(false);
@@ -1463,7 +1470,9 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    if (canonicalDraft === launchpad.prompt) {
+    const editorDocumentChanged =
+      JSON.stringify(launchpad.editorDocument) !== JSON.stringify(editorDocument);
+    if (canonicalDraft === launchpad.prompt && !editorDocumentChanged) {
       return;
     }
 
@@ -1475,13 +1484,21 @@ export function Composer(props: ComposerProps) {
       void props.onUpdateLaunchpad?.(launchpad.directoryKey, {
         imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
         prompt: canonicalDraft,
+        editorDocument: editorDocument as Record<string, unknown> | undefined,
       });
     }, 250);
 
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [canonicalDraft, composerScopeKey, imageAttachments, launchpad, props.onUpdateLaunchpad]);
+  }, [
+    canonicalDraft,
+    composerScopeKey,
+    editorDocument,
+    imageAttachments,
+    launchpad,
+    props.onUpdateLaunchpad,
+  ]);
 
   const submitReviewCommand = async (reviewCommand: {
     displayText: string;

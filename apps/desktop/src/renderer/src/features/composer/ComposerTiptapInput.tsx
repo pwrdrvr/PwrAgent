@@ -135,6 +135,103 @@ function splitTextContent(text: string): JSONContent[] {
   return nodes;
 }
 
+type InlineMarkSpec = {
+  delimiter: string;
+  mark: "bold" | "italic" | "strike" | "code";
+  verbatim?: boolean;
+};
+
+// Order matters: longer delimiters must be matched before their prefixes
+// (** before *) so we don't misclassify bold as italic-italic.
+const INLINE_MARK_SPECS: InlineMarkSpec[] = [
+  { delimiter: "**", mark: "bold" },
+  { delimiter: "~~", mark: "strike" },
+  { delimiter: "`", mark: "code", verbatim: true },
+  { delimiter: "*", mark: "italic" },
+];
+
+function parseInlineMarkdown(text: string): JSONContent[] {
+  return parseInlineMarkdownWithMarks(text, []);
+}
+
+function parseInlineMarkdownWithMarks(
+  text: string,
+  inheritedMarks: { type: string }[],
+): JSONContent[] {
+  const nodes: JSONContent[] = [];
+  let buffer = "";
+  let cursor = 0;
+
+  const flush = (): void => {
+    if (buffer.length === 0) {
+      return;
+    }
+    nodes.push({
+      type: "text",
+      text: buffer,
+      ...(inheritedMarks.length > 0 ? { marks: inheritedMarks } : {}),
+    });
+    buffer = "";
+  };
+
+  while (cursor < text.length) {
+    const char = text[cursor];
+
+    if (char === "\n") {
+      flush();
+      nodes.push({ type: "hardBreak" });
+      cursor += 1;
+      continue;
+    }
+
+    let matchedSpec: InlineMarkSpec | undefined;
+    let closeIndex = -1;
+    for (const spec of INLINE_MARK_SPECS) {
+      if (!text.startsWith(spec.delimiter, cursor)) {
+        continue;
+      }
+      // Don't match an opener immediately followed by the closing delimiter
+      // (empty span) or by whitespace immediately after the opener — that
+      // would shadow legitimate uses like `* not a list`.
+      const innerStart = cursor + spec.delimiter.length;
+      if (innerStart >= text.length) {
+        continue;
+      }
+      const candidateClose = text.indexOf(spec.delimiter, innerStart);
+      if (candidateClose === -1 || candidateClose === innerStart) {
+        continue;
+      }
+      matchedSpec = spec;
+      closeIndex = candidateClose;
+      break;
+    }
+
+    if (!matchedSpec) {
+      buffer += char;
+      cursor += 1;
+      continue;
+    }
+
+    flush();
+    const innerStart = cursor + matchedSpec.delimiter.length;
+    const inner = text.slice(innerStart, closeIndex);
+    const nextMarks = [...inheritedMarks, { type: matchedSpec.mark }];
+    if (matchedSpec.verbatim) {
+      nodes.push({
+        type: "text",
+        text: inner,
+        marks: nextMarks,
+      });
+    } else {
+      nodes.push(...parseInlineMarkdownWithMarks(inner, nextMarks));
+    }
+    cursor = closeIndex + matchedSpec.delimiter.length;
+  }
+
+  flush();
+  return nodes;
+}
+
 function buildTiptapContent(
   value: string,
   skillTokens: ComposerSkillToken[],
@@ -209,8 +306,10 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
       continue;
     }
 
+    // Blank lines between content are paragraph separators in markdown,
+    // not standalone empty paragraph nodes. Re-creating them as nodes
+    // double-spaces the doc on every round-trip (n → 2n+1 blank lines).
     if (line.trim().length === 0) {
-      content.push({ type: "paragraph" });
       index += 1;
       continue;
     }
@@ -226,16 +325,8 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
     }
     content.push({
       type: "paragraph",
-      content: splitTextContent(paragraphLines.join("\n")),
+      content: parseInlineMarkdown(paragraphLines.join("\n")),
     });
-  }
-
-  while (
-    content.length > 1 &&
-    content.at(-1)?.type === "paragraph" &&
-    !content.at(-1)?.content
-  ) {
-    content.pop();
   }
 
   return {

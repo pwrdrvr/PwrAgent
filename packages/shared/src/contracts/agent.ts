@@ -201,6 +201,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       NavigationLaunchpadDraft,
       | "imageAttachments"
       | "prompt"
+      | "editorDocument"
       | "backend"
       | "executionMode"
       | "model"
