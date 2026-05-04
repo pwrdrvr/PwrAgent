@@ -39,7 +39,6 @@ import type {
 import { getMainLogger } from "../log";
 import type {
   ClientRequest as CodexClientRequest,
-  CollaborationMode as CodexCollaborationMode,
   InitializeParams as CodexInitializeParams,
   ReasoningEffort as CodexReasoningEffort,
   ServerRequest as CodexServerRequest,
@@ -2978,10 +2977,7 @@ function buildThreadStartPayload(params: {
   ephemeral?: boolean;
   config?: CodexThreadStartParams["config"];
 }): CodexThreadStartParams {
-  const base: CodexThreadStartParams = {
-    experimentalRawEvents: false,
-    persistExtendedHistory: false,
-  };
+  const base: CodexThreadStartParams = {};
 
   if (params.cwd?.trim()) {
     base.cwd = params.cwd.trim();
@@ -3025,8 +3021,7 @@ function buildThreadResumePayloads(params: {
   fastMode?: boolean;
 }): CodexThreadResumeParams[] {
   const base: CodexThreadResumeParams = {
-    threadId: params.threadId,
-    persistExtendedHistory: false
+    threadId: params.threadId
   };
 
   if (params.cwd?.trim()) {
@@ -3076,11 +3071,11 @@ function extractStringProperty(value: unknown, ...keys: string[]): string | unde
   return undefined;
 }
 
-function buildCollaborationModePayload(params: {
+function buildCollaborationModeOverrides(params: {
   collaborationMode?: AppServerCollaborationModeRequest;
   fallbackModel?: string;
   fallbackReasoningEffort?: string;
-}): CodexCollaborationMode | undefined {
+}): { model: string; effort: CodexReasoningEffort | null } | undefined {
   if (!params.collaborationMode) {
     return undefined;
   }
@@ -3094,19 +3089,9 @@ function buildCollaborationModePayload(params: {
     normalizeCodexReasoningEffort(settings.reasoningEffort) ??
     normalizeCodexReasoningEffort(params.fallbackReasoningEffort) ??
     null;
-  const developerInstructions = Object.hasOwn(settings, "developerInstructions")
-    ? settings.developerInstructions
-    : params.collaborationMode.mode === "plan"
-      ? null
-      : undefined;
-
   return {
-    mode: params.collaborationMode.mode,
-    settings: {
-      model,
-      reasoning_effort: reasoningEffort,
-      developer_instructions: developerInstructions ?? null,
-    },
+    model,
+    effort: reasoningEffort,
   };
 }
 
@@ -3158,14 +3143,15 @@ function buildTurnStartPayload(params: {
     base.outputSchema = params.outputSchema;
   }
 
-  const collaborationMode = buildCollaborationModePayload({
+  const collaborationOverrides = buildCollaborationModeOverrides({
     collaborationMode: params.collaborationMode,
     fallbackModel: params.collaborationFallbackModel ?? params.model,
     fallbackReasoningEffort:
       params.collaborationFallbackReasoningEffort ?? params.reasoningEffort,
   });
-  if (collaborationMode) {
-    base.collaborationMode = collaborationMode;
+  if (collaborationOverrides) {
+    base.model = collaborationOverrides.model;
+    base.effort = collaborationOverrides.effort;
   }
 
   return base;

@@ -29,7 +29,7 @@ The generated files are committed so PwrAgent builds cleanly without a Codex ins
 - A new Codex protocol surface lands that PwrAgent wants to consume.
 - The committed generated files drift from the generator version noted below.
 
-Current generated source: `codex-cli 0.125.0` from the pre-extraction `@pwragent/shared` generated tree (432 generated `.ts` files; v1 surface in `src/`, v2 surface in `src/v2/`).
+Current generated source: `codex-cli 0.128.0-alpha.1` from Codex Desktop's bundled binary (509 generated `.ts` files; v1 surface in `src/`, v2 surface in `src/v2/`).
 
 ## Why a separate package
 
