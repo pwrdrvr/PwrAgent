@@ -127,6 +127,14 @@ builderArgs.push(publish ? "--publish" : "--publish=never", publish ? "always" :
 const cleanedArgs = builderArgs.filter((arg) => arg !== "");
 runChecked("npx", cleanedArgs, { cwd: stageDir });
 
+// 6. Post-build asar contents check — fails if forbidden files (TS sources,
+//    tests, third-party docs, design docs, screenshots, etc.) leaked into the
+//    bundle. Exclusions are configured in electron-builder.yml; this script
+//    is a belt-and-braces guard against accidental edits to that YAML.
+step("verify packaged asar contents");
+const builtApp = join(stageDir, "dist", "mac-arm64", "PwrAgent.app");
+runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);
+
 step("done");
 const dist = join(stageDir, "dist");
 console.log(`  artifacts: ${dist}`);

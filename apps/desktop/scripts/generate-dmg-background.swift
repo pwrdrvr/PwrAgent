@@ -1,7 +1,28 @@
 #!/usr/bin/env swift
 
 import AppKit
+import CoreText
 import Foundation
+
+/// Register a font file from disk so its PostScript name becomes resolvable via
+/// NSFont(name:size:). Returns the resolved PostScript name on success.
+func registerFont(at path: String) -> String? {
+  let url = URL(fileURLWithPath: path)
+  guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+  var error: Unmanaged<CFError>?
+  guard CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error) else {
+    if let err = error?.takeRetainedValue() {
+      FileHandle.standardError.write(Data("Font register failed: \(err)\n".utf8))
+    }
+    return nil
+  }
+  guard
+    let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor],
+    let descriptor = descriptors.first,
+    let psName = CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String
+  else { return nil }
+  return psName
+}
 
 // DMG window and icon layout — keep in sync with electron-builder.yml dmg section.
 let width = 660
@@ -11,28 +32,29 @@ let appIconX = 170
 let applicationsX = 500
 let iconY = 230
 
-let output = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "build/dmg-background.tiff")
+let output = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "build/dmg-background.png")
+
+// Register the vendored Geist Bold so the wordmark renders in the brand face on
+// any build machine, regardless of system fonts. Path is relative to the
+// desktop package root (the script's expected working directory).
+let geistBoldPath = "build/fonts/Geist-Bold.ttf"
+let geistBoldName = registerFont(at: geistBoldPath)
 
 struct Color {
-  static let black = NSColor(calibratedRed: 0, green: 0, blue: 0, alpha: 1)
+  static let background = NSColor(calibratedRed: 0.965, green: 0.965, blue: 0.965, alpha: 1)
+  static let pillBackground = NSColor(calibratedRed: 0.12, green: 0.12, blue: 0.12, alpha: 1)
   static let text = NSColor(calibratedRed: 0.969, green: 0.953, blue: 0.922, alpha: 1)
-  static let secondary = NSColor(calibratedRed: 0.722, green: 0.690, blue: 0.647, alpha: 1)
   static let muted = NSColor(calibratedRed: 0.549, green: 0.522, blue: 0.478, alpha: 1)
-  static let accent = NSColor(calibratedRed: 1.000, green: 0.541, blue: 0.122, alpha: 1)
+  // Brand orange — design system: #E85A3A (rgb 232, 90, 58).
+  static let accent = NSColor(calibratedRed: 0.910, green: 0.353, blue: 0.227, alpha: 1)
+  static let arrowShaft = NSColor(calibratedRed: 0.910, green: 0.353, blue: 0.227, alpha: 1)
 }
 
-/// Render the DMG background at the given pixel scale (1 = standard, 2 = retina).
-/// Setting bitmap.size to the logical (1x) dimensions while using scale× pixel
-/// dimensions makes NSGraphicsContext apply the correct transform automatically —
-/// no manual ctx.scaleBy needed.
-func renderBackground(scale: Int) -> NSBitmapImageRep {
-  let pw = width * scale
-  let ph = height * scale
-
+func renderBackground() -> NSBitmapImageRep {
   guard let bitmap = NSBitmapImageRep(
     bitmapDataPlanes: nil,
-    pixelsWide: pw,
-    pixelsHigh: ph,
+    pixelsWide: width,
+    pixelsHigh: height,
     bitsPerSample: 8,
     samplesPerPixel: 4,
     hasAlpha: true,
@@ -41,26 +63,42 @@ func renderBackground(scale: Int) -> NSBitmapImageRep {
     bytesPerRow: 0,
     bitsPerPixel: 0
   ) else {
-    fatalError("Unable to create bitmap at \(scale)x")
+    fatalError("Unable to create bitmap")
   }
-  // Point size = logical (1x) size; the pixel/point ratio gives the implicit scale.
   bitmap.size = NSSize(width: CGFloat(width), height: CGFloat(height))
 
   NSGraphicsContext.saveGraphicsState()
   NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
 
   let h = CGFloat(height)
+  let w = CGFloat(width)
 
-  // Background
-  Color.black.setFill()
-  NSRect(x: 0, y: 0, width: CGFloat(width), height: h).fill()
+  // Light background
+  Color.background.setFill()
+  NSRect(x: 0, y: 0, width: w, height: h).fill()
 
-  // Logo: "Pwr" + "Agent"
-  let logoFont = NSFont.systemFont(ofSize: 45, weight: .bold)
-  let logoY = h - 78
+  // Dark rounded pill behind logo and subtitle
+  let pillWidth: CGFloat = 340
+  let pillHeight: CGFloat = 100
+  let pillX = (w - pillWidth) / 2
+  let pillY = h - 120
+  let pill = NSBezierPath(
+    roundedRect: NSRect(x: pillX, y: pillY, width: pillWidth, height: pillHeight),
+    xRadius: 16, yRadius: 16
+  )
+  Color.pillBackground.setFill()
+  pill.fill()
+
+  // Logo: "Pwr" + "Agent" — Geist Bold (brand display), falling back to system bold
+  // if the vendored font failed to register.
+  let logoFont: NSFont = {
+    if let name = geistBoldName, let f = NSFont(name: name, size: 40) { return f }
+    return NSFont.systemFont(ofSize: 40, weight: .bold)
+  }()
+  let logoY = pillY + pillHeight - 60
   let pwrSize = "Pwr".size(withAttributes: [.font: logoFont])
   let agentSize = "Agent".size(withAttributes: [.font: logoFont])
-  let logoX = (CGFloat(width) - pwrSize.width - agentSize.width) / 2
+  let logoX = (w - pwrSize.width - agentSize.width) / 2
 
   let textAttrs: [NSAttributedString.Key: Any] = [.font: logoFont, .foregroundColor: Color.text]
   let accentAttrs: [NSAttributedString.Key: Any] = [.font: logoFont, .foregroundColor: Color.accent]
@@ -68,52 +106,54 @@ func renderBackground(scale: Int) -> NSBitmapImageRep {
   "Agent".draw(at: NSPoint(x: logoX + pwrSize.width, y: logoY), withAttributes: accentAttrs)
 
   // Subtitle
-  let subtitleFont = NSFont.systemFont(ofSize: 12, weight: .medium)
+  let subtitleFont = NSFont.systemFont(ofSize: 11, weight: .medium)
   let subtitle = "threads / transcripts"
   let subtitleAttrs: [NSAttributedString.Key: Any] = [.font: subtitleFont, .foregroundColor: Color.muted]
   let subtitleSize = subtitle.size(withAttributes: subtitleAttrs)
   subtitle.draw(
-    at: NSPoint(x: (CGFloat(width) - subtitleSize.width) / 2, y: h - 106),
+    at: NSPoint(x: (w - subtitleSize.width) / 2, y: pillY + 14),
     withAttributes: subtitleAttrs
   )
 
-  // Arrow between icons — positioned between their inner edges.
-  let arrowStartX = CGFloat(appIconX + iconSize / 2 + 18)
-  let arrowEndX = CGFloat(applicationsX - iconSize / 2 - 18)
+  // Arrow — thick orange bar with chunky arrowhead
+  let arrowStartX = CGFloat(appIconX + iconSize / 2 + 20)
+  let arrowEndX = CGFloat(applicationsX - iconSize / 2 - 20)
   let arrowY = h - CGFloat(iconY)
+  let shaftThickness: CGFloat = 18
 
-  NSColor(calibratedRed: 0.722, green: 0.690, blue: 0.647, alpha: 0.60).setStroke()
-  let arrow = NSBezierPath()
-  arrow.move(to: NSPoint(x: arrowStartX, y: arrowY))
-  arrow.line(to: NSPoint(x: arrowEndX - 16, y: arrowY))
-  arrow.lineWidth = 2.5
-  arrow.stroke()
+  // Shaft — rounded rectangle
+  let shaft = NSBezierPath(
+    roundedRect: NSRect(
+      x: arrowStartX,
+      y: arrowY - shaftThickness / 2,
+      width: arrowEndX - arrowStartX - 20,
+      height: shaftThickness
+    ),
+    xRadius: shaftThickness / 2,
+    yRadius: shaftThickness / 2
+  )
+  Color.arrowShaft.setFill()
+  shaft.fill()
 
-  Color.accent.withAlphaComponent(0.82).setFill()
+  // Arrowhead — solid orange triangle
+  Color.accent.setFill()
+  let headHeight: CGFloat = 48
+  let headWidth: CGFloat = 32
   let arrowHead = NSBezierPath()
   arrowHead.move(to: NSPoint(x: arrowEndX, y: arrowY))
-  arrowHead.line(to: NSPoint(x: arrowEndX - 18, y: arrowY + 11))
-  arrowHead.line(to: NSPoint(x: arrowEndX - 18, y: arrowY - 11))
+  arrowHead.line(to: NSPoint(x: arrowEndX - headWidth, y: arrowY + headHeight / 2))
+  arrowHead.line(to: NSPoint(x: arrowEndX - headWidth, y: arrowY - headHeight / 2))
   arrowHead.close()
   arrowHead.fill()
 
-  // Light zones behind Finder icon labels (Finder draws black text over background).
-  for labelX in [CGFloat(appIconX), CGFloat(applicationsX)] {
-    let labelZone = NSBezierPath(
-      roundedRect: NSRect(x: labelX - 50, y: h - CGFloat(iconY) - 80, width: 100, height: 20),
-      xRadius: 4, yRadius: 4
-    )
-    NSColor.white.withAlphaComponent(0.22).setFill()
-    labelZone.fill()
-  }
-
-  // Instruction hint
+  // "Drag to Applications" hint
   let instructionFont = NSFont.systemFont(ofSize: 12, weight: .medium)
   let instruction = "Drag to Applications"
-  let instrAttrs: [NSAttributedString.Key: Any] = [.font: instructionFont, .foregroundColor: Color.secondary]
+  let instrColor = NSColor(calibratedRed: 0.45, green: 0.45, blue: 0.45, alpha: 1)
+  let instrAttrs: [NSAttributedString.Key: Any] = [.font: instructionFont, .foregroundColor: instrColor]
   let instrSize = instruction.size(withAttributes: instrAttrs)
   instruction.draw(
-    at: NSPoint(x: (CGFloat(width) - instrSize.width) / 2, y: h - 366),
+    at: NSPoint(x: (w - instrSize.width) / 2, y: h - 366),
     withAttributes: instrAttrs
   )
 
@@ -121,19 +161,13 @@ func renderBackground(scale: Int) -> NSBitmapImageRep {
   return bitmap
 }
 
-// Generate 1x and 2x representations.
-let rep1x = renderBackground(scale: 1)
-let rep2x = renderBackground(scale: 2)
+// Single 1x PNG — no multi-resolution TIFF.
+let rep = renderBackground()
 
-// Combine into a multi-resolution TIFF (HiDPI) with LZW compression.
-let image = NSImage(size: NSSize(width: CGFloat(width), height: CGFloat(height)))
-image.addRepresentation(rep1x)
-image.addRepresentation(rep2x)
-
-guard let tiffData = image.tiffRepresentation(using: .lzw, factor: 1.0) else {
-  fatalError("Unable to create multi-resolution TIFF")
+guard let pngData = rep.representation(using: .png, properties: [:]) else {
+  fatalError("Unable to create PNG data")
 }
 
 try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
-try tiffData.write(to: output)
-print("Generated HiDPI DMG background (\(tiffData.count / 1024) KB): \(output.path)")
+try pngData.write(to: output)
+print("Generated DMG background PNG (\(pngData.count / 1024) KB): \(output.path)")
