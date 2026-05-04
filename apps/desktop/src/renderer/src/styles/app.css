@@ -4244,6 +4244,15 @@ textarea,
   font-weight: 700;
 }
 
+.composer__application-icon--glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+}
+
 .composer__select {
   appearance: none;
   min-width: 168px;

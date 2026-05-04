@@ -30,6 +30,7 @@ import type {
   ThreadWorkspaceHandoffStrategy,
   ThreadExecutionMode,
 } from "@pwragent/shared";
+import { EditorIcon, TerminalIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
@@ -803,6 +804,20 @@ function ComposerApplicationButton(props: {
           className="composer__application-icon"
           src={props.application.iconDataUrl}
         />
+      ) : props.application.kind === "editor" ? (
+        <span
+          aria-hidden="true"
+          className="composer__application-icon composer__application-icon--glyph"
+        >
+          <EditorIcon size={14} />
+        </span>
+      ) : props.application.kind === "terminal" ? (
+        <span
+          aria-hidden="true"
+          className="composer__application-icon composer__application-icon--glyph"
+        >
+          <TerminalIcon size={14} />
+        </span>
       ) : (
         <span
           aria-hidden="true"
