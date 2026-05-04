@@ -52,6 +52,10 @@ export type DesktopMessagingSettingsSource = Pick<
   "readSettings" | "resolveDiscordBotTokenSync" | "resolveTelegramBotTokenSync"
 >;
 
+export type DesktopMessagingConfigLoadOptions = {
+  logStartupEligibility?: boolean;
+};
+
 export function loadDesktopMessagingConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): DesktopMessagingConfig {
@@ -100,6 +104,7 @@ export function loadDesktopMessagingConfig(
 export async function loadDesktopMessagingConfigFromSettings(
   settings: DesktopMessagingSettingsSource,
   env: NodeJS.ProcessEnv = process.env,
+  options: DesktopMessagingConfigLoadOptions = {},
 ): Promise<DesktopMessagingConfig> {
   const log = getMainLogger("pwragent:messaging");
   const snapshot = await settings.readSettings();
@@ -139,6 +144,7 @@ export async function loadDesktopMessagingConfigFromSettings(
     channel: "telegram",
     enabled: telegramEnabled,
     hasToken: Boolean(telegramBotToken),
+    logStartupEligibility: options.logStartupEligibility === true,
     authorizedActorCount: telegramAuthorizedActorIds.length,
   })
     ? {
@@ -157,6 +163,7 @@ export async function loadDesktopMessagingConfigFromSettings(
     channel: "discord",
     enabled: discordEnabled,
     hasToken: Boolean(discordBotToken),
+    logStartupEligibility: options.logStartupEligibility === true,
     authorizedActorCount: discordAuthorizedActorIds.length,
   })
     ? {
@@ -192,38 +199,48 @@ function buildChannelConfig(params: {
   channel: string;
   enabled: boolean;
   hasToken: boolean;
+  logStartupEligibility: boolean;
   authorizedActorCount: number;
 }): boolean {
-  const { log, channel, enabled, hasToken, authorizedActorCount } = params;
+  const { log, channel, enabled, hasToken, logStartupEligibility, authorizedActorCount } =
+    params;
 
   if (!enabled) {
-    log.info(`${channel}: disabled in settings — skipping`, {
-      channel,
-    });
+    if (logStartupEligibility) {
+      log.info(`${channel}: disabled in settings — skipping`, {
+        channel,
+      });
+    }
     return false;
   }
 
   // Channel is enabled — any missing prerequisite is an error
   if (!hasToken) {
-    log.error(
-      `${channel}: enabled but bot token is missing or could not be decrypted — cannot start`,
-      { channel },
-    );
+    if (logStartupEligibility) {
+      log.error(
+        `${channel}: enabled but bot token is missing or could not be decrypted — cannot start`,
+        { channel },
+      );
+    }
     return false;
   }
 
   if (authorizedActorCount === 0) {
-    log.error(
-      `${channel}: enabled but no authorized user IDs configured — cannot start`,
-      { channel },
-    );
+    if (logStartupEligibility) {
+      log.error(
+        `${channel}: enabled but no authorized user IDs configured — cannot start`,
+        { channel },
+      );
+    }
     return false;
   }
 
-  log.info(`${channel}: enabled — will attempt to start`, {
-    channel,
-    authorizedActorCount,
-  });
+  if (logStartupEligibility) {
+    log.info(`${channel}: enabled — will attempt to start`, {
+      channel,
+      authorizedActorCount,
+    });
+  }
   return true;
 }
 

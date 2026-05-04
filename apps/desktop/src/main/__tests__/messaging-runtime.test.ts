@@ -66,6 +66,57 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
+  it("requests messaging startup eligibility logging only for the startup config load", async () => {
+    await prepareRuntimeStore();
+    const adapter = createAdapter("telegram");
+    const configLoader = vi.fn(() => ({
+      inputDebounceMs: 0,
+      telegram: {
+        channel: "telegram" as const,
+        botToken: "telegram-token",
+        authorizedActorIds: ["user-1"],
+      },
+    }));
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: bridge,
+      config: configLoader,
+    });
+
+    await runtime.start();
+    await adapter.listener?.(
+      buildCallbackEvent("bind:codex:thread-1", {
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    );
+    await bridge.emitBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "command-1",
+            type: "commandExecution",
+            command: "pnpm test",
+            status: "completed",
+          },
+        },
+      },
+    });
+
+    expect(configLoader).toHaveBeenNthCalledWith(1, {
+      logStartupEligibility: true,
+    });
+    expect(configLoader).toHaveBeenNthCalledWith(2, undefined);
+  });
+
   it("uses adapter-supplied authorization without provider-specific runtime config", async () => {
     await prepareRuntimeStore();
     const adapter = createAdapter("custom", {
