@@ -422,6 +422,79 @@ describe("TelegramAdapter", () => {
     );
   });
 
+  it("treats Telegram unchanged final stream edits as successful updates", async () => {
+    const api = createApi({
+      editMessageText: vi.fn(async () => {
+        throw new Error("Bad Request: message is not modified");
+      }),
+    });
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+        streamingResponses: true,
+      },
+      now: () => 1000,
+    });
+    const baseIntent = {
+      audit: {
+        actor: {
+          platformUserId: "42",
+        },
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+        occurredAt: 1000,
+      },
+      bindingId: "binding-1",
+      createdAt: 1000,
+      id: "stream-1",
+      kind: "stream_update",
+      markdown: "plain",
+      role: "assistant",
+      stream: {
+        isFinal: false,
+        key: "stream-key-1",
+        sequence: 1,
+      },
+      text: "Hello",
+    } satisfies MessagingSurfaceIntent;
+
+    const first = await adapter.deliver(baseIntent);
+    const final = await adapter.deliver({
+      ...baseIntent,
+      id: "stream-2",
+      stream: {
+        ...baseIntent.stream,
+        isFinal: true,
+        sequence: 2,
+      },
+      text: "Hello",
+    } satisfies MessagingSurfaceIntent);
+
+    expect(first).toMatchObject({
+      outcome: "presented",
+      surface: {
+        id: "200",
+      },
+    });
+    expect(final).toMatchObject({
+      outcome: "updated",
+      surface: {
+        id: "200",
+      },
+    });
+    expect(final).not.toHaveProperty("errorMessage");
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).toHaveBeenCalledTimes(1);
+  });
+
   it("uses a stream target surface to edit even when the stream key changes", async () => {
     const api = createApi();
     let now = 1000;

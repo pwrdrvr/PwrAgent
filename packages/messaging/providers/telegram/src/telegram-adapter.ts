@@ -714,10 +714,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       }
     }
 
+    const existing =
+      this.streamSurfaces.get(intent.stream.key) ??
+      (target.messageId ? target : undefined);
     try {
-      const existing =
-        this.streamSurfaces.get(intent.stream.key) ??
-        (target.messageId ? target : undefined);
       const message = existing?.messageId
         ? await this.bot.api.editMessageText({
             chat_id: existing.chatId,
@@ -765,6 +765,32 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         },
       };
     } catch (error) {
+      if (existing?.messageId && isTelegramMessageNotModifiedError(error)) {
+        if (intent.stream.isFinal) {
+          this.streamSurfaces.delete(intent.stream.key);
+        } else {
+          this.streamSurfaces.set(intent.stream.key, existing);
+        }
+        this.options.logger?.debug(
+          `telegram stream update unchanged final=${intent.stream.isFinal} sequence=${intent.stream.sequence} target=${this.compactTypingTarget(existing)} stream=${intent.stream.key}`,
+        );
+        return {
+          channel: this.channel,
+          deliveredAt: this.now(),
+          outcome: "updated",
+          surface: {
+            channel: this.channel,
+            id: String(existing.messageId),
+            state: {
+              opaque: {
+                chatId: existing.chatId,
+                messageId: existing.messageId,
+                messageThreadId: existing.messageThreadId ?? null,
+              },
+            },
+          },
+        };
+      }
       const retryAfterMs = telegramRetryAfterMs(error);
       if (retryAfterMs !== undefined) {
         this.blockStreamRateLimitTarget(target, retryAfterMs);
@@ -1796,6 +1822,19 @@ function telegramGroupStreamMinIntervalMs(deliveriesInWindow: number): number {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isTelegramMessageNotModifiedError(error: unknown): boolean {
+  const text = [
+    errorMessage(error),
+    diagnosticErrorMessage(readErrorProperty(error)),
+    readStringProperty(error, "description"),
+    readStringProperty(readErrorProperty(error), "description"),
+  ]
+    .filter((message): message is string => Boolean(message))
+    .join("\n")
+    .toLowerCase();
+  return text.includes("message is not modified");
 }
 
 function telegramRetryAfterMs(error: unknown): number | undefined {
