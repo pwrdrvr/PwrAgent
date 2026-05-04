@@ -461,7 +461,7 @@ describe("DesktopMessagingRuntime", () => {
 
     expect(workingAdapter.start).toHaveBeenCalledTimes(1);
     expect(messagingLog.error).toHaveBeenCalledWith(
-      "messaging adapter failed to start",
+      "telegram: failed to start adapter",
       expect.objectContaining({
         channel: "telegram",
       }),
@@ -469,7 +469,8 @@ describe("DesktopMessagingRuntime", () => {
     expect(messagingLog.info).toHaveBeenCalledWith(
       "messaging runtime started",
       expect.objectContaining({
-        adapters: ["discord"],
+        started: ["discord"],
+        failed: ["telegram"],
       }),
     );
   });

@@ -75,6 +75,7 @@ export class DesktopMessagingRuntime {
       store,
     });
 
+    const failedChannels: string[] = [];
     for (const adapter of configuredAdapters) {
       const authorizedActorIds = [...adapter.authorizedActorIds];
       const authorizedActorIdSet = new Set(authorizedActorIds);
@@ -122,13 +123,17 @@ export class DesktopMessagingRuntime {
           }
         });
       } catch (error) {
-        messagingLog.error("messaging adapter failed to start", {
+        messagingLog.error(`${adapter.channel}: failed to start adapter`, {
           channel: adapter.channel,
-          error,
+          error: error instanceof Error ? error.message : String(error),
         });
+        failedChannels.push(adapter.channel);
         continue;
       }
 
+      messagingLog.info(`${adapter.channel}: adapter started successfully`, {
+        channel: adapter.channel,
+      });
       this.adapters.push(adapter);
       this.controllers.push(controller);
     }
@@ -156,10 +161,17 @@ export class DesktopMessagingRuntime {
       );
     });
 
-    messagingLog.info("messaging runtime started", {
-      adapters: this.adapters.map((adapter) => adapter.channel),
-      config: redactDesktopMessagingConfig(config),
-    });
+    const startedChannels = this.adapters.map((adapter) => adapter.channel);
+    if (startedChannels.length > 0 || failedChannels.length > 0) {
+      messagingLog.info("messaging runtime started", {
+        started: startedChannels,
+        failed: failedChannels.length > 0 ? failedChannels : undefined,
+      });
+    } else {
+      messagingLog.info(
+        "messaging runtime started with no adapters — no platforms configured",
+      );
+    }
   }
 
   async stop(): Promise<void> {
