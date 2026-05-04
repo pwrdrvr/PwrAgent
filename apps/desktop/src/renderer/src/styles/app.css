@@ -349,8 +349,7 @@ textarea,
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  color: var(--accent-bright);
-  opacity: 0.9;
+  color: var(--accent);
 }
 
 .runtime-identity__text {
@@ -875,6 +874,8 @@ textarea,
 }
 
 .thread-row__chip-icon {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
   line-height: 1;
 }
@@ -932,6 +933,8 @@ textarea,
 }
 
 .directory-row__icon {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
   line-height: 1;
 }
@@ -3573,6 +3576,8 @@ textarea,
 }
 
 .context-list__icon {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
   line-height: 1;
 }

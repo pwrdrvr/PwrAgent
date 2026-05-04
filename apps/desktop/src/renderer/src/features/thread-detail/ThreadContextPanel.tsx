@@ -16,6 +16,7 @@ import type {
   NavigationThreadSummary,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
+import { FolderIcon, WorktreeIcon } from "../../icons";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 
@@ -260,7 +261,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                           onShowTooltip={showRailTooltip}
                         >
                           <span aria-hidden="true" className="context-list__icon">
-                            {directory.kind === "worktree" ? "🔀" : "📁"}
+                            {directory.kind === "worktree" ? (
+                              <WorktreeIcon size={14} />
+                            ) : (
+                              <FolderIcon size={14} />
+                            )}
                           </span>
                           {directory.label}
                         </TooltipValue>
@@ -324,7 +329,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                         onShowTooltip={showRailTooltip}
                       >
                         <span aria-hidden="true" className="context-list__icon">
-                          📁
+                          <FolderIcon size={14} />
                         </span>
                         {pathBaseName(props.thread.projectKey)}
                       </TooltipValue>
@@ -383,7 +388,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
                         onMouseLeave={hideRailTooltip}
                       >
                         <span aria-hidden="true" className="context-list__icon">
-                          🔀
+                          <WorktreeIcon size={14} />
                         </span>
                         {pathBaseName(snapshot.worktreePath)}
                       </button>

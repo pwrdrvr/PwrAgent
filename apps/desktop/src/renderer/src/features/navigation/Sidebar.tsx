@@ -9,6 +9,7 @@ import type {
 } from "@pwragent/shared";
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
+import { BranchIcon, FolderIcon } from "../../icons";
 import type { BrowseMode } from "../../lib/useThreadNavigation";
 import {
   formatRuntimeGitRef,
@@ -577,11 +578,7 @@ function RuntimeIdentityButton(props: {
       }}
     >
       <span aria-hidden="true" className="runtime-identity__icon">
-        {props.valueKind === "cwd" ? (
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/></svg>
-        ) : (
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
-        )}
+        {props.valueKind === "cwd" ? <FolderIcon size={13} /> : <BranchIcon size={13} />}
       </span>
       <span className="runtime-identity__text">{props.label}</span>
     </button>
