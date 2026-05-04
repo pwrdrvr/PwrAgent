@@ -57,6 +57,10 @@ describe("App", () => {
           value: "tiptap-wysiwyg-markdown-chips",
           source: "default",
         },
+        diffCondensation: {
+          enabled: { value: false, source: "default" },
+          model: { value: "auto", source: "default" },
+        },
       },
       messaging: {
         inputDebounceMs: { value: 500, source: "default" },

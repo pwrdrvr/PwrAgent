@@ -23,6 +23,10 @@ describe("desktop settings contracts", () => {
           value: "tiptap-wysiwyg-markdown-chips",
           source: "default",
         },
+        diffCondensation: {
+          enabled: { value: false, source: "default" },
+          model: { value: "auto", source: "default" },
+        },
       },
       messaging: {
         inputDebounceMs: {

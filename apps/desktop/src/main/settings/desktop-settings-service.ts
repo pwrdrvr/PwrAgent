@@ -139,6 +139,14 @@ export class DesktopSettingsService {
         chatReplyComposer: this.resolveComposer(
           config.experimental?.chatReplyComposer,
         ),
+        diffCondensation: {
+          enabled: this.resolveDiffCondensationEnabled(
+            config.experimental?.diffCondensation?.enabled,
+          ),
+          model: this.resolveDiffCondensationModel(
+            config.experimental?.diffCondensation?.model,
+          ),
+        },
       },
       messaging: {
         inputDebounceMs: this.resolveClampedNumber(
@@ -319,6 +327,25 @@ export class DesktopSettingsService {
       value: configValue ?? DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
       source: configValue === undefined ? "default" : "config",
       error: envValue.error,
+    };
+  }
+
+  private resolveDiffCondensationEnabled(
+    configValue: boolean | undefined,
+  ): DesktopSettingsValue<boolean> {
+    return {
+      value: configValue ?? false,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveDiffCondensationModel(
+    configValue: string | undefined,
+  ): DesktopSettingsValue<string> {
+    const trimmed = configValue?.trim();
+    return {
+      value: trimmed && trimmed.length > 0 ? trimmed : "auto",
+      source: trimmed && trimmed.length > 0 ? "config" : "default",
     };
   }
 

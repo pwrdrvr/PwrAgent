@@ -426,4 +426,43 @@ describe("DesktopSettingsService", () => {
       "No secure backend",
     );
   });
+
+  it("defaults diff condensation to disabled / auto and round-trips a custom value", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.experimental.diffCondensation).toEqual({
+      enabled: { value: false, source: "default" },
+      model: { value: "auto", source: "default" },
+    });
+
+    await service.writeConfigPatch({
+      experimental: {
+        diffCondensation: { enabled: true, model: "grok-3" },
+      },
+    });
+
+    const updated = await service.readSettings();
+    expect(updated.experimental.diffCondensation).toEqual({
+      enabled: { value: true, source: "config" },
+      model: { value: "grok-3", source: "config" },
+    });
+
+    await service.writeConfigPatch({
+      experimental: {
+        diffCondensation: { model: "auto" },
+      },
+    });
+
+    const reverted = await service.readSettings();
+    expect(reverted.experimental.diffCondensation.model.value).toBe("auto");
+    // enabled stays true because the patch only updated model
+    expect(reverted.experimental.diffCondensation.enabled.value).toBe(true);
+  });
 });

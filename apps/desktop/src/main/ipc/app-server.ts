@@ -102,6 +102,7 @@ function getNavigationSnapshotRequestKey(
 class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
   private focusedDiffServiceApiKey: string | undefined;
+  private focusedDiffServiceModel: string | undefined;
   private readonly pendingNavigationSnapshots = new Map<
     string,
     Promise<NavigationSnapshot>
@@ -387,14 +388,55 @@ class DesktopAppServerService {
   async analyzeFocusedDiff(
     request: FocusedDiffAnalysisRequest
   ): Promise<FocusedDiffAnalysisResponse> {
-    const response = await this.getFocusedDiffService().analyze(request);
+    // Diff condensation is gated by an experimental setting. When the
+    // user has it disabled, never call the focused-diff service — return
+    // the synthetic "full" response that the renderer treats as
+    // "render every hunk, hide nothing". This is the diff-eliding gate
+    // that keeps us from sending unsolicited xAI requests.
+    //
+    // PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE bypasses the gate so E2Es that
+    // exercise the focused-diff path keep working with the default-off
+    // setting; without that bypass the override (consumed inside
+    // FocusedDiffService.analyze) never gets a chance to run.
+    const settings = await getDesktopSettingsService().readSettings();
+    const condensation = settings.experimental.diffCondensation;
+    const testOverridePresent = Boolean(
+      process.env.PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE,
+    );
+    if (!condensation.enabled.value && !testOverridePresent) {
+      logDebug("analyzeFocusedDiff", {
+        filePath: request.filePath ?? null,
+        hunkCount: request.hunks.length,
+        mode: "full",
+        source: "condensation-disabled",
+        hiddenHunkCount: 0,
+      });
+      return {
+        mode: "full",
+        source: "condensation-disabled",
+        hiddenHunkIndices: [],
+        hiddenHunkCount: 0,
+        decisions: request.hunks.map((hunk) => ({
+          index: hunk.index,
+          disposition: "show" as const,
+          reasonCode: "keep" as const,
+          reason: "diff condensation disabled in settings",
+          confidence: 1,
+        })),
+      };
+    }
+
+    const response = await this.getFocusedDiffService(
+      condensation.model.value === "auto" ? undefined : condensation.model.value,
+    ).analyze(request);
 
     logDebug("analyzeFocusedDiff", {
       filePath: request.filePath ?? null,
       hunkCount: request.hunks.length,
       mode: response.mode,
       source: response.source,
-      hiddenHunkCount: response.hiddenHunkCount
+      hiddenHunkCount: response.hiddenHunkCount,
+      condensationModel: condensation.model.value,
     });
 
     return response;
@@ -403,6 +445,7 @@ class DesktopAppServerService {
   async close(): Promise<void> {
     this.focusedDiffService = null;
     this.focusedDiffServiceApiKey = undefined;
+    this.focusedDiffServiceModel = undefined;
     await disposeDesktopBackendRegistry();
   }
 
@@ -410,16 +453,22 @@ class DesktopAppServerService {
     return getDesktopOverlayStore();
   }
 
-  private getFocusedDiffService(): FocusedDiffService {
+  private getFocusedDiffService(modelOverride?: string): FocusedDiffService {
     const apiKey = getDesktopSettingsService().resolveGrokApiKeySync();
-    if (this.focusedDiffService && this.focusedDiffServiceApiKey === apiKey) {
+    if (
+      this.focusedDiffService
+      && this.focusedDiffServiceApiKey === apiKey
+      && this.focusedDiffServiceModel === modelOverride
+    ) {
       return this.focusedDiffService;
     }
 
     this.focusedDiffService = new FocusedDiffService({
       apiKey,
+      ...(modelOverride ? { model: modelOverride } : {}),
     });
     this.focusedDiffServiceApiKey = apiKey;
+    this.focusedDiffServiceModel = modelOverride;
     return this.focusedDiffService;
   }
 }
