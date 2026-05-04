@@ -8,6 +8,64 @@ the proprietary source code for PwrDrvr LLC's PwrAgnt product. It is not open
 source. Distribution of source, binaries, or derivative works requires prior
 written consent from PwrDrvr LLC.
 
+## Data Storage Architecture
+
+```mermaid
+graph TD
+    subgraph Desktop["Desktop (Electron Main Process)"]
+        direction TB
+        Shell[Desktop Shell / IPC Layer]
+        MsgStore[SqliteMessagingStore]
+        OvlStore[SqliteOverlayStore]
+        SecStore[DbBackedSafeStorageSecretStore]
+        StateDB[(state.db<br/>sqlite WAL)]
+        ConfigTOML[config.toml]
+
+        Shell --> MsgStore
+        Shell --> OvlStore
+        Shell --> SecStore
+        MsgStore --> StateDB
+        OvlStore --> StateDB
+        SecStore --> StateDB
+        Shell --> ConfigTOML
+    end
+
+    subgraph AgentCore["Agent-Core (Grok App Server)"]
+        direction TB
+        GrokSrv[Grok App Server]
+        RolloutJSONL[rollout.jsonl<br/>per thread]
+        ThreadTOML[thread.toml<br/>per thread]
+        GrokConfig[grok-app-server/config.toml]
+
+        GrokSrv --> RolloutJSONL
+        GrokSrv --> ThreadTOML
+        GrokSrv --> GrokConfig
+    end
+
+    subgraph Captures["Protocol Captures (dev-only)"]
+        direction TB
+        Observer[Protocol Observer]
+        CaptureJSONL[capture-*.jsonl]
+        CaptureIndex[index.json]
+
+        Observer --> CaptureJSONL
+        Observer --> CaptureIndex
+    end
+
+    Shell -.->|JSON-RPC over stdio| GrokSrv
+    Shell -.->|opt-in recording| Observer
+```
+
+| Layer | Storage | Purpose |
+|-------|---------|---------|
+| Desktop state | `~/.pwragnt/profiles/<name>/state/state.db` | Messaging bindings, thread overlay, secrets, launchpad settings |
+| Desktop config | `~/.pwragnt/profiles/<name>/config.toml` | Desktop settings (messaging, models, worktrees) |
+| Agent-Core threads | `<state_root>/threads/<id>/rollout.jsonl` | Append-only message + replay-item log per thread |
+| Agent-Core metadata | `<state_root>/threads/<id>/thread.toml` | Thread config (model, cwd, approval policy) |
+| Protocol captures | `~/.pwragnt/profiles/<name>/state/protocol-captures/` | Dev-only JSON-RPC session recordings |
+
+See [docs/state-layout.md](docs/state-layout.md) for full directory layout, environment variables, and migration details.
+
 ## Internal Development
 
 ### Setup
@@ -46,9 +104,10 @@ Desktop replay-backed Electron coverage lives under `apps/desktop/e2e`.
 
 To record real Codex App Server traffic from the desktop client boundary, launch
 the desktop app with `PWRAGNT_PROTOCOL_CAPTURE=true`. Captures are written under
-the Electron user-data directory at `test-artifacts/protocol-captures` by
-default. Override that root with `PWRAGNT_PROTOCOL_CAPTURE_ROOT=/absolute/path`
-when you want a stable local export location.
+the active profile's state directory at `protocol-captures/` by default
+(`~/.pwragnt/profiles/default/state/protocol-captures/`). Override that root with
+`PWRAGNT_PROTOCOL_CAPTURE_ROOT=/absolute/path` when you want a stable local
+export location.
 
 Replay fixtures live in `apps/desktop/e2e/fixtures/*/replay.fixture.json`. The
 current harness runs the built Electron app in replay mode by pointing

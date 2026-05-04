@@ -2,6 +2,56 @@
 
 All PwrAgnt desktop state lives under a single root directory, defaulting to `~/.pwragnt/`.
 
+## Component Storage Overview
+
+```mermaid
+graph TD
+    subgraph Desktop["Desktop (Electron Main Process)"]
+        direction TB
+        Shell[Desktop Shell / IPC Layer]
+        MsgStore[SqliteMessagingStore]
+        OvlStore[SqliteOverlayStore]
+        SecStore[DbBackedSafeStorageSecretStore]
+        StateDB[(state.db<br/>sqlite WAL)]
+        ConfigTOML[config.toml]
+
+        Shell --> MsgStore
+        Shell --> OvlStore
+        Shell --> SecStore
+        MsgStore --> StateDB
+        OvlStore --> StateDB
+        SecStore --> StateDB
+        Shell --> ConfigTOML
+    end
+
+    subgraph AgentCore["Agent-Core (Grok App Server)"]
+        direction TB
+        GrokSrv[Grok App Server]
+        RolloutJSONL[rollout.jsonl<br/>per thread]
+        ThreadTOML[thread.toml<br/>per thread]
+        GrokConfig[grok-app-server/config.toml]
+
+        GrokSrv --> RolloutJSONL
+        GrokSrv --> ThreadTOML
+        GrokSrv --> GrokConfig
+    end
+
+    subgraph Captures["Protocol Captures (dev-only)"]
+        direction TB
+        Observer[Protocol Observer]
+        CaptureJSONL[capture-*.jsonl]
+        CaptureIndex[index.json]
+
+        Observer --> CaptureJSONL
+        Observer --> CaptureIndex
+    end
+
+    Shell -.->|JSON-RPC over stdio| GrokSrv
+    Shell -.->|opt-in recording| Observer
+```
+
+**Desktop** uses sqlite for all structured persistent state (messaging, overlay, secrets). **Agent-Core** uses append-only JSONL files for thread conversation history and flat TOML for per-thread configuration. The two layers communicate over JSON-RPC via stdio — they do not share a database.
+
 ## Directory Structure
 
 ```
