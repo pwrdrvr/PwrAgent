@@ -20,10 +20,38 @@ compression: normal
 files:
   - "out/**/*"
   - "package.json"
+  # Compiled JS only — drop sources, declarations, and sourcemaps.
   - "!**/*.map"
   - "!**/*.ts"
+  - "!**/*.tsx"
+  - "!**/*.d.ts"
+  - "!**/tsconfig*.json"
+  # Tests of any flavor.
   - "!**/*.test.*"
+  - "!**/*.spec.*"
   - "!**/__tests__/**"
+  - "!**/__mocks__/**"
+  - "!**/test/**"
+  - "!**/tests/**"
+  - "!**/e2e/**"
+  - "!**/playwright.config.*"
+  # Markdown / docs from third-party packages and our own workspace packages.
+  # (Workspace packages are inlined by vite/electron-vite into out/; the copies
+  # in node_modules are dead weight.) Runtime markdown such as the review
+  # prompt is imported via Vite's ?raw and inlined into the compiled JS.
+  - "!**/*.md"
+  - "!**/*.mdx"
+  - "!**/docs/**"
+  # Misc dotfiles and examples that occasionally ship inside dependency tarballs.
+  - "!**/.env*"
+  - "!**/.npmignore"
+  - "!**/.editorconfig"
+  - "!**/.eslintrc*"
+  - "!**/.prettierrc*"
+  - "!**/.github/**"
+  # Our own workspace package metadata is unused at runtime — vite inlines.
+  - "!**/node_modules/@pwragent/*/AGENTS.md"
+  - "!**/node_modules/@pwragent/*/src/**"
 
 # Electron fuses — ASAR integrity is NOT on by default in electron-builder.
 # Enable it explicitly so the runtime aborts if the .asar is tampered with.
@@ -67,7 +95,7 @@ mac:
       arch: [arm64]
 
 dmg:
-  background: build/dmg-background.tiff
+  background: build/dmg-background.png
   window:
     width: 660
     height: 400
