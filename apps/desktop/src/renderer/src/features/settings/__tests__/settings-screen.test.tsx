@@ -281,7 +281,7 @@ describe("SettingsScreen", () => {
     const onClose = vi.fn();
     render(<SettingsScreen settings={createSettingsState()} onClose={onClose} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: /Exit Settings/i }));
 
     expect(onClose).toHaveBeenCalledOnce();
   });

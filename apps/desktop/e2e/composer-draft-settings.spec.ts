@@ -216,7 +216,7 @@ test("keeps a thread reply draft after opening settings and returning to the thr
       });
     expect(threadButtonCoveredBySettings).toBe(true);
 
-    await app.window.getByRole("button", { name: "Back" }).click();
+    await app.window.getByRole("button", { name: /Exit Settings/i }).click();
     await expect(
       app.window.getByRole("heading", {
         level: 2,
