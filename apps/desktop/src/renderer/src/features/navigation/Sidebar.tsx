@@ -260,33 +260,7 @@ export function Sidebar(props: SidebarProps) {
         onPointerDown={props.onResizeStart}
       />
       <header className="sidebar__masthead">
-        <div className="sidebar__identity">
-          <p className="sidebar__brand">Pwr<span className="sidebar__brand-accent">Agent</span></p>
-
-          {props.runtimeIdentity ? (
-            <div className="runtime-identity" aria-label="Runtime identity">
-              <RuntimeIdentityButton
-                copied={copiedRuntimeValue === "cwd"}
-                label={formatRuntimePath(props.runtimeIdentity.cwd)}
-                value={props.runtimeIdentity.cwd}
-                valueKind="cwd"
-                onCopied={setCopiedRuntimeValue}
-              />
-              {runtimeGitRefLabel && runtimeGitRefValue ? (
-                <RuntimeIdentityButton
-                  copied={copiedRuntimeValue === "branch"}
-                  copyLabel={
-                    props.runtimeIdentity.detachedHead ? "commit SHA" : "branch name"
-                  }
-                  label={runtimeGitRefLabel}
-                  value={runtimeGitRefValue}
-                  valueKind="branch"
-                  onCopied={setCopiedRuntimeValue}
-                />
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+        <p className="sidebar__brand">Pwr<span className="sidebar__brand-accent">Agent</span></p>
 
         <div className="sidebar__masthead-actions">
           <button
@@ -311,6 +285,30 @@ export function Sidebar(props: SidebarProps) {
           </button>
         </div>
       </header>
+
+      {props.runtimeIdentity ? (
+        <div className="runtime-identity" aria-label="Runtime identity">
+          <RuntimeIdentityButton
+            copied={copiedRuntimeValue === "cwd"}
+            label={formatRuntimePath(props.runtimeIdentity.cwd)}
+            value={props.runtimeIdentity.cwd}
+            valueKind="cwd"
+            onCopied={setCopiedRuntimeValue}
+          />
+          {runtimeGitRefLabel && runtimeGitRefValue ? (
+            <RuntimeIdentityButton
+              copied={copiedRuntimeValue === "branch"}
+              copyLabel={
+                props.runtimeIdentity.detachedHead ? "commit SHA" : "branch name"
+              }
+              label={runtimeGitRefLabel}
+              value={runtimeGitRefValue}
+              valueKind="branch"
+              onCopied={setCopiedRuntimeValue}
+            />
+          ) : null}
+        </div>
+      ) : null}
 
       {props.createThreadError ? (
         <p className="sidebar-error sidebar-error--masthead">{props.createThreadError}</p>
