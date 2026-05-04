@@ -19,6 +19,7 @@ export type DesktopSettingsConfig = {
     chatReplyComposer?: DesktopChatReplyComposer;
   };
   messaging?: {
+    inputDebounceMs?: number;
     toolUpdateMode?: MessagingToolUpdateMode;
     attachments?: {
       imageProfile?: DesktopMessagingImageProfile;
@@ -105,6 +106,8 @@ export function mergeDesktopSettingsConfig(
       ...patch.experimental,
     },
     messaging: {
+      inputDebounceMs:
+        patch.messaging?.inputDebounceMs ?? current.messaging?.inputDebounceMs,
       toolUpdateMode:
         patch.messaging?.toolUpdateMode ?? current.messaging?.toolUpdateMode,
       attachments: {
@@ -195,12 +198,21 @@ export function stringifyDesktopSettingsToml(
     );
   }
 
-  if (config.messaging?.toolUpdateMode) {
+  if (
+    config.messaging?.toolUpdateMode
+    || config.messaging?.inputDebounceMs !== undefined
+  ) {
     sections.push(
       [
         "[messaging]",
-        `tool_update_mode = ${formatTomlValue(config.messaging.toolUpdateMode)}`,
-      ].join("\n"),
+        formatOptionalTomlEntry(
+          "input_debounce_ms",
+          config.messaging.inputDebounceMs,
+        ),
+        formatOptionalTomlEntry("tool_update_mode", config.messaging.toolUpdateMode),
+      ]
+        .filter(Boolean)
+        .join("\n"),
     );
   }
 
@@ -303,6 +315,7 @@ function normalizeDesktopConfig(
       chatReplyComposer: readComposer(experimental?.chat_reply_composer),
     },
     messaging: {
+      inputDebounceMs: readNumber(messaging?.input_debounce_ms),
       toolUpdateMode: readToolUpdateMode(messaging?.tool_update_mode),
       attachments: {
         imageProfile: readImageProfile(attachments?.image_profile),
@@ -347,14 +360,19 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const attachments = config.messaging?.attachments;
   const telegram = config.messaging?.telegram;
   const discord = config.messaging?.discord;
+  const inputDebounceMs = config.messaging?.inputDebounceMs;
   const toolUpdateMode = config.messaging?.toolUpdateMode;
   if (
+    inputDebounceMs !== undefined ||
     toolUpdateMode !== undefined ||
     (attachments && hasDefinedValue(attachments))
     || (telegram && hasDefinedValue(telegram))
     || (discord && hasDefinedValue(discord))
   ) {
     pruned.messaging = {};
+    if (inputDebounceMs !== undefined) {
+      pruned.messaging.inputDebounceMs = inputDebounceMs;
+    }
     if (toolUpdateMode !== undefined) {
       pruned.messaging.toolUpdateMode = toolUpdateMode;
     }

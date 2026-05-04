@@ -158,6 +158,13 @@ function SettingsSectionBody(props: {
             },
           });
         }}
+        onInputDebounceMsChange={async (inputDebounceMs) => {
+          await props.settings.writeConfig({
+            messaging: {
+              inputDebounceMs,
+            },
+          });
+        }}
         onSaveDiscord={async (discord) => {
           await props.settings.writeConfig({
             messaging: {

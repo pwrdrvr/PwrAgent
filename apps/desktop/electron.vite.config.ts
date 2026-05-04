@@ -35,7 +35,13 @@ export default defineConfig(({ command }) => {
         minify: "esbuild",
         sourcemap: false,
         rollupOptions: {
-          external: ["discord.js", "grammy"]
+          external: [
+            "abort-controller",
+            "bufferutil",
+            "node-fetch",
+            "utf-8-validate",
+            "zlib-sync"
+          ]
         }
       }
     },

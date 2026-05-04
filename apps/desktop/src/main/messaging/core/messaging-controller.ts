@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
+import { buildThreadIdentityKey } from "@pwragnt/shared";
 import type {
   AgentEvent,
+  AppServerTurnInputItem,
   AppServerBackendKind,
   AppServerPendingRequestNotification,
   AppServerToolRequestUserInputNotification,
@@ -29,7 +31,6 @@ import type {
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragnt/shared";
-import { buildThreadIdentityKey } from "@pwragnt/shared";
 import { MessagingStore, buildMessagingConversationKey } from "./messaging-store.js";
 import type { MessagingAdapter, MessagingBackendBridge } from "./messaging-adapter.js";
 import {
@@ -79,9 +80,17 @@ import {
   type MessagingAttachmentPolicy,
   type MessagingAttachmentRejection,
 } from "./messaging-attachment-processor.js";
+import {
+  MessagingTurnAdmission,
+  threadKeyForBinding,
+  type MessagingQueuedTurnEntry,
+  type MessagingTurnAdmissionBundle,
+  type MessagingTurnInputEvent,
+} from "./messaging-turn-admission.js";
 const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;
+const DEFAULT_INPUT_DEBOUNCE_MS = 500;
 const messagingControllerLog = getMainLogger("pwragnt:messaging");
 
 function executionModeForBinding(
@@ -142,6 +151,11 @@ type MessagingToolUpdateDefaultModeResolver =
   | MessagingToolUpdateMode
   | (() => MessagingToolUpdateMode | Promise<MessagingToolUpdateMode>);
 
+type QueuedTurnAction = {
+  entryId: string;
+  kind: "cancel" | "steer";
+};
+
 export type MessagingControllerOptions = {
   adapter: MessagingAdapter;
   authorizedActorIds: string[];
@@ -150,6 +164,7 @@ export type MessagingControllerOptions = {
   interactionMapper?: MessagingInteractionMapper;
   logger?: MessagingControllerLogger;
   now?: () => number;
+  inputDebounceMs?: number;
   pendingIntentTtlMs?: number;
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   store: MessagingStore;
@@ -166,6 +181,7 @@ export class MessagingController {
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
   private readonly logger: MessagingControllerLogger;
   private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
+  private readonly turnAdmission: MessagingTurnAdmission;
 
   constructor(private readonly options: MessagingControllerOptions) {
     this.authorizedActorIds = new Set(options.authorizedActorIds);
@@ -174,6 +190,13 @@ export class MessagingController {
       options.pendingIntentTtlMs ?? DEFAULT_PENDING_INTENT_TTL_MS;
     this.interactionMapper = options.interactionMapper ?? new DeterministicInteractionMapper();
     this.logger = options.logger ?? messagingControllerLog;
+    this.turnAdmission = new MessagingTurnAdmission({
+      debounceMs: options.inputDebounceMs ?? DEFAULT_INPUT_DEBOUNCE_MS,
+      now: this.now,
+      onBundleReady: async (bundle) => {
+        await this.handleAdmittedTurnBundle(bundle);
+      },
+    });
     this.toolUpdatePolicy = new MessagingToolUpdatePolicy({
       now: this.now,
       onBatchReady: async (delivery) => {
@@ -302,6 +325,7 @@ export class MessagingController {
           force: true,
         });
         await this.renderBindingStatus(binding);
+        await this.startNextQueuedTurn(binding);
       } else if (activeTurn?.status === "waiting" && isTurnWorkActivityEvent(event, activeTurn)) {
         const previousTurn = activeTurn;
         activeTurn = {
@@ -511,32 +535,7 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
-    const turnSettings = turnSettingsForBinding(binding, navigation);
-    const started = await this.options.backend.startTurn({
-      backend: binding.backend,
-      threadId: binding.threadId,
-      input: [
-        {
-          type: "text",
-          text: event.text,
-        },
-      ],
-      ...turnSettings,
-    });
-    const activeTurn: MessagingActiveTurnSummary = {
-      turnId: started.turnId,
-      status: "working",
-      startedAt: this.now(),
-      updatedAt: this.now(),
-    };
-    this.setActiveTurn(binding, activeTurn);
-    await this.signalTurnActivity(binding, activeTurn, {
-      force: true,
-    });
-    await this.renderBindingStatus(binding, undefined, navigation);
+    await this.turnAdmission.append({ binding, event });
   }
 
   private async handleMedia(event: MessagingInboundMediaEvent): Promise<void> {
@@ -576,26 +575,308 @@ export class MessagingController {
       return;
     }
 
-    const processed = await processMessagingAttachments({
-      adapter: this.options.adapter,
-      attachments: event.attachments,
-      policy: {
-        ...DEFAULT_MESSAGING_ATTACHMENT_POLICY,
-        ...this.options.attachmentPolicy,
-      },
-      text: event.text,
-    });
+    await this.turnAdmission.append({ binding, event });
+  }
 
-    if (processed.input.length === 0) {
+  private async handleAdmittedTurnBundle(
+    bundle: MessagingTurnAdmissionBundle,
+  ): Promise<void> {
+    const prepared = await this.prepareTurnInput(bundle.events, bundle.binding, bundle.events[0]);
+    if (!prepared) {
+      return;
+    }
+
+    if (await this.isTurnOccupied(bundle.binding, bundle.threadKey)) {
+      await this.queuePreparedInput({
+        binding: bundle.binding,
+        input: prepared.input,
+        preview: prepared.preview,
+        threadKey: bundle.threadKey,
+      });
+      return;
+    }
+
+    await this.startPreparedInput({
+      binding: bundle.binding,
+      input: prepared.input,
+      preview: prepared.preview,
+      threadKey: bundle.threadKey,
+      event: bundle.events[0],
+    });
+  }
+
+  private async prepareTurnInput(
+    events: MessagingTurnInputEvent[],
+    binding: MessagingBindingRecord,
+    event?: MessagingInboundEvent,
+  ): Promise<
+    | {
+        input: AppServerTurnInputItem[];
+        preview: string;
+      }
+    | undefined
+  > {
+    const input: AppServerTurnInputItem[] = [];
+    const previewParts: string[] = [];
+    const rejections: MessagingAttachmentRejection[] = [];
+
+    for (const turnEvent of events) {
+      if (turnEvent.kind === "text") {
+        const previewText = turnEvent.text.trim();
+        if (previewText) {
+          input.push({ type: "text", text: turnEvent.text });
+          previewParts.push(previewText);
+        }
+        continue;
+      }
+
+      const processed = await processMessagingAttachments({
+        adapter: this.options.adapter,
+        attachments: turnEvent.attachments,
+        policy: {
+          ...DEFAULT_MESSAGING_ATTACHMENT_POLICY,
+          ...this.options.attachmentPolicy,
+        },
+        text: turnEvent.text,
+      });
+
+      input.push(...processed.input);
+      rejections.push(...processed.rejections);
+      if (turnEvent.text?.trim()) {
+        previewParts.push(turnEvent.text.trim());
+      }
+      for (const attachment of turnEvent.attachments) {
+        previewParts.push(`[${attachment.name}]`);
+      }
+    }
+
+    if (input.length === 0) {
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("unsupported-media"),
           createdAt: this.now(),
           title: "Attachment not supported",
           body:
-            processed.rejections.length > 0
-              ? formatAttachmentRejections(processed.rejections)
+            rejections.length > 0
+              ? formatAttachmentRejections(rejections)
               : "This attachment could not be prepared for the model.",
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return undefined;
+    }
+
+    if (rejections.length > 0) {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("attachment-partial"),
+          createdAt: this.now(),
+          title: "Some attachments were skipped",
+          body: formatAttachmentRejections(rejections),
+        }),
+        binding,
+        event,
+      );
+    }
+
+    return {
+      input,
+      preview: buildQueuedInputPreview(previewParts),
+    };
+  }
+
+  private async startPreparedInput(params: {
+    binding: MessagingBindingRecord;
+    event?: MessagingInboundEvent;
+    input: AppServerTurnInputItem[];
+    preview: string;
+    queueOnConcurrentStart?: boolean;
+    threadKey: string;
+  }): Promise<boolean> {
+    this.turnAdmission.markStarting(params.threadKey);
+    let turnStarted = false;
+
+    try {
+      const navigation = await this.options.backend.getNavigationSnapshot({
+        backend: "all",
+      });
+      const turnSettings = turnSettingsForBinding(params.binding, navigation);
+      const started = await this.options.backend.startTurn({
+        backend: params.binding.backend,
+        threadId: params.binding.threadId,
+        input: params.input,
+        ...turnSettings,
+      });
+      turnStarted = true;
+      const activeTurn: MessagingActiveTurnSummary = {
+        turnId: started.turnId,
+        status: "working",
+        startedAt: this.now(),
+        updatedAt: this.now(),
+      };
+      this.setActiveTurn(params.binding, activeTurn);
+      await this.signalTurnActivity(params.binding, activeTurn, {
+        force: true,
+      });
+      await this.renderBindingStatus(params.binding, undefined, navigation);
+      return true;
+    } catch (error) {
+      if (turnStarted) {
+        this.logger.debug?.("messaging post-start update failed", {
+          error: error instanceof Error ? error.message : String(error),
+          threadId: params.binding.threadId,
+        });
+        return true;
+      }
+      if (isTurnInProgressStartError(error)) {
+        if (params.queueOnConcurrentStart !== false) {
+          await this.queuePreparedInput({
+            binding: params.binding,
+            input: params.input,
+            preview: params.preview,
+            threadKey: params.threadKey,
+          });
+        }
+        return false;
+      }
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("turn-start-failed"),
+          createdAt: this.now(),
+          title: "Turn could not start",
+          body: error instanceof Error ? error.message : String(error),
+          recoverable: true,
+        }),
+        params.binding,
+        params.event,
+      );
+      return false;
+    } finally {
+      this.turnAdmission.clearStarting(params.threadKey);
+    }
+  }
+
+  private async isTurnOccupied(
+    binding: MessagingBindingRecord,
+    threadKey: string,
+  ): Promise<boolean> {
+    if (this.turnAdmission.isStarting(threadKey)) {
+      return true;
+    }
+
+    const activeTurn = this.getActiveTurn(binding);
+    if (activeTurn && ["working", "waiting"].includes(activeTurn.status)) {
+      return true;
+    }
+
+    if (!this.options.backend.readThreadStatus) {
+      return false;
+    }
+
+    const threadStatus = await this.options.backend.readThreadStatus({
+      backend: binding.backend,
+      threadId: binding.threadId,
+    });
+    return threadStatus === "active";
+  }
+
+  private async queuePreparedInput(params: {
+    binding: MessagingBindingRecord;
+    input: AppServerTurnInputItem[];
+    preview: string;
+    threadKey: string;
+  }): Promise<void> {
+    const queued = this.turnAdmission.enqueue(params);
+    await this.deliverQueuedTurnNotice(queued);
+  }
+
+  private async deliverQueuedTurnNotice(entry: MessagingQueuedTurnEntry): Promise<void> {
+    const canSteer = this.canSteerQueuedTurn(entry);
+    const intent = buildConfirmationIntent({
+      id: this.newIntentId("queued-turn"),
+      createdAt: this.now(),
+      title: "Message queued",
+      body: buildQueuedTurnNoticeBody(entry.preview, canSteer),
+      actions: [
+        {
+          id: `queued-turn:steer:${entry.id}`,
+          label: "Steer",
+          style: "primary",
+          disabled: !canSteer,
+        },
+        {
+          id: `queued-turn:cancel:${entry.id}`,
+          label: "Cancel",
+          style: "secondary",
+        },
+      ],
+    });
+    const result = await this.deliver(intent, entry.binding);
+    if (result.surface) {
+      this.turnAdmission.updateQueuedEntry(entry, {
+        surface: result.surface,
+      });
+    }
+  }
+
+  private canSteerQueuedTurn(entry: MessagingQueuedTurnEntry): boolean {
+    const activeTurn = this.getActiveTurn(entry.binding);
+    return Boolean(
+      this.options.backend.steerTurn &&
+        activeTurn &&
+        ["working", "waiting"].includes(activeTurn.status),
+    );
+  }
+
+  private async retireQueuedTurnNotice(
+    entry: MessagingQueuedTurnEntry,
+    body: string,
+    event?: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    const targetSurface = entry.surface ?? event?.interaction;
+    if (!targetSurface) {
+      return;
+    }
+
+    try {
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("queued-turn-retired"),
+          createdAt: this.now(),
+          delivery: {
+            mode: "update",
+            replaceMarkup: true,
+            fallback: "present_new",
+          },
+          title: "Message queued",
+          body,
+          targetSurface,
+        }),
+        entry.binding,
+        event,
+      );
+    } catch (error) {
+      this.logger.debug?.("messaging queued turn notice retirement failed", {
+        error: error instanceof Error ? error.message : String(error),
+        queuedTurnId: entry.id,
+      });
+    }
+  }
+
+  private async handleQueuedTurnCallback(
+    event: MessagingInboundCallbackEvent,
+    action: QueuedTurnAction,
+  ): Promise<void> {
+    const entry = this.turnAdmission.findQueuedEntry(action.entryId);
+    if (!entry || entry.status !== "queued") {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("expired-queued-turn"),
+          createdAt: this.now(),
+          title: "Queued message unavailable",
+          body: "That queued message is no longer waiting.",
           recoverable: true,
         }),
         undefined,
@@ -604,41 +885,101 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
-    const turnSettings = turnSettingsForBinding(binding, navigation);
-    const started = await this.options.backend.startTurn({
-      backend: binding.backend,
-      threadId: binding.threadId,
-      input: processed.input,
-      ...turnSettings,
-    });
-    const activeTurn: MessagingActiveTurnSummary = {
-      turnId: started.turnId,
-      status: "working",
-      startedAt: this.now(),
-      updatedAt: this.now(),
-    };
-    this.setActiveTurn(binding, activeTurn);
-    await this.signalTurnActivity(binding, activeTurn, {
-      force: true,
-    });
-
-    if (processed.rejections.length > 0) {
-      await this.deliver(
-        buildConfirmationIntent({
-          id: this.newIntentId("attachment-partial"),
-          createdAt: this.now(),
-          title: "Some attachments were skipped",
-          body: formatAttachmentRejections(processed.rejections),
-        }),
-        binding,
+    if (action.kind === "cancel") {
+      const cancelled = this.turnAdmission.updateQueuedEntry(entry, {
+        status: "cancelled",
+      });
+      await this.retireQueuedTurnNotice(
+        cancelled,
+        "Queued message cancelled.",
         event,
       );
+      return;
     }
 
-    await this.renderBindingStatus(binding, undefined, navigation);
+    const activeTurn = this.getActiveTurn(entry.binding);
+    if (
+      !this.options.backend.steerTurn ||
+      !activeTurn ||
+      !["working", "waiting"].includes(activeTurn.status)
+    ) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("queued-turn-steer-unavailable"),
+          createdAt: this.now(),
+          title: "Steer unavailable",
+          body: "There is no active turn available to steer. The message is still queued.",
+          recoverable: true,
+        }),
+        entry.binding,
+        event,
+      );
+      return;
+    }
+
+    try {
+      await this.options.backend.steerTurn({
+        backend: entry.binding.backend,
+        threadId: entry.binding.threadId,
+        expectedTurnId: activeTurn.turnId,
+        input: entry.input,
+      });
+    } catch (error) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("queued-turn-steer-failed"),
+          createdAt: this.now(),
+          title: "Steer failed",
+          body: `${
+            error instanceof Error ? error.message : String(error)
+          }\n\nThe message is still queued.`,
+          recoverable: true,
+        }),
+        entry.binding,
+        event,
+      );
+      return;
+    }
+    const steered = this.turnAdmission.updateQueuedEntry(entry, {
+      status: "steered",
+    });
+    await this.retireQueuedTurnNotice(
+      steered,
+      "Queued message was sent as a steering message.",
+      event,
+    );
+  }
+
+  private async startNextQueuedTurn(binding: MessagingBindingRecord): Promise<void> {
+    const threadKey = this.threadKeyForBinding(binding);
+    if (await this.isTurnOccupied(binding, threadKey)) {
+      return;
+    }
+
+    const entry = this.turnAdmission.peekNextQueued(threadKey);
+    if (!entry) {
+      return;
+    }
+
+    const started = await this.startPreparedInput({
+      binding: entry.binding,
+      input: entry.input,
+      preview: entry.preview,
+      queueOnConcurrentStart: false,
+      threadKey,
+    });
+    if (!started) {
+      return;
+    }
+
+    const submitted = this.turnAdmission.updateQueuedEntry(entry, {
+      status: "submitted",
+    });
+    this.turnAdmission.removeQueuedEntry(submitted);
+    await this.retireQueuedTurnNotice(
+      submitted,
+      "Queued message sent as the next turn.",
+    );
   }
 
   private async handleCallback(event: MessagingInboundCallbackEvent): Promise<void> {
@@ -663,6 +1004,12 @@ export class MessagingController {
     const statusAction = readStatusAction(event);
     if (statusAction) {
       await this.handleStatusCallback(event, statusAction);
+      return;
+    }
+
+    const queuedTurnAction = readQueuedTurnAction(event);
+    if (queuedTurnAction) {
+      await this.handleQueuedTurnCallback(event, queuedTurnAction);
       return;
     }
 
@@ -900,6 +1247,7 @@ export class MessagingController {
   }
 
   dispose(): void {
+    this.turnAdmission.dispose();
     this.toolUpdatePolicy.dispose();
   }
 
@@ -2316,7 +2664,7 @@ export class MessagingController {
   }
 
   private threadKeyForBinding(binding: MessagingBindingRecord): string {
-    return buildThreadIdentityKey(binding.backend, binding.threadId);
+    return threadKeyForBinding(binding);
   }
 
   private async signalTurnActivity(
@@ -2642,6 +2990,29 @@ function readStatusAction(event: MessagingInboundCallbackEvent): string | undefi
     : undefined;
 }
 
+function readQueuedTurnAction(
+  event: MessagingInboundCallbackEvent,
+): QueuedTurnAction | undefined {
+  const actionId = event.actionId ?? event.interaction.id;
+  const steerPrefix = "queued-turn:steer:";
+  if (actionId.startsWith(steerPrefix)) {
+    return {
+      kind: "steer",
+      entryId: actionId.slice(steerPrefix.length),
+    };
+  }
+
+  const cancelPrefix = "queued-turn:cancel:";
+  if (actionId.startsWith(cancelPrefix)) {
+    return {
+      kind: "cancel",
+      entryId: actionId.slice(cancelPrefix.length),
+    };
+  }
+
+  return undefined;
+}
+
 function handoffContextForBinding(
   binding: MessagingBindingRecord,
   navigation: NavigationSnapshot,
@@ -2911,6 +3282,38 @@ function compactLogPreview(text: string, limit = 96): string {
   const compact = text.replace(/\s+/g, " ").trim();
   const preview = compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
   return preview.replace(/["\\]/g, "\\$&");
+}
+
+function buildQueuedInputPreview(parts: string[]): string {
+  const preview = parts
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  return preview || "[attachment]";
+}
+
+function buildQueuedTurnNoticeBody(preview: string, canSteer: boolean): string {
+  const quotedPreview = truncateText(preview, 500)
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+  const steeringSentence = canSteer
+    ? " To submit it as a steering message, click Steer."
+    : "";
+  return `${quotedPreview}\n\nI got your message, but there is a turn in progress. I've queued it to be sent when the turn completes.${steeringSentence} You can cancel if you don't want this queued.`;
+}
+
+function truncateText(text: string, limit: number): string {
+  if (text.length <= limit) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, limit - 3))}...`;
+}
+
+function isTurnInProgressStartError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(active turn|turn already|already active|in progress)\b/i.test(message);
 }
 
 function isPermanentMessagingTargetFailure(result: MessagingDeliveryResult): boolean {

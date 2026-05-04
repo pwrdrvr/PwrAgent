@@ -25,6 +25,10 @@ describe("desktop settings contracts", () => {
         },
       },
       messaging: {
+        inputDebounceMs: {
+          value: 500,
+          source: "default",
+        },
         toolUpdateMode: {
           value: "show_some",
           source: "default",

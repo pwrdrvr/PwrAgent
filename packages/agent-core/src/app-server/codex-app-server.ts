@@ -74,6 +74,7 @@ export class CodexAppServer {
   private readonly toolExecutor: LocalToolExecutor;
   private readonly createThreadId: () => string;
   private readonly createTurnId: () => string;
+  private readonly startingThreadIds = new Set<string>();
 
   constructor(options: ServerOptions) {
     this.provider = options.provider;
@@ -350,42 +351,53 @@ export class CodexAppServer {
     if (!thread) {
       throw new AppServerProtocolError(`Unknown thread: ${threadId}`);
     }
-    const effectiveThread =
-      params.model !== undefined ||
-      params.serviceTier !== undefined ||
-      params.reasoningEffort !== undefined ||
-      params.fastMode !== undefined
-        ? this.state.updateThread(threadId, {
-            model: asOptionalString(params.model),
-            serviceTier: asOptionalString(params.serviceTier),
-            reasoningEffort: asOptionalString(params.reasoningEffort),
-            fastMode: asOptionalBoolean(params.fastMode),
-          }) ?? thread
-        : thread;
-    const normalizedInput = normalizeTurnInput(params.input);
-    const turnId = this.createTurnId();
-    const handle = await this.provider.startTurn({
-      thread: effectiveThread,
-      input: normalizedInput,
-      history: this.state.readThread(threadId).messages,
-      previousResponseId: this.state.getPreviousResponseId(threadId),
-      tools: this.toolExecutor,
-    });
-    this.state.appendInput(threadId, normalizedInput);
-    this.state.createRun({ turnId, threadId, handle });
-    await this.emit({
-      method: "turn/started",
-      params: {
-        threadId,
-        turnId,
-        turn: {
-          id: turnId,
-          status: "inProgress",
+    const activeRun = this.state.getActiveRunForThread(threadId);
+    if (activeRun || this.startingThreadIds.has(threadId)) {
+      throw new AppServerProtocolError(
+        `Thread already has an active turn in progress: ${threadId}`,
+      );
+    }
+    this.startingThreadIds.add(threadId);
+    try {
+      const effectiveThread =
+        params.model !== undefined ||
+        params.serviceTier !== undefined ||
+        params.reasoningEffort !== undefined ||
+        params.fastMode !== undefined
+          ? this.state.updateThread(threadId, {
+              model: asOptionalString(params.model),
+              serviceTier: asOptionalString(params.serviceTier),
+              reasoningEffort: asOptionalString(params.reasoningEffort),
+              fastMode: asOptionalBoolean(params.fastMode),
+            }) ?? thread
+          : thread;
+      const normalizedInput = normalizeTurnInput(params.input);
+      const turnId = this.createTurnId();
+      const handle = await this.provider.startTurn({
+        thread: effectiveThread,
+        input: normalizedInput,
+        history: this.state.readThread(threadId).messages,
+        previousResponseId: this.state.getPreviousResponseId(threadId),
+        tools: this.toolExecutor,
+      });
+      this.state.appendInput(threadId, normalizedInput);
+      this.state.createRun({ turnId, threadId, handle });
+      await this.emit({
+        method: "turn/started",
+        params: {
+          threadId,
+          turnId,
+          turn: {
+            id: turnId,
+            status: "inProgress",
+          },
         },
-      },
-    });
-    this.turnRunner.attach({ threadId, turnId, handle });
-    return { threadId, turnId };
+      });
+      this.turnRunner.attach({ threadId, turnId, handle });
+      return { threadId, turnId };
+    } finally {
+      this.startingThreadIds.delete(threadId);
+    }
   }
 
   private async steerTurn(params: Record<string, unknown>): Promise<AppServerTurnResult> {

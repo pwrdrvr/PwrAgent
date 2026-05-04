@@ -618,6 +618,87 @@ describe("TelegramAdapter", () => {
     });
   });
 
+  it("logs safe token diagnostics before Telegram startup", async () => {
+    const api = createApi();
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    };
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: " 12345:test-token ",
+        authorizedActorIds: ["42"],
+      },
+      logger,
+      pollOnStart: false,
+    });
+
+    await adapter.start(async () => {});
+
+    expect(logger.debug).toHaveBeenCalledWith("telegram startup token diagnostics", {
+      length: 18,
+      trimmedLength: 16,
+      hasColon: true,
+      hasSurroundingWhitespace: true,
+      hasAnyWhitespace: true,
+      botIdLength: 5,
+      botIdIsNumeric: true,
+      secretLength: 10,
+      secretPresent: true,
+      matchesExpectedShape: true,
+    });
+    expect(JSON.stringify(logger.debug.mock.calls)).not.toContain("test-token");
+  });
+
+  it("logs Telegram startup HTTP status and token shape when getWebhookInfo fails", async () => {
+    const api = createApi();
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    };
+    const httpError = Object.assign(new Error("Network request for 'getWebhookInfo' failed!"), {
+      name: "HttpError",
+      error: {
+        status: 502,
+        statusText: "Bad Gateway",
+      },
+    });
+    api.getWebhookInfo.mockRejectedValueOnce(httpError);
+    const adapter = new TelegramAdapter({
+      api: api as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "bad token",
+        authorizedActorIds: ["42"],
+      },
+      logger,
+      pollOnStart: false,
+    });
+
+    await expect(adapter.start(async () => {})).rejects.toBe(httpError);
+
+    expect(logger.warn).toHaveBeenCalledWith("telegram getWebhookInfo failed", {
+      error: "Network request for 'getWebhookInfo' failed!",
+      status: 502,
+      statusText: "Bad Gateway",
+      token: {
+        length: 9,
+        trimmedLength: 9,
+        hasColon: false,
+        hasSurroundingWhitespace: false,
+        hasAnyWhitespace: true,
+        botIdLength: 9,
+        botIdIsNumeric: false,
+        secretLength: 0,
+        secretPresent: false,
+        matchesExpectedShape: false,
+      },
+    });
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("bad token");
+  });
+
   it("edits target Telegram messages for managed surface updates", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({
@@ -1566,6 +1647,7 @@ async function createControllerHarness(): Promise<{
       getNavigationSnapshot,
       startTurn,
     },
+    inputDebounceMs: 0,
     now: () => 1000,
     store,
   });

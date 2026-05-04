@@ -606,6 +606,7 @@ async function createRuntimeHarness(): Promise<{
     adapterFactory: () => [adapter],
     backendBridge: bridge,
     config: {
+      inputDebounceMs: 0,
       telegram: {
         channel: "telegram",
         botToken: "telegram-token",

@@ -10,6 +10,7 @@ import {
   loadDesktopMessagingConfigFromSettings,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
+  MESSAGING_INPUT_DEBOUNCE_MS_ENV,
   redactDesktopMessagingConfig,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
@@ -34,6 +35,7 @@ describe("desktop messaging config", () => {
     });
 
     expect(config).toEqual({
+      inputDebounceMs: 500,
       toolUpdateDefaultMode: "show_some",
       telegram: {
         channel: "telegram",
@@ -95,6 +97,7 @@ describe("desktop messaging config", () => {
     const config = await loadDesktopMessagingConfigFromSettings(service, {});
 
     expect(config).toEqual({
+      inputDebounceMs: 500,
       toolUpdateDefaultMode: "show_some",
       attachmentPolicy: {
         imageProfile: "medium",
@@ -142,6 +145,15 @@ describe("desktop messaging config", () => {
     });
 
     expect(config.attachmentPolicy).toBeUndefined();
+    expect(config.inputDebounceMs).toBe(500);
+  });
+
+  it("loads and caps the input debounce env override", () => {
+    expect(
+      loadDesktopMessagingConfig({
+        [MESSAGING_INPUT_DEBOUNCE_MS_ENV]: "9999",
+      }).inputDebounceMs,
+    ).toBe(5000);
   });
 
   it("redacts bot tokens while preserving useful diagnostics", () => {
@@ -168,6 +180,7 @@ describe("desktop messaging config", () => {
         authorizedActorCount: 2,
       },
       toolUpdateDefaultMode: "show_some",
+      inputDebounceMs: 500,
       discord: {
         channel: "discord",
         enabled: true,

@@ -18,6 +18,8 @@ import type {
   SetThreadModelSettingsResponse,
   StartTurnRequest,
   StartTurnResponse,
+  SteerTurnRequest,
+  SteerTurnResponse,
   StartThreadRequest,
   StartThreadResponse,
   SubmitServerRequestRequest,
@@ -80,6 +82,10 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {
     return await this.registry.startTurn(request);
+  }
+
+  async steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse> {
+    return await this.registry.steerTurn(request);
   }
 
   async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {

@@ -11,6 +11,7 @@ import {
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
+  MESSAGING_INPUT_DEBOUNCE_MS_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
@@ -27,6 +28,7 @@ export {
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
+  MESSAGING_INPUT_DEBOUNCE_MS_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
@@ -35,6 +37,7 @@ export {
 export type DesktopMessagingConfig = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   discord?: DiscordMessagingConfig;
+  inputDebounceMs?: number;
   telegram?: TelegramMessagingConfig;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
 };
@@ -54,6 +57,7 @@ export function loadDesktopMessagingConfig(
   const attachmentPolicy = readAttachmentPolicyFromEnv(env);
 
   return {
+    inputDebounceMs: readInputDebounceMsFromEnv(env) ?? 500,
     toolUpdateDefaultMode: "show_some",
     ...(attachmentPolicy ? { attachmentPolicy } : {}),
     ...(telegramBotToken && telegramAuthorizedActorIds.length > 0
@@ -103,6 +107,7 @@ export async function loadDesktopMessagingConfigFromSettings(
   };
 
   return {
+    inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
     toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
     attachmentPolicy,
     ...(shouldEnableSettingsChannel(
@@ -159,6 +164,7 @@ export function redactDesktopMessagingConfig(
         }
       : undefined,
     toolUpdateDefaultMode: config.toolUpdateDefaultMode ?? "show_some",
+    inputDebounceMs: config.inputDebounceMs ?? 500,
     discord: config.discord
       ? {
           channel: config.discord.channel,
@@ -170,6 +176,11 @@ export function redactDesktopMessagingConfig(
       : undefined,
     attachmentPolicy: config.attachmentPolicy,
   };
+}
+
+function readInputDebounceMsFromEnv(env: NodeJS.ProcessEnv): number | undefined {
+  const value = readEnvInteger(env, MESSAGING_INPUT_DEBOUNCE_MS_ENV).value;
+  return value === undefined ? undefined : Math.min(value, 5_000);
 }
 
 function readEnv(

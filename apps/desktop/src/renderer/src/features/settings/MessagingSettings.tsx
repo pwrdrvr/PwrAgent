@@ -22,6 +22,7 @@ export function MessagingSettings(props: {
     value: string,
   ) => Promise<boolean>;
   onToolUpdateModeChange: (mode: MessagingToolUpdateMode) => Promise<void>;
+  onInputDebounceMsChange: (value: number) => Promise<void>;
   onSaveDiscord: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["discord"]>,
   ) => Promise<void>;
@@ -32,6 +33,7 @@ export function MessagingSettings(props: {
   const telegram = props.snapshot.messaging.telegram;
   const discord = props.snapshot.messaging.discord;
   const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
+  const inputDebounceMs = props.snapshot.messaging.inputDebounceMs;
   const runtimeMessaging = props.snapshot.runtime.messaging;
 
   return (
@@ -60,6 +62,17 @@ export function MessagingSettings(props: {
           onChange={(mode) => {
             void props.onToolUpdateModeChange(mode);
           }}
+        />
+        <NumberField
+          description="Wait briefly for split text, code blocks, images, or files before starting one agent turn. Use 0 to disable the pre-start wait."
+          disabled={props.saving}
+          label="Input debounce"
+          max={5000}
+          min={0}
+          source={sourceBadge(inputDebounceMs)}
+          suffix="ms"
+          value={inputDebounceMs.value}
+          onSave={props.onInputDebounceMsChange}
         />
       </MessagingGroup>
 
@@ -288,6 +301,56 @@ function TextField(props: {
         onBlur={() => props.onSave(value.trim())}
         onChange={(event) => setValue(event.currentTarget.value)}
       />
+    </label>
+  );
+}
+
+function NumberField(props: {
+  description?: string;
+  disabled?: boolean;
+  label: string;
+  max?: number;
+  min?: number;
+  source: string;
+  suffix?: string;
+  value: number;
+  onSave: (value: number) => void;
+}) {
+  const [value, setValue] = useState(String(props.value));
+
+  return (
+    <label className="settings-row">
+      <span className="settings-row__label">{props.label}</span>
+      <span className="settings-source">{props.source}</span>
+      <span className="settings-number">
+        <input
+          aria-label={props.label}
+          className="settings-input"
+          disabled={props.disabled}
+          max={props.max}
+          min={props.min}
+          type="number"
+          value={value}
+          onBlur={() => {
+            const parsed = Number(value);
+            if (!Number.isFinite(parsed)) {
+              setValue(String(props.value));
+              return;
+            }
+            const clamped = Math.min(
+              Math.max(Math.trunc(parsed), props.min ?? Number.MIN_SAFE_INTEGER),
+              props.max ?? Number.MAX_SAFE_INTEGER,
+            );
+            setValue(String(clamped));
+            props.onSave(clamped);
+          }}
+          onChange={(event) => setValue(event.currentTarget.value)}
+        />
+        {props.suffix ? <span className="settings-source">{props.suffix}</span> : null}
+      </span>
+      {props.description ? (
+        <span className="settings-row__description">{props.description}</span>
+      ) : null}
     </label>
   );
 }

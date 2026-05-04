@@ -112,6 +112,7 @@ export type DesktopSettingsSnapshot = {
     chatReplyComposer: DesktopSettingsValue<DesktopChatReplyComposer>;
   };
   messaging: {
+    inputDebounceMs: DesktopSettingsValue<number>;
     toolUpdateMode: DesktopSettingsValue<MessagingToolUpdateMode>;
     attachments: DesktopMessagingAttachmentSettingsSnapshot;
     telegram: {
@@ -145,6 +146,7 @@ export type DesktopSettingsConfigPatch = {
     chatReplyComposer?: DesktopChatReplyComposer;
   };
   messaging?: {
+    inputDebounceMs?: number;
     toolUpdateMode?: MessagingToolUpdateMode;
     attachments?: {
       imageProfile?: DesktopMessagingImageProfile;

@@ -357,6 +357,12 @@ export class AppServerSessionState {
     return this.runs.get(turnId);
   }
 
+  getActiveRunForThread(threadId: string): ActiveRunRecord | undefined {
+    return [...this.runs.values()].find(
+      (run) => run.threadId === threadId && run.status === "active",
+    );
+  }
+
   completeRun(turnId: string): ActiveRunRecord | undefined {
     const run = this.runs.get(turnId);
     if (!run) {

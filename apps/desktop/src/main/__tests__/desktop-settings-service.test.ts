@@ -30,6 +30,7 @@ describe("DesktopSettingsService", () => {
         'chat_reply_composer = "tiptap-chips"',
         "",
         "[messaging]",
+        "input_debounce_ms = 750",
         'tool_update_mode = "show_more"',
         "",
         "[messaging.telegram]",
@@ -69,6 +70,10 @@ describe("DesktopSettingsService", () => {
     });
     expect(snapshot.messaging.toolUpdateMode).toEqual({
       value: "show_more",
+      source: "config",
+    });
+    expect(snapshot.messaging.inputDebounceMs).toEqual({
+      value: 750,
       source: "config",
     });
     expect(snapshot.messaging.telegram.enabled).toEqual({
@@ -125,6 +130,7 @@ describe("DesktopSettingsService", () => {
       configPath,
       env: {
         PWRAGNT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "custom-widget-chips",
+        PWRAGNT_MESSAGING_INPUT_DEBOUNCE_MS: "250",
         PWRAGNT_MESSAGING_TELEGRAM_ENABLED: "true",
         PWRAGNT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS: "222222222,333333333",
         PWRAGNT_CODEX_COMMAND: "codex-env",
@@ -144,6 +150,11 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "env",
       overriddenByEnv: true,
+    });
+    expect(snapshot.messaging.inputDebounceMs).toMatchObject({
+      value: 250,
+      source: "env",
+      overriddenByEnv: false,
     });
     expect(snapshot.messaging.telegram.authorizedUserIds).toMatchObject({
       value: ["222222222", "333333333"],
@@ -176,6 +187,7 @@ describe("DesktopSettingsService", () => {
 
     await service.writeConfigPatch({
       messaging: {
+        inputDebounceMs: 1250,
         toolUpdateMode: "show_less",
         telegram: {
           enabled: true,
@@ -201,6 +213,7 @@ describe("DesktopSettingsService", () => {
 
     expect(contents).toContain("[messaging.telegram]");
     expect(contents).toContain("[messaging]");
+    expect(contents).toContain("input_debounce_ms = 1250");
     expect(contents).toContain('tool_update_mode = "show_less"');
     expect(contents).toContain('authorized_user_ids = ["111111111"]');
     expect(contents).toContain("[applications.terminal]");

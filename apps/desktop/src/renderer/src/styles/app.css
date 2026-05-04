@@ -1376,6 +1376,13 @@ textarea,
   white-space: nowrap;
 }
 
+.settings-number {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .settings-row__error,
 .settings-empty {
   margin: 0;
