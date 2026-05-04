@@ -398,7 +398,7 @@ describe("App", () => {
       })
     ).toBeInTheDocument();
     expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
-    expect(await screen.findByText(".worktrees/pwragent-fix-th...ng-moioth2352")).toBeInTheDocument();
+    expect(await screen.findByText(".worktrees/pwragent-fix-t...ng-moioth2352")).toBeInTheDocument();
     expect(screen.getByText("codex/fix-thread-naming-ephemeral")).toBeInTheDocument();
     expect(screen.getAllByText("codex/build-codex-client").length).toBeGreaterThan(0);
     expect(screen.queryByRole("heading", { level: 3, name: "Transcript" })).not.toBeInTheDocument();

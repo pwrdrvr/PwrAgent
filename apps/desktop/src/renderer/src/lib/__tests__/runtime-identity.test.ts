@@ -12,7 +12,7 @@ describe("runtime identity formatting", () => {
       formatRuntimePath(
         "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352"
       )
-    ).toBe(".worktrees/pwragent-fix-th...ng-moioth2352");
+    ).toBe(".worktrees/pwragent-fix-t...ng-moioth2352");
   });
 
   it("ignores the desktop app package when showing the runtime workspace", () => {
@@ -26,7 +26,7 @@ describe("runtime identity formatting", () => {
       formatRuntimePath(
         "/Users/huntharo/github/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352/apps/desktop"
       )
-    ).toBe(".worktrees/pwragent-fix-th...ng-moioth2352");
+    ).toBe(".worktrees/pwragent-fix-t...ng-moioth2352");
   });
 
   it("shows the codex worktree id and repo for codex-managed worktrees", () => {

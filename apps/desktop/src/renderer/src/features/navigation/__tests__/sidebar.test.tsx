@@ -1098,7 +1098,7 @@ describe("Sidebar", () => {
       />
     );
 
-    expect(screen.getByText(".worktrees/pwragent-fix-th...ng-moioth2352")).toBeInTheDocument();
+    expect(screen.getByText(".worktrees/pwragent-fix-t...ng-moioth2352")).toBeInTheDocument();
     expect(screen.getByText("codex/fix-thread-naming-ephemeral")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy working directory" }));

@@ -41,7 +41,7 @@ describe("analyzeCodexThreadProtocolCapture", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: "019da321-9801-70f1-a2ba-103afa135831",
-          cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+          cwd: "/Users/huntharo/pwrdrvr/PwrAgnt",
           gitBranch: "main",
         }),
       ]),
