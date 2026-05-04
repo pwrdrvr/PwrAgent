@@ -1,5 +1,7 @@
+import { useState } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
+import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
 
@@ -16,6 +18,11 @@ type ThreadRowProps = {
     position: { x: number; y: number; anchorTop?: number }
   ) => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
+  onSetReaction?: (
+    thread: NavigationThreadSummary,
+    emoji: string,
+    present: boolean,
+  ) => Promise<void>;
 };
 
 export function ThreadRow(props: ThreadRowProps) {
@@ -23,6 +30,17 @@ export function ThreadRow(props: ThreadRowProps) {
   const selected =
     threadKey === props.selectedThreadKey;
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const reactions = props.thread.reactions ?? [];
+  const canReact = Boolean(props.onSetReaction);
+
+  const toggleReaction = (emoji: string): void => {
+    if (!props.onSetReaction) {
+      return;
+    }
+    const present = !reactions.includes(emoji);
+    void props.onSetReaction(props.thread, emoji, present);
+  };
 
   return (
     <div
@@ -61,6 +79,52 @@ export function ThreadRow(props: ThreadRowProps) {
           thread={props.thread}
         />
       </button>
+
+      {canReact || reactions.length > 0 ? (
+        <div className="thread-row__reactions">
+          {reactions.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              aria-label={`Remove reaction ${emoji} from thread`}
+              className="thread-row__reaction"
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleReaction(emoji);
+              }}
+            >
+              <span aria-hidden="true">{emoji}</span>
+            </button>
+          ))}
+
+          {canReact ? (
+            <div className="thread-row__reaction-picker-wrap">
+              <button
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={pickerOpen}
+                aria-label="Add reaction to thread"
+                className="thread-row__add-reaction"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setPickerOpen((open) => !open);
+                }}
+              >
+                <span aria-hidden="true">+</span>
+              </button>
+              <ReactionPicker
+                open={pickerOpen}
+                current={reactions}
+                onSelect={(emoji) => {
+                  toggleReaction(emoji);
+                  setPickerOpen(false);
+                }}
+                onDismiss={() => setPickerOpen(false)}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <button
         aria-haspopup="menu"
