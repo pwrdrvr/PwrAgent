@@ -1104,9 +1104,84 @@ describe("MessagingController", () => {
         ],
       }),
     );
-    expect(harness.delivered.at(-3)).toMatchObject({
+    expect(
+      harness.delivered.find(
+        (intent) =>
+          intent.kind === "confirmation" &&
+          intent.body === "Queued message sent as the next turn.",
+      ),
+    ).toMatchObject({
       kind: "confirmation",
       body: "Queued message sent as the next turn.",
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+    });
+  });
+
+  it("retains queued follow-up input when promotion fails", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
+    await harness.controller.handleInboundEvent(buildTextEvent("also check the logs"));
+
+    const queuedNotice = harness.delivered
+      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .at(-1);
+    if (!queuedNotice || !("actions" in queuedNotice)) {
+      throw new Error("Queued notice was not delivered");
+    }
+    const cancelAction = Array.isArray(queuedNotice.actions)
+      ? queuedNotice.actions.find((action) =>
+          action.id.startsWith("queued-turn:cancel:"),
+        )
+      : undefined;
+    expect(cancelAction).toBeDefined();
+
+    harness.startTurn.mockRejectedValueOnce(new Error("provider unavailable"));
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "error",
+        title: "Turn could not start",
+        body: "provider unavailable",
+      }),
+    );
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        body: "Queued message sent as the next turn.",
+      }),
+    );
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: cancelAction!.id,
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: "Queued message cancelled.",
       delivery: {
         mode: "update",
         replaceMarkup: true,
@@ -1224,6 +1299,60 @@ describe("MessagingController", () => {
     } satisfies AgentEvent);
 
     expect(harness.startTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps queued follow-ups available when backend steering is rejected", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildTextEvent("start the task"));
+    await harness.controller.handleInboundEvent(buildTextEvent("also check the logs"));
+    const queuedNotice = harness.delivered
+      .filter((intent) => intent.kind === "confirmation" && intent.title === "Message queued")
+      .at(-1);
+    if (!queuedNotice || !("actions" in queuedNotice)) {
+      throw new Error("Queued notice was not delivered");
+    }
+    const queuedActions = Array.isArray(queuedNotice.actions)
+      ? queuedNotice.actions
+      : [];
+    const steerAction = queuedActions.find((action) =>
+      action.id.startsWith("queued-turn:steer:"),
+    );
+    const cancelAction = queuedActions.find((action) =>
+      action.id.startsWith("queued-turn:cancel:"),
+    );
+    expect(steerAction).toBeDefined();
+    expect(cancelAction).toBeDefined();
+
+    harness.steerTurn.mockRejectedValueOnce(new Error("no active turn to steer"));
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: steerAction!.id,
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Steer failed",
+      body: expect.stringContaining("The message is still queued."),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: cancelAction!.id,
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: "Queued message cancelled.",
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+    });
   });
 
   it("routes completed assistant output to active thread bindings", async () => {

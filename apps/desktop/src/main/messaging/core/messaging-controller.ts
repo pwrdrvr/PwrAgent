@@ -692,9 +692,11 @@ export class MessagingController {
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
     preview: string;
+    queueOnConcurrentStart?: boolean;
     threadKey: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     this.turnAdmission.markStarting(params.threadKey);
+    let turnStarted = false;
 
     try {
       const navigation = await this.options.backend.getNavigationSnapshot({
@@ -707,6 +709,7 @@ export class MessagingController {
         input: params.input,
         ...turnSettings,
       });
+      turnStarted = true;
       const activeTurn: MessagingActiveTurnSummary = {
         turnId: started.turnId,
         status: "working",
@@ -718,15 +721,25 @@ export class MessagingController {
         force: true,
       });
       await this.renderBindingStatus(params.binding, undefined, navigation);
+      return true;
     } catch (error) {
-      if (isTurnInProgressStartError(error)) {
-        await this.queuePreparedInput({
-          binding: params.binding,
-          input: params.input,
-          preview: params.preview,
-          threadKey: params.threadKey,
+      if (turnStarted) {
+        this.logger.debug?.("messaging post-start update failed", {
+          error: error instanceof Error ? error.message : String(error),
+          threadId: params.binding.threadId,
         });
-        return;
+        return true;
+      }
+      if (isTurnInProgressStartError(error)) {
+        if (params.queueOnConcurrentStart !== false) {
+          await this.queuePreparedInput({
+            binding: params.binding,
+            input: params.input,
+            preview: params.preview,
+            threadKey: params.threadKey,
+          });
+        }
+        return false;
       }
       await this.deliver(
         buildErrorIntent({
@@ -739,6 +752,7 @@ export class MessagingController {
         params.binding,
         params.event,
       );
+      return false;
     } finally {
       this.turnAdmission.clearStarting(params.threadKey);
     }
@@ -903,12 +917,29 @@ export class MessagingController {
       return;
     }
 
-    await this.options.backend.steerTurn({
-      backend: entry.binding.backend,
-      threadId: entry.binding.threadId,
-      expectedTurnId: activeTurn.turnId,
-      input: entry.input,
-    });
+    try {
+      await this.options.backend.steerTurn({
+        backend: entry.binding.backend,
+        threadId: entry.binding.threadId,
+        expectedTurnId: activeTurn.turnId,
+        input: entry.input,
+      });
+    } catch (error) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("queued-turn-steer-failed"),
+          createdAt: this.now(),
+          title: "Steer failed",
+          body: `${
+            error instanceof Error ? error.message : String(error)
+          }\n\nThe message is still queued.`,
+          recoverable: true,
+        }),
+        entry.binding,
+        event,
+      );
+      return;
+    }
     const steered = this.turnAdmission.updateQueuedEntry(entry, {
       status: "steered",
     });
@@ -925,21 +956,30 @@ export class MessagingController {
       return;
     }
 
-    const entry = this.turnAdmission.shiftNextQueued(threadKey);
+    const entry = this.turnAdmission.peekNextQueued(threadKey);
     if (!entry) {
       return;
     }
 
-    await this.retireQueuedTurnNotice(
-      entry,
-      "Queued message sent as the next turn.",
-    );
-    await this.startPreparedInput({
+    const started = await this.startPreparedInput({
       binding: entry.binding,
       input: entry.input,
       preview: entry.preview,
+      queueOnConcurrentStart: false,
       threadKey,
     });
+    if (!started) {
+      return;
+    }
+
+    const submitted = this.turnAdmission.updateQueuedEntry(entry, {
+      status: "submitted",
+    });
+    this.turnAdmission.removeQueuedEntry(submitted);
+    await this.retireQueuedTurnNotice(
+      submitted,
+      "Queued message sent as the next turn.",
+    );
   }
 
   private async handleCallback(event: MessagingInboundCallbackEvent): Promise<void> {

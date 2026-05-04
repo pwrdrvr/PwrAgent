@@ -145,6 +145,40 @@ export class MessagingTurnAdmission {
     return undefined;
   }
 
+  peekNextQueued(threadKey: string): MessagingQueuedTurnEntry | undefined {
+    const queue = this.queuedByThreadKey.get(threadKey);
+    if (!queue) {
+      return undefined;
+    }
+
+    while (queue.length > 0) {
+      const entry = queue[0];
+      if (entry?.status === "queued") {
+        return entry;
+      }
+      queue.shift();
+    }
+
+    this.queuedByThreadKey.delete(threadKey);
+    return undefined;
+  }
+
+  removeQueuedEntry(entry: MessagingQueuedTurnEntry): void {
+    const queue = this.queuedByThreadKey.get(entry.threadKey);
+    if (!queue) {
+      return;
+    }
+
+    const index = queue.findIndex((candidate) => candidate.id === entry.id);
+    if (index >= 0) {
+      queue.splice(index, 1);
+    }
+
+    if (queue.length === 0) {
+      this.queuedByThreadKey.delete(entry.threadKey);
+    }
+  }
+
   shiftNextQueued(threadKey: string): MessagingQueuedTurnEntry | undefined {
     const queue = this.queuedByThreadKey.get(threadKey);
     if (!queue) {
