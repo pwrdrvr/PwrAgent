@@ -220,6 +220,33 @@ describe("GitWorkspaceHandoffService", () => {
     expect(await pathExists(detachedResult.targetPath)).toBe(false);
   });
 
+  it("allows detached-changes handoff from a detached HEAD", async () => {
+    const repoPath = await createRepo();
+    await git(repoPath, ["checkout", "--detach"]);
+    await writeFile(path.join(repoPath, "scratch.txt"), "scratch\n", "utf8");
+
+    const service = new GitWorkspaceHandoffService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const result = await service.handoff({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+      strategy: "detached-changes",
+      repositoryPath: repoPath,
+      sourcePath: repoPath,
+      sourceBranch: "feature/handoff",
+      now: 5000,
+    });
+
+    expect(result.workMode).toBe("worktree");
+    expect(result.strategy).toBe("detached-changes");
+    expect(path.basename(result.targetPath)).toBe("PwrAgnt");
+    await expect(readFile(path.join(result.targetPath, "scratch.txt"), "utf8")).resolves.toBe(
+      "scratch\n",
+    );
+  });
+
   it("protects dirty local changes separately when moving a worktree branch to local", async () => {
     const repoPath = await createRepo();
     await git(repoPath, ["switch", "main"]);

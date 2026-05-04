@@ -287,13 +287,14 @@ export class GitWorkspaceHandoffService {
     if (path.resolve(context.repositoryPath) !== path.resolve(context.sourcePath)) {
       throw new Error("Local-to-worktree handoff must start from the local checkout.");
     }
-    if (context.branch === "HEAD") {
-      throw new Error("Local-to-worktree handoff requires a named source branch.");
-    }
 
     const strategy = params.strategy ?? "move-branch";
     if (strategy === "detached-changes") {
       return await this.handoffLocalChangesToDetachedWorktree(params, context);
+    }
+
+    if (context.branch === "HEAD") {
+      throw new Error("Local-to-worktree handoff requires a named source branch.");
     }
 
     ensureBranchNotCheckedOutElsewhere({
