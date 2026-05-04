@@ -1629,7 +1629,7 @@ describe("MessagingController", () => {
     await firstStreamStarted;
 
     now += 100;
-    const skipped = harness.controller.handleBackendEvent({
+    await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
         method: "item/agentMessage/delta",
@@ -1666,7 +1666,7 @@ describe("MessagingController", () => {
 
     expect(delivered).toHaveLength(1);
     releaseFirstDelivery?.();
-    await Promise.all([first, skipped, final]);
+    await Promise.all([first, final]);
 
     const streamUpdates = delivered.filter(
       (intent) => intent.kind === "stream_update",
