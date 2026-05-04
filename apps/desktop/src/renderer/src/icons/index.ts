@@ -1,7 +1,9 @@
 export { BranchIcon } from "./BranchIcon";
+export { EditorIcon } from "./EditorIcon";
 export { FolderIcon } from "./FolderIcon";
 export { NewThreadIcon } from "./NewThreadIcon";
 export { SettingsIcon } from "./SettingsIcon";
+export { TerminalIcon } from "./TerminalIcon";
 export { UnlinkedDotIcon } from "./UnlinkedDotIcon";
 export { WorkspaceIcon } from "./WorkspaceIcon";
 export { WorktreeIcon } from "./WorktreeIcon";
