@@ -196,7 +196,10 @@ export class OverlayStore {
             return false;
           }
 
-          if (directory.id.startsWith("pwragent-handoff:")) {
+          if (
+            directory.id.startsWith("pwragent-handoff:") ||
+            directory.id.startsWith("pwragnt-handoff:")  // legacy prefix
+          ) {
             return false;
           }
 
@@ -538,5 +541,9 @@ export class OverlayStore {
 function hasHandoffWorkspace(
   directories: ThreadOverlayState["extraLinkedDirectories"] = [],
 ): boolean {
-  return directories.some((directory) => directory.id.startsWith("pwragent-handoff:"));
+  return directories.some(
+    (directory) =>
+      directory.id.startsWith("pwragent-handoff:") ||
+      directory.id.startsWith("pwragnt-handoff:"),  // legacy prefix
+  );
 }
