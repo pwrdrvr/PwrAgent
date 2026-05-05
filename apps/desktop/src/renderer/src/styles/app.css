@@ -181,6 +181,17 @@ textarea,
 
 .thread-header {
   padding-top: 10px;
+  /* Reserve space for the position:fixed context-rail spine (48px wide,
+     pinned top-right). Without this padding, anything we render in the
+     header's right-aligned region (messaging status icons, on/off
+     toggle) gets covered by the spine's hamburger button. */
+  padding-right: 56px;
+}
+
+.thread-view:has(.thread-view__layout.has-pinned-context-rail) .thread-header {
+  /* When the rail is pinned open, it pushes the layout left and is no
+     longer fixed at the screen edge — the header reclaims the space. */
+  padding-right: 0;
 }
 
 .thread-header button,
