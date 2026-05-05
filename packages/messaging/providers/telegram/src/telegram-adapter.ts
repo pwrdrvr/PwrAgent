@@ -1136,13 +1136,21 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     intent: MessagingSurfaceIntent,
     actions: MessagingSurfaceAction[],
   ): Promise<TelegramInlineKeyboardMarkup | undefined> {
+    // Defensive caps from the adapter's own profile. Producers should
+    // already have applied these via applyActionCapabilityLimits.
+    const maxActions = this.capabilityProfile.actions?.maxActions ?? 100;
+    const maxLabelLength = this.capabilityProfile.actions?.maxLabelLength ?? 64;
+    const maxColumns = this.capabilityProfile.actions?.maxActionsPerRow ?? 8;
     const items = await Promise.all(
       actions
         .filter((action) => !action.disabled)
+        .slice(0, maxActions)
         .map(async (action) => ({
           action,
           component: {
-            text: action.label,
+            text: action.label.length > maxLabelLength
+              ? action.label.slice(0, maxLabelLength)
+              : action.label,
             callback_data: await this.createCallbackData(intent, action),
           },
         })),
@@ -1155,7 +1163,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return {
       inline_keyboard: layoutMessagingActionRows(items, {
         defaultColumns: intent.actionLayout?.columns ?? 1,
-        maxColumns: 8,
+        maxColumns,
       }),
     };
   }

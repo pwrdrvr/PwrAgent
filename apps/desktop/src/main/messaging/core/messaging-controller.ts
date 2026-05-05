@@ -491,6 +491,7 @@ export class MessagingController {
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("help"),
+        capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
         title: "PwrAgent",
         body: "Use /resume to choose a thread to control from this conversation.",
@@ -548,6 +549,7 @@ export class MessagingController {
         await this.deliver(
           buildConfirmationIntent({
             id: this.newIntentId("ambiguous-reply"),
+            capabilityProfile: this.capabilityProfile,
             createdAt: this.now(),
             title: "Choose an option",
             body: pendingIntent.intent.fallbackText ?? "Reply with one of the shown options.",
@@ -565,6 +567,7 @@ export class MessagingController {
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("needs-binding"),
+          capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
           title: "Choose a thread",
           body: "Bind this conversation to a PwrAgent thread before sending instructions.",
@@ -610,6 +613,7 @@ export class MessagingController {
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("needs-binding-media"),
+          capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
           title: "Choose a thread",
           body: "Bind this conversation to a PwrAgent thread before sending attachments.",
@@ -726,6 +730,7 @@ export class MessagingController {
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("attachment-partial"),
+          capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
           title: "Some attachments were skipped",
           body: formatAttachmentRejections(rejections),
@@ -850,6 +855,7 @@ export class MessagingController {
     const canSteer = this.canSteerQueuedTurn(entry);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("queued-turn"),
+      capabilityProfile: this.capabilityProfile,
       createdAt: this.now(),
       title: "Message queued",
       body: buildQueuedTurnNoticeBody(entry.preview, canSteer),
@@ -898,6 +904,7 @@ export class MessagingController {
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("queued-turn-retired"),
+          capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
           delivery: {
             mode: "update",
@@ -1073,6 +1080,7 @@ export class MessagingController {
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("bound"),
+          capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
           title: "Thread bound",
           body: "Messages in this conversation will route to the selected thread.",
@@ -1702,6 +1710,7 @@ export class MessagingController {
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("browse-cancelled"),
+          capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
           delivery: session.surface
             ? {
@@ -1754,6 +1763,7 @@ export class MessagingController {
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("bound"),
+          capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
           delivery: session.surface
             ? {
@@ -1895,6 +1905,7 @@ export class MessagingController {
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("new-thread-bound"),
+        capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
         delivery: session.surface
           ? {
@@ -1919,6 +1930,7 @@ export class MessagingController {
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("status-unbound"),
+          capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
           title: "No thread bound",
           body: "Use /resume to choose a PwrAgent thread for this conversation.",
@@ -2049,6 +2061,7 @@ export class MessagingController {
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("status-action-pending"),
+        capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
         title: "Status action unavailable",
         body: "Use /status to refresh. This control will be wired to backend actions in the next implementation slice.",
@@ -2077,6 +2090,7 @@ export class MessagingController {
       {
         ...buildHandoffOverviewIntent({
           id: this.newIntentId("handoff-overview"),
+          capabilityProfile: this.capabilityProfile,
           binding,
           context,
           createdAt: this.now(),
@@ -2108,6 +2122,7 @@ export class MessagingController {
       {
         ...buildHandoffBranchPickerIntent({
           id: this.newIntentId("handoff-branch"),
+          capabilityProfile: this.capabilityProfile,
           binding,
           context,
           createdAt: this.now(),
@@ -2142,6 +2157,7 @@ export class MessagingController {
       {
         ...buildHandoffConfirmationIntent({
           id: this.newIntentId("handoff-confirm"),
+          capabilityProfile: this.capabilityProfile,
           binding,
           context,
           createdAt: this.now(),
@@ -2390,6 +2406,7 @@ export class MessagingController {
     await this.deliver(
       buildStatusModelPickerIntent({
         id: this.newIntentId("status-model-picker"),
+        capabilityProfile: this.capabilityProfile,
         binding,
         createdAt: this.now(),
         models,
@@ -2412,6 +2429,7 @@ export class MessagingController {
     await this.deliver(
       buildStatusReasoningPickerIntent({
         id: this.newIntentId("status-reasoning-picker"),
+        capabilityProfile: this.capabilityProfile,
         binding,
         createdAt: this.now(),
         efforts,
@@ -2659,6 +2677,7 @@ export class MessagingController {
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("status-sync-name-confirmed"),
+        capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
         title: "Name synced",
         body: `Set this ${conversationKindLabel(binding.channel.conversation.kind)} name to "${result.title}".`,
@@ -2727,6 +2746,7 @@ export class MessagingController {
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("detach-unbound"),
+          capabilityProfile: this.capabilityProfile,
           createdAt: this.now(),
           title: "No thread bound",
           body: "This conversation is not bound to a PwrAgent thread.",
@@ -2763,6 +2783,7 @@ export class MessagingController {
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("detached"),
+        capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
         title: "Thread detached",
         body: "Messages in this conversation will no longer route to PwrAgent.",
@@ -3078,6 +3099,7 @@ export class MessagingController {
     if (request.method === "item/tool/requestUserInput") {
       return buildQuestionnaireIntent({
         id: this.newIntentId("questionnaire"),
+        capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
         request: request as AppServerToolRequestUserInputNotification,
       });
@@ -3086,6 +3108,7 @@ export class MessagingController {
     if (request.method.toLowerCase().includes("requestapproval")) {
       return buildApprovalIntent({
         id: this.newIntentId("approval"),
+        capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
         request,
       });

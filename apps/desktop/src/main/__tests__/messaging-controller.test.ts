@@ -22,7 +22,7 @@ import type {
   SteerTurnRequest,
   SubmitServerRequestRequest,
 } from "@pwragent/shared";
-import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import {
   MessagingController,
   type MessagingControllerOptions,

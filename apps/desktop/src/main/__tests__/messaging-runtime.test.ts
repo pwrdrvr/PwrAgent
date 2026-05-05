@@ -7,13 +7,13 @@ import type {
   NavigationSnapshot,
   StartTurnRequest,
 } from "@pwragent/shared";
-import {
-  PERMISSIVE_CAPABILITY_PROFILE,
-  type MessagingChannelKind,
-  type MessagingDeliveryResult,
-  type MessagingInboundEvent,
-  type MessagingSurfaceIntent,
+import type {
+  MessagingChannelKind,
+  MessagingDeliveryResult,
+  MessagingInboundEvent,
+  MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import type {
   DesktopMessagingAdapter,

@@ -824,23 +824,6 @@ export type MessagingCapabilityProfile = {
   outboundAttachments?: MessagingOutboundAttachmentCapabilities;
 };
 
-export type MessagingCapabilitySurfaceKind =
-  | "picker"
-  | "status"
-  | "approval"
-  | "questionnaire"
-  | "select"
-  | "confirmation";
-
-const CAPABILITY_MIN_ACTIONS: Record<MessagingCapabilitySurfaceKind, number> = {
-  picker: 2,
-  status: 3,
-  approval: 2,
-  questionnaire: 2,
-  select: 2,
-  confirmation: 2,
-};
-
 const DEFAULT_TEXT_MODE_PAGE_SIZE = 20;
 const DEFAULT_MAX_PAGE_SIZE = 8;
 
@@ -862,20 +845,60 @@ export function capabilityProfilePageSize(
   return Math.min(available, cap);
 }
 
-export function capabilityProfileMinActions(
-  surfaceKind: MessagingCapabilitySurfaceKind,
-): number {
-  return CAPABILITY_MIN_ACTIONS[surfaceKind];
-}
-
-export function capabilityProfileSupportsActions(
+/**
+ * Returns true if the profile supports interactive actions and has at least
+ * `minActions` slots available. Producers own the policy for what "enough
+ * actions" means for their surface (e.g., status card needs ≥3, picker ≥2).
+ */
+export function capabilityProfileSupportsActionCount(
   profile: MessagingCapabilityProfile,
-  surfaceKind: MessagingCapabilitySurfaceKind,
+  minActions: number,
 ): boolean {
   if (!profile.actions) {
     return false;
   }
-  return profile.actions.maxActions >= CAPABILITY_MIN_ACTIONS[surfaceKind];
+  return profile.actions.maxActions >= minActions;
+}
+
+/**
+ * Apply a profile's action constraints to a producer-generated action list:
+ *   1. Truncate label text to `actions.maxLabelLength` if the action would
+ *      otherwise exceed it.
+ *   2. If there are more actions than `actions.maxActions`, drop the
+ *      lowest-priority ones (see `truncateActionsByPriority`).
+ *
+ * If the profile has no `actions` capability (text-only provider), returns
+ * an empty array — the caller is expected to fall back to text rendering.
+ */
+export function applyActionCapabilityLimits(
+  actions: MessagingSurfaceAction[],
+  profile: MessagingCapabilityProfile | undefined,
+): MessagingSurfaceAction[] {
+  if (!profile) {
+    return actions;
+  }
+  if (!profile.actions) {
+    return [];
+  }
+  const max = profile.actions.maxActions;
+  const labelLimit = profile.actions.maxLabelLength;
+  const limited = actions.length > max
+    ? truncateActionsByPriority(actions, max)
+    : actions;
+  return limited.map((action) => {
+    if (action.label.length <= labelLimit) {
+      return action;
+    }
+    return { ...action, label: truncateLabelTo(action.label, labelLimit) };
+  });
+}
+
+function truncateLabelTo(label: string, limit: number): string {
+  if (limit <= 1 || label.length <= limit) {
+    return label.slice(0, limit);
+  }
+  // Reserve one character for an ellipsis marker so the truncation is visible.
+  return `${label.slice(0, limit - 1)}…`;
 }
 
 export function truncateActionsByPriority(
@@ -897,29 +920,6 @@ export function truncateActionsByPriority(
   const keptIndices = new Set(indexed.slice(0, maxActions).map((entry) => entry.index));
   return actions.filter((_, index) => keptIndices.has(index));
 }
-
-export const PERMISSIVE_CAPABILITY_PROFILE: MessagingCapabilityProfile = {
-  actions: {
-    maxActions: 100,
-    maxActionsPerRow: 8,
-    maxLabelLength: 256,
-    supportsStyles: true,
-    supportsDisabled: true,
-    supportsLayoutHints: true,
-    maxCallbackPayloadBytes: 256,
-  },
-  text: {
-    maxLength: 16384,
-    encoding: "characters",
-    markdownDialect: "markdown",
-    supportsCodeBlocks: true,
-    supportsBold: true,
-    supportsItalic: true,
-    supportsLinks: true,
-    supportsInlineCode: true,
-    supportsMessageEdit: true,
-  },
-};
 
 /** @deprecated Use MessagingCapabilityProfile instead. */
 export type MessagingAdapterCapabilities = {

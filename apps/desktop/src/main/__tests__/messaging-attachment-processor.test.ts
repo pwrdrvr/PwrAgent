@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import type {
   MessagingAdapter,
 } from "../messaging/core/messaging-adapter";

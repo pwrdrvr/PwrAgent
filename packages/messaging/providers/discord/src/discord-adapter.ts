@@ -381,6 +381,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         actionsForDiscordIntent(intent),
         (action) => this.createCustomId(intent, action),
         intent.actionLayout,
+        this.capabilityProfile,
       );
       const imageUpload = uploadableImagePart(intent);
       const imageUrl = imageUpload ? undefined : this.firstImageUrl(intent);

@@ -11,6 +11,10 @@ import type {
   NavigationSnapshot,
 } from "@pwragent/shared";
 import {
+  applyActionCapabilityLimits,
+  type MessagingCapabilityProfile,
+} from "@pwragent/messaging-interface";
+import {
   formatToolActivityLine,
   type MessagingToolActivity,
 } from "./messaging-tool-activity.js";
@@ -131,6 +135,7 @@ export function buildToolUpdateBatchMessageIntent(params: {
 export function buildConfirmationIntent(params: {
   actions?: MessagingSurfaceAction[];
   body: string;
+  capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
   delivery?: MessagingConfirmationIntent["delivery"];
   fallbackText?: string;
@@ -141,7 +146,7 @@ export function buildConfirmationIntent(params: {
   return {
     id: params.id,
     kind: "confirmation",
-    actions: params.actions ?? [],
+    actions: applyActionCapabilityLimits(params.actions ?? [], params.capabilityProfile),
     body: params.body,
     createdAt: params.createdAt,
     delivery: params.delivery,
@@ -169,10 +174,12 @@ export function buildErrorIntent(params: {
 }
 
 export function buildQuestionnaireIntent(params: {
+  capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
   id: string;
   request: AppServerToolRequestUserInputNotification;
 }): MessagingQuestionnaireIntent {
+  const labelLimit = params.capabilityProfile?.actions?.maxLabelLength;
   return {
     id: params.id,
     kind: "questionnaire",
@@ -187,11 +194,21 @@ export function buildQuestionnaireIntent(params: {
       secret: question.isSecret,
       options: (question.options ?? []).map((option, index) => ({
         id: `${question.id}:option:${index + 1}`,
-        label: option.label,
+        label: capLabel(option.label, labelLimit),
         description: option.description || undefined,
         fallbackText: String(index + 1),
         recommended: /\(recommended\)/i.test(option.label),
       })),
     })),
   };
+}
+
+function capLabel(label: string, limit: number | undefined): string {
+  if (limit === undefined || label.length <= limit) {
+    return label;
+  }
+  if (limit <= 1) {
+    return label.slice(0, limit);
+  }
+  return `${label.slice(0, limit - 1)}…`;
 }
