@@ -893,11 +893,26 @@ textarea,
   /* Mute the add affordance until the user is interacting with the
      row; revealed on hover, focus, or while the picker is open. */
   opacity: 0;
+  /* SVG glyph uses --text-secondary so it reads as a soft gray —
+     matches the design and avoids competing with the actual reaction
+     chips next to it. The reaction chips above still use
+     --text-primary because monochrome symbol-block codepoints take
+     CSS color, and we want those readable. */
+  color: var(--text-secondary);
   transition:
     background 120ms ease,
     border-color 120ms ease,
     color 120ms ease,
     opacity 120ms ease;
+}
+
+.thread-row__chip--add-reaction:hover,
+.thread-row__chip--add-reaction:focus-visible,
+.thread-row__chip--add-reaction.is-open {
+  /* Brighten the icon on the same gesture that brightens the chip
+     border + background, so the smiley doesn't stay muted while the
+     rest of the chip is in its active state. */
+  color: var(--text-primary);
 }
 
 .thread-row-shell:hover .thread-row__chip--add-reaction,

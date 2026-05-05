@@ -4,6 +4,7 @@ export { EditorIcon } from "./EditorIcon";
 export { FolderIcon } from "./FolderIcon";
 export { NewThreadIcon } from "./NewThreadIcon";
 export { SettingsIcon } from "./SettingsIcon";
+export { SmileyIcon } from "./SmileyIcon";
 export { TelegramIcon } from "./TelegramIcon";
 export { TerminalIcon } from "./TerminalIcon";
 export { UnlinkedDotIcon } from "./UnlinkedDotIcon";

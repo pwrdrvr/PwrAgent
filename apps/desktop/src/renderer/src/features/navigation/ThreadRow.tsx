@@ -12,7 +12,7 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
-import { DiscordIcon, TelegramIcon, type IconProps } from "../../icons";
+import { DiscordIcon, SmileyIcon, TelegramIcon, type IconProps } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { PrChip } from "../pr-status/PrChip";
 import { ReactionPicker } from "./ReactionPicker";
@@ -27,13 +27,6 @@ const PLATFORM_ICONS: Partial<
 };
 
 const HOVER_PREFETCH_DELAY_MS = 750;
-/**
- * Add-reaction glyph. Reactions are explicitly exempt from the
- * no-emoji-as-icon rule (see ReactionPicker.tsx); the trigger uses a
- * smiley face so it visually reads as "add an emoji" the same way
- * GitHub's reaction affordance does.
- */
-const ADD_REACTION_GLYPH = "🙂";
 
 type ThreadRowProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
@@ -303,7 +296,10 @@ function AddReactionChip(props: {
         }
       }}
     >
-      <span aria-hidden="true">{ADD_REACTION_GLYPH}</span>
+      {/* Stroke-based icon — matches the rest of the icon set and
+          inherits the chip's foreground color, instead of the OS
+          emoji's bright yellow which fought the dark theme. */}
+      <SmileyIcon size={14} aria-hidden="true" />
     </span>
   );
 }
