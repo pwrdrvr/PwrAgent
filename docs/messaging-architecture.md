@@ -281,4 +281,4 @@ The full procedure is in [`docs/messaging-adapter-contract.md`](messaging-adapte
 - [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md) — the technical contract for new platform adapters
 - [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md) — package boundary rules and enforcement
 - [`docs/plans/2026-05-04-002-feat-messaging-capability-discovery-plan.md`](plans/2026-05-04-002-feat-messaging-capability-discovery-plan.md) — the design plan that introduced the capability profile system
-- [`docs/plans/2026-05-05-001-feat-messaging-plan-review-attachment-delivery-plan.md`](plans/2026-05-05-001-feat-messaging-plan-review-attachment-delivery-plan.md) — planned consumer of `outboundAttachments` for plan/review surface delivery
+- [`docs/plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md`](plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md) — planned consumer of `outboundAttachments` for plan/review surface delivery

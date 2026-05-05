@@ -11,10 +11,16 @@ describe("messaging docs links", () => {
       (match) => match[1],
     );
 
-    expect(links).toEqual([
-      "docs/messaging-platform-integration.md",
-      "docs/messaging-adapter-contract.md",
-    ]);
+    // The architecture doc is the umbrella overview added in PR #180;
+    // platform-integration covers operator setup; adapter-contract is the
+    // implementer's contract. README must link all three.
+    expect(new Set(links)).toEqual(
+      new Set([
+        "docs/messaging-architecture.md",
+        "docs/messaging-platform-integration.md",
+        "docs/messaging-adapter-contract.md",
+      ]),
+    );
     for (const link of links) {
       expect(existsSync(path.join(repoRoot, link))).toBe(true);
     }
@@ -25,7 +31,11 @@ describe("messaging docs links", () => {
     const adapterContract = readText("docs/messaging-adapter-contract.md");
 
     expect(operatorGuide).toContain("(messaging-adapter-contract.md)");
-    expect(adapterContract).toContain("packages/shared/src/contracts/messaging.ts");
+    // Messaging types now live in @pwragent/messaging-interface (PR #180
+    // unified the duplicate type tree out of @pwragent/shared).
+    expect(adapterContract).toContain(
+      "packages/messaging/interface/src/index.ts",
+    );
   });
 
   it("does not include obvious real messaging tokens", () => {
