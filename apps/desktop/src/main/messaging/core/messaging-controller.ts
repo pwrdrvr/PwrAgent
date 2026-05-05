@@ -273,6 +273,17 @@ export class MessagingController {
       await this.handleBackendRequestResolved(event);
       return;
     }
+    if (
+      event.notification.method === "thread/executionMode/updated" ||
+      event.notification.method === "thread/modelSettings/updated"
+    ) {
+      await this.refreshStatusSurfacesForThread(
+        event.backend,
+        threadId,
+        event.notification.method,
+      );
+      return;
+    }
 
     const bindings = this.filterBindingsForChannel(
       await this.options.store.findActiveBindingsForThread({
@@ -1151,6 +1162,42 @@ export class MessagingController {
         decision,
       },
     });
+  }
+
+  /**
+   * Re-render status surfaces for every binding tied to a thread on this
+   * controller's channel. Used by the thread-state update bus to fan out
+   * cross-surface refreshes when state changes anywhere — desktop UI,
+   * Telegram callback, Discord callback — so every surface reflects the new
+   * value. The reason is logged for audit only.
+   */
+  private async refreshStatusSurfacesForThread(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+    reason: string,
+  ): Promise<void> {
+    const bindings = this.filterBindingsForChannel(
+      await this.options.store.findActiveBindingsForThread({
+        backend,
+        threadId,
+      }),
+    );
+    for (const binding of bindings) {
+      if (!binding.statusSurface && !binding.pinnedStatusSurface) {
+        continue;
+      }
+      try {
+        await this.renderBindingStatus(binding);
+      } catch (error) {
+        this.logger.debug?.("messaging status refresh failed", {
+          backend,
+          bindingId: binding.id,
+          error: error instanceof Error ? error.message : String(error),
+          reason,
+          threadId,
+        });
+      }
+    }
   }
 
   private async handleBackendRequestResolved(event: AgentEvent): Promise<void> {
@@ -2382,7 +2429,9 @@ export class MessagingController {
       reasoningEffort: updatedBinding.preferences?.reasoningEffort,
       serviceTier: updatedBinding.preferences?.serviceTier,
     });
-    await this.renderBindingStatus(updatedBinding, event);
+    // Bus-driven refresh: setThreadModelSettings emits thread/modelSettings/updated
+    // which fans out to refreshStatusSurfacesForThread for every controller —
+    // including this one — so we don't need an inline render here.
   }
 
   private async setBindingReasoning(
@@ -2406,7 +2455,8 @@ export class MessagingController {
       reasoningEffort,
       serviceTier: updatedBinding.preferences?.serviceTier,
     });
-    await this.renderBindingStatus(updatedBinding, event);
+    // Refresh handled by the thread-state update bus on
+    // thread/modelSettings/updated — see refreshStatusSurfacesForThread.
   }
 
   private async toggleFastMode(
@@ -2425,7 +2475,7 @@ export class MessagingController {
       reasoningEffort: updatedBinding.preferences?.reasoningEffort,
       serviceTier: updatedBinding.preferences?.serviceTier,
     });
-    await this.renderBindingStatus(updatedBinding, event);
+    // Refresh handled by the thread-state update bus.
   }
 
   private async togglePermissionsMode(
@@ -2438,16 +2488,20 @@ export class MessagingController {
     const currentMode = executionModeForBinding(binding, navigation) ?? "default";
     const nextMode = currentMode === "full-access" ? "default" : "full-access";
     const executionMode = nextMode;
+    // Update local binding prefs first so the bus-path render — which
+    // fetches the binding fresh from the store — sees the new values
+    // even if navigation snapshot hasn't reloaded yet.
+    await this.updateBindingPreferences(binding, {
+      executionMode,
+      permissionsMode: nextMode,
+    });
     await this.options.backend.setThreadExecutionMode?.({
       backend: binding.backend,
       threadId: binding.threadId,
       executionMode,
     });
-    const updatedBinding = await this.updateBindingPreferences(binding, {
-      executionMode,
-      permissionsMode: nextMode,
-    });
-    await this.renderBindingStatus(updatedBinding, event);
+    // Refresh handled by the thread-state update bus on
+    // thread/executionMode/updated — see refreshStatusSurfacesForThread.
   }
 
   private async stopActiveTurn(
