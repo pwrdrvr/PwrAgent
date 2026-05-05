@@ -406,15 +406,18 @@ class DesktopAppServerService {
     // Terminal-state short-circuit: once a PR is merged or closed, we
     // never re-query gh for that thread. The chip is frozen at its
     // terminal color and we just hand back what's persisted.
+    //
+    // No log here on purpose — this path runs on every navigation
+    // refresh tick (once a minute per renderer) for every thread with
+    // a terminal PR, so logging would produce one line per thread per
+    // minute of pure noise. The interesting path is the cache-miss
+    // fetch below, and callers that need to observe the no-op
+    // programmatically can read `shortCircuited: true` off the
+    // response.
     const hasTerminalPr = existingPrs.some(
       (pr) => pr.state === "merged" || pr.state === "closed",
     );
     if (hasTerminalPr) {
-      logDebug("refreshThreadPullRequests:short-circuit", {
-        backend,
-        threadId: request.threadId,
-        prCount: existingPrs.length,
-      });
       return {
         backend,
         threadId: request.threadId,
