@@ -209,6 +209,17 @@ export type DesktopApi = {
   onMessagingPlatformStatusEvent?: (
     callback: (event: MessagingPlatformStatusEvent) => void,
   ) => () => void;
+  /**
+   * Marker event fired whenever the main process mutates a messaging
+   * binding (create / refresh metadata / sync title / detach / revoke).
+   * Listeners should refetch the navigation snapshot rather than
+   * trying to apply per-binding diffs from the payload — that's where
+   * binding chips live, and the snapshot endpoint is cheap and
+   * idempotent. See `MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL`.
+   */
+  onMessagingBindingsChanged?: (
+    callback: (event: { at: number }) => void,
+  ) => () => void;
   unbindMessagingThread?: (
     request: UnbindMessagingThreadRequest,
   ) => Promise<UnbindMessagingThreadResponse>;

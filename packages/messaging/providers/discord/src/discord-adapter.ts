@@ -287,7 +287,15 @@ export class DiscordAdapter implements DiscordProviderAdapter {
    * conversation breadcrumb metadata (channel name, parent channel
    * name for threads, guild name). Names change rarely; one REST
    * fetch per id per process is sufficient.
+   *
+   * Bounded LRU (insertion-order Map + eviction at the cap) so a
+   * long-running session bound to a busy server can't grow these
+   * caches without bound. Names change rarely so eviction is cheap to
+   * recover from — worst case is one extra REST round-trip on
+   * inbound. Cap is generous: real Discord servers rarely have >500
+   * named channels.
    */
+  private static readonly BREADCRUMB_CACHE_CAP = 500;
   private readonly channelCache = new Map<string, DiscordChannelInfo>();
   private readonly guildCache = new Map<string, DiscordGuildInfo>();
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
@@ -1169,10 +1177,16 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     channelId: string,
   ): Promise<DiscordChannelInfo | undefined> {
     const cached = this.channelCache.get(channelId);
-    if (cached) return cached;
+    if (cached) {
+      // LRU touch: re-insert to move to end so eviction picks the
+      // genuinely-coldest entry, not the one we just used.
+      this.channelCache.delete(channelId);
+      this.channelCache.set(channelId, cached);
+      return cached;
+    }
     try {
       const fresh = await this.api.getChannel(channelId);
-      this.channelCache.set(channelId, fresh);
+      this.setLruEntry(this.channelCache, channelId, fresh);
       return fresh;
     } catch {
       return undefined;
@@ -1183,13 +1197,28 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     guildId: string,
   ): Promise<DiscordGuildInfo | undefined> {
     const cached = this.guildCache.get(guildId);
-    if (cached) return cached;
+    if (cached) {
+      this.guildCache.delete(guildId);
+      this.guildCache.set(guildId, cached);
+      return cached;
+    }
     try {
       const fresh = await this.api.getGuild(guildId);
-      this.guildCache.set(guildId, fresh);
+      this.setLruEntry(this.guildCache, guildId, fresh);
       return fresh;
     } catch {
       return undefined;
+    }
+  }
+
+  private setLruEntry<V>(map: Map<string, V>, key: string, value: V): void {
+    map.set(key, value);
+    while (map.size > DiscordAdapter.BREADCRUMB_CACHE_CAP) {
+      // Map iteration is insertion-ordered; the first key is the
+      // oldest. Bail if the iterator yields nothing (defensive).
+      const oldest = map.keys().next();
+      if (oldest.done) break;
+      map.delete(oldest.value);
     }
   }
 

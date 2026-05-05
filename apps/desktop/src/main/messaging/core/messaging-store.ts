@@ -171,6 +171,32 @@ export class MessagingStore {
     });
   }
 
+  /**
+   * Retire every channel-scoped pending intent on a channel that is
+   * NOT tied to a binding. Mirrors `SqliteMessagingStore.deletePendingIntentsForChannel`
+   * — kept on the file-backed store so controller tests can exercise
+   * the same bind cleanup path.
+   */
+  async deletePendingIntentsForChannel(params: {
+    channel: MessagingChannelRef;
+  }): Promise<string[]> {
+    const channelKey = buildMessagingConversationKey(params.channel);
+    return await this.withData((data) => {
+      const removed: string[] = [];
+      for (const [intentId, intent] of Object.entries(data.pendingIntents)) {
+        if (intent.bindingId) continue;
+        if (
+          intent.channel &&
+          buildMessagingConversationKey(intent.channel) === channelKey
+        ) {
+          delete data.pendingIntents[intentId];
+          removed.push(intentId);
+        }
+      }
+      return removed;
+    });
+  }
+
   async cleanupExpiredPendingIntents(options?: { now?: number }): Promise<string[]> {
     const now = options?.now ?? Date.now();
     return await this.withData((data) => {

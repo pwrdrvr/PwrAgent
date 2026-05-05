@@ -76,6 +76,7 @@ export class MessagingActivityLog {
       actorDisplayName: entry.actorDisplayName,
       summary: entry.summary,
       createdAt,
+      payload: Object.keys(payload).length > 0 ? payload : undefined,
     };
   }
 
@@ -129,12 +130,24 @@ type RawActivityRow = {
 };
 
 function rowToEntry(row: RawActivityRow): MessagingActivityEntry {
+  // The payload column stores `{ backend, ...callerExtras }` as JSON.
+  // We split `backend` out (it's a typed top-level field on the entry)
+  // and surface the remaining keys as the opaque `payload` bag the
+  // renderer's activity detail panel can render.
   let backend: AppServerBackendKind | undefined;
+  let extras: Record<string, unknown> | undefined;
   try {
-    const parsed = JSON.parse(row.payload) as { backend?: AppServerBackendKind };
+    const parsed = JSON.parse(row.payload) as Record<string, unknown> & {
+      backend?: AppServerBackendKind;
+    };
     backend = parsed.backend;
+    const { backend: _ignored, ...rest } = parsed;
+    if (Object.keys(rest).length > 0) {
+      extras = rest;
+    }
   } catch {
-    // Malformed JSON — treat as if there's no backend hint.
+    // Malformed JSON — treat as if there's no backend hint and no
+    // extras. The row still surfaces; only the opaque bag is lost.
   }
   return {
     id: row.id,
@@ -149,5 +162,6 @@ function rowToEntry(row: RawActivityRow): MessagingActivityEntry {
     actorDisplayName: row.actor_display_name ?? undefined,
     summary: row.summary,
     createdAt: row.created_at,
+    payload: extras,
   };
 }

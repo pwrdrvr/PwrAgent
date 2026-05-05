@@ -375,6 +375,25 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private streamRateLimits = new Map<string, TelegramStreamRateLimitState>();
   private streamSurfaces = new Map<string, TelegramDeliveryTarget>();
+  /**
+   * Per-process cache of forum topic names, keyed by
+   * `${chatId}:${messageThreadId}`. Telegram's Bot API does not expose
+   * a "fetch topic name" endpoint — the name only ships on the
+   * `forum_topic_created` and `forum_topic_edited` service messages.
+   * We capture those messages (which we otherwise ignore as service
+   * traffic) so that subsequent regular messages in the same topic
+   * can carry the topic name on their `MessagingChannelRef.title`.
+   * This is what makes external renames-via-Telegram-client propagate
+   * to the desktop chip.
+   *
+   * Bounded LRU (insertion-order Map + eviction at the cap). Cap is
+   * generous — most users have under a few dozen active topics; the
+   * cap protects against long-running sessions in extreme cases.
+   * Worst case on eviction is one extra "Topic" placeholder until the
+   * next `forum_topic_edited` message arrives.
+   */
+  private static readonly TOPIC_NAME_CACHE_CAP = 500;
+  private readonly topicNameCache = new Map<string, string>();
   private readonly options: {
     api?: TelegramBotApi;
     bot?: TelegramBotLike;
@@ -854,6 +873,17 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         message_thread_id: target.messageThreadId,
         name: title,
       });
+      // Pre-populate the topic-name cache with the value we just set.
+      // The gateway will also send a `forum_topic_edited` echo that
+      // would update the cache, but writing here avoids a brief
+      // window where the chip still shows the old name.
+      this.topicNameCache.delete(
+        this.topicCacheKey(target.chatId, target.messageThreadId),
+      );
+      this.topicNameCache.set(
+        this.topicCacheKey(target.chatId, target.messageThreadId),
+        title,
+      );
       return {
         channel: this.channel,
         conversation: {
@@ -898,6 +928,11 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     const serviceMessageReason = telegramServiceMessageReason(message);
     if (serviceMessageReason || this.isOwnBotUser(message.from)) {
+      // Forum topic create/edit service messages carry the topic name
+      // — capture it before the early-return so the next regular
+      // message in that topic can populate `channel.conversation.title`
+      // for the binding chip. Telegram has no other API to fetch this.
+      this.captureForumTopicNameIfPresent(message);
       this.options.logger?.debug(
         `telegram inbound ignored update=${updateId} message=${message.message_id} reason=${serviceMessageReason ?? "own_bot"} chat=${message.chat.id}`,
       );
@@ -1581,19 +1616,23 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     if (message.message_thread_id) {
       // Topic-bound messages: title slot belongs to the topic itself.
-      // The supergroup name is the parent breadcrumb. Telegram bot API
-      // doesn't ship topic names on every message — when missing,
-      // chip falls back to "SG: <supergroup>" via the renderer-side
-      // formatter (no breadcrumb after the slash).
+      // Look up the cached topic name (populated from
+      // `forum_topic_created` / `forum_topic_edited` service messages
+      // — see `captureForumTopicNameIfPresent`). When the cache misses
+      // (bot joined the chat after topic creation, no rename has
+      // happened since), title stays undefined and the renderer falls
+      // back to a literal "Topic" placeholder.
+      const topicTitle = this.lookupTopicName(
+        message.chat.id,
+        message.message_thread_id,
+      );
       return {
         channel: this.channel,
         conversation: {
           id: String(message.message_thread_id),
           kind: "topic",
           parentId: String(message.chat.id),
-          // TODO: fetch + cache forum topic title via getForumTopicIcon
-          //       so chips can render "SG: PwrDrvr/General". For now
-          //       leave the topic node title undefined.
+          title: topicTitle,
           parentTitle: chatTitle,
         },
       };
@@ -1635,6 +1674,60 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         messageThreadId: message.message_thread_id ?? null,
       },
     };
+  }
+
+  /**
+   * Cache the forum topic name when a `forum_topic_created` or
+   * `forum_topic_edited` service message arrives. Both messages carry
+   * the topic id in `message_thread_id` and the new name on the
+   * service-message payload. `forum_topic_edited.name` is optional
+   * because rename messages can also change just the icon — we skip
+   * those (no name → nothing to cache).
+   */
+  private captureForumTopicNameIfPresent(message: TelegramMessage): void {
+    if (!message.message_thread_id) return;
+    const name =
+      message.forum_topic_created?.name ??
+      message.forum_topic_edited?.name;
+    if (!name) return;
+    const key = this.topicCacheKey(message.chat.id, message.message_thread_id);
+    // LRU: re-insert on update so the cache picks the genuinely-coldest
+    // entry on eviction, not the one we just refreshed.
+    this.topicNameCache.delete(key);
+    this.topicNameCache.set(key, name);
+    while (this.topicNameCache.size > TelegramAdapter.TOPIC_NAME_CACHE_CAP) {
+      const oldest = this.topicNameCache.keys().next();
+      if (oldest.done) break;
+      this.topicNameCache.delete(oldest.value);
+    }
+  }
+
+  private lookupTopicName(
+    chatId: number | string,
+    messageThreadId: number,
+  ): string | undefined {
+    const key = this.topicCacheKey(chatId, messageThreadId);
+    const cached = this.topicNameCache.get(key);
+    if (cached !== undefined) {
+      // LRU touch — re-insert at the back so frequently-active topics
+      // aren't evicted ahead of cold ones.
+      this.topicNameCache.delete(key);
+      this.topicNameCache.set(key, cached);
+    }
+    return cached;
+  }
+
+  /**
+   * Cache key is platform-agnostic stringification of chat id +
+   * topic id. The Telegram adapter sometimes hands us numeric chat
+   * ids (gateway path) and sometimes string ids (HTTP target path);
+   * both stringify to the same key.
+   */
+  private topicCacheKey(
+    chatId: number | string,
+    messageThreadId: number,
+  ): string {
+    return `${chatId}:${messageThreadId}`;
   }
 
   private messageReceivedAt(message: TelegramMessage): number {

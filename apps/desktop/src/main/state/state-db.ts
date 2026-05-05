@@ -151,20 +151,29 @@ export class StateDb {
     db.pragma("busy_timeout = 5000");
     db.pragma("foreign_keys = ON");
 
+    // Migrations are wrapped in transactions so a partial failure
+    // (mid-DDL crash, transient disk error) rolls back cleanly and the
+    // next launch retries from the previous user_version. Without the
+    // transaction the table could exist with the old user_version, and
+    // the next launch would throw "table already exists" on retry.
     const userVersion = db.pragma("user_version", { simple: true }) as number;
     if (userVersion === 0) {
       db.pragma("auto_vacuum = INCREMENTAL");
-      db.exec(SCHEMA_V1);
-      if (options?.profileName) {
-        db.prepare("UPDATE meta SET value = ? WHERE key = 'profile_name'").run(
-          options.profileName,
-        );
-      }
-      db.pragma("user_version = 1");
+      db.transaction(() => {
+        db.exec(SCHEMA_V1);
+        if (options?.profileName) {
+          db.prepare("UPDATE meta SET value = ? WHERE key = 'profile_name'").run(
+            options.profileName,
+          );
+        }
+        db.pragma("user_version = 1");
+      })();
     }
     if ((db.pragma("user_version", { simple: true }) as number) < 2) {
-      db.exec(SCHEMA_V2);
-      db.pragma("user_version = 2");
+      db.transaction(() => {
+        db.exec(SCHEMA_V2);
+        db.pragma("user_version = 2");
+      })();
     }
 
     return new StateDb(db);
@@ -212,27 +221,28 @@ export class StateDb {
         )
         .run(now - REVOKED_BINDINGS_RETENTION_MS);
       // Per-platform FIFO eviction for the activity log: keep the
-      // newest N per platform; delete the rest. Iterate the (cheap)
-      // distinct-platform set rather than wrestling with sqlite
-      // correlated-subquery semantics.
-      const platforms = this.db
+      // newest N per platform; delete the rest. A single windowed
+      // DELETE handles every platform at once — the inner subquery
+      // computes a per-platform rank by id-desc, and we delete rows
+      // beyond the cap. Cleaner than the previous distinct-platforms
+      // loop and runs in one statement.
+      this.db
         .prepare(
-          "SELECT DISTINCT platform FROM messaging_activity_log",
-        )
-        .all() as { platform: string }[];
-      const evict = this.db.prepare(
-        `DELETE FROM messaging_activity_log
-         WHERE platform = ?
-           AND id NOT IN (
-             SELECT id FROM messaging_activity_log
-             WHERE platform = ?
-             ORDER BY id DESC
-             LIMIT ?
+          `DELETE FROM messaging_activity_log
+           WHERE id IN (
+             SELECT id FROM (
+               SELECT
+                 id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY platform
+                   ORDER BY id DESC
+                 ) AS rank
+               FROM messaging_activity_log
+             )
+             WHERE rank > ?
            )`,
-      );
-      for (const { platform } of platforms) {
-        evict.run(platform, platform, MESSAGING_ACTIVITY_LOG_PER_PLATFORM_CAP);
-      }
+        )
+        .run(MESSAGING_ACTIVITY_LOG_PER_PLATFORM_CAP);
     });
     cleanup();
     this.db.pragma("incremental_vacuum");

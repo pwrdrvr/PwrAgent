@@ -122,6 +122,14 @@ export type MessagingActivityEntry = {
   actorDisplayName?: string;
   summary: string;
   createdAt: number;
+  /**
+   * Free-form bag of fields the row remembers without growing dedicated
+   * columns. Renderer may show these in the activity detail panel;
+   * consumers must treat the shape as opaque (current keys include
+   * `eventId`, `eventKind`, `conversationKind`, `actorUsername`,
+   * `actorIsBot`, plus any caller-provided extras).
+   */
+  payload?: Record<string, unknown>;
 };
 
 export type ListMessagingActivityRequest = {
