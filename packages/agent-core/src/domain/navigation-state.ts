@@ -24,19 +24,20 @@ function isHandoffDirectory(directory: LinkedDirectorySummary): boolean {
 function dedupeLinkedDirectories(
   directories: LinkedDirectorySummary[],
 ): LinkedDirectorySummary[] {
+  const normalizedDirectories = directories.map(normalizeLinkedDirectoryKind);
   let overlayWorkspace: LinkedDirectorySummary | undefined;
-  for (const directory of directories) {
+  for (const directory of normalizedDirectories) {
     if (isHandoffDirectory(directory)) {
       overlayWorkspace = directory;
     }
   }
   const filteredDirectories = overlayWorkspace
-    ? directories.filter(
+    ? normalizedDirectories.filter(
         (directory) =>
           directory.id === overlayWorkspace.id ||
           (directory.kind !== "local" && directory.kind !== "worktree"),
       )
-    : directories;
+    : normalizedDirectories;
   const byId = new Map<string, LinkedDirectorySummary>();
 
   for (const directory of filteredDirectories) {
@@ -48,8 +49,21 @@ function dedupeLinkedDirectories(
   );
 }
 
+function normalizeLinkedDirectoryKind(
+  directory: LinkedDirectorySummary,
+): LinkedDirectorySummary {
+  if (directory.kind === "local" && directory.worktreePath?.trim()) {
+    return {
+      ...directory,
+      kind: "worktree",
+    };
+  }
+
+  return directory;
+}
+
 function hasHandoffWorkspace(directories: LinkedDirectorySummary[]): boolean {
-  return directories.some(isHandoffDirectory);
+  return directories.map(normalizeLinkedDirectoryKind).some(isHandoffDirectory);
 }
 
 export function materializeNavigationThreads(params: {

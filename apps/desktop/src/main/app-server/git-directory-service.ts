@@ -400,7 +400,7 @@ export class GitDirectoryService {
       "branchName" | "directoryKind" | "directoryLabel" | "directoryPath" | "workMode"
     > &
       Partial<Pick<NavigationLaunchpadDraft, "backend">>,
-  ): Promise<{ cwd?: string; workMode: LaunchpadWorkMode }> {
+  ): Promise<{ cwd?: string; repositoryPath?: string; workMode: LaunchpadWorkMode }> {
     if (launchpad.directoryKind === "workspace") {
       return {
         cwd: undefined,
@@ -440,6 +440,7 @@ export class GitDirectoryService {
 
     return {
       cwd: worktreePath,
+      repositoryPath: repoRoot,
       workMode: "worktree",
     };
   }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { buildDirectorySummaries } from "../domain/directory-navigation";
+import { materializeNavigationThreads } from "../domain/navigation-state";
 
 function buildThread(
   overrides: Partial<NavigationThreadSummary> = {},
@@ -431,6 +432,39 @@ describe("buildDirectorySummaries", () => {
         path: "/repo",
         threadKeys: ["codex:thread-1"],
       }),
+    ]);
+  });
+});
+
+describe("materializeNavigationThreads", () => {
+  it("normalizes linked directories so a worktree path cannot render as local", () => {
+    const [thread] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {},
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [
+        buildThread({
+          linkedDirectories: [
+            {
+              id: "thread-worktree",
+              label: "PwrAgent",
+              path: "/Users/huntharo/github/PwrAgent",
+              worktreePath: "/Users/huntharo/.codex/worktrees/morkpkco/PwrAgent",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(thread?.linkedDirectories).toEqual([
+      {
+        id: "thread-worktree",
+        label: "PwrAgent",
+        path: "/Users/huntharo/github/PwrAgent",
+        worktreePath: "/Users/huntharo/.codex/worktrees/morkpkco/PwrAgent",
+        kind: "worktree",
+      },
     ]);
   });
 });
