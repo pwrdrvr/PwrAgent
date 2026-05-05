@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface";
 import type {
   MessagingAdapter,
 } from "../messaging/core/messaging-adapter";
@@ -10,6 +11,7 @@ const bytes = (value: string): Uint8Array => new TextEncoder().encode(value);
 
 function createAdapter(dataByName: Record<string, Uint8Array>): MessagingAdapter {
   return {
+    capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
     deliver: vi.fn(),
     downloadAttachment: vi.fn(async ({ attachment }) => {
       const data = dataByName[attachment.name] ?? new Uint8Array();

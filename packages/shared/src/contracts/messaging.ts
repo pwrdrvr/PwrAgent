@@ -192,6 +192,8 @@ export type MessagingSurfaceAction = {
   value?: MessagingJsonValue;
   disabled?: boolean;
   fallbackText?: string;
+  /** Lower number = higher priority. Actions without priority are dropped first. */
+  priority?: number;
 };
 
 export type MessagingChoice = MessagingSurfaceAction & {
@@ -599,16 +601,61 @@ export type MessagingAttachmentDownloadResult = {
   sizeBytes: number;
 };
 
+export type MessagingActionCapabilities = {
+  maxActions: number;
+  maxActionsPerRow: number;
+  maxRows?: number;
+  maxLabelLength: number;
+  supportsStyles: boolean;
+  supportsDisabled: boolean;
+  supportsLayoutHints: boolean;
+  maxCallbackPayloadBytes: number;
+};
+
+export type MessagingTextEncoding = "utf8-bytes" | "utf16-units" | "characters";
+
+export type MessagingMarkdownDialect =
+  | "plain"
+  | "html"
+  | "slack-mrkdwn"
+  | "discord-markdown"
+  | "markdown";
+
+export type MessagingTextCapabilities = {
+  maxLength: number;
+  encoding: MessagingTextEncoding;
+  markdownDialect: MessagingMarkdownDialect;
+  supportsCodeBlocks: boolean;
+  supportsBold: boolean;
+  supportsItalic: boolean;
+  supportsLinks: boolean;
+  supportsInlineCode: boolean;
+  maxCaptionLength?: number;
+  supportsMessageEdit: boolean;
+};
+
+export type MessagingAttachmentCapabilities = {
+  maxAttachmentCount?: number;
+  maxDownloadBytes?: number;
+  supportsDownload: boolean;
+};
+
+export type MessagingOutboundAttachmentCapabilities = {
+  maxUploadBytes?: number;
+  supportsFileUpload: boolean;
+  supportsImageUpload: boolean;
+  supportsRemoteImageUrl: boolean;
+};
+
+export type MessagingCapabilityProfile = {
+  actions: MessagingActionCapabilities | null;
+  text: MessagingTextCapabilities;
+  inboundAttachments?: MessagingAttachmentCapabilities;
+  outboundAttachments?: MessagingOutboundAttachmentCapabilities;
+};
+
+/** @deprecated Use MessagingCapabilityProfile instead. */
 export type MessagingAdapterCapabilities = {
-  inboundAttachments?: {
-    maxAttachmentCount?: number;
-    maxDownloadBytes?: number;
-    supportsDownload: boolean;
-  };
-  outboundAttachments?: {
-    maxUploadBytes?: number;
-    supportsFileUpload: boolean;
-    supportsImageUpload: boolean;
-    supportsRemoteImageUrl: boolean;
-  };
+  inboundAttachments?: MessagingAttachmentCapabilities;
+  outboundAttachments?: MessagingOutboundAttachmentCapabilities;
 };

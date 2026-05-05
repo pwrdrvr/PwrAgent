@@ -7,11 +7,12 @@ import type {
   NavigationSnapshot,
   StartTurnRequest,
 } from "@pwragent/shared";
-import type {
-  MessagingChannelKind,
-  MessagingDeliveryResult,
-  MessagingInboundEvent,
-  MessagingSurfaceIntent,
+import {
+  PERMISSIVE_CAPABILITY_PROFILE,
+  type MessagingChannelKind,
+  type MessagingDeliveryResult,
+  type MessagingInboundEvent,
+  type MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import type {
@@ -705,6 +706,7 @@ function createAdapter(
   const delivered: MessagingSurfaceIntent[] = [];
   const adapter = {
     authorizedActorIds: ["user-1"],
+    capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
     channel,
     delivered,
     deliver: vi.fn(async (intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> => {

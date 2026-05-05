@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { MessagingSurfaceIntent } from "@pwragent/messaging-interface";
+import { PERMISSIVE_CAPABILITY_PROFILE, type MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import type { MessagingStore } from "../messaging/core/messaging-store";
 import type { DesktopMessagingConfig } from "../messaging/messaging-config";
 import type {
@@ -139,6 +139,7 @@ function createRegistry(
 function createAdapter(channel: "telegram" | "discord"): DesktopMessagingAdapter {
   return {
     authorizedActorIds: [`${channel}-user`],
+    capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
     channel,
     deliver: vi.fn(async (intent: MessagingSurfaceIntent) => ({
       channel,

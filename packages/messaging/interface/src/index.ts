@@ -215,6 +215,8 @@ export type MessagingSurfaceAction = {
   value?: MessagingJsonValue;
   disabled?: boolean;
   fallbackText?: string;
+  /** Lower number = higher priority. Actions without priority are dropped first. */
+  priority?: number;
 };
 
 export function layoutMessagingActionRows<T>(
@@ -751,18 +753,154 @@ export type MessagingAttachmentDownloadResult = {
   sizeBytes: number;
 };
 
+export type MessagingActionCapabilities = {
+  maxActions: number;
+  maxActionsPerRow: number;
+  maxRows?: number;
+  maxLabelLength: number;
+  supportsStyles: boolean;
+  supportsDisabled: boolean;
+  supportsLayoutHints: boolean;
+  maxCallbackPayloadBytes: number;
+};
+
+export type MessagingTextEncoding = "utf8-bytes" | "utf16-units" | "characters";
+
+export type MessagingMarkdownDialect =
+  | "plain"
+  | "html"
+  | "slack-mrkdwn"
+  | "discord-markdown"
+  | "markdown";
+
+export type MessagingTextCapabilities = {
+  maxLength: number;
+  encoding: MessagingTextEncoding;
+  markdownDialect: MessagingMarkdownDialect;
+  supportsCodeBlocks: boolean;
+  supportsBold: boolean;
+  supportsItalic: boolean;
+  supportsLinks: boolean;
+  supportsInlineCode: boolean;
+  maxCaptionLength?: number;
+  supportsMessageEdit: boolean;
+};
+
+export type MessagingAttachmentCapabilities = {
+  maxAttachmentCount?: number;
+  maxDownloadBytes?: number;
+  supportsDownload: boolean;
+};
+
+export type MessagingOutboundAttachmentCapabilities = {
+  maxUploadBytes?: number;
+  supportsFileUpload: boolean;
+  supportsImageUpload: boolean;
+  supportsRemoteImageUrl: boolean;
+};
+
+export type MessagingCapabilityProfile = {
+  actions: MessagingActionCapabilities | null;
+  text: MessagingTextCapabilities;
+  inboundAttachments?: MessagingAttachmentCapabilities;
+  outboundAttachments?: MessagingOutboundAttachmentCapabilities;
+};
+
+export type MessagingCapabilitySurfaceKind =
+  | "picker"
+  | "status"
+  | "approval"
+  | "questionnaire"
+  | "select"
+  | "confirmation";
+
+const CAPABILITY_MIN_ACTIONS: Record<MessagingCapabilitySurfaceKind, number> = {
+  picker: 2,
+  status: 3,
+  approval: 2,
+  questionnaire: 2,
+  select: 2,
+  confirmation: 2,
+};
+
+const DEFAULT_TEXT_MODE_PAGE_SIZE = 20;
+const DEFAULT_MAX_PAGE_SIZE = 8;
+
+export function capabilityProfilePageSize(
+  profile: MessagingCapabilityProfile,
+  navActionCount: number,
+  maxPageSize?: number,
+): number {
+  if (profile.actions === null) {
+    return DEFAULT_TEXT_MODE_PAGE_SIZE;
+  }
+  const available = profile.actions.maxActions - navActionCount;
+  const cap = maxPageSize ?? DEFAULT_MAX_PAGE_SIZE;
+  return Math.max(1, Math.min(available, cap));
+}
+
+export function capabilityProfileMinActions(
+  surfaceKind: MessagingCapabilitySurfaceKind,
+): number {
+  return CAPABILITY_MIN_ACTIONS[surfaceKind];
+}
+
+export function capabilityProfileSupportsActions(
+  profile: MessagingCapabilityProfile,
+  surfaceKind: MessagingCapabilitySurfaceKind,
+): boolean {
+  if (profile.actions === null) {
+    return false;
+  }
+  return profile.actions.maxActions >= CAPABILITY_MIN_ACTIONS[surfaceKind];
+}
+
+export function truncateActionsByPriority(
+  actions: MessagingSurfaceAction[],
+  maxActions: number,
+): MessagingSurfaceAction[] {
+  if (actions.length <= maxActions) {
+    return actions;
+  }
+  const sorted = [...actions].sort((a, b) => {
+    const pa = a.priority ?? Number.MAX_SAFE_INTEGER;
+    const pb = b.priority ?? Number.MAX_SAFE_INTEGER;
+    if (pa !== pb) {
+      return pa - pb;
+    }
+    return actions.indexOf(a) - actions.indexOf(b);
+  });
+  const kept = new Set(sorted.slice(0, maxActions));
+  return actions.filter((action) => kept.has(action));
+}
+
+export const PERMISSIVE_CAPABILITY_PROFILE: MessagingCapabilityProfile = {
+  actions: {
+    maxActions: 100,
+    maxActionsPerRow: 8,
+    maxLabelLength: 256,
+    supportsStyles: true,
+    supportsDisabled: true,
+    supportsLayoutHints: true,
+    maxCallbackPayloadBytes: 256,
+  },
+  text: {
+    maxLength: 16384,
+    encoding: "characters",
+    markdownDialect: "markdown",
+    supportsCodeBlocks: true,
+    supportsBold: true,
+    supportsItalic: true,
+    supportsLinks: true,
+    supportsInlineCode: true,
+    supportsMessageEdit: true,
+  },
+};
+
+/** @deprecated Use MessagingCapabilityProfile instead. */
 export type MessagingAdapterCapabilities = {
-  inboundAttachments?: {
-    maxAttachmentCount?: number;
-    maxDownloadBytes?: number;
-    supportsDownload: boolean;
-  };
-  outboundAttachments?: {
-    maxUploadBytes?: number;
-    supportsFileUpload: boolean;
-    supportsImageUpload: boolean;
-    supportsRemoteImageUrl: boolean;
-  };
+  inboundAttachments?: MessagingAttachmentCapabilities;
+  outboundAttachments?: MessagingOutboundAttachmentCapabilities;
 };
 
 export type MessagingCallbackHandleStore = {
