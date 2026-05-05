@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { ThreadRow } from "./ThreadRow";
 
@@ -7,11 +7,11 @@ type InboxListProps = {
   selectedThreadKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
-  prsByThreadKey?: Record<string, PrSummary[]>;
   onOpenThreadContextMenu: (
     thread: NavigationThreadSummary,
     position: { x: number; y: number }
   ) => void;
+  onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onSetReaction?: (
     thread: NavigationThreadSummary,
@@ -41,8 +41,8 @@ export function InboxList(props: InboxListProps) {
             selectedThreadKey={props.selectedThreadKey}
             thinkingThreadKeys={props.thinkingThreadKeys}
             thread={thread}
-            prs={props.prsByThreadKey?.[key]}
             onOpenContextMenu={props.onOpenThreadContextMenu}
+            onPrefetchPullRequests={props.onPrefetchPullRequests}
             onSelectThread={props.onSelectThread}
             onSetReaction={props.onSetReaction}
           />

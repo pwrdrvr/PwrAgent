@@ -11,7 +11,7 @@ import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
-import { usePullRequestsForThreads } from "./features/pr-status/usePullRequestsForThreads";
+import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { useThreadSkills } from "./lib/useThreadSkills";
 
@@ -53,9 +53,9 @@ function DesktopAppShell(props: {
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
   const backendSummaries = useBackendSummaries(desktopApi);
   const navigation = useThreadNavigation(desktopApi);
-  const pullRequests = usePullRequestsForThreads({
+  const pullRequests = usePullRequestRefresh({
     desktopApi,
-    threads: navigation.threads,
+    selectedThread: navigation.selectedThread,
   });
   const composerDraftStore = useComposerDraftStore();
   const session = useThreadSessionState({
@@ -128,7 +128,7 @@ function DesktopAppShell(props: {
         onArchiveThread={navigation.archiveThread}
         onRenameThread={navigation.renameThread}
         onSetThreadReaction={navigation.setThreadReaction}
-        prsByThreadKey={pullRequests.prsByThreadKey}
+        onPrefetchPullRequests={pullRequests.prefetch}
         onResizeStart={startSidebarResize}
         onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidth + delta)}
       />

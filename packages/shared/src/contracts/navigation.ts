@@ -185,17 +185,53 @@ export type SetThreadReactionResponse = {
   reactions: string[];
 };
 
-export type GetThreadPullRequestsRequest = {
+export type RefreshThreadPullRequestsRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /** Branch the renderer believes the thread is on. */
+  branch: string;
+  /**
+   * Resolved cwds to ask `gh` about. The renderer pre-resolves
+   * worktree-vs-local paths so the main process doesn't need to
+   * re-walk the snapshot.
+   */
+  directoryPaths: string[];
 };
 
-export type GetThreadPullRequestsResponse = {
+export type RefreshThreadPullRequestsResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   prs: PrSummary[];
   /** True when the host doesn't have `gh` installed; degrade silently. */
   ghAvailable: boolean;
+  /**
+   * True when main short-circuited the gh fetch because at least one
+   * PR for this thread is already in a terminal state (`merged` or
+   * `closed`). Returned PRs are the persisted overlay snapshot.
+   */
+  shortCircuited?: boolean;
+};
+
+export type GhStatus = {
+  /** `gh` binary present on PATH. */
+  installed: boolean;
+  /** Authenticated against github.com. */
+  loggedIn: boolean;
+  /** Login name parsed from `gh auth status`. */
+  account?: string;
+  /** OAuth/PAT scopes. */
+  scopes: string[];
+  /** True when scopes include `repo` (or `public_repo` for restricted). */
+  hasRepoScope: boolean;
+  /** Raw stderr/stdout from `gh auth status`, for displaying in the UI. */
+  rawOutput?: string;
+  /** Why we returned this result, for display in the UI. */
+  reason?: string;
+};
+
+export type GetGhStatusRequest = {
+  /** When true, invalidate the cached `gh --version` probe and re-check. */
+  recheck?: boolean;
 };
 
 export type ThreadOverlayState = {
@@ -221,6 +257,15 @@ export type ThreadOverlayState = {
    * (e.g., "needs follow-up"), not multi-user voting.
    */
   reactions?: string[];
+  /**
+   * GitHub pull requests detected for this thread, persisted across
+   * restarts so chips appear instantly on relaunch and so we can
+   * short-circuit re-fetching once a PR reaches a terminal state
+   * (`merged` / `closed`).
+   */
+  prs?: PrSummary[];
+  /** Wall-clock ms when `prs` was last refreshed via gh. */
+  prsFetchedAt?: number;
 };
 
 export type ThreadBranchDriftPair = {
