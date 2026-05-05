@@ -216,6 +216,55 @@ export class SqliteMessagingStore {
       .run(id);
   }
 
+  /**
+   * Retire every channel-scoped pending intent on a channel that is
+   * NOT tied to a specific binding. Used by `bindChannelToThread` to
+   * clean up the resume browser's pending intent (and any other
+   * pre-binding picker intent) the moment a successful bind lands —
+   * otherwise the next inbound text on that channel matches the stale
+   * picker intent and the bot bounces "Choose an option" instead of
+   * routing to the new binding.
+   *
+   * Binding-scoped pending intents (binding_id != '') are kept — they
+   * belong to the binding's status surface, approval flows, etc.
+   */
+  async deletePendingIntentsForChannel(params: {
+    channel: MessagingChannelRef;
+  }): Promise<string[]> {
+    const channelKey = buildMessagingConversationKey(params.channel);
+    // Only consider channel-only intents (binding_id stored as ''). The
+    // matching channel ref is JSON-encoded inside the payload, so we
+    // parse and compare in JS rather than wrestle with sqlite JSON
+    // extraction. The pending_intents table is small (capped TTL,
+    // pruned by GC) so this is cheap.
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT intent_id, payload FROM pending_intents WHERE binding_id = ''",
+      )
+      .all() as { intent_id: string; payload: string }[];
+    const removed: string[] = [];
+    for (const row of rows) {
+      try {
+        const record = JSON.parse(row.payload) as MessagingPendingIntentRecord;
+        if (
+          record.channel &&
+          buildMessagingConversationKey(record.channel) === channelKey
+        ) {
+          removed.push(row.intent_id);
+        }
+      } catch {
+        // Malformed payload — skip; the row will be cleaned up by GC
+        // on its expiry.
+      }
+    }
+    if (removed.length === 0) return [];
+    const placeholders = removed.map(() => "?").join(",");
+    this.stateDb.raw
+      .prepare(`DELETE FROM pending_intents WHERE intent_id IN (${placeholders})`)
+      .run(...removed);
+    return removed;
+  }
+
   async cleanupExpiredPendingIntents(options?: {
     now?: number;
   }): Promise<string[]> {
@@ -591,6 +640,7 @@ export type MessagingStoreLike = Pick<
   | "findActivePendingIntentForChannel"
   | "findActivePendingIntentsForRequest"
   | "deletePendingIntent"
+  | "deletePendingIntentsForChannel"
   | "cleanupExpiredPendingIntents"
   | "upsertBrowseSession"
   | "getBrowseSession"

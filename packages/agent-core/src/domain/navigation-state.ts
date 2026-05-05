@@ -227,10 +227,19 @@ export function buildNavigationSnapshotHash(params: {
         state: pr.state,
         url: pr.url,
       })),
+      // Include the breadcrumb fields (parentTitle / ancestorTitle) in
+      // the hash so the controller's `refreshBindingFromInbound`
+      // self-heal — which fills these in lazily when the first inbound
+      // event after a bind carries fresher ancestry — actually
+      // propagates to the renderer. Without them the next snapshot tick
+      // computes an identical hash, marks it unchanged, and the chip
+      // tooltip stays on the stale value (issue #191).
       messagingBindings: (thread.messagingBindings ?? []).map((binding) => ({
         bindingId: binding.bindingId,
         platform: binding.platform,
         conversationTitle: binding.conversationTitle ?? null,
+        parentTitle: binding.parentTitle ?? null,
+        ancestorTitle: binding.ancestorTitle ?? null,
       })),
     })),
     directories: (params.directories ?? []).map((directory) => ({

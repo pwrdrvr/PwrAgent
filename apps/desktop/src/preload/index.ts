@@ -117,6 +117,7 @@ import {
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
+  MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
   MESSAGING_LIST_ACTIVITY_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
@@ -374,6 +375,18 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL, listener);
+    };
+  },
+  onMessagingBindingsChanged: (
+    callback: (event: { at: number }) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: { at: number },
+    ) => callback(payload);
+    ipcRenderer.on(MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL, listener);
     };
   },
   platform: process.platform,

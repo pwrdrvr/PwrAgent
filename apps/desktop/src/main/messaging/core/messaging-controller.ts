@@ -193,6 +193,16 @@ export type MessagingControllerOptions = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   store: MessagingStoreLike;
   toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
+  /**
+   * Notification hook invoked after any binding mutation the
+   * controller performs (create, conversation-metadata refresh,
+   * conversation-title sync, detach). The runtime supplies a callback
+   * that broadcasts a renderer-bound IPC event so the UI re-fetches the
+   * navigation snapshot and the binding chip reflects the new state
+   * immediately. Best-effort — exceptions thrown by the listener must
+   * not abort the controller's mutation flow.
+   */
+  onBindingChanged?: () => void;
 };
 
 export class MessagingController {
@@ -254,7 +264,19 @@ export class MessagingController {
     // = guild for Discord threads). Merge any new fields into the
     // stored binding so the renderer's binding chip can show full
     // breadcrumbs without waiting for an explicit refresh.
-    await this.refreshBindingFromInbound(event);
+    //
+    // Best-effort: a sqlite hiccup here must not abort the inbound kind
+    // dispatch below — the binding refresh is observability/UX, not the
+    // source of truth for routing. Log and continue.
+    try {
+      await this.refreshBindingFromInbound(event);
+    } catch (error) {
+      this.logger.debug?.("messaging binding refresh failed", {
+        eventId: event.id,
+        platform: event.channel.channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     if (event.kind === "command") {
       await this.handleCommand(event);
@@ -500,16 +522,30 @@ export class MessagingController {
     if (!binding) return;
     const stored = binding.channel.conversation;
     const incoming = event.channel.conversation;
-    // Only fields where the incoming event is strictly more informative
-    // than what's stored. We never overwrite a non-empty stored field
-    // (the adapter that originally created the binding might have set
-    // a more specific title than what's on a passing message — e.g.
-    // bot-created topic name set via setConversationTitle).
+    // Incoming wins when present. Adapters fetch fresher metadata
+    // than we stored at bind time:
+    //   - Discord resolves channel/parent/guild names via REST every
+    //     inbound (bounded LRU cache), so a server or channel rename
+    //     reaches us on the next message.
+    //   - Telegram caches forum-topic names from `forum_topic_created`
+    //     and `forum_topic_edited` service messages, so renames done
+    //     in the Telegram client propagate to subsequent inbound
+    //     messages.
+    // When `incoming` doesn't carry a field (e.g. a regular Telegram
+    // topic message that doesn't ship the topic name and the cache
+    // missed), we fall back to `stored` so we never lose data we
+    // already have.
+    //
+    // Loop safety: the `if (!changed)` guard below means an inbound
+    // whose values match what's stored produces no write and no
+    // broadcast — so the gateway echo of our own `editForumTopic`
+    // call (which carries the same name we just wrote in
+    // `syncConversationName`) is a no-op, not a refresh storm.
     const merged = {
       ...stored,
-      title: stored.title ?? incoming.title,
-      parentTitle: stored.parentTitle ?? incoming.parentTitle,
-      ancestorTitle: stored.ancestorTitle ?? incoming.ancestorTitle,
+      title: incoming.title ?? stored.title,
+      parentTitle: incoming.parentTitle ?? stored.parentTitle,
+      ancestorTitle: incoming.ancestorTitle ?? stored.ancestorTitle,
     };
     const changed =
       merged.title !== stored.title
@@ -521,6 +557,9 @@ export class MessagingController {
       channel: { ...binding.channel, conversation: merged },
       updatedAt: this.now(),
     });
+    // The chip now has fresher breadcrumbs in the store; nudge the
+    // renderer to refetch so the tooltip / label reflect them.
+    this.notifyBindingChanged("refresh-from-inbound");
   }
 
   private async handleCommand(event: MessagingInboundCommandEvent): Promise<void> {
@@ -2726,6 +2765,9 @@ export class MessagingController {
       },
       updatedAt: this.now(),
     });
+    // Title changed — make the chip's label/tooltip pick up the new
+    // value without waiting for the next backend tick.
+    this.notifyBindingChanged("sync-conversation-name");
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("status-sync-name-confirmed"),
@@ -2832,6 +2874,7 @@ export class MessagingController {
       bindingId: binding.id,
       revokedAt: this.now(),
     });
+    this.notifyBindingChanged("detach");
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("detached"),
@@ -3126,6 +3169,23 @@ export class MessagingController {
     );
   }
 
+  /**
+   * Best-effort fan-out to the runtime's bindings-changed listener.
+   * Wrapped so a misbehaving listener (e.g. closed BrowserWindow) can
+   * never abort the mutation that produced the event.
+   */
+  private notifyBindingChanged(reason: string): void {
+    if (!this.options.onBindingChanged) return;
+    try {
+      this.options.onBindingChanged();
+    } catch (error) {
+      this.logger.debug?.("messaging onBindingChanged listener threw", {
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private async bindChannelToThread(
     event: MessagingInboundCallbackEvent,
     target: { backend: AppServerBackendKind; threadId: ThreadIdentifier },
@@ -3142,7 +3202,50 @@ export class MessagingController {
       updatedAt: now,
       displayName: event.actor.displayName ?? event.actor.username,
     };
-    return await this.options.store.upsertBinding(binding);
+    const upserted = await this.options.store.upsertBinding(binding);
+    // Retire any channel-scoped pending intents that pre-date this
+    // bind. Without this, the resume browser's pending intent (and any
+    // other pre-binding picker intent) survives the bind, and the next
+    // text inbound on this channel matches the stale picker — making
+    // the bot bounce "Choose an option" instead of routing to the new
+    // binding. Best-effort: log and continue if the cleanup fails so
+    // the bind itself still succeeds (fresh binding is the source of
+    // truth; stale intents will eventually be evicted by TTL GC).
+    //
+    // Not transactional with `upsertBinding` on purpose: the store
+    // API doesn't expose a transaction boundary for cross-row work,
+    // and adding one would push transaction plumbing into the
+    // messaging interface — over-architecture for a recovery window
+    // measured in minutes. If the process crashes between these two
+    // writes, the next bind on the same channel re-runs the cleanup,
+    // and the TTL GC catches anything missed within 15 minutes.
+    try {
+      const removed = await this.options.store.deletePendingIntentsForChannel({
+        channel: event.channel,
+      });
+      if (removed.length > 0) {
+        this.logger.debug?.("messaging retired channel pending intents on bind", {
+          bindingId: upserted.id,
+          channel: event.channel.channel,
+          removedCount: removed.length,
+        });
+      }
+    } catch (error) {
+      this.logger.debug?.(
+        "messaging channel pending-intent cleanup failed on bind",
+        {
+          bindingId: upserted.id,
+          channel: event.channel.channel,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
+    }
+    // Renderer's binding chip is fed by the navigation snapshot. The
+    // snapshot only refetches on backend events — and binding creation
+    // doesn't emit one. Fan out a bindings-changed notification so the
+    // UI picks up the new chip immediately (issue #191).
+    this.notifyBindingChanged("bind");
+    return upserted;
   }
 
   private intentForPendingRequest(
@@ -3262,6 +3365,7 @@ export class MessagingController {
         bindingId: binding.id,
         revokedAt: this.now(),
       });
+      this.notifyBindingChanged("permanent-delivery-failure");
       this.logger.debug?.("messaging binding revoked after permanent delivery failure", {
         bindingId: binding.id,
         channel: binding.channel.channel,

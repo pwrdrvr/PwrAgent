@@ -12,6 +12,7 @@ import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import { getDesktopMessagingActivityLog } from "../messaging/desktop-messaging-activity-log";
 import { getMainLogger } from "../log";
 import {
+  MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
   MESSAGING_LIST_ACTIVITY_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
@@ -21,6 +22,7 @@ import {
 const log = getMainLogger("pwragent:messaging-ipc");
 
 let unsubscribePlatformStatus: (() => void) | undefined;
+let unsubscribeBindingsChanged: (() => void) | undefined;
 
 function broadcastPlatformStatusEvent(event: MessagingPlatformStatusEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -34,6 +36,20 @@ function broadcastPlatformStatusEvent(event: MessagingPlatformStatusEvent): void
   }
 }
 
+function broadcastBindingsChanged(): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (typeof window.isDestroyed === "function" && window.isDestroyed()) {
+      continue;
+    }
+    if (typeof window.webContents.send !== "function") {
+      continue;
+    }
+    window.webContents.send(MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL, {
+      at: Date.now(),
+    });
+  }
+}
+
 export function registerMessagingStatusIpcHandlers(): void {
   const runtime = getDesktopMessagingRuntime();
 
@@ -41,6 +57,8 @@ export function registerMessagingStatusIpcHandlers(): void {
   unsubscribePlatformStatus = runtime.onPlatformStatus(
     broadcastPlatformStatusEvent,
   );
+  unsubscribeBindingsChanged?.();
+  unsubscribeBindingsChanged = runtime.onBindingsChanged(broadcastBindingsChanged);
 
   ipcMain.removeHandler(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL);
   ipcMain.handle(
@@ -81,6 +99,18 @@ export function registerMessagingStatusIpcHandlers(): void {
         backend: revoked?.backend ?? null,
         threadId: revoked?.threadId ?? null,
       });
+      // Same fan-out the controller paths use — the desktop UI
+      // initiated the unbind, so refetch the snapshot now to remove
+      // the chip without waiting for a backend tick.
+      if (revoked) {
+        try {
+          getDesktopMessagingRuntime().notifyBindingsChanged();
+        } catch (error) {
+          log.debug("failed to broadcast bindings-changed after unbind", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       return { revoked: Boolean(revoked), bindingId: request.bindingId };
     },
   );
@@ -89,6 +119,8 @@ export function registerMessagingStatusIpcHandlers(): void {
 export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   unsubscribePlatformStatus?.();
   unsubscribePlatformStatus = undefined;
+  unsubscribeBindingsChanged?.();
+  unsubscribeBindingsChanged = undefined;
   ipcMain.removeHandler(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL);
   ipcMain.removeHandler(MESSAGING_LIST_ACTIVITY_CHANNEL);
   ipcMain.removeHandler(MESSAGING_UNBIND_THREAD_CHANNEL);

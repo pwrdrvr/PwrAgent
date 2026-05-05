@@ -76,6 +76,13 @@ export class DesktopMessagingRuntime {
   private readonly platformStatusListeners = new Set<
     (event: MessagingPlatformStatusEvent) => void
   >();
+  /**
+   * Listeners notified whenever any controller mutates a binding
+   * (create / refresh metadata / sync title / detach / revoke). The
+   * payload is intentionally empty — listeners refetch the navigation
+   * snapshot rather than diffing per-binding changes themselves.
+   */
+  private readonly bindingsChangedListeners = new Set<() => void>();
 
   constructor(
     private readonly options: {
@@ -114,6 +121,7 @@ export class DesktopMessagingRuntime {
         store,
         toolUpdateDefaultMode: async () =>
           (await this.loadConfig()).toolUpdateDefaultMode ?? "show_some",
+        onBindingChanged: () => this.broadcastBindingsChanged(),
       });
 
       try {
@@ -255,6 +263,42 @@ export class DesktopMessagingRuntime {
    */
   getPlatformStatuses(): MessagingPlatformStatus[] {
     return [...this.platformStatuses.values()];
+  }
+
+  /**
+   * Subscribe to bindings-changed events. Returns an unsubscribe.
+   * Fires after any controller has mutated a binding (create, refresh
+   * metadata, sync title, detach, revoke). Renderer-side IPC bridge
+   * uses this to push a marker event so `useThreadNavigation`
+   * refetches the navigation snapshot — that's where binding chips
+   * live (issue #191).
+   */
+  onBindingsChanged(listener: () => void): () => void {
+    this.bindingsChangedListeners.add(listener);
+    return () => {
+      this.bindingsChangedListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Public emitter so non-controller code (the unbind IPC handler in
+   * `messaging-status.ts`, future bind paths) can fan out the same
+   * event without reaching into the listener set directly.
+   */
+  notifyBindingsChanged(): void {
+    this.broadcastBindingsChanged();
+  }
+
+  private broadcastBindingsChanged(): void {
+    for (const listener of this.bindingsChangedListeners) {
+      try {
+        listener();
+      } catch (error) {
+        messagingLog.error("messaging bindings-changed listener threw", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   private setPlatformHealth(

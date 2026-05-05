@@ -284,6 +284,150 @@ describe("MessagingController", () => {
     });
   });
 
+  it("completes binding mutations without throwing when no onBindingChanged listener is configured", async () => {
+    // The `onBindingChanged` option is declared optional on
+    // `MessagingControllerOptions`. Production wiring always supplies
+    // one (see `messaging-runtime.ts`), but the controller must
+    // remain safe to construct without it — defensive coverage so a
+    // future test or alternate consumer that forgets the callback
+    // doesn't crash on the first bind/detach.
+    const harness = await createHarness({ bindingChangedListener: false });
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    await expect(
+      harness.controller.handleInboundEvent(
+        buildCallbackEvent({
+          actionId: "browse:select-thread",
+          value: { backend: "codex", threadId: "thread-1" },
+        }),
+      ),
+    ).resolves.not.toThrow();
+    // Bind landed despite no callback wired.
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toMatchObject({ backend: "codex", threadId: "thread-1" });
+    // Detach also completes — fan-out is best-effort, mutation isn't.
+    await expect(
+      harness.controller.handleInboundEvent(buildCommandEvent("/detach")),
+    ).resolves.not.toThrow();
+    // Active lookup now misses (the row is revoked, not deleted).
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/resume").channel),
+    ).resolves.toBeUndefined();
+  });
+
+  it("fires onBindingChanged on every binding mutation path", async () => {
+    // Regression: binding chips in the navigation snapshot only refresh
+    // when the renderer refetches the snapshot. The renderer was only
+    // refetching on backend events — so bind / detach / sync-name
+    // didn't propagate until the next backend tick (issue #191). The
+    // controller now fan-outs `onBindingChanged` on every mutation.
+    const setConversationTitle = vi.fn(
+      async (
+        request: Parameters<NonNullable<MessagingAdapter["setConversationTitle"]>>[0],
+      ) => ({
+        channel: "telegram" as const,
+        conversation: {
+          ...request.channel.conversation,
+          title: request.title,
+        },
+        outcome: "updated" as const,
+        title: request.title,
+        updatedAt: 1000,
+      }),
+    );
+    const harness = await createHarness({ setConversationTitle });
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.title = "Renamed in Desktop";
+    harness.getNavigationSnapshot.mockResolvedValue(navigation);
+
+    // 1. bind via /resume picker → callback path
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    harness.onBindingChanged.mockClear();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        value: { backend: "codex", threadId: "thread-1" },
+      }),
+    );
+    expect(harness.onBindingChanged).toHaveBeenCalled();
+
+    // 2. /sync name updates the title and must also fire
+    harness.onBindingChanged.mockClear();
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:sync-name",
+        routingState: {
+          opaque: { chatId: 777, messageThreadId: 9 },
+        },
+      }),
+    );
+    expect(harness.onBindingChanged).toHaveBeenCalled();
+
+    // 3. /detach revokes the binding and must also fire
+    harness.onBindingChanged.mockClear();
+    await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
+    expect(harness.onBindingChanged).toHaveBeenCalled();
+  });
+
+  it("routes text to the bound thread after a /resume → select-thread bind", async () => {
+    // Regression: the resume browser stores a channel-scoped pending
+    // intent. Before `bindChannelToThread` started retiring channel
+    // intents on a successful bind, that picker intent survived the
+    // bind, and the next text inbound matched it as ambiguous —
+    // making the bot bounce "Choose an option" instead of routing the
+    // text to the freshly-bound thread.
+    const harness = await createHarness();
+    // The test harness uses `receivedAt: 1000`; pin the lookup clock
+    // inside the intent's TTL window so the picker intent is visible.
+    const lookupNow = 1500;
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    expect(
+      await harness.store.findActivePendingIntentForChannel({
+        actorId: "user-1",
+        channel: buildTextEvent("ignored").channel,
+        now: lookupNow,
+      }),
+    ).toBeTruthy();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        value: { backend: "codex", threadId: "thread-1" },
+      }),
+    );
+
+    // After the bind, no channel-scoped pending intent should remain
+    // — the picker intent must be retired so it can't intercept the
+    // next text.
+    expect(
+      await harness.store.findActivePendingIntentForChannel({
+        actorId: "user-1",
+        channel: buildTextEvent("ignored").channel,
+        now: lookupNow,
+      }),
+    ).toBeUndefined();
+
+    harness.delivered.length = 0;
+    harness.startTurn.mockClear();
+    await harness.controller.handleInboundEvent(buildTextEvent("you there?"));
+
+    // Text routes to the bound thread, not back to the picker.
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "you there?" }],
+      }),
+    );
+    const confirmations = harness.delivered.filter(
+      (intent) => intent.kind === "confirmation",
+    );
+    for (const confirmation of confirmations) {
+      expect(confirmation).not.toMatchObject({ title: "Choose an option" });
+      expect(confirmation).not.toMatchObject({ title: "Choose a thread" });
+    }
+  });
+
   it("updates the clicked resume picker when multiple pickers are active", async () => {
     const harness = await createHarness();
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
@@ -3289,6 +3433,15 @@ async function createHarness(options?: {
   inputDebounceMs?: number;
   logger?: MessagingControllerOptions["logger"];
   now?: () => number;
+  /**
+   * Set to `false` to construct the controller WITHOUT an
+   * `onBindingChanged` callback. Used by tests that verify the
+   * controller's nullish-callback guard — production callers always
+   * supply one (see `messaging-runtime.ts`), but the option is
+   * declared optional and the controller must not throw if it's
+   * absent.
+   */
+  bindingChangedListener?: false;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
 }): Promise<{
@@ -3299,6 +3452,7 @@ async function createHarness(options?: {
   handoffThreadWorkspace: ReturnType<typeof vi.fn> | undefined;
   interruptTurn: ReturnType<typeof vi.fn>;
   listBackends: ReturnType<typeof vi.fn>;
+  onBindingChanged: ReturnType<typeof vi.fn>;
   readThreadStatus: ReturnType<typeof vi.fn>;
   setThreadExecutionMode: ReturnType<typeof vi.fn>;
   setThreadModelSettings: ReturnType<typeof vi.fn>;
@@ -3453,6 +3607,7 @@ async function createHarness(options?: {
     submitServerRequest,
   };
 
+  const onBindingChanged = vi.fn();
   const controller = new MessagingController({
     adapter,
     authorizedActorIds: ["user-1"],
@@ -3460,6 +3615,13 @@ async function createHarness(options?: {
     inputDebounceMs: options?.inputDebounceMs ?? 0,
     logger: options?.logger,
     now: options?.now ?? (() => 1000),
+    // Pass the spy by default so tests can assert on fan-out. The
+    // `bindingChangedListener: false` opt-out exists for tests that
+    // verify the nullish-callback guard — production wiring always
+    // supplies one.
+    ...(options?.bindingChangedListener === false
+      ? {}
+      : { onBindingChanged }),
     store,
     toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
   });
@@ -3473,6 +3635,7 @@ async function createHarness(options?: {
     handoffThreadWorkspace,
     interruptTurn,
     listBackends,
+    onBindingChanged,
     readThreadStatus,
     setThreadExecutionMode,
     setThreadModelSettings,

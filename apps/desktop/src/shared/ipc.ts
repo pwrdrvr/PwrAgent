@@ -40,6 +40,19 @@ export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =
   "messaging:platform-status-event";
 export const MESSAGING_UNBIND_THREAD_CHANNEL = "messaging:unbind-thread";
 export const MESSAGING_LIST_ACTIVITY_CHANNEL = "messaging:list-activity";
+/**
+ * Fired main → renderer whenever the messaging store has had bindings
+ * created, revoked, or had their conversation metadata change. The
+ * payload is intentionally minimal — receivers should refetch the
+ * navigation snapshot rather than try to apply per-binding diffs from
+ * the event itself. See `useThreadNavigation` for the renderer-side
+ * subscription, and `MessagingController.bindChannelToThread` /
+ * `syncConversationName` / `refreshBindingFromInbound` /
+ * `detachBinding` plus the `messaging:unbind-thread` IPC handler for
+ * the emit sites.
+ */
+export const MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL =
+  "messaging:bindings-changed";
 export const NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "navigation:ensure-directory-launchpad";
 export const NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL =

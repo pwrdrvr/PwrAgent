@@ -1280,6 +1280,20 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     });
   }, [desktopApi, scheduleRefresh, state.response]);
 
+  // Bindings live in the navigation snapshot but are mutated outside
+  // the agent-event bus (a Telegram callback creates a binding, a
+  // /sync name renames it, a /detach revokes it — none of those emit
+  // backend notifications). Without this hook the binding chip stays
+  // stale until the next backend tick. See issue #191.
+  useEffect(() => {
+    if (!desktopApi?.onMessagingBindingsChanged) {
+      return;
+    }
+    return desktopApi.onMessagingBindingsChanged(() => {
+      scheduleRefresh();
+    });
+  }, [desktopApi, scheduleRefresh]);
+
   const threads = useMemo(() => {
     const currentThreads = state.response?.threads ?? [];
     if (!optimisticThread) {
