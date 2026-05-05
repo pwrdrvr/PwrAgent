@@ -1,4 +1,5 @@
 import type { NavigationThreadSummary } from "@pwragent/shared";
+import { isBranchDrifted } from "@pwragent/shared";
 import { BranchIcon, FolderIcon, WorktreeIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText, formatCopyTooltip } from "../../lib/copy-text";
@@ -16,10 +17,7 @@ export function ThreadMetaChips({
   linkedDirectoryMode = "label",
   thread,
 }: ThreadMetaChipsProps) {
-  const branchDrifted =
-    thread.gitBranch &&
-    thread.observedGitBranch &&
-    thread.observedGitBranch !== thread.gitBranch;
+  const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
   const linkedDirectoryChips = includeLinkedDirectories
     ? thread.linkedDirectories.length > 0
       ? linkedDirectoryMode === "kind"

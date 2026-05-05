@@ -23,6 +23,7 @@ import type {
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
+import { isBranchDrifted } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -749,13 +750,7 @@ export function ThreadView(props: ThreadViewProps) {
     );
 
   const canWarnForBranchDrift = (expectedBranch?: string, observedBranch?: string): boolean =>
-    Boolean(
-      expectedBranch &&
-        observedBranch &&
-        expectedBranch !== "HEAD" &&
-        observedBranch !== "HEAD" &&
-        expectedBranch !== observedBranch,
-    );
+    isBranchDrifted(expectedBranch, observedBranch);
 
   const showBranchDriftDialog = (
     thread: NavigationThreadSummary,

@@ -28,6 +28,7 @@ import {
   type BackendSummary,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
+  isBranchDrifted,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
   type ListBackendsRequest,
@@ -1840,13 +1841,11 @@ export class DesktopBackendRegistry {
       branch: normalizedObservedBranch,
     });
 
+    const drifted = isBranchDrifted(expectedBranch, normalizedObservedBranch);
+
     backendRegistryLog.debug("checked thread branch drift", {
       backend: params.backend,
-      drifted:
-        Boolean(expectedBranch && normalizedObservedBranch) &&
-        expectedBranch !== "HEAD" &&
-        normalizedObservedBranch !== "HEAD" &&
-        expectedBranch !== normalizedObservedBranch,
+      drifted,
       expectedBranch,
       observedBranch: normalizedObservedBranch,
       sourcePath,
@@ -1858,11 +1857,7 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       expectedBranch,
       observedBranch: normalizedObservedBranch,
-      drifted:
-        Boolean(expectedBranch && normalizedObservedBranch) &&
-        expectedBranch !== "HEAD" &&
-        normalizedObservedBranch !== "HEAD" &&
-        expectedBranch !== normalizedObservedBranch,
+      drifted,
       checkedAt: Date.now(),
     };
   }
