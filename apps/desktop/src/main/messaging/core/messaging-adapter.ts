@@ -11,21 +11,11 @@ import type {
   GetNavigationSnapshotRequest,
   ListBackendsRequest,
   ListBackendsResponse,
-  MessagingDeliveryResult,
-  MessagingAttachmentDownloadRequest,
-  MessagingAttachmentDownloadResult,
-  MessagingCapabilityProfile,
-  MessagingInboundEvent,
-  MessagingActorIdentity,
-  MessagingAdapterState,
-  MessagingChannelRef,
-  MessagingChannelKind,
   NavigationSnapshot,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
-  MessagingSurfaceIntent,
   StartThreadRequest,
   StartThreadResponse,
   StartTurnRequest,
@@ -35,6 +25,18 @@ import type {
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
 } from "@pwragent/shared";
+import type {
+  MessagingDeliveryResult,
+  MessagingAttachmentDownloadRequest,
+  MessagingAttachmentDownloadResult,
+  MessagingCapabilityProfile,
+  MessagingInboundEvent,
+  MessagingActorIdentity,
+  MessagingAdapterState,
+  MessagingChannelRef,
+  MessagingChannelKind,
+  MessagingSurfaceIntent,
+} from "@pwragent/messaging-interface";
 
 export type MessagingConversationTitleUpdateRequest = {
   actor?: MessagingActorIdentity;

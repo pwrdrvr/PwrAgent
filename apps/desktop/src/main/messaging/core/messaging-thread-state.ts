@@ -1,12 +1,14 @@
 import type {
-  MessagingActiveTurnSummary,
-  MessagingBindingRecord,
   NavigationDirectorySummary,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
+import type {
+  MessagingActiveTurnSummary,
+  MessagingBindingRecord,
+} from "@pwragent/messaging-interface";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 
 export type MessagingResolvedThreadState = {

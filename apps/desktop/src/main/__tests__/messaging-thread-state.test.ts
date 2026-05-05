@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type {
-  MessagingBindingRecord,
-  MessagingActiveTurnSummary,
   NavigationSnapshot,
 } from "@pwragent/shared";
+import type {
+  MessagingBindingRecord,
+  MessagingActiveTurnSummary,
+} from "@pwragent/messaging-interface";
 import { resolveMessagingThreadState } from "../messaging/core/messaging-thread-state";
 
 describe("resolveMessagingThreadState", () => {

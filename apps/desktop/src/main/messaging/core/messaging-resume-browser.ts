@@ -1,5 +1,11 @@
 import type {
   AppServerBackendKind,
+  NavigationDirectorySummary,
+  NavigationSnapshot,
+  NavigationThreadSummary,
+  ThreadIdentifier,
+} from "@pwragent/shared";
+import type {
   MessagingBindingPreferences,
   MessagingBrowseLaunchAction,
   MessagingBrowseMode,
@@ -9,11 +15,7 @@ import type {
   MessagingProjectPickerIntent,
   MessagingSurfaceAction,
   MessagingThreadPickerIntent,
-  NavigationDirectorySummary,
-  NavigationSnapshot,
-  NavigationThreadSummary,
-  ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/messaging-interface";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import { capabilityProfilePageSize } from "@pwragent/messaging-interface";

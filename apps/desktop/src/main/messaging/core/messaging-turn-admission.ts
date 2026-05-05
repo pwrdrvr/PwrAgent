@@ -1,10 +1,12 @@
 import type {
   AppServerTurnInputItem,
+} from "@pwragent/shared";
+import type {
   MessagingBindingRecord,
   MessagingInboundMediaEvent,
   MessagingInboundTextEvent,
   MessagingSurfaceRef,
-} from "@pwragent/shared";
+} from "@pwragent/messaging-interface";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 
 export type MessagingTurnInputEvent =

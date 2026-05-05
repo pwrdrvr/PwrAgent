@@ -1,7 +1,7 @@
 import type {
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
-} from "@pwragent/shared";
+} from "@pwragent/messaging-interface";
 
 export type MessagingInteractionMapperResult =
   | {

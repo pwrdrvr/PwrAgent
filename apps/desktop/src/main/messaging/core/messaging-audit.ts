@@ -1,10 +1,12 @@
 import type {
   AppServerBackendKind,
+  ThreadIdentifier,
+} from "@pwragent/shared";
+import type {
   MessagingActorIdentity,
   MessagingAuditContext,
   MessagingChannelRef,
-  ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/messaging-interface";
 
 export function buildMessagingAuditContext(params: {
   action: string;

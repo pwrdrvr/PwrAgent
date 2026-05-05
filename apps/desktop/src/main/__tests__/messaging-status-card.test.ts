@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { MessagingBindingRecord, NavigationSnapshot } from "@pwragent/shared";
+import type {
+  NavigationSnapshot,
+} from "@pwragent/shared";
+import type {
+  MessagingBindingRecord,
+} from "@pwragent/messaging-interface";
 import {
   buildBindingStatusIntent,
   buildHandoffBranchPickerIntent,

@@ -7,7 +7,7 @@ import type {
   MessagingBrowseSessionRecord,
   MessagingCallbackHandleRecord,
   MessagingPendingIntentRecord,
-} from "@pwragent/shared";
+} from "@pwragent/messaging-interface";
 import { MessagingStore } from "../messaging/core/messaging-store";
 
 const tempDirs: string[] = [];

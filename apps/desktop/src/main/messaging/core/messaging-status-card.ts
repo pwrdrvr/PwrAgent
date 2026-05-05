@@ -1,15 +1,17 @@
 import type {
   AppServerBackendKind,
   HandoffThreadWorkspaceRequest,
+  MessagingToolUpdateMode,
+  ThreadIdentifier,
+} from "@pwragent/shared";
+import type {
   MessagingBindingRecord,
   MessagingConfirmationIntent,
   MessagingJsonValue,
-  MessagingToolUpdateMode,
   MessagingSingleSelectIntent,
   MessagingSurfaceAction,
   MessagingStatusIntent,
-  ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/messaging-interface";
 import { shortenDerivedThreadTitle } from "@pwragent/shared";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import {
@@ -18,13 +20,13 @@ import {
   capabilityProfileSupportsActionCount,
   truncateActionsByPriority,
 } from "@pwragent/messaging-interface";
+import type { MessagingResolvedThreadState } from "./messaging-thread-state.js";
 
 /**
  * Minimum action count for a usable status card. Below this, drop all
  * actions and rely on text rendering (Stop/Refresh/Detach via text reply).
  */
 const STATUS_CARD_MIN_ACTIONS = 3;
-import type { MessagingResolvedThreadState } from "./messaging-thread-state.js";
 
 export type MessagingWorkspaceHandoffContext = {
   backend: AppServerBackendKind;
