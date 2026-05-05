@@ -2,12 +2,19 @@ import { BrowserWindow, ipcMain } from "electron";
 import type {
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  UnbindMessagingThreadRequest,
+  UnbindMessagingThreadResponse,
 } from "@pwragent/shared";
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
+import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
+import { getMainLogger } from "../log";
 import {
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
+  MESSAGING_UNBIND_THREAD_CHANNEL,
 } from "../../shared/ipc";
+
+const log = getMainLogger("pwragent:messaging-ipc");
 
 let unsubscribePlatformStatus: (() => void) | undefined;
 
@@ -38,10 +45,31 @@ export function registerMessagingStatusIpcHandlers(): void {
       return runtime.getPlatformStatuses();
     },
   );
+
+  ipcMain.removeHandler(MESSAGING_UNBIND_THREAD_CHANNEL);
+  ipcMain.handle(
+    MESSAGING_UNBIND_THREAD_CHANNEL,
+    async (
+      _event,
+      request: UnbindMessagingThreadRequest,
+    ): Promise<UnbindMessagingThreadResponse> => {
+      const store = getDesktopMessagingStore();
+      const revoked = await store.revokeBinding({ bindingId: request.bindingId });
+      log.info("messaging binding unbound", {
+        bindingId: request.bindingId,
+        revoked: Boolean(revoked),
+        platform: revoked?.channel?.channel ?? null,
+        backend: revoked?.backend ?? null,
+        threadId: revoked?.threadId ?? null,
+      });
+      return { revoked: Boolean(revoked), bindingId: request.bindingId };
+    },
+  );
 }
 
 export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   unsubscribePlatformStatus?.();
   unsubscribePlatformStatus = undefined;
   ipcMain.removeHandler(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_UNBIND_THREAD_CHANNEL);
 }

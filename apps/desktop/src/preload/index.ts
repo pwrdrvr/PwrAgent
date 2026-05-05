@@ -40,6 +40,8 @@ import type {
   GhStatus,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  UnbindMessagingThreadRequest,
+  UnbindMessagingThreadResponse,
   RefreshThreadPullRequestsRequest,
   RefreshThreadPullRequestsResponse,
   NavigationSnapshot,
@@ -115,6 +117,7 @@ import {
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
+  MESSAGING_UNBIND_THREAD_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
@@ -350,6 +353,10 @@ const desktopApi = Object.freeze({
   },
   getMessagingPlatformStatuses: async (): Promise<MessagingPlatformStatus[]> =>
     await ipcRenderer.invoke(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL),
+  unbindMessagingThread: async (
+    request: UnbindMessagingThreadRequest,
+  ): Promise<UnbindMessagingThreadResponse> =>
+    await ipcRenderer.invoke(MESSAGING_UNBIND_THREAD_CHANNEL, request),
   onMessagingPlatformStatusEvent: (
     callback: (event: MessagingPlatformStatusEvent) => void,
   ): (() => void) => {

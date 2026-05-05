@@ -4,6 +4,7 @@ import type {
   DirectoryLaunchpadOverlayState,
   LinkedDirectorySummary,
   MarkThreadSeenResponse,
+  MessagingThreadBindingSummary,
   NavigationDirectoryGitStatus,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
@@ -26,6 +27,15 @@ export class SqliteOverlayStore {
     backend: AppServerBackendScope;
     fetchedAt: number;
     gitStatusByDirectoryKey?: Record<string, NavigationDirectoryGitStatus | undefined>;
+    /**
+     * Active messaging bindings per thread, keyed by thread identity key.
+     * Sourced from the desktop messaging sqlite store. Optional so tests
+     * (and any future callers without messaging) can keep working.
+     */
+    messagingBindingsByThreadKey?: Record<
+      string,
+      MessagingThreadBindingSummary[] | undefined
+    >;
     threads: AppServerThreadSummary[];
   }): Promise<NavigationSnapshot> {
     const backendState = this.getBackend(params.backend);
@@ -71,6 +81,7 @@ export class SqliteOverlayStore {
       gitStatusByDirectoryKey: params.gitStatusByDirectoryKey,
       launchpadDefaults,
       launchpadsByKey,
+      messagingBindingsByThreadKey: params.messagingBindingsByThreadKey,
       overlayByThreadKey,
       previousKnownThreadKeys: backendState?.knownThreadKeys ?? [],
       threads: params.threads,

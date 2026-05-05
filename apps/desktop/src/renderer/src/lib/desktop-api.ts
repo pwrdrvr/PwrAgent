@@ -40,6 +40,8 @@ import type {
   GhStatus,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  UnbindMessagingThreadRequest,
+  UnbindMessagingThreadResponse,
   RefreshThreadPullRequestsRequest,
   RefreshThreadPullRequestsResponse,
   NavigationSnapshot,
@@ -205,6 +207,9 @@ export type DesktopApi = {
   onMessagingPlatformStatusEvent?: (
     callback: (event: MessagingPlatformStatusEvent) => void,
   ) => () => void;
+  unbindMessagingThread?: (
+    request: UnbindMessagingThreadRequest,
+  ) => Promise<UnbindMessagingThreadResponse>;
   onWindowFocus?: (callback: () => void) => () => void;
   platform?: string;
   versions?: {

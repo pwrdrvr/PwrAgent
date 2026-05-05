@@ -38,6 +38,7 @@ export const MESSAGING_GET_PLATFORM_STATUSES_CHANNEL =
   "messaging:get-platform-statuses";
 export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =
   "messaging:platform-status-event";
+export const MESSAGING_UNBIND_THREAD_CHANNEL = "messaging:unbind-thread";
 export const NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "navigation:ensure-directory-launchpad";
 export const NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL =

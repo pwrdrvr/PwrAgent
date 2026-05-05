@@ -150,6 +150,17 @@ export type MessagingPlatformStatusEvent =
       at: number;
     };
 
+export type UnbindMessagingThreadRequest = {
+  bindingId: string;
+};
+
+export type UnbindMessagingThreadResponse = {
+  /** True when the binding existed and was revoked. */
+  revoked: boolean;
+  /** The binding id we just revoked, echoed for client-side cache eviction. */
+  bindingId: string;
+};
+
 export type MessagingJsonPrimitive = string | number | boolean | null;
 export type MessagingJsonValue =
   | MessagingJsonPrimitive

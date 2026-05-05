@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent } from "react";
 import type {
   AppServerBackendKind,
   BackendSummary,
+  MessagingThreadBindingSummary,
   NavigationDirectorySummary,
   NavigationThreadSummary,
   ThreadExecutionMode,
@@ -68,6 +69,15 @@ type SidebarProps = {
    * fresh PR status before they click in.
    */
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
+  /**
+   * Called when the user unbinds a messaging conversation from a
+   * thread via the binding chip. Receives the thread + binding so the
+   * parent can call the IPC and refresh navigation.
+   */
+  onUnbindMessagingBinding?: (
+    thread: NavigationThreadSummary,
+    binding: MessagingThreadBindingSummary,
+  ) => Promise<void>;
   onResizeStart?: (event: PointerEvent<HTMLElement>) => void;
   onResizeByKeyboard?: (delta: number) => void;
 };
@@ -364,6 +374,7 @@ export function Sidebar(props: SidebarProps) {
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetThreadReaction}
+              onUnbindMessagingBinding={props.onUnbindMessagingBinding}
             />
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
@@ -377,6 +388,7 @@ export function Sidebar(props: SidebarProps) {
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetThreadReaction}
+              onUnbindMessagingBinding={props.onUnbindMessagingBinding}
             />
           ) : (
             props.threads.length === 0 ? (

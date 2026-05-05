@@ -1,10 +1,22 @@
-import { useEffect, useRef, useState } from "react";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import { useEffect, useRef, useState, type ReactElement } from "react";
+import type {
+  MessagingThreadBindingSummary,
+  NavigationThreadSummary,
+  PrSummary,
+} from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
+import { DiscordIcon, TelegramIcon, type IconProps } from "../../icons";
 import { PrChip } from "../pr-status/PrChip";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
+
+const PLATFORM_ICONS: Partial<
+  Record<MessagingThreadBindingSummary["platform"], (props: IconProps) => ReactElement>
+> = {
+  telegram: TelegramIcon,
+  discord: DiscordIcon,
+};
 
 const HOVER_PREFETCH_DELAY_MS = 750;
 
@@ -26,6 +38,15 @@ type ThreadRowProps = {
    * thread key, respect terminal-state short-circuit on the main side).
    */
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
+  /**
+   * Called when the user picks "Unbind" from a per-thread messaging
+   * binding chip. Receives the binding id; the parent owns the IPC call
+   * and any optimistic UI rollback.
+   */
+  onUnbindMessagingBinding?: (
+    thread: NavigationThreadSummary,
+    binding: MessagingThreadBindingSummary,
+  ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onSetReaction?: (
     thread: NavigationThreadSummary,
@@ -141,6 +162,23 @@ export function ThreadRow(props: ThreadRowProps) {
             ))}
           </span>
         ) : null}
+
+        {(props.thread.messagingBindings ?? []).length > 0 ? (
+          <span className="thread-row__binding-chips">
+            {(props.thread.messagingBindings ?? []).map((binding) => (
+              <BindingChip
+                key={binding.bindingId}
+                binding={binding}
+                onUnbind={
+                  props.onUnbindMessagingBinding
+                    ? (target) =>
+                        void props.onUnbindMessagingBinding!(props.thread, target)
+                    : undefined
+                }
+              />
+            ))}
+          </span>
+        ) : null}
       </button>
 
       {canReact || reactions.length > 0 ? (
@@ -210,6 +248,53 @@ export function ThreadRow(props: ThreadRowProps) {
         ...
       </button>
     </div>
+  );
+}
+
+function BindingChip(props: {
+  binding: MessagingThreadBindingSummary;
+  onUnbind?: (binding: MessagingThreadBindingSummary) => void;
+}) {
+  const { binding, onUnbind } = props;
+  const Icon = PLATFORM_ICONS[binding.platform];
+  const platformLabel =
+    binding.platform.charAt(0).toUpperCase() + binding.platform.slice(1);
+  const detail = binding.conversationTitle
+    ? `${platformLabel}: ${binding.conversationTitle}`
+    : platformLabel;
+  const ariaLabel = onUnbind
+    ? `Unbind ${detail} from this thread`
+    : detail;
+  return (
+    <button
+      type="button"
+      className="thread-row__binding-chip"
+      title={onUnbind ? `${detail} (click to unbind)` : detail}
+      aria-label={ariaLabel}
+      disabled={!onUnbind}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (!onUnbind) return;
+        if (
+          window.confirm(
+            `Stop responding to ${detail} from this thread? You can rebind from the messaging app.`,
+          )
+        ) {
+          onUnbind(binding);
+        }
+      }}
+    >
+      {Icon ? (
+        <Icon size={12} />
+      ) : (
+        <span aria-hidden="true">{binding.platform.slice(0, 2)}</span>
+      )}
+      {binding.conversationTitle ? (
+        <span className="thread-row__binding-chip-label">
+          {binding.conversationTitle}
+        </span>
+      ) : null}
+    </button>
   );
 }
 

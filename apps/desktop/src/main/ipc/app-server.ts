@@ -66,6 +66,7 @@ import {
 } from "../../shared/ipc";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { getMainLogger } from "../log";
+import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import { detectPullRequestsForThread } from "../pr-status/pr-detection";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -327,9 +328,11 @@ class DesktopAppServerService {
       callerReason: "navigation-snapshot",
       filter: request.filter,
     });
+    const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
       backend,
       fetchedAt: Date.now(),
+      messagingBindingsByThreadKey,
       threads,
     });
     const directoryStatuses =

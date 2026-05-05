@@ -129,6 +129,11 @@ function DesktopAppShell(props: {
         onRenameThread={navigation.renameThread}
         onSetThreadReaction={navigation.setThreadReaction}
         onPrefetchPullRequests={pullRequests.prefetch}
+        onUnbindMessagingBinding={async (_thread, binding) => {
+          if (!desktopApi?.unbindMessagingThread) return;
+          await desktopApi.unbindMessagingThread({ bindingId: binding.bindingId });
+          await navigation.refresh?.();
+        }}
         onResizeStart={startSidebarResize}
         onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidth + delta)}
       />

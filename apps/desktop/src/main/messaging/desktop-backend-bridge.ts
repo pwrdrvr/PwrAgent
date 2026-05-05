@@ -29,6 +29,7 @@ import type { MessagingBackendBridge } from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { buildMessagingBindingsByThreadKey } from "./messaging-bindings-snapshot";
 
 export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   constructor(
@@ -44,9 +45,11 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       callerReason: "messaging-navigation-snapshot",
       filter: request.filter,
     });
+    const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
     const snapshot = await getDesktopOverlayStore().reconcileNavigationSnapshot({
       backend,
       fetchedAt: Date.now(),
+      messagingBindingsByThreadKey,
       threads,
     });
     const directoryStatuses = await this.registry.readDirectoryStatuses(
