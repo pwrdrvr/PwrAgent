@@ -4,6 +4,7 @@ import type {
   AppServerBackendScope,
   AppServerThreadSummary,
   LinkedDirectorySummary,
+  MessagingThreadBindingSummary,
   NavigationSnapshot,
   NavigationThreadSummary,
   NavigationLaunchpadDefaults,
@@ -70,6 +71,13 @@ export function materializeNavigationThreads(params: {
   firstSnapshot: boolean;
   now?: number;
   overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
+  /**
+   * Active messaging bindings per thread, keyed by thread identity key.
+   * Sourced from the desktop's messaging store (sqlite). When omitted,
+   * threads have no `messagingBindings` field — non-desktop callers
+   * (tests, server-side use) don't need to wire it.
+   */
+  messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
   previousKnownThreadKeys: string[];
   threads: AppServerThreadSummary[];
 }): NavigationThreadSummary[] {
@@ -87,6 +95,7 @@ export function materializeNavigationThreads(params: {
       (overlay?.observedGitBranch && hasHandoffWorkspace(overlay.extraLinkedDirectories)
         ? overlay.observedGitBranch
         : undefined);
+    const messagingBindings = params.messagingBindingsByThreadKey?.[threadKey];
 
     return {
       ...thread,
@@ -102,6 +111,9 @@ export function materializeNavigationThreads(params: {
       worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
       reactions: overlay?.reactions ?? [],
       prs: overlay?.prs ?? [],
+      messagingBindings: messagingBindings && messagingBindings.length > 0
+        ? messagingBindings
+        : undefined,
       inbox: deriveInboxState({
         firstSnapshot: params.firstSnapshot,
         isNewThread: !previousKnownThreadKeys.has(threadKey),
@@ -121,6 +133,7 @@ export function buildNavigationSnapshot(params: {
   gitStatusByDirectoryKey?: Record<string, NavigationDirectoryGitStatus | undefined>;
   launchpadDefaults?: NavigationLaunchpadDefaults;
   launchpadsByKey?: Record<string, DirectoryLaunchpadOverlayState | undefined>;
+  messagingBindingsByThreadKey?: Record<string, MessagingThreadBindingSummary[] | undefined>;
   overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
   previousKnownThreadKeys: string[];
   threads: AppServerThreadSummary[];
@@ -130,6 +143,7 @@ export function buildNavigationSnapshot(params: {
     firstSnapshot: params.firstSnapshot,
     now: params.now,
     overlayByThreadKey: params.overlayByThreadKey,
+    messagingBindingsByThreadKey: params.messagingBindingsByThreadKey,
     previousKnownThreadKeys: params.previousKnownThreadKeys,
     threads: params.threads,
   });
@@ -212,6 +226,11 @@ export function buildNavigationSnapshotHash(params: {
         repo: pr.repo,
         state: pr.state,
         url: pr.url,
+      })),
+      messagingBindings: (thread.messagingBindings ?? []).map((binding) => ({
+        bindingId: binding.bindingId,
+        platform: binding.platform,
+        conversationTitle: binding.conversationTitle ?? null,
       })),
     })),
     directories: (params.directories ?? []).map((directory) => ({

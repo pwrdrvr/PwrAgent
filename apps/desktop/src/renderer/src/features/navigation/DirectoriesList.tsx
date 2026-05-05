@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type {
   AppServerBackendKind,
+  MessagingThreadBindingSummary,
   NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
@@ -28,6 +29,10 @@ type DirectoriesListProps = {
     thread: NavigationThreadSummary,
     emoji: string,
     present: boolean,
+  ) => Promise<void>;
+  onUnbindMessagingBinding?: (
+    thread: NavigationThreadSummary,
+    binding: MessagingThreadBindingSummary,
   ) => Promise<void>;
 };
 
@@ -185,6 +190,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           onPrefetchPullRequests={props.onPrefetchPullRequests}
                           onSelectThread={props.onSelectThread}
                           onSetReaction={props.onSetReaction}
+                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
                         />
                       );
                     })}

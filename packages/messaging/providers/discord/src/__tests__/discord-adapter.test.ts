@@ -281,6 +281,8 @@ function createApi(overrides: Partial<DiscordApi> = {}): DiscordApi {
       id: "message-2",
     }),
     deleteApplicationCommand: async () => {},
+    getChannel: async (id: string) => ({ id }),
+    getGuild: async (id: string) => ({ id }),
     listApplicationCommands: async () => [],
     pinMessage: async () => {},
     sendTyping: async () => {},

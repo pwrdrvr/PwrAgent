@@ -181,6 +181,17 @@ textarea,
 
 .thread-header {
   padding-top: 10px;
+  /* Reserve space for the position:fixed context-rail spine (48px wide,
+     pinned top-right). Without this padding, anything we render in the
+     header's right-aligned region (messaging status icons, on/off
+     toggle) gets covered by the spine's hamburger button. */
+  padding-right: 56px;
+}
+
+.thread-view:has(.thread-view__layout.has-pinned-context-rail) .thread-header {
+  /* When the rail is pinned open, it pushes the layout left and is no
+     longer fixed at the screen edge — the header reclaims the space. */
+  padding-right: 0;
 }
 
 .thread-header button,
@@ -188,6 +199,196 @@ textarea,
 .thread-header a,
 .thread-header select {
   -webkit-app-region: no-drag;
+}
+
+.thread-header__main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.messaging-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  -webkit-app-region: no-drag;
+}
+
+.messaging-status-bar * {
+  -webkit-app-region: no-drag;
+}
+
+.messaging-status-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-muted);
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.messaging-status-chip--enabled {
+  color: var(--text-primary);
+}
+
+.messaging-status-chip--errored {
+  color: var(--danger-text);
+}
+
+.messaging-status-chip__fallback {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.messaging-status-chip > .status-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--bg-panel);
+}
+
+/* Binding chip menu — small popover anchored to the chip wrap. The
+   chip itself uses the shared .thread-row__chip primitive; only the
+   menu has its own styling. */
+.thread-row__chip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.thread-row__chip-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 200px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.thread-row__chip-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-row__chip-menu-item:hover {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.thread-row__chip-menu-hint {
+  margin: 4px 6px 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.messaging-status-chip--clickable {
+  cursor: pointer;
+  border: none;
+  padding: 0;
+  background: transparent;
+}
+
+.messaging-status-chip--clickable:hover {
+  color: var(--text-primary);
+}
+
+.messaging-activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.messaging-activity-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.messaging-activity-row:last-child {
+  border-bottom: none;
+}
+
+.messaging-activity-row__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.messaging-activity-row__icon--ok {
+  color: var(--success-text);
+}
+
+.messaging-activity-row__icon--warning {
+  color: var(--accent-bright);
+}
+
+.messaging-activity-row__icon--error {
+  color: var(--danger-text);
+}
+
+.messaging-activity-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.messaging-activity-row__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.messaging-activity-row__summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messaging-activity-row__meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
 }
 
 .sidebar__icon-button {
@@ -661,46 +862,37 @@ textarea,
   color: var(--accent-bright);
 }
 
-/* Reactions on thread rows. The strip sits as a sibling of the main row
-   button (not nested) because HTML disallows nested interactives. The
-   picker popover is anchored to the add-reaction button. */
+/* Reaction + add-reaction chips share the .thread-row__chip primitive
+   below; only their content (emoji glyph) differs from a meta chip.
+   These rules layer the per-variant tweaks (slightly larger glyph
+   font-size, hover-only visibility for the add chip) on top. */
 
-.thread-row__reactions {
-  display: flex;
-  position: absolute;
-  bottom: 8px;
-  left: 14px;
-  z-index: 2;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-}
-
-/* Reserve bottom space inside the row button so the reactions strip
-   (absolute-positioned at bottom-left) does not crash into the chip row. */
-.thread-row-shell:has(.thread-row__reactions) .thread-row {
-  padding-bottom: 42px;
-}
-
-.thread-row__reaction,
-.thread-row__add-reaction {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 28px;
-  min-width: 28px;
-  padding: 0 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  background: var(--bg-panel-elevated);
+.thread-row__chip--reaction,
+.thread-row__chip--add-reaction {
   /* Use primary text color, not secondary — colored emoji (✅ 👀 …)
      ignore CSS color anyway, but monochrome symbol-block codepoints
      (🅐 🅑 …) take this color, and secondary made them look alpha'd
      down compared to the colored emoji. Picker uses --text-primary too. */
   color: var(--text-primary);
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1;
   cursor: pointer;
+}
+
+.thread-row__chip--reaction:hover,
+.thread-row__chip--reaction:focus-visible,
+.thread-row__chip--add-reaction:hover,
+.thread-row__chip--add-reaction:focus-visible,
+.thread-row__chip--add-reaction.is-open {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  outline: none;
+}
+
+.thread-row__chip--add-reaction {
+  /* Mute the add affordance until the user is interacting with the
+     row; revealed on hover, focus, or while the picker is open. */
+  opacity: 0;
   transition:
     background 120ms ease,
     border-color 120ms ease,
@@ -708,38 +900,10 @@ textarea,
     opacity 120ms ease;
 }
 
-.thread-row__reaction:hover,
-.thread-row__reaction:focus-visible {
-  border-color: var(--accent-border);
-  background: var(--bg-row-active);
-  outline: none;
-}
-
-.thread-row__add-reaction {
-  width: 28px;
-  padding: 0;
-  font-weight: 700;
-  font-size: 16px;
-  opacity: 0;
-}
-
-.thread-row-shell:hover .thread-row__add-reaction,
-.thread-row__add-reaction:focus-visible,
-.thread-row__add-reaction[aria-expanded="true"] {
+.thread-row-shell:hover .thread-row__chip--add-reaction,
+.thread-row__chip--add-reaction:focus-visible,
+.thread-row__chip--add-reaction.is-open {
   opacity: 1;
-}
-
-.thread-row__add-reaction:hover,
-.thread-row__add-reaction:focus-visible,
-.thread-row__add-reaction[aria-expanded="true"] {
-  border-color: var(--accent-border);
-  background: var(--bg-row-active);
-  color: var(--accent-bright);
-  outline: none;
-}
-
-.thread-row__reaction-picker-wrap {
-  position: relative;
 }
 
 .reaction-picker {
@@ -774,7 +938,7 @@ textarea,
   color: var(--text-primary);
   font-size: 16px;
   line-height: 1;
-  /* Pair with .thread-row__reaction so the row chip matches the picker
+  /* Pair with .thread-row__chip--reaction so the row chip matches the picker
      option's rendering for ambiguous symbol-block codepoints. */
   font-variant-emoji: emoji;
   cursor: pointer;
@@ -943,10 +1107,24 @@ textarea,
   line-height: 1.45;
 }
 
-.thread-row__meta {
+/* Single ordered chip flow per thread row. All chip types — meta
+   (agent/mode/dir/branch/drift), PR chips, messaging binding chips,
+   reactions, add-reaction — render as siblings in this one wrapping
+   flex container. flex-wrap handles overflow naturally; no per-type
+   container, no absolute positioning. */
+.thread-row__chips {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+}
+
+/* Focus ring for any role="button" chip in the flow (PR, binding,
+   reaction, add-reaction). Span-with-role doesn't get the browser's
+   default focus outline. */
+.thread-row__chips [role="button"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .thread-row__chip {
@@ -1082,12 +1260,6 @@ textarea,
    per the Tangerine Terminal thesis and use a desaturated violet only
    for the dot, not the whole chip. */
 
-.thread-row__pr-chips {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 4px;
-}
 
 .pr-chip {
   display: inline-flex;
@@ -1283,7 +1455,7 @@ textarea,
 }
 
 .directory-row__threads .thread-row__header,
-.directory-row__threads .thread-row__meta {
+.directory-row__threads .thread-row__chips {
   width: 100%;
 }
 
@@ -3830,6 +4002,29 @@ textarea,
   height: 2px;
   border-radius: 999px;
   background: currentColor;
+}
+
+/* Portal-rendered tooltip rendered by the useViewportTooltip hook.
+   Used when a CSS-pseudo `tooltip-target` would get clipped by an
+   ancestor's overflow:hidden / overflow:auto (sidebar scroll
+   region, overflow-hidden chip with text-ellipsis, etc.). */
+.viewport-tooltip {
+  position: fixed;
+  z-index: 90;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: rgba(10, 10, 10, 0.98);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  pointer-events: none;
+  text-align: left;
+  white-space: pre-wrap;
 }
 
 .context-rail__tooltip {

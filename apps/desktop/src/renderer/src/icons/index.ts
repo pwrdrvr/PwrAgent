@@ -1,8 +1,10 @@
 export { BranchIcon } from "./BranchIcon";
+export { DiscordIcon } from "./DiscordIcon";
 export { EditorIcon } from "./EditorIcon";
 export { FolderIcon } from "./FolderIcon";
 export { NewThreadIcon } from "./NewThreadIcon";
 export { SettingsIcon } from "./SettingsIcon";
+export { TelegramIcon } from "./TelegramIcon";
 export { TerminalIcon } from "./TerminalIcon";
 export { UnlinkedDotIcon } from "./UnlinkedDotIcon";
 export { WorkspaceIcon } from "./WorkspaceIcon";

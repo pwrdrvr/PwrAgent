@@ -702,9 +702,11 @@ test("directory launchpad keeps new worktree as the sticky default after startin
     const startedThreadRow = app.window
       .getByRole("button", { name: /Use a sticky worktree default/ })
       .first();
-    const startedThreadMeta = startedThreadRow.locator(".thread-row__meta");
-    await expect(startedThreadMeta.getByText("worktree", { exact: true })).toBeVisible();
-    await expect(startedThreadMeta.getByText("local", { exact: true })).toHaveCount(0);
+    // Renamed in the chip-flow refactor: meta + PR + binding + reactions
+    // chips all share a single `.thread-row__chips` flex-wrap container.
+    const startedThreadChips = startedThreadRow.locator(".thread-row__chips");
+    await expect(startedThreadChips.getByText("worktree", { exact: true })).toBeVisible();
+    await expect(startedThreadChips.getByText("local", { exact: true })).toHaveCount(0);
 
     await app.window.getByRole("button", { name: "Open context rail" }).click();
     const contextRail = app.window.getByRole("complementary", {

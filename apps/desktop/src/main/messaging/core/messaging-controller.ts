@@ -249,6 +249,13 @@ export class MessagingController {
       return;
     }
 
+    // Self-heal: every inbound event carries the freshest ancestry data
+    // the adapter knows (parentTitle = supergroup/server, ancestorTitle
+    // = guild for Discord threads). Merge any new fields into the
+    // stored binding so the renderer's binding chip can show full
+    // breadcrumbs without waiting for an explicit refresh.
+    await this.refreshBindingFromInbound(event);
+
     if (event.kind === "command") {
       await this.handleCommand(event);
       return;
@@ -473,6 +480,47 @@ export class MessagingController {
         await this.renderBindingStatus(binding);
       }
     }
+  }
+
+  /**
+   * Self-heal stored bindings from the freshest data on every inbound.
+   * The adapter populates `parentTitle` / `ancestorTitle` (supergroup
+   * / server / channel breadcrumbs) on every inbound channel ref;
+   * legacy bindings stored before those fields existed don't have
+   * them. Merge in any new fields the binding doesn't already have so
+   * the navigation snapshot's binding chip can render full
+   * breadcrumbs without waiting for an explicit unbind/rebind.
+   */
+  private async refreshBindingFromInbound(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const binding = await this.options.store.findActiveBindingForChannel(
+      event.channel,
+    );
+    if (!binding) return;
+    const stored = binding.channel.conversation;
+    const incoming = event.channel.conversation;
+    // Only fields where the incoming event is strictly more informative
+    // than what's stored. We never overwrite a non-empty stored field
+    // (the adapter that originally created the binding might have set
+    // a more specific title than what's on a passing message — e.g.
+    // bot-created topic name set via setConversationTitle).
+    const merged = {
+      ...stored,
+      title: stored.title ?? incoming.title,
+      parentTitle: stored.parentTitle ?? incoming.parentTitle,
+      ancestorTitle: stored.ancestorTitle ?? incoming.ancestorTitle,
+    };
+    const changed =
+      merged.title !== stored.title
+      || merged.parentTitle !== stored.parentTitle
+      || merged.ancestorTitle !== stored.ancestorTitle;
+    if (!changed) return;
+    await this.options.store.upsertBinding({
+      ...binding,
+      channel: { ...binding.channel, conversation: merged },
+      updatedAt: this.now(),
+    });
   }
 
   private async handleCommand(event: MessagingInboundCommandEvent): Promise<void> {
@@ -3139,6 +3187,55 @@ export class MessagingController {
     });
   }
 
+  private recordOutboundActivity(
+    intent: MessagingSurfaceIntent,
+    binding: MessagingBindingRecord | undefined,
+    result: MessagingDeliveryResult,
+  ): void {
+    // Only log user-visible deliveries — status/typing/dismiss are
+    // every-tick noise and would drown the activity feed.
+    if (
+      intent.kind !== "message"
+      && intent.kind !== "approval"
+      && intent.kind !== "error"
+    ) {
+      return;
+    }
+    const channel = binding?.channel.channel ?? result.channel;
+    if (!channel) return;
+    const conversation = binding?.channel.conversation;
+    const summary = describeOutboundIntent(intent);
+    try {
+      // Lazy import keeps the controller free of a top-level dep on
+      // the desktop activity-log singleton (the controller is shared
+      // with other harnesses; this method is the only main-process
+      // entry that needs it).
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const log = (require(
+        "../desktop-messaging-activity-log",
+      ) as typeof import("../desktop-messaging-activity-log"))
+        .getDesktopMessagingActivityLog();
+      log.record({
+        platform: channel,
+        kind: "outbound",
+        backend: binding?.backend,
+        threadId: binding?.threadId,
+        bindingId: binding?.id,
+        conversationId: conversation?.id,
+        conversationTitle: conversation?.title,
+        summary,
+        payload: {
+          intentId: intent.id,
+          intentKind: intent.kind,
+          outcome: result.outcome,
+        },
+      });
+    } catch {
+      // Activity log is best-effort observability; never break delivery
+      // because the log threw.
+    }
+  }
+
   private async deliver(
     intent: MessagingSurfaceIntent,
     binding?: MessagingBindingRecord,
@@ -3155,6 +3252,7 @@ export class MessagingController {
       bindingId: binding?.id ?? intent.bindingId,
       intentId: routedIntent.id,
     });
+    this.recordOutboundActivity(routedIntent, binding, result);
     if (
       binding &&
       result.channel === binding.channel.channel &&
@@ -4040,4 +4138,16 @@ function readStringValue(
 
   const result = value[key];
   return typeof result === "string" ? result : undefined;
+}
+
+function describeOutboundIntent(intent: MessagingSurfaceIntent): string {
+  if (intent.kind === "message") {
+    const role = (intent as MessagingMessageIntent).role ?? "assistant";
+    return role === "assistant"
+      ? "Sent assistant reply"
+      : `Sent ${role} message`;
+  }
+  if (intent.kind === "approval") return "Sent approval request";
+  if (intent.kind === "error") return "Sent error notice";
+  return `Sent ${intent.kind}`;
 }

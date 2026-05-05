@@ -1,4 +1,7 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  MessagingThreadBindingSummary,
+  NavigationThreadSummary,
+} from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { ThreadRow } from "./ThreadRow";
 
@@ -17,6 +20,10 @@ type InboxListProps = {
     thread: NavigationThreadSummary,
     emoji: string,
     present: boolean,
+  ) => Promise<void>;
+  onUnbindMessagingBinding?: (
+    thread: NavigationThreadSummary,
+    binding: MessagingThreadBindingSummary,
   ) => Promise<void>;
 };
 
@@ -45,6 +52,7 @@ export function InboxList(props: InboxListProps) {
             onPrefetchPullRequests={props.onPrefetchPullRequests}
             onSelectThread={props.onSelectThread}
             onSetReaction={props.onSetReaction}
+            onUnbindMessagingBinding={props.onUnbindMessagingBinding}
           />
         );
       })}

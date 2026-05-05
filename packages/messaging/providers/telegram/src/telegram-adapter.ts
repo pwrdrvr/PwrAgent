@@ -1570,14 +1570,31 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   private channelFromMessage(message: TelegramMessage): MessagingInboundEvent["channel"] {
+    // Private DMs don't carry a chat title — synthesize one from the
+    // sender's first/last name so the chip renders as "DM: Alice"
+    // instead of "DM: ?".
+    const senderName =
+      [message.from?.first_name, message.from?.last_name]
+        .filter(Boolean)
+        .join(" ") || undefined;
+    const chatTitle = message.chat.title ?? senderName;
+
     if (message.message_thread_id) {
+      // Topic-bound messages: title slot belongs to the topic itself.
+      // The supergroup name is the parent breadcrumb. Telegram bot API
+      // doesn't ship topic names on every message — when missing,
+      // chip falls back to "SG: <supergroup>" via the renderer-side
+      // formatter (no breadcrumb after the slash).
       return {
         channel: this.channel,
         conversation: {
           id: String(message.message_thread_id),
           kind: "topic",
           parentId: String(message.chat.id),
-          title: message.chat.title,
+          // TODO: fetch + cache forum topic title via getForumTopicIcon
+          //       so chips can render "SG: PwrDrvr/General". For now
+          //       leave the topic node title undefined.
+          parentTitle: chatTitle,
         },
       };
     }
@@ -1587,7 +1604,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       conversation: {
         id: String(message.chat.id),
         kind: message.chat.type === "private" ? "dm" : "channel",
-        title: message.chat.title,
+        title: chatTitle,
       },
     };
   }

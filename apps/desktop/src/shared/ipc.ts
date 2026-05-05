@@ -34,6 +34,12 @@ export const NAVIGATION_REFRESH_THREAD_PRS_CHANNEL =
   "navigation:refresh-thread-prs";
 export const NAVIGATION_GET_GH_STATUS_CHANNEL =
   "navigation:get-gh-status";
+export const MESSAGING_GET_PLATFORM_STATUSES_CHANNEL =
+  "messaging:get-platform-statuses";
+export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =
+  "messaging:platform-status-event";
+export const MESSAGING_UNBIND_THREAD_CHANNEL = "messaging:unbind-thread";
+export const MESSAGING_LIST_ACTIVITY_CHANNEL = "messaging:list-activity";
 export const NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "navigation:ensure-directory-launchpad";
 export const NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL =

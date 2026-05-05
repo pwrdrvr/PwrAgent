@@ -116,8 +116,11 @@ export function ThreadMetaChips({
         )
     : null;
 
+  // Returns a fragment (no wrapping container) so the chips flow as
+  // direct siblings inside the row's single .thread-row__chips
+  // flex-wrap container, alongside PR / binding / reaction chips.
   return (
-    <span className="thread-row__meta">
+    <>
       <span className="thread-row__chip thread-row__chip--backend">
         {formatBackendLabel(thread.source)}
       </span>
@@ -154,6 +157,6 @@ export function ThreadMetaChips({
           now {thread.observedGitBranch}
         </span>
       ) : null}
-    </span>
+    </>
   );
 }

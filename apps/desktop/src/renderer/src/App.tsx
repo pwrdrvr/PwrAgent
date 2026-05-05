@@ -1,6 +1,9 @@
 import { useState, type CSSProperties, type PointerEvent } from "react";
 import { Sidebar } from "./features/navigation/Sidebar";
-import { SettingsScreen } from "./features/settings/SettingsScreen";
+import {
+  SettingsScreen,
+  type SettingsSection,
+} from "./features/settings/SettingsScreen";
 import {
   useDesktopSettings,
   type DesktopSettingsState,
@@ -48,6 +51,12 @@ function DesktopAppShell(props: {
 }) {
   const [sidebarWidth, setSidebarWidth] = useState(408);
   const [mainView, setMainView] = useState<"thread" | "settings">("thread");
+  // Initial section for SettingsScreen — non-undefined when navigation
+  // came from a deep-link (e.g. clicking a platform chip jumps directly
+  // to "messaging-activity"). Resets when the user switches mainView.
+  const [settingsInitialSection, setSettingsInitialSection] = useState<
+    SettingsSection | undefined
+  >(undefined);
   const desktopApi = props.desktopApi;
   const settings = props.settings;
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
@@ -120,7 +129,10 @@ function DesktopAppShell(props: {
           setMainView("thread");
           await navigation.openDirectoryLaunchpad(directory, preferredBackend);
         }}
-        onOpenSettings={() => setMainView("settings")}
+        onOpenSettings={() => {
+          setSettingsInitialSection(undefined);
+          setMainView("settings");
+        }}
         onSelectThread={(thread) => {
           setMainView("thread");
           navigation.selectThread(thread);
@@ -129,6 +141,11 @@ function DesktopAppShell(props: {
         onRenameThread={navigation.renameThread}
         onSetThreadReaction={navigation.setThreadReaction}
         onPrefetchPullRequests={pullRequests.prefetch}
+        onUnbindMessagingBinding={async (_thread, binding) => {
+          if (!desktopApi?.unbindMessagingThread) return;
+          await desktopApi.unbindMessagingThread({ bindingId: binding.bindingId });
+          await navigation.refresh?.();
+        }}
         onResizeStart={startSidebarResize}
         onResizeByKeyboard={(delta) => resizeSidebar(sidebarWidth + delta)}
       />
@@ -181,6 +198,10 @@ function DesktopAppShell(props: {
           onActiveTurnIdChange={session.setActiveTurnId}
           onArchiveWorktree={navigation.archiveWorktree}
           onEnsureSkillsLoaded={skills.ensureLoaded}
+          onOpenMessagingActivity={() => {
+            setSettingsInitialSection("messaging-activity");
+            setMainView("settings");
+          }}
           onHandoffThreadWorkspace={
             navigation.selectedThread
               ? async (request) =>
@@ -228,6 +249,7 @@ function DesktopAppShell(props: {
           <SettingsScreen
             desktopApi={desktopApi}
             settings={settings}
+            initialSection={settingsInitialSection}
             onClose={() => setMainView("thread")}
           />
         </div>
