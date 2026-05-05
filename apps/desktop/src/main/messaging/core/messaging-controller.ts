@@ -2109,7 +2109,6 @@ export class MessagingController {
         ...buildHandoffBranchPickerIntent({
           id: this.newIntentId("handoff-branch"),
           binding,
-          capabilityProfile: this.capabilityProfile,
           context,
           createdAt: this.now(),
           pageIndex,
