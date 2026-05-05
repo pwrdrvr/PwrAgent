@@ -1823,6 +1823,17 @@ export class DesktopBackendRegistry {
       executionMode: params.executionMode,
     });
 
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/updated",
+        params: {
+          threadId: result.threadId,
+          executionMode: params.executionMode,
+        },
+      },
+    });
+
     return {
       backend: params.backend,
       threadId: result.threadId,
@@ -1842,6 +1853,17 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
       ...modelSettings,
+    });
+
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/modelSettings/updated",
+        params: {
+          threadId: params.threadId,
+          ...modelSettings,
+        },
+      },
     });
 
     return {

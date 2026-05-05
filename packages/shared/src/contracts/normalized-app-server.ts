@@ -789,4 +789,21 @@ export type AppServerNotification =
         itemId?: string;
       };
     }
+  | {
+      method: "thread/executionMode/updated";
+      params: {
+        threadId: string;
+        executionMode: ThreadExecutionMode;
+      };
+    }
+  | {
+      method: "thread/modelSettings/updated";
+      params: {
+        threadId: string;
+        model?: string;
+        fastMode?: boolean;
+        reasoningEffort?: string;
+        serviceTier?: string;
+      };
+    }
   | AppServerPendingRequestNotification;
