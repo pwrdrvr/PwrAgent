@@ -296,6 +296,64 @@ textarea,
   white-space: nowrap;
 }
 
+.thread-row__binding-chip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.thread-row__binding-chip-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 200px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.thread-row__binding-chip-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-row__binding-chip-menu-item:hover {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.thread-row__binding-chip-menu-hint {
+  margin: 4px 6px 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.messaging-status-chip--clickable {
+  cursor: pointer;
+  border: none;
+  padding: 0;
+  background: transparent;
+}
+
+.messaging-status-chip--clickable:hover {
+  color: var(--text-primary);
+}
+
 .messaging-activity-list {
   list-style: none;
   margin: 0;

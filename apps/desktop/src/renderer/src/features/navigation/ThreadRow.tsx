@@ -256,6 +256,8 @@ function BindingChip(props: {
   onUnbind?: (binding: MessagingThreadBindingSummary) => void;
 }) {
   const { binding, onUnbind } = props;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement>(null);
   const Icon = PLATFORM_ICONS[binding.platform];
   const platformLabel =
     binding.platform.charAt(0).toUpperCase() + binding.platform.slice(1);
@@ -263,38 +265,86 @@ function BindingChip(props: {
     ? `${platformLabel}: ${binding.conversationTitle}`
     : platformLabel;
   const ariaLabel = onUnbind
-    ? `Unbind ${detail} from this thread`
+    ? `Open binding actions for ${detail}`
     : detail;
+
+  // Dismiss the menu when clicking outside or pressing Escape — same
+  // pattern as the reaction picker. Keep the listener tight (capture
+  // phase) so we close before the row's click handler fires.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (event: MouseEvent): void => {
+      if (!wrapRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown, true);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown, true);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
   return (
-    <button
-      type="button"
-      className="thread-row__binding-chip"
-      title={onUnbind ? `${detail} (click to unbind)` : detail}
-      aria-label={ariaLabel}
-      disabled={!onUnbind}
-      onClick={(event) => {
-        event.stopPropagation();
-        if (!onUnbind) return;
-        if (
-          window.confirm(
-            `Stop responding to ${detail} from this thread? You can rebind from the messaging app.`,
-          )
-        ) {
-          onUnbind(binding);
-        }
-      }}
+    <span
+      ref={wrapRef}
+      className="thread-row__binding-chip-wrap"
+      onClick={(event) => event.stopPropagation()}
     >
-      {Icon ? (
-        <Icon size={12} />
-      ) : (
-        <span aria-hidden="true">{binding.platform.slice(0, 2)}</span>
-      )}
-      {binding.conversationTitle ? (
-        <span className="thread-row__binding-chip-label">
-          {binding.conversationTitle}
-        </span>
+      <button
+        type="button"
+        className="thread-row__binding-chip"
+        title={detail}
+        aria-label={ariaLabel}
+        aria-haspopup={onUnbind ? "menu" : undefined}
+        aria-expanded={onUnbind ? menuOpen : undefined}
+        disabled={!onUnbind}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (!onUnbind) return;
+          setMenuOpen((open) => !open);
+        }}
+      >
+        {Icon ? (
+          <Icon size={12} />
+        ) : (
+          <span aria-hidden="true">{binding.platform.slice(0, 2)}</span>
+        )}
+        {binding.conversationTitle ? (
+          <span className="thread-row__binding-chip-label">
+            {binding.conversationTitle}
+          </span>
+        ) : null}
+      </button>
+      {menuOpen && onUnbind ? (
+        <div
+          role="menu"
+          className="thread-row__binding-chip-menu"
+          aria-label={`Actions for ${detail}`}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="thread-row__binding-chip-menu-item"
+            onClick={(event) => {
+              event.stopPropagation();
+              setMenuOpen(false);
+              onUnbind(binding);
+            }}
+          >
+            Unbind from {platformLabel}
+          </button>
+          <p className="thread-row__binding-chip-menu-hint">
+            Removes the binding from this app. To stop the conversation
+            entirely, also unbind from {platformLabel}.
+          </p>
+        </div>
       ) : null}
-    </button>
+    </span>
   );
 }
 

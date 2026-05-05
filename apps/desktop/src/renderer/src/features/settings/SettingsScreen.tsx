@@ -11,9 +11,9 @@ import { ModelsSettings } from "./ModelsSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
 import { MessagingActivityScreen } from "../messaging-activity/MessagingActivityScreen";
 import { WorktreesSettings } from "./WorktreesSettings";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-type SettingsSection =
+export type SettingsSection =
   | "experimental"
   | "messaging"
   | "messaging-activity"
@@ -35,9 +35,18 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
 export function SettingsScreen(props: {
   desktopApi?: DesktopApi;
   settings: DesktopSettingsState;
+  /** Initial section to render. Defaults to Applications. */
+  initialSection?: SettingsSection;
   onClose?: () => void;
 }) {
-  const [section, setSection] = useState<SettingsSection>("applications");
+  const [section, setSection] = useState<SettingsSection>(
+    props.initialSection ?? "applications",
+  );
+  // When the parent re-mounts with a different initialSection (e.g.
+  // user clicked a platform icon → "messaging-activity"), follow it.
+  useEffect(() => {
+    if (props.initialSection) setSection(props.initialSection);
+  }, [props.initialSection]);
   const snapshot = props.settings.snapshot;
 
   return (

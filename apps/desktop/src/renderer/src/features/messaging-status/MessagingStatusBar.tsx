@@ -32,7 +32,16 @@ const HEALTH_LABEL: Record<MessagingPlatformHealth, string> = {
  * Renders nothing when no platforms are configured — keeps the header
  * tight for users who don't use messaging.
  */
-export function MessagingStatusBar(props: { desktopApi?: DesktopApi }) {
+export function MessagingStatusBar(props: {
+  desktopApi?: DesktopApi;
+  /**
+   * Called when the user clicks a platform chip. Parent navigates to
+   * the Messaging Activity screen so the user can audit traffic for
+   * that platform. Receives the chosen platform so the parent could
+   * scope the screen to it in the future.
+   */
+  onOpenActivity?: (platform: MessagingChannelKind) => void;
+}) {
   const { statuses, activeAtByPlatform } = useMessagingPlatformStatuses(
     props.desktopApi,
   );
@@ -48,6 +57,11 @@ export function MessagingStatusBar(props: { desktopApi?: DesktopApi }) {
           key={status.platform}
           status={status}
           active={hasRecentActivity(status, activeAtByPlatform[status.platform])}
+          onClick={
+            props.onOpenActivity
+              ? () => props.onOpenActivity!(status.platform)
+              : undefined
+          }
         />
       ))}
     </div>
@@ -57,20 +71,21 @@ export function MessagingStatusBar(props: { desktopApi?: DesktopApi }) {
 function PlatformChip(props: {
   status: MessagingPlatformStatus;
   active: boolean;
+  onClick?: () => void;
 }) {
-  const { status, active } = props;
+  const { status, active, onClick } = props;
   const Icon = ICONS[status.platform];
-  const label = `${formatPlatformName(status.platform)}: ${HEALTH_LABEL[status.health]}${
+  const baseLabel = `${formatPlatformName(status.platform)}: ${HEALTH_LABEL[status.health]}${
     status.reason ? ` (${status.reason})` : ""
   }`;
-  return (
-    <span
-      className={`messaging-status-chip messaging-status-chip--${status.health}${
-        active ? " is-active" : ""
-      }`}
-      title={label}
-      aria-label={label}
-    >
+  const label = onClick
+    ? `${baseLabel} — click to view messaging activity`
+    : baseLabel;
+  const className = `messaging-status-chip messaging-status-chip--${status.health}${
+    active ? " is-active" : ""
+  }`;
+  const content = (
+    <>
       {Icon ? (
         <Icon size={14} />
       ) : (
@@ -84,7 +99,25 @@ function PlatformChip(props: {
         }`}
         aria-hidden="true"
       />
-    </span>
+    </>
+  );
+  if (!onClick) {
+    return (
+      <span className={className} title={label} aria-label={label}>
+        {content}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={`${className} messaging-status-chip--clickable`}
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+    >
+      {content}
+    </button>
   );
 }
 
