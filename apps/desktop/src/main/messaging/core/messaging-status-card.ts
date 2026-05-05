@@ -130,27 +130,6 @@ function buildStatusActions(params: {
 
   const allActions: MessagingSurfaceAction[] = [
     {
-      id: "status:stop",
-      label: "Stop",
-      style: "danger",
-      fallbackText: "stop",
-      priority: 1,
-    },
-    {
-      id: "status:refresh",
-      label: "Refresh",
-      style: "secondary",
-      fallbackText: "refresh",
-      priority: 2,
-    },
-    {
-      id: "status:detach",
-      label: "Detach",
-      style: "danger",
-      fallbackText: "detach",
-      priority: 3,
-    },
-    {
       id: "status:model",
       label: "Model",
       style: "secondary",
@@ -213,6 +192,28 @@ function buildStatusActions(params: {
       style: "secondary",
       fallbackText: "sync name",
       priority: 11,
+    },
+    {
+      id: "status:stop",
+      label: "Stop",
+      style: "danger",
+      fallbackText: "stop",
+      priority: 1,
+      layout: { rowBreakBefore: true },
+    },
+    {
+      id: "status:refresh",
+      label: "Refresh",
+      style: "secondary",
+      fallbackText: "refresh",
+      priority: 2,
+    },
+    {
+      id: "status:detach",
+      label: "Detach",
+      style: "danger",
+      fallbackText: "detach",
+      priority: 3,
     },
   ];
 
