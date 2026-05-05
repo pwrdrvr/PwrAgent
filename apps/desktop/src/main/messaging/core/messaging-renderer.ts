@@ -14,6 +14,7 @@ import type {
 } from "@pwragent/messaging-interface";
 import {
   applyActionCapabilityLimits,
+  truncateMessagingLabel,
   type MessagingCapabilityProfile,
 } from "@pwragent/messaging-interface";
 import {
@@ -196,21 +197,11 @@ export function buildQuestionnaireIntent(params: {
       secret: question.isSecret,
       options: (question.options ?? []).map((option, index) => ({
         id: `${question.id}:option:${index + 1}`,
-        label: capLabel(option.label, labelLimit),
+        label: labelLimit === undefined ? option.label : truncateMessagingLabel(option.label, labelLimit),
         description: option.description || undefined,
         fallbackText: String(index + 1),
         recommended: /\(recommended\)/i.test(option.label),
       })),
     })),
   };
-}
-
-function capLabel(label: string, limit: number | undefined): string {
-  if (limit === undefined || label.length <= limit) {
-    return label;
-  }
-  if (limit <= 1) {
-    return label.slice(0, limit);
-  }
-  return `${label.slice(0, limit - 1)}…`;
 }

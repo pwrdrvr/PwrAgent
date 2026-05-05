@@ -866,11 +866,15 @@ export function capabilityProfileSupportsActionCount(
  *
  * If the profile has no `actions` capability (text-only provider), returns
  * an empty array — the caller is expected to fall back to text rendering.
+ *
+ * Generic over `T extends MessagingSurfaceAction` so callers passing
+ * discriminated subtypes (e.g., `MessagingApprovalDecision`,
+ * `MessagingChoice`) get back the same subtype rather than the base.
  */
-export function applyActionCapabilityLimits(
-  actions: MessagingSurfaceAction[],
+export function applyActionCapabilityLimits<T extends MessagingSurfaceAction>(
+  actions: T[],
   profile: MessagingCapabilityProfile | undefined,
-): MessagingSurfaceAction[] {
+): T[] {
   if (!profile) {
     return actions;
   }
@@ -886,11 +890,16 @@ export function applyActionCapabilityLimits(
     if (action.label.length <= labelLimit) {
       return action;
     }
-    return { ...action, label: truncateLabelTo(action.label, labelLimit) };
+    return { ...action, label: truncateMessagingLabel(action.label, labelLimit) };
   });
 }
 
-function truncateLabelTo(label: string, limit: number): string {
+/**
+ * Truncate a label/string to fit a character limit, appending an ellipsis
+ * (`…`) when truncation occurs. Use for action labels, picker option text,
+ * or anywhere a producer needs to fit text into a `maxLabelLength` budget.
+ */
+export function truncateMessagingLabel(label: string, limit: number): string {
   if (limit <= 1 || label.length <= limit) {
     return label.slice(0, limit);
   }
@@ -898,10 +907,10 @@ function truncateLabelTo(label: string, limit: number): string {
   return `${label.slice(0, limit - 1)}…`;
 }
 
-export function truncateActionsByPriority(
-  actions: MessagingSurfaceAction[],
+export function truncateActionsByPriority<T extends MessagingSurfaceAction>(
+  actions: T[],
   maxActions: number,
-): MessagingSurfaceAction[] {
+): T[] {
   if (actions.length <= maxActions) {
     return actions;
   }

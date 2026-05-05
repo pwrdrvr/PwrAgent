@@ -345,7 +345,12 @@ export function buildHandoffOverviewIntent(params: {
       [
         action,
         {
-          id: "status:refresh",
+          // Back from the handoff overview returns to the status card.
+          // Distinct id from the sibling "Refresh" button so callback
+          // handles don't collide on Telegram (same intent, two actions
+          // with identical ids would map to a single handle record).
+          // Both ids resolve to renderBindingStatus on the controller.
+          id: "handoff:back-to-status",
           label: "Back",
           fallbackText: "back",
           style: "secondary",
@@ -380,16 +385,34 @@ export function buildHandoffBranchPickerIntent(params: {
   pageIndex?: number;
   pageSize?: number;
 }): MessagingSingleSelectIntent {
-  const navActionCount = 5; // previous, next, back, refresh, cancel (max present at once)
-  const profilePageSize = params.capabilityProfile
-    ? capabilityProfilePageSize(
-        params.capabilityProfile,
-        navActionCount,
-        HANDOFF_BRANCH_PAGE_SIZE,
-      )
-    : HANDOFF_BRANCH_PAGE_SIZE;
-  const pageSize = Math.max(1, params.pageSize ?? profilePageSize);
+  // Three nav buttons always render (Back/Refresh/Cancel). Previous/Next
+  // appear conditionally based on pagination — but pageSize must be a
+  // single value across all pages, so we plan for the worst case (a
+  // middle page with both Previous AND Next visible) when the picker
+  // actually paginates. For a single-page result we only need to reserve
+  // 3 nav slots, freeing 2 more for branches.
+  const NAV_ACTIONS_BASE = 3; // back, refresh, cancel
+  const NAV_ACTIONS_MULTIPAGE = 5; // + previous + next
   const totalBranches = params.context.leaveLocalBranches.length;
+  const profilePageSize = (navActionCount: number): number =>
+    params.capabilityProfile
+      ? capabilityProfilePageSize(
+          params.capabilityProfile,
+          navActionCount,
+          HANDOFF_BRANCH_PAGE_SIZE,
+        )
+      : HANDOFF_BRANCH_PAGE_SIZE;
+  // First-pass page size assumes single-page (no Previous/Next). If the
+  // branches don't all fit on one page, recompute with the multi-page
+  // budget so middle pages still leave room for both nav buttons.
+  const singlePagePageSize = profilePageSize(NAV_ACTIONS_BASE);
+  const pageSize = Math.max(
+    1,
+    params.pageSize
+      ?? (totalBranches <= singlePagePageSize
+        ? singlePagePageSize
+        : profilePageSize(NAV_ACTIONS_MULTIPAGE)),
+  );
   const totalPages = Math.max(1, Math.ceil(totalBranches / pageSize));
   const pageIndex = clampPageIndex(params.pageIndex ?? 0, totalPages);
   const pageStart = pageIndex * pageSize;
@@ -404,6 +427,11 @@ export function buildHandoffBranchPickerIntent(params: {
       label: `${branchNumber}. ${branch}`,
       fallbackText: String(branchNumber),
       style: "secondary" as const,
+      // Branch entries are the lowest priority — under tight action
+      // budgets, drop branches before nav buttons. The page-size math
+      // should already prevent this from triggering, but the priority
+      // pass is the safety net.
+      priority: 100 + index,
       value: {
         ...handoffValue(params.context),
         leaveLocalBranch: branch,
@@ -418,6 +446,7 @@ export function buildHandoffBranchPickerIntent(params: {
             label: "Previous",
             fallbackText: "previous",
             style: "secondary" as const,
+            priority: 4,
             value: {
               ...handoffValue(params.context),
               pageIndex: pageIndex - 1,
@@ -432,6 +461,7 @@ export function buildHandoffBranchPickerIntent(params: {
             label: "Next",
             fallbackText: "next",
             style: "secondary" as const,
+            priority: 5,
             value: {
               ...handoffValue(params.context),
               pageIndex: pageIndex + 1,
@@ -440,6 +470,36 @@ export function buildHandoffBranchPickerIntent(params: {
         ]
       : []),
   ];
+
+  const choices = applyActionCapabilityLimits(
+    [
+      ...branchChoices,
+      ...pageActions,
+      {
+        id: "status:handoff",
+        label: "Back",
+        fallbackText: "back",
+        style: "secondary" as const,
+        priority: 1,
+        value: handoffValue(params.context),
+      },
+      {
+        id: "status:refresh",
+        label: "Refresh",
+        fallbackText: "refresh",
+        style: "secondary" as const,
+        priority: 3,
+      },
+      {
+        id: "handoff:cancel",
+        label: "Cancel",
+        fallbackText: "cancel",
+        style: "secondary" as const,
+        priority: 2,
+      },
+    ],
+    params.capabilityProfile,
+  );
 
   return {
     id: params.id,
@@ -467,29 +527,7 @@ export function buildHandoffBranchPickerIntent(params: {
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n"),
-    choices: [
-      ...branchChoices,
-      ...pageActions,
-      {
-        id: "status:handoff",
-        label: "Back",
-        fallbackText: "back",
-        style: "secondary" as const,
-        value: handoffValue(params.context),
-      },
-      {
-        id: "status:refresh",
-        label: "Refresh",
-        fallbackText: "refresh",
-        style: "secondary" as const,
-      },
-      {
-        id: "handoff:cancel",
-        label: "Cancel",
-        fallbackText: "cancel",
-        style: "secondary" as const,
-      },
-    ],
+    choices,
   };
 }
 
@@ -617,11 +655,10 @@ export function buildStatusModelPickerIntent(params: {
   id: string;
   models: Array<{ id: string; label?: string; current?: boolean }>;
 }): MessagingSingleSelectIntent {
-  // Reserve 1 nav slot for "Back"; the rest go to model entries.
-  const modelLimit = params.capabilityProfile?.actions
-    ? Math.max(0, params.capabilityProfile.actions.maxActions - 1)
-    : params.models.length;
-  const visibleModels = params.models.slice(0, modelLimit);
+  // Build the full list and let applyActionCapabilityLimits drop the
+  // lowest-priority entries (trailing models) on platforms with tighter
+  // action budgets. Back stays as priority 1 (always kept); models are
+  // priority 10+i so they degrade in display order.
   return {
     id: params.id,
     kind: "single_select",
@@ -636,12 +673,12 @@ export function buildStatusModelPickerIntent(params: {
     prompt: "Select Model",
     choices: applyActionCapabilityLimits(
       [
-        ...visibleModels.map((model, index) => ({
+        ...params.models.map((model, index) => ({
           id: "status:set-model",
           label: `${model.label ?? model.id}${model.current ? " (current)" : ""}`,
           fallbackText: String(index + 1),
           style: "secondary" as const,
-          priority: 10 + index, // models keep their order; back has higher priority
+          priority: 10 + index,
           value: {
             model: model.id,
           },
