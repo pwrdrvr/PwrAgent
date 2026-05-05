@@ -126,13 +126,9 @@ describe("TelegramAdapter", () => {
               expect.objectContaining({
                 text: "Projects",
               }),
-            ],
-            [
               expect.objectContaining({
                 text: "New",
               }),
-            ],
-            [
               expect.objectContaining({
                 text: "Cancel",
               }),

@@ -347,74 +347,71 @@ function projectsForSession(
     });
 }
 
+// Explicit row sentinels for the resume browser footer. Items above are
+// auto-flowed by the provider (Telegram packs 1/row, Discord packs 5/row),
+// then the nav and footer rows pack as many buttons as fit within
+// `maxColumns`. Sentinel values just need to be distinct integers; with the
+// document-order-aware layout, the relative emit order is determined by
+// document position, not by numeric value.
+const NAV_ROW = 1;
+const FOOTER_ROW = 2;
+
 function navigationActions(
   session: MessagingBrowseSessionRecord,
   pageIndex: number,
   totalPages: number,
 ): MessagingSurfaceAction[] {
   const actions: MessagingSurfaceAction[] = [];
-  let navigationRowStarted = false;
-  let footerRowStarted = false;
-  const addNavigationAction = (
-    action: Omit<MessagingSurfaceAction, "layout">,
-  ): void => {
-    actions.push({
-      ...action,
-      ...(navigationRowStarted ? {} : { layout: { rowBreakBefore: true } }),
-    });
-    navigationRowStarted = true;
-  };
-  const addFooterAction = (action: Omit<MessagingSurfaceAction, "layout">): void => {
-    actions.push({
-      ...action,
-      ...(footerRowStarted ? {} : { layout: { rowBreakBefore: true } }),
-    });
-    footerRowStarted = true;
-  };
   if (pageIndex > 0) {
-    addNavigationAction({
+    actions.push({
       id: "browse:page:prev",
       label: "Previous",
       style: "navigation",
       fallbackText: "back",
+      layout: { row: NAV_ROW },
     });
   }
   if (pageIndex < totalPages - 1) {
-    addNavigationAction({
+    actions.push({
       id: "browse:page:next",
       label: "Next",
       style: "navigation",
       fallbackText: "next",
+      layout: { row: NAV_ROW },
     });
   }
   if (session.mode !== "projects" && session.mode !== "new_project") {
-    addFooterAction({
+    actions.push({
       id: "browse:mode:projects",
       label: "Projects",
       style: "navigation",
       fallbackText: "projects",
+      layout: { row: FOOTER_ROW },
     });
   } else if (session.launchAction === "resume_thread") {
-    addFooterAction({
+    actions.push({
       id: "browse:mode:recents",
       label: "Recent Threads",
       style: "navigation",
       fallbackText: "recent",
+      layout: { row: FOOTER_ROW },
     });
   }
   if (session.launchAction !== "start_new_thread") {
-    addFooterAction({
+    actions.push({
       id: "browse:mode:new",
       label: "New",
       style: "secondary",
       fallbackText: "new",
+      layout: { row: FOOTER_ROW },
     });
   }
-  addFooterAction({
+  actions.push({
     id: "browse:cancel",
     label: "Cancel",
     style: "secondary",
     fallbackText: "cancel",
+    layout: { row: FOOTER_ROW },
   });
   return actions;
 }

@@ -140,6 +140,37 @@ describe("messaging surface contract", () => {
     expect(rows).toEqual([["one", "two"], ["next", "cancel"]]);
   });
 
+  it("interleaves explicit-row groups with automatic items in document order", () => {
+    const rows = layoutMessagingActionRows(
+      [
+        { action: { id: "a", label: "A" }, component: "a" },
+        { action: { id: "b", label: "B" }, component: "b" },
+        { action: { id: "c", label: "C" }, component: "c" },
+        {
+          action: { id: "prev", label: "Prev", layout: { row: 1 } },
+          component: "prev",
+        },
+        {
+          action: { id: "next", label: "Next", layout: { row: 1 } },
+          component: "next",
+        },
+        {
+          action: { id: "cancel", label: "Cancel", layout: { row: 2 } },
+          component: "cancel",
+        },
+      ],
+      { defaultColumns: 1, maxColumns: 8 },
+    );
+
+    expect(rows).toEqual([
+      ["a"],
+      ["b"],
+      ["c"],
+      ["prev", "next"],
+      ["cancel"],
+    ]);
+  });
+
   it("describes mixed markdown and image message parts", () => {
     const intent = {
       id: "intent-message",

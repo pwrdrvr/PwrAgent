@@ -231,34 +231,38 @@ export function layoutMessagingActionRows<T>(
   },
 ): T[][] {
   const maxColumns = Math.max(1, Math.floor(options.maxColumns));
-  const explicitRows = new Map<
-    number,
-    Array<{
-      action: MessagingSurfaceAction;
-      component: T;
-      index: number;
-    }>
-  >();
-  const automaticItems: Array<{
+
+  type ExplicitEntry = {
+    action: MessagingSurfaceAction;
+    component: T;
+    index: number;
+  };
+
+  const rows: T[][] = [];
+  let pendingAuto: Array<{
     action: MessagingSurfaceAction;
     component: T;
   }> = [];
+  let pendingExplicit: { row: number; entries: ExplicitEntry[] } | null = null;
 
-  items.forEach((item, index) => {
-    const row = item.action.layout?.row;
-    if (typeof row === "number" && Number.isInteger(row) && row >= 0) {
-      const entries = explicitRows.get(row) ?? [];
-      entries.push({ ...item, index });
-      explicitRows.set(row, entries);
+  const flushAuto = (): void => {
+    if (pendingAuto.length === 0) {
       return;
     }
-    automaticItems.push(item);
-  });
+    rows.push(
+      ...layoutAutomaticActionRows(pendingAuto, {
+        defaultColumns: options.defaultColumns,
+        maxColumns,
+      }),
+    );
+    pendingAuto = [];
+  };
 
-  const rows: T[][] = [];
-  for (const row of [...explicitRows.keys()].sort((left, right) => left - right)) {
-    const components = explicitRows
-      .get(row)!
+  const flushExplicit = (): void => {
+    if (!pendingExplicit) {
+      return;
+    }
+    const components = pendingExplicit.entries
       .sort((left, right) => {
         const leftColumn = left.action.layout?.column;
         const rightColumn = right.action.layout?.column;
@@ -273,14 +277,27 @@ export function layoutMessagingActionRows<T>(
         }
         return left.index - right.index;
       })
-      .map((item) => item.component);
+      .map((entry) => entry.component);
     rows.push(...chunkRow(components, maxColumns));
-  }
+    pendingExplicit = null;
+  };
 
-  rows.push(...layoutAutomaticActionRows(automaticItems, {
-    defaultColumns: options.defaultColumns,
-    maxColumns,
-  }));
+  items.forEach((item, index) => {
+    const row = item.action.layout?.row;
+    if (typeof row === "number" && Number.isInteger(row) && row >= 0) {
+      if (!pendingExplicit || pendingExplicit.row !== row) {
+        flushAuto();
+        flushExplicit();
+        pendingExplicit = { row, entries: [] };
+      }
+      pendingExplicit.entries.push({ ...item, index });
+    } else {
+      flushExplicit();
+      pendingAuto.push(item);
+    }
+  });
+  flushAuto();
+  flushExplicit();
 
   return typeof options.maxRows === "number" ? rows.slice(0, options.maxRows) : rows;
 }
