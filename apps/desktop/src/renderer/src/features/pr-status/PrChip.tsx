@@ -1,3 +1,4 @@
+import type { KeyboardEvent, MouseEvent } from "react";
 import type { PrSummary } from "@pwragent/shared";
 
 type PrChipProps = {
@@ -14,20 +15,34 @@ export function PrChip(props: PrChipProps) {
     : `#${pr.number}`;
   const tooltip = `${pr.org}/${pr.repo}#${pr.number} — ${stateTooltipLabel(pr.state)}`;
 
+  // role="button" span (not a real <button>) so the chip is legal HTML
+  // inside the row's main <button>. stopPropagation prevents the row's
+  // "select thread" click from firing when the user is opening a PR.
+  const handleActivate = (
+    event: MouseEvent<HTMLSpanElement> | KeyboardEvent<HTMLSpanElement>,
+  ): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    props.onOpen(pr.url);
+  };
+
   return (
-    <button
-      type="button"
+    <span
+      role="button"
+      tabIndex={0}
       aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${pr.state}) in browser`}
       title={tooltip}
       className={`pr-chip pr-chip--${pr.state}`}
-      onClick={(event) => {
-        event.stopPropagation();
-        props.onOpen(pr.url);
+      onClick={handleActivate}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          handleActivate(event);
+        }
       }}
     >
       <span className="pr-chip__dot" aria-hidden="true" />
       <span className="pr-chip__label">{label}</span>
-    </button>
+    </span>
   );
 }
 

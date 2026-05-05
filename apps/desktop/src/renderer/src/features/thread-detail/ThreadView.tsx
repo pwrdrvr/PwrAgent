@@ -18,6 +18,7 @@ import type {
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   HandoffThreadWorkspaceRequest,
+  MessagingChannelKind,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
@@ -614,6 +615,8 @@ type ThreadViewProps = {
   updatingExecutionMode?: ThreadExecutionMode;
   onActiveTurnIdChange?: (turnId?: string) => void;
   onEnsureSkillsLoaded?: () => void | Promise<void>;
+  /** Forwarded to ThreadHeader → MessagingStatusBar — opens the Activity screen. */
+  onOpenMessagingActivity?: (platform: MessagingChannelKind) => void;
   onLoadOlder: () => Promise<void>;
   onRefreshNavigation?: () => Promise<void>;
   onLiveTranscriptEntry?: (entry: AppServerThreadEntry) => void;
@@ -1496,7 +1499,11 @@ export function ThreadView(props: ThreadViewProps) {
 
   return (
     <section className="thread-view">
-      <ThreadHeader thread={selectedThread!} />
+      <ThreadHeader
+        desktopApi={props.desktopApi}
+        thread={selectedThread!}
+        onOpenMessagingActivity={props.onOpenMessagingActivity}
+      />
 
       <div
         className={`thread-view__layout${

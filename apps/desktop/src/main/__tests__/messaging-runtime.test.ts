@@ -616,6 +616,109 @@ describe("DesktopMessagingRuntime", () => {
       });
   });
 
+  it("emits health=enabled for each adapter that successfully starts", async () => {
+    const { runtime } = await createRuntimeHarness();
+    const events: unknown[] = [];
+    const unsubscribe = runtime.onPlatformStatus((event) => {
+      events.push(event);
+    });
+
+    await runtime.start();
+    await Promise.resolve();
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "health-changed",
+        platform: "telegram",
+        health: "enabled",
+      }),
+    );
+    unsubscribe();
+  });
+
+  it("emits health=errored when an adapter fails to start", async () => {
+    await prepareRuntimeStore();
+    const failingAdapter = createAdapter("telegram", {
+      start: vi.fn(async () => {
+        throw new Error("telegram unavailable");
+      }),
+    });
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: () => [failingAdapter],
+      backendBridge: bridge,
+      config: {
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: ["user-1"],
+        },
+      },
+    });
+    const events: unknown[] = [];
+    runtime.onPlatformStatus((event) => events.push(event));
+
+    await runtime.start();
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "health-changed",
+        platform: "telegram",
+        health: "errored",
+        reason: expect.stringContaining("telegram unavailable"),
+      }),
+    );
+  });
+
+  it("emits an activity event when an inbound message arrives", async () => {
+    const { runtime, adapter } = await createRuntimeHarness();
+    await runtime.start();
+    const events: unknown[] = [];
+    runtime.onPlatformStatus((event) => events.push(event));
+
+    await adapter.listener?.(buildCommandEvent("/resume"));
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "activity",
+        platform: "telegram",
+      }),
+    );
+  });
+
+  it("emits health=suspended for each running adapter when stopped", async () => {
+    const { runtime } = await createRuntimeHarness();
+    await runtime.start();
+    const events: unknown[] = [];
+    runtime.onPlatformStatus((event) => events.push(event));
+
+    await runtime.stop();
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "health-changed",
+        platform: "telegram",
+        health: "suspended",
+      }),
+    );
+  });
+
+  it("getPlatformStatuses returns a snapshot keyed by platform", async () => {
+    const { runtime } = await createRuntimeHarness();
+    await runtime.start();
+
+    const snapshot = runtime.getPlatformStatuses();
+    expect(snapshot).toEqual([
+      expect.objectContaining({
+        platform: "telegram",
+        health: "enabled",
+      }),
+    ]);
+  });
+
   it("stops the started adapter instances without rebuilding the factory", async () => {
     await prepareRuntimeStore();
     const adapter = createAdapter("telegram");

@@ -206,6 +206,48 @@ Hover, focus, selected, loading, and disabled states must not cause layout shift
 
 Focus states should be visible and tangerine-led, but contained so they do not create clipped halos or stray outlines.
 
+## Tooltips
+
+Two patterns. Pick the right one:
+
+**CSS pseudo-element tooltip** (`tooltip-target` + `data-tooltip` in
+`app.css`): cheapest and stateless. Use when the hovered element and
+all its ancestors render with `overflow: visible`. The tooltip is an
+`::after` pseudo-element positioned absolutely; any clipping ancestor
+(`overflow: hidden`, `overflow: auto`, `overflow: scroll`) chops it.
+
+```tsx
+<span className="… tooltip-target" data-tooltip={text}>…</span>
+```
+
+**Portal-rendered tooltip** (`useViewportTooltip` hook in
+`renderer/src/lib/useViewportTooltip.tsx`): when ANY ancestor clips —
+sidebar scroll regions, overflow-hidden chips with text-ellipsis,
+draggable rails. The hook renders the tooltip via `createPortal` to
+`document.body` with `position: fixed`, then clamps to viewport bounds
+via `useLayoutEffect` after measuring the rendered text.
+
+```tsx
+const { show, hide, tooltipNode } =
+  useViewportTooltip({ className: "viewport-tooltip" });
+return (
+  <span
+    onMouseEnter={(e) => show(e.currentTarget, "Multi\nline\ntext")}
+    onMouseLeave={hide}
+    onFocus={(e) => show(e.currentTarget, "Multi\nline\ntext")}
+    onBlur={hide}
+  >
+    …
+    {tooltipNode}
+  </span>
+);
+```
+
+Both honor `\n` for multi-line bodies via `white-space: pre-wrap`.
+
+Anti-pattern: native `title=` attribute. Inconsistent timing across
+platforms, can't be styled, no multi-line on macOS Electron.
+
 ## Accessibility
 
 Maintain strong contrast between text and surfaces. Critical states should not rely on color alone: pair color with text, shape, placement, iconography, or row treatment.

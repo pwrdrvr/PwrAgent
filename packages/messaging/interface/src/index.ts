@@ -100,7 +100,21 @@ export type MessagingConversationRef = {
   id: string;
   kind: MessagingConversationKind;
   parentId?: string;
+  /**
+   * Title of this conversation node (DM peer, channel, topic, thread).
+   * Optional — adapters populate when the platform makes it cheap.
+   */
   title?: string;
+  /**
+   * Title of the immediate parent conversation. Used by chip
+   * breadcrumbs: Telegram topic → supergroup name; Discord channel →
+   * guild name; Discord thread → parent channel name.
+   */
+  parentTitle?: string;
+  /**
+   * Two levels up. Today: Discord threads — the guild name.
+   */
+  ancestorTitle?: string;
 };
 
 export type MessagingActorIdentity = {

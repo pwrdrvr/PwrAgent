@@ -82,10 +82,18 @@ export class SqliteMessagingStore {
       .all(params.threadId) as { payload: string }[];
     return rows
       .map((row) => JSON.parse(row.payload) as MessagingBindingRecord)
-      .filter(
-        (binding) =>
-          !binding.revokedAt && binding.backend === params.backend,
-      );
+      .filter((binding) => {
+        if (binding.revokedAt) return false;
+        // Backend-strict matching used to drop bindings whose stored
+        // backend disagreed with the thread's current source — a real
+        // problem when an older binding lacks a backend at all, or
+        // when a thread migrated between backends. Accept the row when
+        // the backends match OR when the binding has no backend
+        // recorded; trust thread_id otherwise (it's already PK-unique
+        // enough across the user's history).
+        if (!binding.backend) return true;
+        return binding.backend === params.backend;
+      });
   }
 
   async revokeBinding(params: {

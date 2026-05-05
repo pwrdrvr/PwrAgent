@@ -9,12 +9,14 @@ import { ExperimentalSettings } from "./ExperimentalSettings";
 import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
+import { MessagingActivityScreen } from "../messaging-activity/MessagingActivityScreen";
 import { WorktreesSettings } from "./WorktreesSettings";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-type SettingsSection =
+export type SettingsSection =
   | "experimental"
   | "messaging"
+  | "messaging-activity"
   | "models"
   | "applications"
   | "worktrees"
@@ -24,6 +26,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "applications", label: "Applications" },
   { id: "worktrees", label: "Worktrees" },
   { id: "messaging", label: "Messaging" },
+  { id: "messaging-activity", label: "Messaging activity" },
   { id: "models", label: "Models" },
   { id: "experimental", label: "Experimental" },
   { id: "about", label: "About" },
@@ -32,9 +35,18 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
 export function SettingsScreen(props: {
   desktopApi?: DesktopApi;
   settings: DesktopSettingsState;
+  /** Initial section to render. Defaults to Applications. */
+  initialSection?: SettingsSection;
   onClose?: () => void;
 }) {
-  const [section, setSection] = useState<SettingsSection>("applications");
+  const [section, setSection] = useState<SettingsSection>(
+    props.initialSection ?? "applications",
+  );
+  // When the parent re-mounts with a different initialSection (e.g.
+  // user clicked a platform icon → "messaging-activity"), follow it.
+  useEffect(() => {
+    if (props.initialSection) setSection(props.initialSection);
+  }, [props.initialSection]);
   const snapshot = props.settings.snapshot;
 
   return (
@@ -246,6 +258,10 @@ function SettingsSectionBody(props: {
         }}
       />
     );
+  }
+
+  if (props.section === "messaging-activity") {
+    return <MessagingActivityScreen desktopApi={props.desktopApi} />;
   }
 
   return (

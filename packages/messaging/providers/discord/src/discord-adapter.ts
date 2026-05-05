@@ -178,7 +178,21 @@ export type DiscordGatewayConnection = {
   start(): Promise<void>;
 };
 
+export type DiscordChannelInfo = {
+  id: string;
+  name?: string;
+  /** Set when the channel is a thread; points at the parent channel. */
+  parentId?: string;
+};
+
+export type DiscordGuildInfo = {
+  id: string;
+  name?: string;
+};
+
 export type DiscordApi = DiscordApplicationCommandApi & {
+  getChannel(channelId: string): Promise<DiscordChannelInfo>;
+  getGuild(guildId: string): Promise<DiscordGuildInfo>;
   updateChannelName(channelId: string, request: { name: string }): Promise<void>;
   createInteractionResponse(
     interactionId: string,
@@ -268,6 +282,14 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private componentBindings = new Map<string, DiscordComponentBinding>();
   private defaultApi?: DiscordApi;
   private defaultGateway?: DiscordGatewayConnection;
+  /**
+   * Per-process caches for channel + guild lookups used to populate
+   * conversation breadcrumb metadata (channel name, parent channel
+   * name for threads, guild name). Names change rarely; one REST
+   * fetch per id per process is sufficient.
+   */
+  private readonly channelCache = new Map<string, DiscordChannelInfo>();
+  private readonly guildCache = new Map<string, DiscordGuildInfo>();
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private readonly options: DiscordAdapterOptions;
   private streamSurfaces = new Map<string, string>();
@@ -633,7 +655,14 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return;
     }
 
-    const channel = this.channelFromDiscord(message.channel_id, message.guild_id);
+    const channel = await this.channelFromDiscord(message.channel_id, message.guild_id, {
+      // Best-effort DM peer name from the message author when the
+      // conversation is a DM (no guild). Channel + thread breadcrumbs
+      // are resolved via REST inside channelFromDiscord (cached).
+      dmPeerName: message.guild_id
+        ? undefined
+        : (message.author.global_name ?? message.author.username),
+    });
     const receivedAt = this.now();
     const routingState = this.routingStateFromDiscord(message.channel_id, message.guild_id, {
       channelType: message.channel_type,
@@ -730,11 +759,15 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
 
     const binding = this.componentBindings.get(customId);
+    const channel = await this.channelFromDiscord(
+      interaction.channel_id,
+      interaction.guild_id,
+    );
     await listener({
       id: `discord:interaction:${interaction.id}`,
       kind: "callback",
       actor: this.actorFromUser(actor, interaction.member?.nick ?? undefined),
-      channel: this.channelFromDiscord(interaction.channel_id, interaction.guild_id),
+      channel,
       interaction: {
         channel: this.channel,
         id: customId,
@@ -770,12 +803,16 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
 
     const args = commandArgsFromOptions(interaction.data?.options);
+    const channel = await this.channelFromDiscord(
+      interaction.channel_id,
+      interaction.guild_id,
+    );
     await listener({
       id: `discord:command:${interaction.id}`,
       kind: "command",
       actor: this.actorFromUser(actor, interaction.member?.nick ?? undefined),
       args,
-      channel: this.channelFromDiscord(interaction.channel_id, interaction.guild_id),
+      channel,
       command: commandName,
       rawText: [`/${commandName}`, ...args].join(" ").trim(),
       receivedAt: this.now(),
@@ -1058,18 +1095,102 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     );
   }
 
-  private channelFromDiscord(
+  private async channelFromDiscord(
     channelId: string,
     guildId: string | undefined,
-  ): MessagingInboundEvent["channel"] {
+    options?: { dmPeerName?: string },
+  ): Promise<MessagingInboundEvent["channel"]> {
+    if (!guildId) {
+      // DM — title from the peer's display name; no parent.
+      return {
+        channel: this.channel,
+        conversation: {
+          id: channelId,
+          kind: "dm",
+          title: options?.dmPeerName,
+        },
+      };
+    }
+    // Guild-channel-or-thread. We keep kind="channel" for both
+    // regular channels and threads — kind is part of the conversation
+    // key used for binding lookup, so flipping to kind="thread" would
+    // make legacy thread bindings unfindable. Thread vs channel is
+    // distinguishable from data shape (ancestorTitle populated → it
+    // came from a thread).
+    const breadcrumbs = await this.lookupChannelBreadcrumbs(
+      channelId,
+      guildId,
+    );
     return {
       channel: this.channel,
       conversation: {
         id: channelId,
-        kind: guildId ? "channel" : "dm",
+        kind: "channel",
         parentId: guildId,
+        title: breadcrumbs.channelName,
+        parentTitle: breadcrumbs.parentChannelName ?? breadcrumbs.guildName,
+        ancestorTitle: breadcrumbs.parentChannelName
+          ? breadcrumbs.guildName
+          : undefined,
       },
     };
+  }
+
+  /**
+   * Resolve channel + guild + (for threads) parent-channel names via
+   * the Discord REST API, with an unbounded in-memory cache keyed by
+   * id. Names rarely change; one fetch per id per process is plenty.
+   * Failures fall through to undefined — the chip falls back to the
+   * literal placeholder. We never throw out of this path because the
+   * adapter listener that called us must keep routing inbound traffic.
+   */
+  private async lookupChannelBreadcrumbs(
+    channelId: string,
+    guildId: string,
+  ): Promise<{
+    channelName?: string;
+    parentChannelName?: string;
+    guildName?: string;
+  }> {
+    const channel = await this.cachedChannel(channelId);
+    let parentChannel: DiscordChannelInfo | undefined;
+    if (channel?.parentId) {
+      parentChannel = await this.cachedChannel(channel.parentId);
+    }
+    const guild = await this.cachedGuild(guildId);
+    return {
+      channelName: channel?.name,
+      parentChannelName: parentChannel?.name,
+      guildName: guild?.name,
+    };
+  }
+
+  private async cachedChannel(
+    channelId: string,
+  ): Promise<DiscordChannelInfo | undefined> {
+    const cached = this.channelCache.get(channelId);
+    if (cached) return cached;
+    try {
+      const fresh = await this.api.getChannel(channelId);
+      this.channelCache.set(channelId, fresh);
+      return fresh;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async cachedGuild(
+    guildId: string,
+  ): Promise<DiscordGuildInfo | undefined> {
+    const cached = this.guildCache.get(guildId);
+    if (cached) return cached;
+    try {
+      const fresh = await this.api.getGuild(guildId);
+      this.guildCache.set(guildId, fresh);
+      return fresh;
+    } catch {
+      return undefined;
+    }
   }
 
   private actorFromUser(
@@ -1286,6 +1407,27 @@ class DiscordRestApi implements DiscordApi {
     return (await this.rest.post(Routes.applicationCommands(applicationId), {
       body: command,
     })) as DiscordApplicationCommand;
+  }
+
+  async getChannel(channelId: string): Promise<DiscordChannelInfo> {
+    const raw = (await this.rest.get(Routes.channel(channelId))) as {
+      id: string;
+      name?: string;
+      parent_id?: string | null;
+    };
+    return {
+      id: raw.id,
+      name: raw.name ?? undefined,
+      parentId: raw.parent_id ?? undefined,
+    };
+  }
+
+  async getGuild(guildId: string): Promise<DiscordGuildInfo> {
+    const raw = (await this.rest.get(Routes.guild(guildId))) as {
+      id: string;
+      name?: string;
+    };
+    return { id: raw.id, name: raw.name ?? undefined };
   }
 
   async createMessage(

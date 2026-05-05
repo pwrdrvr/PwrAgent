@@ -8,6 +8,10 @@ import type {
   ThreadIdentifier,
   WorktreeSnapshotSummary,
 } from "./normalized-app-server";
+import type {
+  MessagingChannelKind,
+  MessagingConversationKind,
+} from "./messaging";
 
 export type InboxReason = "new-thread" | "updated-since-seen";
 
@@ -30,6 +34,48 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   reactions?: string[];
   /** GitHub pull requests detected for this thread's linked directories + branch. */
   prs?: PrSummary[];
+  /**
+   * Messaging platform conversations bound to this thread. Each binding
+   * represents a single conversation (DM, channel, topic, etc.) on one
+   * platform. The renderer renders one chip per active binding and lets
+   * the user unbind from the desktop side via the chip menu.
+   */
+  messagingBindings?: MessagingThreadBindingSummary[];
+};
+
+/**
+ * Renderer-facing slice of a single active messaging binding for a
+ * thread. Carries enough to render the chip + the unbind action without
+ * exposing the full `MessagingBindingRecord` (which has adapter-opaque
+ * routing state the UI must not parse).
+ */
+export type MessagingThreadBindingSummary = {
+  /** Stable id of the binding row in sqlite — pass back to unbind. */
+  bindingId: string;
+  platform: MessagingChannelKind;
+  /**
+   * Conversation kind (DM / channel / topic / thread). Drives the chip
+   * label prefix: `DM:` for dm, `SG:` for Telegram topic+channel,
+   * `SRV:` for Discord channel/thread, etc.
+   */
+  conversationKind?: MessagingConversationKind;
+  /**
+   * Title of this conversation node itself (DM peer name, channel
+   * name, topic name when known). Renderer-only — not used for routing.
+   */
+  conversationTitle?: string;
+  /**
+   * Title of the immediate parent. For Telegram topics this is the
+   * supergroup name; for Discord channels it's the guild name; for
+   * Discord threads it's the parent channel name.
+   */
+  parentTitle?: string;
+  /**
+   * Two levels up. Today: Discord threads — the guild name.
+   */
+  ancestorTitle?: string;
+  /** Wall-clock ms when the binding last had inbound or outbound activity. */
+  activeAt?: number;
 };
 
 /**
