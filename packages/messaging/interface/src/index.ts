@@ -822,7 +822,7 @@ export type MessagingAttachmentCapabilities = {
  * Producers will read `supportsFileUpload` and `maxUploadBytes` to decide
  * between attachment-with-preview and inline-only fallback.
  *
- * Tracked in: docs/plans/2026-05-05-001-feat-messaging-plan-review-attachment-delivery-plan.md
+ * Tracked in: docs/plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md
  */
 export type MessagingOutboundAttachmentCapabilities = {
   maxUploadBytes?: number;
