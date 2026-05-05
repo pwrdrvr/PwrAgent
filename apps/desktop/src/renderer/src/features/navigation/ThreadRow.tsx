@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
+import { PrChip } from "../pr-status/PrChip";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
@@ -13,6 +14,8 @@ type ThreadRowProps = {
   selectedThreadKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   thread: NavigationThreadSummary;
+  /** PRs detected for this specific thread; rendered as chips. */
+  prs?: PrSummary[];
   onOpenContextMenu: (
     thread: NavigationThreadSummary,
     position: { x: number; y: number; anchorTop?: number }
@@ -23,6 +26,7 @@ type ThreadRowProps = {
     emoji: string,
     present: boolean,
   ) => Promise<void>;
+  onOpenPullRequest?: (url: string) => void;
 };
 
 export function ThreadRow(props: ThreadRowProps) {
@@ -34,6 +38,9 @@ export function ThreadRow(props: ThreadRowProps) {
   const addReactionRef = useRef<HTMLButtonElement>(null);
   const reactions = props.thread.reactions ?? [];
   const canReact = Boolean(props.onSetReaction);
+  const prs = props.prs ?? [];
+  const showRepoPrefix = needsRepoPrefix(prs);
+  const openPr = props.onOpenPullRequest ?? defaultOpenPullRequest;
 
   const toggleReaction = (emoji: string): void => {
     if (!props.onSetReaction) {
@@ -79,6 +86,19 @@ export function ThreadRow(props: ThreadRowProps) {
           linkedDirectoryMode={props.linkedDirectoryMode}
           thread={props.thread}
         />
+
+        {prs.length > 0 ? (
+          <span className="thread-row__pr-chips">
+            {prs.map((pr) => (
+              <PrChip
+                key={pr.url}
+                pr={pr}
+                showRepoPrefix={showRepoPrefix}
+                onOpen={openPr}
+              />
+            ))}
+          </span>
+        ) : null}
       </button>
 
       {canReact || reactions.length > 0 ? (
@@ -149,6 +169,21 @@ export function ThreadRow(props: ThreadRowProps) {
       </button>
     </div>
   );
+}
+
+function needsRepoPrefix(prs: PrSummary[]): boolean {
+  if (prs.length <= 1) {
+    return false;
+  }
+  const firstKey = `${prs[0]!.org}/${prs[0]!.repo}`;
+  return prs.some((pr) => `${pr.org}/${pr.repo}` !== firstKey);
+}
+
+function defaultOpenPullRequest(url: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function formatRelativeTime(timestamp?: number): string {

@@ -19,6 +19,8 @@ import type {
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
+  GetThreadPullRequestsRequest,
+  GetThreadPullRequestsResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   NavigationSnapshot,
@@ -51,6 +53,7 @@ import {
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
+  NAVIGATION_GET_THREAD_PRS_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -60,6 +63,8 @@ import {
 } from "../../shared/ipc";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { getMainLogger } from "../log";
+import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
+import { detectPullRequestsForThread } from "../pr-status/pr-detection";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -106,6 +111,7 @@ class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
   private focusedDiffServiceApiKey: string | undefined;
   private focusedDiffServiceModel: string | undefined;
+  private prFetcher: GithubPrFetcher | undefined;
   private readonly pendingNavigationSnapshots = new Map<
     string,
     Promise<NavigationSnapshot>
@@ -370,6 +376,39 @@ class DesktopAppServerService {
     return response;
   }
 
+  async getThreadPullRequests(
+    request: GetThreadPullRequestsRequest,
+  ): Promise<GetThreadPullRequestsResponse> {
+    const backend = request.backend ?? "codex";
+    const fetcher = this.getPrFetcher();
+    const ghAvailable = await fetcher.isGhAvailable();
+    if (!ghAvailable) {
+      return { backend, threadId: request.threadId, prs: [], ghAvailable: false };
+    }
+
+    // Pull the thread off the most recent navigation snapshot so we have
+    // its current branch + linked directories without needing the renderer
+    // to forward them every call. If the thread isn't in the snapshot
+    // (e.g. archived), return empty rather than crashing.
+    const snapshot = await this.getNavigationSnapshot({ backend });
+    const thread = snapshot.threads.find(
+      (candidate) => candidate.id === request.threadId,
+    );
+    if (!thread) {
+      return { backend, threadId: request.threadId, prs: [], ghAvailable: true };
+    }
+
+    const prs = await detectPullRequestsForThread({ fetcher, thread });
+    logDebug("getThreadPullRequests", {
+      backend,
+      threadId: request.threadId,
+      branch: thread.gitBranch ?? null,
+      directoryCount: thread.linkedDirectories.length,
+      prCount: prs.length,
+    });
+    return { backend, threadId: request.threadId, prs, ghAvailable: true };
+  }
+
   async setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> {
@@ -476,7 +515,15 @@ class DesktopAppServerService {
     this.focusedDiffService = null;
     this.focusedDiffServiceApiKey = undefined;
     this.focusedDiffServiceModel = undefined;
+    this.prFetcher = undefined;
     await disposeDesktopBackendRegistry();
+  }
+
+  private getPrFetcher(): GithubPrFetcher {
+    if (!this.prFetcher) {
+      this.prFetcher = new GithubPrFetcher();
+    }
+    return this.prFetcher;
   }
 
   private getOverlayStore(): OverlayStoreLike {
@@ -636,6 +683,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.setThreadReaction(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_GET_THREAD_PRS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_GET_THREAD_PRS_CHANNEL,
+    async (
+      _event,
+      request: GetThreadPullRequestsRequest,
+    ): Promise<GetThreadPullRequestsResponse> => {
+      return await appServerService.getThreadPullRequests(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.handle(
     NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -682,6 +739,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_GET_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);

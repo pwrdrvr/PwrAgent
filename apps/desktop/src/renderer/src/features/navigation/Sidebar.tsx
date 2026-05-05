@@ -5,6 +5,7 @@ import type {
   BackendSummary,
   NavigationDirectorySummary,
   NavigationThreadSummary,
+  PrSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
@@ -62,6 +63,7 @@ type SidebarProps = {
     emoji: string,
     present: boolean,
   ) => Promise<void>;
+  prsByThreadKey?: Record<string, PrSummary[]>;
   onResizeStart?: (event: PointerEvent<HTMLElement>) => void;
   onResizeByKeyboard?: (delta: number) => void;
 };
@@ -354,6 +356,7 @@ export function Sidebar(props: SidebarProps) {
               selectedThreadKey={props.selectedItemKey}
               thinkingThreadKeys={props.thinkingThreadKeys}
               threads={props.inboxThreads}
+              prsByThreadKey={props.prsByThreadKey}
               onOpenThreadContextMenu={openThreadContextMenu}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetThreadReaction}
@@ -365,6 +368,7 @@ export function Sidebar(props: SidebarProps) {
               selectedItemKey={props.selectedItemKey}
               thinkingThreadKeys={props.thinkingThreadKeys}
               threads={props.threads}
+              prsByThreadKey={props.prsByThreadKey}
               onOpenThreadContextMenu={openThreadContextMenu}
               onOpenLaunchpad={props.onOpenLaunchpad}
               onSelectThread={props.onSelectThread}
@@ -379,6 +383,7 @@ export function Sidebar(props: SidebarProps) {
                 selectedThreadKey={props.selectedItemKey}
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 threads={props.threads}
+                prsByThreadKey={props.prsByThreadKey}
                 onOpenThreadContextMenu={openThreadContextMenu}
                 onSelectThread={props.onSelectThread}
                 onSetReaction={props.onSetThreadReaction}

@@ -28,6 +28,37 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   };
   /** Per-thread emoji reactions, ordered by insertion. */
   reactions?: string[];
+  /** GitHub pull requests detected for this thread's linked directories + branch. */
+  prs?: PrSummary[];
+};
+
+/**
+ * Color states map directly to GitHub PR + check status:
+ *   - merged   → state === MERGED              (purple chip)
+ *   - failing  → any check FAILURE/CANCELLED/TIMED_OUT/STARTUP_FAILURE (red)
+ *   - passing  → all checks SUCCESS, !isDraft  (green)
+ *   - draft    → isDraft on an OPEN PR         (gray)
+ *   - pending  → checks still running          (yellow)
+ *   - closed   → CLOSED without merge          (gray)
+ *   - unknown  → no checks reported yet, or shape we don't recognize (gray)
+ */
+export type PrChipState =
+  | "merged"
+  | "failing"
+  | "passing"
+  | "draft"
+  | "pending"
+  | "closed"
+  | "unknown";
+
+export type PrSummary = {
+  number: number;
+  /** Repo owner login, e.g. "pwrdrvr". */
+  org: string;
+  /** Repo name, e.g. "PwrAgent". */
+  repo: string;
+  state: PrChipState;
+  url: string;
 };
 
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
@@ -152,6 +183,19 @@ export type SetThreadReactionResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   reactions: string[];
+};
+
+export type GetThreadPullRequestsRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type GetThreadPullRequestsResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  prs: PrSummary[];
+  /** True when the host doesn't have `gh` installed; degrade silently. */
+  ghAvailable: boolean;
 };
 
 export type ThreadOverlayState = {

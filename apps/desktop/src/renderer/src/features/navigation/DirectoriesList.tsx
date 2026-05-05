@@ -3,6 +3,7 @@ import type {
   AppServerBackendKind,
   NavigationDirectorySummary,
   NavigationThreadSummary,
+  PrSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { FolderIcon, UnlinkedDotIcon, WorkspaceIcon } from "../../icons";
@@ -28,6 +29,7 @@ type DirectoriesListProps = {
     emoji: string,
     present: boolean,
   ) => Promise<void>;
+  prsByThreadKey?: Record<string, PrSummary[]>;
 };
 
 function buildLaunchpadSelectionKey(directoryKey: string): string {
@@ -168,21 +170,25 @@ export function DirectoriesList(props: DirectoriesListProps) {
               <div className="directory-row__details">
                 {visibleThreads.length > 0 ? (
                   <div className="sidebar-list sidebar-list--compact directory-row__threads">
-                    {visibleThreads.map((thread) => (
-                      <ThreadRow
-                        key={`${directory.key}:${buildThreadIdentityKey(thread.source, thread.id)}`}
-                        approvalRequestThreadKeys={props.approvalRequestThreadKeys}
-                        compact
-                        includeLinkedDirectories
-                        linkedDirectoryMode="kind"
-                        selectedThreadKey={props.selectedItemKey}
-                        thinkingThreadKeys={props.thinkingThreadKeys}
-                        thread={thread}
-                        onOpenContextMenu={props.onOpenThreadContextMenu}
-                        onSelectThread={props.onSelectThread}
-                        onSetReaction={props.onSetReaction}
-                      />
-                    ))}
+                    {visibleThreads.map((thread) => {
+                      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+                      return (
+                        <ThreadRow
+                          key={`${directory.key}:${threadKey}`}
+                          approvalRequestThreadKeys={props.approvalRequestThreadKeys}
+                          compact
+                          includeLinkedDirectories
+                          linkedDirectoryMode="kind"
+                          selectedThreadKey={props.selectedItemKey}
+                          thinkingThreadKeys={props.thinkingThreadKeys}
+                          thread={thread}
+                          prs={props.prsByThreadKey?.[threadKey]}
+                          onOpenContextMenu={props.onOpenThreadContextMenu}
+                          onSelectThread={props.onSelectThread}
+                          onSetReaction={props.onSetReaction}
+                        />
+                      );
+                    })}
                   </div>
                 ) : (
                   <p className="sidebar-empty directory-row__empty">No threads in this directory yet.</p>

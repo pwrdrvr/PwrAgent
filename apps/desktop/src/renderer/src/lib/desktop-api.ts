@@ -36,6 +36,8 @@ import type {
   MarkThreadSeenRequest,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  GetThreadPullRequestsRequest,
+  GetThreadPullRequestsResponse,
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
@@ -173,6 +175,9 @@ export type DesktopApi = {
   setThreadReaction?: (
     request: SetThreadReactionRequest
   ) => Promise<SetThreadReactionResponse>;
+  getThreadPullRequests?: (
+    request: GetThreadPullRequestsRequest
+  ) => Promise<GetThreadPullRequestsResponse>;
   ensureDirectoryLaunchpad?: (
     request: EnsureDirectoryLaunchpadRequest
   ) => Promise<EnsureDirectoryLaunchpadResponse>;
