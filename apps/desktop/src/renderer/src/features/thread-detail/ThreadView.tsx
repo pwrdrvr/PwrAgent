@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type {
   AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification,
@@ -778,6 +778,22 @@ export function ThreadView(props: ThreadViewProps) {
     return true;
   };
 
+  // Single dialog-open gate. Suppresses while a turn is active on the
+  // focused thread; the end-of-turn falling-edge useEffect re-runs the
+  // drift check once activeTurnId clears, so deferral is implicit.
+  const tryOpenBranchDriftDialog = (
+    thread: NavigationThreadSummary,
+    expectedBranch: string,
+    observedBranch: string,
+    reason: BranchDriftDialogState["reason"],
+    checkedAt?: number,
+  ): boolean => {
+    if (props.activeTurnId !== undefined) {
+      return false;
+    }
+    return showBranchDriftDialog(thread, expectedBranch, observedBranch, reason, checkedAt);
+  };
+
   const checkSelectedThreadBranchDrift = async (
     reason: BranchDriftDialogState["reason"],
   ): Promise<boolean> => {
@@ -785,14 +801,22 @@ export function ThreadView(props: ThreadViewProps) {
     if (!thread?.gitBranch || !props.desktopApi?.checkThreadBranchDrift) {
       return false;
     }
+    const startedThreadKey = `${thread.source}:${thread.id}`;
 
     try {
       const result = await props.desktopApi.checkThreadBranchDrift({
         backend: thread.source,
         threadId: thread.id,
       });
+      // Stale-closure guard: user navigated away mid-IPC.
+      if (selectedThreadKeyRef.current !== startedThreadKey) {
+        return false;
+      }
       if (result.observedBranch !== thread.observedGitBranch) {
         await props.onRefreshNavigation?.();
+        if (selectedThreadKeyRef.current !== startedThreadKey) {
+          return false;
+        }
       }
       if (
         !result.drifted ||
@@ -801,12 +825,12 @@ export function ThreadView(props: ThreadViewProps) {
         !canWarnForBranchDrift(result.expectedBranch, result.observedBranch)
       ) {
         setBranchDriftDialog((current) =>
-          current?.threadKey === `${thread.source}:${thread.id}` ? undefined : current,
+          current?.threadKey === startedThreadKey ? undefined : current,
         );
         return false;
       }
 
-      return showBranchDriftDialog(
+      return tryOpenBranchDriftDialog(
         thread,
         result.expectedBranch,
         result.observedBranch,
@@ -821,6 +845,12 @@ export function ThreadView(props: ThreadViewProps) {
   useEffect(() => {
     setBranchDriftDialog(undefined);
     setBranchDriftError(undefined);
+  }, [selectedThreadKey]);
+
+  // Live mirror of selectedThreadKey for async stale-closure guards.
+  const selectedThreadKeyRef = useRef(selectedThreadKey);
+  useEffect(() => {
+    selectedThreadKeyRef.current = selectedThreadKey;
   }, [selectedThreadKey]);
 
   useEffect(() => {
@@ -841,8 +871,33 @@ export function ThreadView(props: ThreadViewProps) {
       return;
     }
 
-    showBranchDriftDialog(thread, expectedBranch, observedBranch, "focus");
-  }, [selectedThread]);
+    tryOpenBranchDriftDialog(thread, expectedBranch, observedBranch, "focus");
+  }, [selectedThread, props.activeTurnId]);
+
+  // End-of-turn falling-edge: re-run drift check when an active turn
+  // settles on the focused thread. Combined ref guards against
+  // same-render thread switches firing a spurious recheck.
+  const previousTurnRef = useRef<{
+    threadKey: string | undefined;
+    activeTurnId: string | undefined;
+  }>({ threadKey: selectedThreadKey, activeTurnId: props.activeTurnId });
+  useEffect(() => {
+    const previous = previousTurnRef.current;
+    const current = {
+      threadKey: selectedThreadKey,
+      activeTurnId: props.activeTurnId,
+    };
+    previousTurnRef.current = current;
+
+    if (
+      previous.threadKey === current.threadKey &&
+      previous.threadKey !== undefined &&
+      previous.activeTurnId !== undefined &&
+      current.activeTurnId === undefined
+    ) {
+      void checkSelectedThreadBranchDrift("focus");
+    }
+  }, [props.activeTurnId, selectedThreadKey]);
 
   useEffect(() => {
     if (!selectedThread || selectedLaunchpad) {
