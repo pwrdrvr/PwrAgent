@@ -3043,6 +3043,55 @@ export class MessagingController {
     });
   }
 
+  private recordOutboundActivity(
+    intent: MessagingSurfaceIntent,
+    binding: MessagingBindingRecord | undefined,
+    result: MessagingDeliveryResult,
+  ): void {
+    // Only log user-visible deliveries — status/typing/dismiss are
+    // every-tick noise and would drown the activity feed.
+    if (
+      intent.kind !== "message"
+      && intent.kind !== "approval"
+      && intent.kind !== "error"
+    ) {
+      return;
+    }
+    const channel = binding?.channel.channel ?? result.channel;
+    if (!channel) return;
+    const conversation = binding?.channel.conversation;
+    const summary = describeOutboundIntent(intent);
+    try {
+      // Lazy import keeps the controller free of a top-level dep on
+      // the desktop activity-log singleton (the controller is shared
+      // with other harnesses; this method is the only main-process
+      // entry that needs it).
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const log = (require(
+        "../desktop-messaging-activity-log",
+      ) as typeof import("../desktop-messaging-activity-log"))
+        .getDesktopMessagingActivityLog();
+      log.record({
+        platform: channel,
+        kind: "outbound",
+        backend: binding?.backend,
+        threadId: binding?.threadId,
+        bindingId: binding?.id,
+        conversationId: conversation?.id,
+        conversationTitle: conversation?.title,
+        summary,
+        payload: {
+          intentId: intent.id,
+          intentKind: intent.kind,
+          outcome: result.outcome,
+        },
+      });
+    } catch {
+      // Activity log is best-effort observability; never break delivery
+      // because the log threw.
+    }
+  }
+
   private async deliver(
     intent: MessagingSurfaceIntent,
     binding?: MessagingBindingRecord,
@@ -3059,6 +3108,7 @@ export class MessagingController {
       bindingId: binding?.id ?? intent.bindingId,
       intentId: routedIntent.id,
     });
+    this.recordOutboundActivity(routedIntent, binding, result);
     if (
       binding &&
       result.channel === binding.channel.channel &&
@@ -3944,4 +3994,16 @@ function readStringValue(
 
   const result = value[key];
   return typeof result === "string" ? result : undefined;
+}
+
+function describeOutboundIntent(intent: MessagingSurfaceIntent): string {
+  if (intent.kind === "message") {
+    const role = (intent as MessagingMessageIntent).role ?? "assistant";
+    return role === "assistant"
+      ? "Sent assistant reply"
+      : `Sent ${role} message`;
+  }
+  if (intent.kind === "approval") return "Sent approval request";
+  if (intent.kind === "error") return "Sent error notice";
+  return `Sent ${intent.kind}`;
 }

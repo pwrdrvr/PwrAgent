@@ -34,6 +34,7 @@ export async function buildMessagingBindingsByThreadKey(
   }
 
   const result: Record<string, MessagingThreadBindingSummary[]> = {};
+  let totalBindings = 0;
   for (const thread of threads) {
     let bindings;
     try {
@@ -50,6 +51,7 @@ export async function buildMessagingBindingsByThreadKey(
       continue;
     }
     if (bindings.length === 0) continue;
+    totalBindings += bindings.length;
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
     result[threadKey] = bindings.map((binding) => ({
       bindingId: binding.id,
@@ -61,5 +63,13 @@ export async function buildMessagingBindingsByThreadKey(
       activeAt: binding.updatedAt,
     }));
   }
+  // One-line diagnostic so a user reporting "I had more bindings than
+  // are showing" can compare the desktop's view of bindings to the raw
+  // sqlite row count without opening the DB.
+  log.info("messaging bindings snapshot", {
+    threadCount: threads.length,
+    boundThreadCount: Object.keys(result).length,
+    totalActiveBindings: totalBindings,
+  });
   return Object.keys(result).length > 0 ? result : undefined;
 }

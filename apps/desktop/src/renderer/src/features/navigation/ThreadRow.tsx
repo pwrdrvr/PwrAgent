@@ -163,23 +163,24 @@ export function ThreadRow(props: ThreadRowProps) {
           </span>
         ) : null}
 
-        {(props.thread.messagingBindings ?? []).length > 0 ? (
-          <span className="thread-row__binding-chips">
-            {(props.thread.messagingBindings ?? []).map((binding) => (
-              <BindingChip
-                key={binding.bindingId}
-                binding={binding}
-                onUnbind={
-                  props.onUnbindMessagingBinding
-                    ? (target) =>
-                        void props.onUnbindMessagingBinding!(props.thread, target)
-                    : undefined
-                }
-              />
-            ))}
-          </span>
-        ) : null}
       </button>
+
+      {(props.thread.messagingBindings ?? []).length > 0 ? (
+        <div className="thread-row__binding-chips">
+          {(props.thread.messagingBindings ?? []).map((binding) => (
+            <BindingChip
+              key={binding.bindingId}
+              binding={binding}
+              onUnbind={
+                props.onUnbindMessagingBinding
+                  ? (target) =>
+                      void props.onUnbindMessagingBinding!(props.thread, target)
+                  : undefined
+              }
+            />
+          ))}
+        </div>
+      ) : null}
 
       {canReact || reactions.length > 0 ? (
         <div className="thread-row__reactions">
