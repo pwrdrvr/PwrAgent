@@ -2878,6 +2878,62 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("does not persist a retained branch drift pair when expected branch is HEAD", async () => {
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-head": {
+          backend: "codex",
+          threadId: "thread-head",
+          gitBranch: "HEAD",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    const response = await registry.retainThreadBranchDrift({
+      backend: "codex",
+      threadId: "thread-head",
+      expectedBranch: "HEAD",
+      observedBranch: "feature/foo",
+    });
+
+    // Response still echoes the request so the renderer can update its
+    // dialog state, but no pair is persisted.
+    expect(response.expectedBranch).toBe("HEAD");
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-head",
+    });
+    expect(overlay?.retainedBranchDriftPairs ?? []).toEqual([]);
+
+    // Sanity: a non-HEAD pair still persists.
+    await registry.retainThreadBranchDrift({
+      backend: "codex",
+      threadId: "thread-head",
+      expectedBranch: "feature/old",
+      observedBranch: "feature/new",
+    });
+    const overlayAfter = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-head",
+    });
+    expect(overlayAfter?.retainedBranchDriftPairs).toHaveLength(1);
+
+    await registry.close();
+  });
+
   it("does not flag drift when observed branch is HEAD (restored archived snapshot)", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-archived",

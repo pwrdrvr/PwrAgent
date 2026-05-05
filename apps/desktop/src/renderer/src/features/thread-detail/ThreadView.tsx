@@ -742,12 +742,17 @@ export function ThreadView(props: ThreadViewProps) {
     thread: NavigationThreadSummary,
     expectedBranch: string,
     observedBranch: string,
-  ): boolean =>
-    (thread.retainedBranchDriftPairs ?? []).some(
+  ): boolean => {
+    // R14: ignore retained pairs where expected is HEAD even if persisted
+    // by an older client — a transition out of detached HEAD is always a
+    // meaningful event the user should re-evaluate.
+    if (expectedBranch === "HEAD") return false;
+    return (thread.retainedBranchDriftPairs ?? []).some(
       (pair) =>
         pair.expectedBranch === expectedBranch &&
         pair.observedBranch === observedBranch,
     );
+  };
 
   const canWarnForBranchDrift = (expectedBranch?: string, observedBranch?: string): boolean =>
     isBranchDrifted(expectedBranch, observedBranch);

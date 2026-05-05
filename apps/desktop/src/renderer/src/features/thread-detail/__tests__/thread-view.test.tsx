@@ -2982,6 +2982,47 @@ describe("ThreadView", () => {
     });
   });
 
+  it("ignores retained pairs where expected branch is HEAD (R14)", async () => {
+    // Thread overlay has a retained (HEAD, fix/foo) pair from an older
+    // client version. The dialog must STILL surface a (HEAD, fix/foo)
+    // drift because R14 ignores HEAD-expected retained pairs on read.
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{}}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "thread-head-retention",
+          title: "HEAD retention",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "HEAD",
+          observedGitBranch: "fix/foo",
+          retainedBranchDriftPairs: [
+            { expectedBranch: "HEAD", observedBranch: "fix/foo", retainedAt: 1 },
+          ],
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />,
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Thread branch changed",
+    });
+    expect(dialog).toBeInTheDocument();
+  });
+
   it("does not fire end-of-turn drift check when both thread and activeTurnId change in one render", async () => {
     const checkThreadBranchDrift = vi.fn(async () => ({
       backend: "codex" as const,

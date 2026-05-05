@@ -1899,13 +1899,18 @@ export class DesktopBackendRegistry {
     params: RetainThreadBranchDriftRequest,
   ): Promise<RetainThreadBranchDriftResponse> {
     const retainedAt = Date.now();
-    await this.overlayStore.retainThreadBranchDrift({
-      backend: params.backend,
-      threadId: params.threadId,
-      expectedBranch: params.expectedBranch,
-      observedBranch: params.observedBranch,
-      retainedAt,
-    });
+    // R14: refuse to persist (HEAD, *) pairs. Each "first named branch
+    // after detached HEAD" is a meaningful new context that should
+    // re-prompt the user, not be permanently silenced.
+    if (params.expectedBranch !== "HEAD") {
+      await this.overlayStore.retainThreadBranchDrift({
+        backend: params.backend,
+        threadId: params.threadId,
+        expectedBranch: params.expectedBranch,
+        observedBranch: params.observedBranch,
+        retainedAt,
+      });
+    }
 
     return {
       ...params,
