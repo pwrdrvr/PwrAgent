@@ -743,6 +743,90 @@ describe("DesktopMessagingRuntime", () => {
     expect(factory).toHaveBeenCalledTimes(1);
     expect(adapter.stop).toHaveBeenCalledTimes(1);
   });
+
+  it("pause() stops adapters and emits suspended for each platform", async () => {
+    const { runtime, adapter } = await createRuntimeHarness();
+    await runtime.start();
+    const events: unknown[] = [];
+    runtime.onPlatformStatus((event) => events.push(event));
+
+    await runtime.pause();
+
+    expect(adapter.stop).toHaveBeenCalledTimes(1);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "health-changed",
+        platform: "telegram",
+        health: "suspended",
+      }),
+    );
+  });
+
+  it("resume() rebuilds adapters from the same factory and re-emits enabled", async () => {
+    await prepareRuntimeStore();
+    const adapter = createAdapter("telegram");
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(() => [adapter]);
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: ["user-1"],
+        },
+      },
+    });
+
+    await runtime.start();
+    await runtime.pause();
+    const events: unknown[] = [];
+    runtime.onPlatformStatus((event) => events.push(event));
+    await runtime.resume();
+
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(adapter.start).toHaveBeenCalledTimes(2);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "health-changed",
+        platform: "telegram",
+        health: "enabled",
+      }),
+    );
+  });
+
+  it("multiple pause()/resume() cycles are safe", async () => {
+    await prepareRuntimeStore();
+    const adapter = createAdapter("telegram");
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(() => [adapter]);
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: ["user-1"],
+        },
+      },
+    });
+
+    await runtime.start();
+    await runtime.pause();
+    await runtime.pause(); // idempotent
+    await runtime.resume();
+    await runtime.resume(); // idempotent
+    await runtime.pause();
+
+    expect(adapter.stop).toHaveBeenCalledTimes(2);
+    expect(adapter.start).toHaveBeenCalledTimes(2);
+  });
 });
 
 async function createRuntimeHarness(): Promise<{

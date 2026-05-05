@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 import type {
   MessagingChannelKind,
   MessagingPlatformHealth,
@@ -7,6 +7,14 @@ import type {
 import { DiscordIcon, TelegramIcon, type IconProps } from "../../icons";
 import { useMessagingPlatformStatuses } from "./useMessagingPlatformStatuses";
 import type { DesktopApi } from "../../lib/desktop-api";
+
+type MessagingEnablementState = {
+  /** True when the runtime is currently allowed to run. */
+  userEnabled: boolean;
+  /** True when a startup override (CLI/env) is forcing messaging off. */
+  overridden: boolean;
+  overrideReason?: string;
+};
 
 const ICONS: Partial<
   Record<MessagingChannelKind, (props: IconProps) => ReactElement>
@@ -29,17 +37,50 @@ const HEALTH_LABEL: Record<MessagingPlatformHealth, string> = {
  * dedicated icon (custom adapters, future channels) get a small text
  * pill instead so we never silently drop a configured platform.
  *
- * Renders nothing when no platforms are configured — keeps the header
- * tight for users who don't use messaging.
+ * The bar also hosts the global on/off toggle. When `--disable-messaging`
+ * fired at startup, the toggle is locked off with an explanatory tooltip.
+ *
+ * Renders nothing when no platforms are configured AND the user has
+ * never toggled messaging — keeps the header tight for users who don't
+ * use messaging.
  */
-export function MessagingStatusBar(props: { desktopApi?: DesktopApi }) {
+export function MessagingStatusBar(props: {
+  desktopApi?: DesktopApi;
+  enablement?: MessagingEnablementState;
+}) {
   const { statuses, activeAtByPlatform } = useMessagingPlatformStatuses(
     props.desktopApi,
   );
+  const [enablement, setEnablement] = useState<MessagingEnablementState | undefined>(
+    props.enablement,
+  );
 
-  if (statuses.length === 0) {
+  // Adopt the latest prop value on each render but keep local state for
+  // optimistic updates after the user clicks the toggle.
+  const effectiveEnablement = enablement ?? props.enablement;
+
+  // Show nothing when there's nothing to show and no toggle to surface.
+  if (statuses.length === 0 && !effectiveEnablement) {
     return null;
   }
+
+  const onToggle = async (): Promise<void> => {
+    if (!effectiveEnablement || effectiveEnablement.overridden) return;
+    if (!props.desktopApi?.setMessagingEnabled) return;
+    const next = !effectiveEnablement.userEnabled;
+    setEnablement({ ...effectiveEnablement, userEnabled: next });
+    try {
+      const result = await props.desktopApi.setMessagingEnabled({ enabled: next });
+      setEnablement({
+        userEnabled: result.enabled,
+        overridden: result.overridden,
+        overrideReason: result.overrideReason,
+      });
+    } catch {
+      // Roll back the optimistic flip on failure.
+      setEnablement(effectiveEnablement);
+    }
+  };
 
   return (
     <div className="messaging-status-bar" role="group" aria-label="Messaging platform status">
@@ -50,7 +91,47 @@ export function MessagingStatusBar(props: { desktopApi?: DesktopApi }) {
           active={hasRecentActivity(status, activeAtByPlatform[status.platform])}
         />
       ))}
+      {effectiveEnablement ? (
+        <ToggleButton enablement={effectiveEnablement} onToggle={onToggle} />
+      ) : null}
     </div>
+  );
+}
+
+function ToggleButton(props: {
+  enablement: MessagingEnablementState;
+  onToggle: () => Promise<void>;
+}) {
+  const { enablement, onToggle } = props;
+  const overrideTooltip = enablement.overrideReason
+    ? `Messaging is locked off: ${enablement.overrideReason}`
+    : "Messaging is locked off by startup override";
+  const tooltip = enablement.overridden
+    ? overrideTooltip
+    : enablement.userEnabled
+      ? "Messaging is on. Click to pause."
+      : "Messaging is off. Click to resume.";
+  return (
+    <button
+      type="button"
+      className={`messaging-toggle${
+        enablement.userEnabled ? " is-on" : ""
+      }${enablement.overridden ? " is-locked" : ""}`}
+      title={tooltip}
+      aria-label={tooltip}
+      aria-pressed={enablement.userEnabled}
+      disabled={enablement.overridden}
+      onClick={() => {
+        void onToggle();
+      }}
+    >
+      <span className="messaging-toggle__track" aria-hidden="true">
+        <span className="messaging-toggle__thumb" />
+      </span>
+      <span className="messaging-toggle__label">
+        {enablement.overridden ? "Off" : enablement.userEnabled ? "On" : "Off"}
+      </span>
+    </button>
   );
 }
 

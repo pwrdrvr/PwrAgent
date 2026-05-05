@@ -150,6 +150,23 @@ export type MessagingPlatformStatusEvent =
       at: number;
     };
 
+export type SetMessagingEnabledRequest = {
+  enabled: boolean;
+};
+
+export type SetMessagingEnabledResponse = {
+  /**
+   * Effective state after the toggle. May not equal the requested
+   * `enabled` if the startup override (`--disable-messaging` /
+   * `PWRAGENT_DISABLE_MESSAGING`) is in force.
+   */
+  enabled: boolean;
+  /** True when the runtime had to ignore the request because of an override. */
+  overridden: boolean;
+  /** Human-readable explanation of the override, when applicable. */
+  overrideReason?: string;
+};
+
 export type MessagingJsonPrimitive = string | number | boolean | null;
 export type MessagingJsonValue =
   | MessagingJsonPrimitive

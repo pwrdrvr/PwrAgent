@@ -132,6 +132,11 @@ export class DesktopSettingsService {
           ...(messagingOverride.reason
             ? { disabledReason: messagingOverride.reason }
             : {}),
+          // Persisted user toggle. Defaults to true so existing users —
+          // who never wrote this setting — keep messaging on. Setting
+          // `messaging.userEnabled = false` in config.toml (or via the
+          // header toggle) disables the runtime on next launch.
+          userEnabled: config.messaging?.userEnabled !== false,
         },
       },
       secretStorage,

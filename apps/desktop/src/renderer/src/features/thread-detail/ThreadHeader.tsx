@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type { DesktopSettingsSnapshot, NavigationThreadSummary } from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
@@ -6,6 +6,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 
 type ThreadHeaderProps = {
   desktopApi?: DesktopApi;
+  settingsSnapshot?: DesktopSettingsSnapshot;
   thread: NavigationThreadSummary;
 };
 
@@ -42,7 +43,18 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           </p>
         ) : null}
       </div>
-      <MessagingStatusBar desktopApi={props.desktopApi} />
+      <MessagingStatusBar
+        desktopApi={props.desktopApi}
+        enablement={
+          props.settingsSnapshot
+            ? {
+                userEnabled: props.settingsSnapshot.runtime.messaging.userEnabled,
+                overridden: props.settingsSnapshot.runtime.messaging.disabled,
+                overrideReason: props.settingsSnapshot.runtime.messaging.disabledReason,
+              }
+            : undefined
+        }
+      />
     </header>
   );
 }

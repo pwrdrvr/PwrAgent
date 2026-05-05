@@ -354,6 +354,7 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.runtime.messaging).toEqual({
       disabled: true,
       disabledReason: "--disable-messaging was provided at startup",
+      userEnabled: true,
     });
   });
 

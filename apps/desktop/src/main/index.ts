@@ -116,13 +116,20 @@ export function bootstrapApp(): void {
         reason: messagingOverride.reason,
       });
     } else {
-      await getDesktopMessagingRuntime((options) =>
+      const settingsSnapshot = await getDesktopSettingsService().readSettings();
+      const userEnabled = settingsSnapshot.runtime.messaging.userEnabled;
+      const runtime = getDesktopMessagingRuntime((options) =>
         loadDesktopMessagingConfigFromSettings(
           getDesktopSettingsService(),
           process.env,
           options,
         ),
-      ).start();
+      );
+      if (userEnabled) {
+        await runtime.start();
+      } else {
+        mainLog.info("messaging runtime not started — disabled by user setting");
+      }
     }
     // Register status IPC after the runtime is constructed so the
     // initial subscriber attaches before the renderer asks for the

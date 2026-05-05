@@ -28,6 +28,8 @@ export type DesktopSettingsConfig = {
   messaging?: {
     inputDebounceMs?: number;
     toolUpdateMode?: MessagingToolUpdateMode;
+    /** Persisted on/off toggle for the whole messaging subsystem. */
+    userEnabled?: boolean;
     attachments?: {
       imageProfile?: DesktopMessagingImageProfile;
       maxAttachmentBytes?: number;
@@ -126,6 +128,8 @@ export function mergeDesktopSettingsConfig(
         patch.messaging?.inputDebounceMs ?? current.messaging?.inputDebounceMs,
       toolUpdateMode:
         patch.messaging?.toolUpdateMode ?? current.messaging?.toolUpdateMode,
+      userEnabled:
+        patch.messaging?.userEnabled ?? current.messaging?.userEnabled,
       attachments: {
         ...current.messaging?.attachments,
         ...patch.messaging?.attachments,
@@ -237,6 +241,7 @@ export function stringifyDesktopSettingsToml(
   if (
     config.messaging?.toolUpdateMode
     || config.messaging?.inputDebounceMs !== undefined
+    || config.messaging?.userEnabled !== undefined
   ) {
     sections.push(
       [
@@ -246,6 +251,7 @@ export function stringifyDesktopSettingsToml(
           config.messaging.inputDebounceMs,
         ),
         formatOptionalTomlEntry("tool_update_mode", config.messaging.toolUpdateMode),
+        formatOptionalTomlEntry("user_enabled", config.messaging.userEnabled),
       ]
         .filter(Boolean)
         .join("\n"),
@@ -376,6 +382,7 @@ function normalizeDesktopConfig(
     messaging: {
       inputDebounceMs: readNumber(messaging?.input_debounce_ms),
       toolUpdateMode: readToolUpdateMode(messaging?.tool_update_mode),
+      userEnabled: readBoolean(messaging?.user_enabled),
       attachments: {
         imageProfile: readImageProfile(attachments?.image_profile),
         maxAttachmentBytes: readNumber(attachments?.max_attachment_bytes),
@@ -426,9 +433,11 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const discord = config.messaging?.discord;
   const inputDebounceMs = config.messaging?.inputDebounceMs;
   const toolUpdateMode = config.messaging?.toolUpdateMode;
+  const userEnabled = config.messaging?.userEnabled;
   if (
     inputDebounceMs !== undefined ||
     toolUpdateMode !== undefined ||
+    userEnabled !== undefined ||
     (attachments && hasDefinedValue(attachments))
     || (telegram && hasDefinedValue(telegram))
     || (discord && hasDefinedValue(discord))
@@ -439,6 +448,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (toolUpdateMode !== undefined) {
       pruned.messaging.toolUpdateMode = toolUpdateMode;
+    }
+    if (userEnabled !== undefined) {
+      pruned.messaging.userEnabled = userEnabled;
     }
     if (attachments && hasDefinedValue(attachments)) {
       pruned.messaging.attachments = attachments;

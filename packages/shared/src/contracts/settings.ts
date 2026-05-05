@@ -117,8 +117,20 @@ export type DesktopSettingsSnapshot = {
   configError?: string;
   runtime: {
     messaging: {
+      /**
+       * True when messaging is hard-disabled by a startup override
+       * (`--disable-messaging` arg or `PWRAGENT_DISABLE_MESSAGING` env).
+       * The user cannot toggle messaging on while this is true.
+       */
       disabled: boolean;
       disabledReason?: string;
+      /**
+       * The user's persisted on/off choice (defaults to true). Independent
+       * of the startup override — the override always wins, but this is
+       * what the toggle UI binds to and what the app respects on next
+       * launch when no override fires.
+       */
+      userEnabled: boolean;
     };
   };
   secretStorage: DesktopSettingsSecretStorageState;
@@ -188,6 +200,12 @@ export type DesktopSettingsConfigPatch = {
   messaging?: {
     inputDebounceMs?: number;
     toolUpdateMode?: MessagingToolUpdateMode;
+    /**
+     * User's on/off toggle for the whole messaging subsystem. Defaults
+     * to true. Cleared back to true by writing `true`. Independent of
+     * the startup --disable-messaging override.
+     */
+    userEnabled?: boolean;
     attachments?: {
       imageProfile?: DesktopMessagingImageProfile;
       maxAttachmentBytes?: number;

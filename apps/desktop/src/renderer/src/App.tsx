@@ -142,6 +142,7 @@ function DesktopAppShell(props: {
           backendError={backendSummaries.error}
           backends={backendSummaries.backends}
           applications={settings.snapshot?.applications}
+          settingsSnapshot={settings.snapshot}
           clearPendingRequest={session.clearPendingRequest}
           composerDisabled={
             !navigation.selectedThread ||

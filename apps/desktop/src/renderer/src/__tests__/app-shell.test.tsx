@@ -45,6 +45,7 @@ describe("App", () => {
       runtime: {
         messaging: {
           disabled: false,
+          userEnabled: true,
         },
       },
       secretStorage: {

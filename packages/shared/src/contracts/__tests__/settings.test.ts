@@ -11,6 +11,7 @@ describe("desktop settings contracts", () => {
       runtime: {
         messaging: {
           disabled: false,
+          userEnabled: true,
         },
       },
       secretStorage: {

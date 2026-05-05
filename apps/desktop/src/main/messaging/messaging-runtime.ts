@@ -226,6 +226,37 @@ export class DesktopMessagingRuntime {
   }
 
   /**
+   * User-driven "messaging off" — drains running adapters and marks
+   * each platform as suspended, but keeps the per-platform status
+   * snapshot in place so the UI keeps showing the icons (gray dots).
+   * Idempotent: a second pause() while already paused is a no-op.
+   *
+   * Equivalent to `stop()` today; kept as a separate name so callers
+   * (the IPC handler + unit tests) signal intent. Future work may
+   * differentiate (e.g. pause keeps backend-event subscription alive
+   * but ignores inbound; stop tears everything down for shutdown).
+   */
+  async pause(): Promise<void> {
+    if (!this.started) {
+      return;
+    }
+    await this.stop();
+  }
+
+  /**
+   * Re-enable messaging after a `pause()`. Re-runs the adapter factory
+   * with the current config — picks up settings changes that landed
+   * while we were paused. Idempotent: a second resume() while already
+   * running is a no-op.
+   */
+  async resume(): Promise<void> {
+    if (this.started) {
+      return;
+    }
+    await this.start();
+  }
+
+  /**
    * Subscribe to platform status transitions. Returns an unsubscribe.
    * Listeners receive every `health-changed` and `activity` event;
    * synchronous, off the runtime's event loop. The renderer uses this

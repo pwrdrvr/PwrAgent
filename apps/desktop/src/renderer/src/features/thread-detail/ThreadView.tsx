@@ -17,6 +17,7 @@ import type {
   BackendSummary,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
+  DesktopSettingsSnapshot,
   HandoffThreadWorkspaceRequest,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
@@ -602,6 +603,7 @@ type ThreadViewProps = {
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
+  settingsSnapshot?: DesktopSettingsSnapshot;
   setExecutionModeError?: string;
   setThreadModelSettingsError?: string;
   worktreeArchiveError?: string;
@@ -1496,7 +1498,11 @@ export function ThreadView(props: ThreadViewProps) {
 
   return (
     <section className="thread-view">
-      <ThreadHeader desktopApi={props.desktopApi} thread={selectedThread!} />
+      <ThreadHeader
+        desktopApi={props.desktopApi}
+        settingsSnapshot={props.settingsSnapshot}
+        thread={selectedThread!}
+      />
 
       <div
         className={`thread-view__layout${

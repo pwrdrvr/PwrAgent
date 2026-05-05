@@ -40,6 +40,8 @@ import type {
   GhStatus,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  SetMessagingEnabledRequest,
+  SetMessagingEnabledResponse,
   RefreshThreadPullRequestsRequest,
   RefreshThreadPullRequestsResponse,
   NavigationSnapshot,
@@ -205,6 +207,9 @@ export type DesktopApi = {
   onMessagingPlatformStatusEvent?: (
     callback: (event: MessagingPlatformStatusEvent) => void,
   ) => () => void;
+  setMessagingEnabled?: (
+    request: SetMessagingEnabledRequest,
+  ) => Promise<SetMessagingEnabledResponse>;
   onWindowFocus?: (callback: () => void) => () => void;
   platform?: string;
   versions?: {

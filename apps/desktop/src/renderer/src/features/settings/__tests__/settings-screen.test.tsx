@@ -18,6 +18,7 @@ function createSnapshot(
     runtime: {
       messaging: {
         disabled: false,
+        userEnabled: true,
       },
     },
     secretStorage: {
@@ -299,6 +300,7 @@ describe("SettingsScreen", () => {
               messaging: {
                 disabled: true,
                 disabledReason: "--disable-messaging was provided at startup",
+                userEnabled: true,
               },
             },
           }),

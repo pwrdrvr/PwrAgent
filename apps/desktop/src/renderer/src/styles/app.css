@@ -247,6 +247,69 @@ textarea,
   border: 1.5px solid var(--bg-panel);
 }
 
+.messaging-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 4px;
+  padding: 4px 10px 4px 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.messaging-toggle:hover:not([disabled]) {
+  border-color: var(--accent-border);
+}
+
+.messaging-toggle[disabled] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.messaging-toggle__track {
+  position: relative;
+  display: inline-block;
+  width: 24px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  transition: background 120ms ease;
+}
+
+.messaging-toggle__thumb {
+  position: absolute;
+  left: 1px;
+  top: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+.messaging-toggle.is-on {
+  color: var(--text-primary);
+}
+
+.messaging-toggle.is-on .messaging-toggle__track {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.messaging-toggle.is-on .messaging-toggle__thumb {
+  background: var(--accent);
+  transform: translateX(10px);
+}
+
 .sidebar__icon-button {
   display: inline-flex;
   width: 34px;

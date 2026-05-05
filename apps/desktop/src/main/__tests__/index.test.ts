@@ -28,6 +28,11 @@ const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
 const registerMessagingStatusIpcHandlersMock = vi.fn();
 const disposeMessagingStatusIpcHandlersMock = vi.fn();
+const settingsReadSettingsMock = vi.fn(async () => ({
+  fetchedAt: 0,
+  configPath: "/tmp",
+  runtime: { messaging: { disabled: false, userEnabled: true } },
+}));
 const setApplicationMenuMock = vi.fn();
 const buildFromTemplateMock = vi.fn(() => ({ kind: "menu" }));
 const setNameMock = vi.fn();
@@ -140,6 +145,12 @@ vi.mock("../messaging/messaging-runtime", () => ({
 vi.mock("../ipc/messaging-status", () => ({
   registerMessagingStatusIpcHandlers: registerMessagingStatusIpcHandlersMock,
   disposeMessagingStatusIpcHandlers: disposeMessagingStatusIpcHandlersMock,
+}));
+
+vi.mock("../settings/desktop-settings-singleton", () => ({
+  getDesktopSettingsService: vi.fn(() => ({
+    readSettings: settingsReadSettingsMock,
+  })),
 }));
 
 vi.mock("../diagnostics/startup-cpu-profiler", () => ({
