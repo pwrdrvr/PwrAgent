@@ -13,9 +13,17 @@ import type {
 import { shortenDerivedThreadTitle } from "@pwragent/shared";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import {
-  capabilityProfileSupportsActions,
+  applyActionCapabilityLimits,
+  capabilityProfilePageSize,
+  capabilityProfileSupportsActionCount,
   truncateActionsByPriority,
 } from "@pwragent/messaging-interface";
+
+/**
+ * Minimum action count for a usable status card. Below this, drop all
+ * actions and rely on text rendering (Stop/Refresh/Detach via text reply).
+ */
+const STATUS_CARD_MIN_ACTIONS = 3;
 import type { MessagingResolvedThreadState } from "./messaging-thread-state.js";
 
 export type MessagingWorkspaceHandoffContext = {
@@ -124,7 +132,7 @@ function buildStatusActions(params: {
   toolUpdateMode: MessagingToolUpdateMode;
 }): MessagingSurfaceAction[] {
   const profile = params.capabilityProfile;
-  if (profile && !capabilityProfileSupportsActions(profile, "status")) {
+  if (profile && !capabilityProfileSupportsActionCount(profile, STATUS_CARD_MIN_ACTIONS)) {
     return [];
   }
 
@@ -293,6 +301,7 @@ export function formatMessagingToolUpdateModeLabel(
 
 export function buildHandoffOverviewIntent(params: {
   binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
   context: MessagingWorkspaceHandoffContext;
   createdAt: number;
   id: string;
@@ -330,39 +339,54 @@ export function buildHandoffOverviewIntent(params: {
       "Reply with 1, Back, Refresh, or Cancel.",
     ].join("\n"),
     prompt: handoffOverviewText(params.context),
-    choices: [
-      action,
-      {
-        id: "status:refresh",
-        label: "Back",
-        fallbackText: "back",
-        style: "secondary",
-      },
-      {
-        id: "status:refresh",
-        label: "Refresh",
-        fallbackText: "refresh",
-        style: "secondary",
-      },
-      {
-        id: "handoff:cancel",
-        label: "Cancel",
-        fallbackText: "cancel",
-        style: "secondary",
-      },
-    ],
+    choices: applyActionCapabilityLimits(
+      [
+        action,
+        {
+          id: "status:refresh",
+          label: "Back",
+          fallbackText: "back",
+          style: "secondary",
+          priority: 1,
+        },
+        {
+          id: "status:refresh",
+          label: "Refresh",
+          fallbackText: "refresh",
+          style: "secondary",
+          priority: 3,
+        },
+        {
+          id: "handoff:cancel",
+          label: "Cancel",
+          fallbackText: "cancel",
+          style: "secondary",
+          priority: 2,
+        },
+      ],
+      params.capabilityProfile,
+    ),
   };
 }
 
 export function buildHandoffBranchPickerIntent(params: {
   binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
   context: MessagingWorkspaceHandoffContext;
   createdAt: number;
   id: string;
   pageIndex?: number;
   pageSize?: number;
 }): MessagingSingleSelectIntent {
-  const pageSize = Math.max(1, params.pageSize ?? HANDOFF_BRANCH_PAGE_SIZE);
+  const navActionCount = 5; // previous, next, back, refresh, cancel (max present at once)
+  const profilePageSize = params.capabilityProfile
+    ? capabilityProfilePageSize(
+        params.capabilityProfile,
+        navActionCount,
+        HANDOFF_BRANCH_PAGE_SIZE,
+      )
+    : HANDOFF_BRANCH_PAGE_SIZE;
+  const pageSize = Math.max(1, params.pageSize ?? profilePageSize);
   const totalBranches = params.context.leaveLocalBranches.length;
   const totalPages = Math.max(1, Math.ceil(totalBranches / pageSize));
   const pageIndex = clampPageIndex(params.pageIndex ?? 0, totalPages);
@@ -476,6 +500,7 @@ function clampPageIndex(pageIndex: number, totalPages: number): number {
 
 export function buildHandoffConfirmationIntent(params: {
   binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
   context: MessagingWorkspaceHandoffContext;
   createdAt: number;
   id: string;
@@ -512,35 +537,41 @@ export function buildHandoffConfirmationIntent(params: {
     title: "Confirm Handoff",
     body,
     fallbackText: "Reply Confirm, Back, or Cancel.",
-    actions: [
-      {
-        id: "handoff:confirm",
-        label: "Confirm",
-        fallbackText: "confirm",
-        style: "primary",
-        value: {
-          ...handoffValue(params.context),
-          ...(params.leaveLocalBranch
-            ? { leaveLocalBranch: params.leaveLocalBranch }
-            : {}),
+    actions: applyActionCapabilityLimits(
+      [
+        {
+          id: "handoff:confirm",
+          label: "Confirm",
+          fallbackText: "confirm",
+          style: "primary",
+          priority: 1,
+          value: {
+            ...handoffValue(params.context),
+            ...(params.leaveLocalBranch
+              ? { leaveLocalBranch: params.leaveLocalBranch }
+              : {}),
+          },
         },
-      },
-      {
-        id: params.context.workspaceKind === "local"
-          ? "handoff:local-to-worktree"
-          : "status:handoff",
-        label: "Back",
-        fallbackText: "back",
-        style: "secondary",
-        value: handoffValue(params.context),
-      },
-      {
-        id: "handoff:cancel",
-        label: "Cancel",
-        fallbackText: "cancel",
-        style: "secondary",
-      },
-    ],
+        {
+          id: params.context.workspaceKind === "local"
+            ? "handoff:local-to-worktree"
+            : "status:handoff",
+          label: "Back",
+          fallbackText: "back",
+          style: "secondary",
+          priority: 2,
+          value: handoffValue(params.context),
+        },
+        {
+          id: "handoff:cancel",
+          label: "Cancel",
+          fallbackText: "cancel",
+          style: "secondary",
+          priority: 3,
+        },
+      ],
+      params.capabilityProfile,
+    ),
   };
 }
 
@@ -579,10 +610,16 @@ export function handoffRequestFromValue(
 
 export function buildStatusModelPickerIntent(params: {
   binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
   id: string;
   models: Array<{ id: string; label?: string; current?: boolean }>;
 }): MessagingSingleSelectIntent {
+  // Reserve 1 nav slot for "Back"; the rest go to model entries.
+  const modelLimit = params.capabilityProfile?.actions
+    ? Math.max(0, params.capabilityProfile.actions.maxActions - 1)
+    : params.models.length;
+  const visibleModels = params.models.slice(0, modelLimit);
   return {
     id: params.id,
     kind: "single_select",
@@ -595,28 +632,34 @@ export function buildStatusModelPickerIntent(params: {
     targetSurface: params.binding.statusSurface,
     fallbackText: "Reply with a model number, Refresh, or Detach.",
     prompt: "Select Model",
-    choices: [
-      ...params.models.map((model, index) => ({
-        id: "status:set-model",
-        label: `${model.label ?? model.id}${model.current ? " (current)" : ""}`,
-        fallbackText: String(index + 1),
-        style: "secondary" as const,
-        value: {
-          model: model.id,
+    choices: applyActionCapabilityLimits(
+      [
+        ...visibleModels.map((model, index) => ({
+          id: "status:set-model",
+          label: `${model.label ?? model.id}${model.current ? " (current)" : ""}`,
+          fallbackText: String(index + 1),
+          style: "secondary" as const,
+          priority: 10 + index, // models keep their order; back has higher priority
+          value: {
+            model: model.id,
+          },
+        })),
+        {
+          id: "status:refresh",
+          label: "Back",
+          fallbackText: "back",
+          style: "secondary" as const,
+          priority: 1,
         },
-      })),
-      {
-        id: "status:refresh",
-        label: "Back",
-        fallbackText: "back",
-        style: "secondary" as const,
-      },
-    ],
+      ],
+      params.capabilityProfile,
+    ),
   };
 }
 
 export function buildStatusReasoningPickerIntent(params: {
   binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
   id: string;
   efforts: string[];
@@ -633,23 +676,28 @@ export function buildStatusReasoningPickerIntent(params: {
     targetSurface: params.binding.statusSurface,
     fallbackText: "Reply with a reasoning option number, Refresh, or Detach.",
     prompt: "Select Reasoning",
-    choices: [
-      ...params.efforts.map((effort, index) => ({
-        id: "status:set-reasoning",
-        label: effort,
-        fallbackText: String(index + 1),
-        style: "secondary" as const,
-        value: {
-          reasoningEffort: effort,
+    choices: applyActionCapabilityLimits(
+      [
+        ...params.efforts.map((effort, index) => ({
+          id: "status:set-reasoning",
+          label: effort,
+          fallbackText: String(index + 1),
+          style: "secondary" as const,
+          priority: 10 + index,
+          value: {
+            reasoningEffort: effort,
+          },
+        })),
+        {
+          id: "status:refresh",
+          label: "Back",
+          fallbackText: "back",
+          style: "secondary" as const,
+          priority: 1,
         },
-      })),
-      {
-        id: "status:refresh",
-        label: "Back",
-        fallbackText: "back",
-        style: "secondary" as const,
-      },
-    ],
+      ],
+      params.capabilityProfile,
+    ),
   };
 }
 

@@ -1,5 +1,6 @@
 import type {
   MessagingActionLayoutPolicy,
+  MessagingCapabilityProfile,
   MessagingContentPart,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
@@ -131,15 +132,23 @@ export function buildDiscordComponents(
   actions: MessagingSurfaceAction[],
   createCustomId: (action: MessagingSurfaceAction) => string,
   layout?: MessagingActionLayoutPolicy,
+  profile?: MessagingCapabilityProfile,
 ): DiscordActionRowComponent[] | undefined {
+  // Defensive caps. Producers should already have applied these via
+  // applyActionCapabilityLimits, but the adapter enforces Discord's hard
+  // limits as a safety net. Read from profile so the numbers stay in sync.
+  const maxActions = profile?.actions?.maxActions ?? 25;
+  const maxLabelLength = profile?.actions?.maxLabelLength ?? 80;
+  const maxColumns = profile?.actions?.maxActionsPerRow ?? 5;
+  const maxRows = profile?.actions?.maxRows ?? 5;
   const items = actions
     .filter((action) => !action.disabled)
-    .slice(0, 25)
+    .slice(0, maxActions)
     .map((action) => ({
       action,
       component: {
         custom_id: createCustomId(action),
-        label: action.label.slice(0, 80),
+        label: action.label.slice(0, maxLabelLength),
         style: styleForAction(action),
         type: 2 as const,
       },
@@ -151,8 +160,8 @@ export function buildDiscordComponents(
 
   return layoutMessagingActionRows(items, {
     defaultColumns: layout?.columns,
-    maxColumns: 5,
-    maxRows: 5,
+    maxColumns,
+    maxRows,
   }).map((components) => ({
     components,
     type: 1,

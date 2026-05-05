@@ -2,9 +2,15 @@ import type {
   AppServerPendingRequestNotification,
   MessagingApprovalDecision,
   MessagingApprovalIntent,
+  MessagingSurfaceAction,
 } from "@pwragent/shared";
+import {
+  applyActionCapabilityLimits,
+  type MessagingCapabilityProfile,
+} from "@pwragent/messaging-interface";
 
 export function buildApprovalIntent(params: {
+  capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
   id: string;
   request: AppServerPendingRequestNotification;
@@ -12,7 +18,14 @@ export function buildApprovalIntent(params: {
   const prompt = stringField(params.request.params.prompt) ?? "Approve this action?";
   const command = extractCommand(params.request.params);
   const fileContext = extractFileContext(params.request.params);
-  const decisions = buildDecisions(params.request.params.options);
+  const rawDecisions = buildDecisions(params.request.params.options);
+  // Approval decisions carry a `decision` discriminator that survives the
+  // generic capability-limit pass; cast back after applying limits.
+  const limited = applyActionCapabilityLimits(
+    rawDecisions as MessagingSurfaceAction[],
+    params.capabilityProfile,
+  );
+  const decisions = decoratedAsApprovalDecisions(limited, rawDecisions);
 
   return {
     id: params.id,
@@ -30,6 +43,28 @@ export function buildApprovalIntent(params: {
     fallbackText: "Reply yes, yes for this session, no, cancel, or a choice number.",
     decisions,
   };
+}
+
+/**
+ * `applyActionCapabilityLimits` operates on `MessagingSurfaceAction`. Restore
+ * the `decision` field by matching ids back to the original decision list.
+ */
+function decoratedAsApprovalDecisions(
+  limited: MessagingSurfaceAction[],
+  original: MessagingApprovalIntent["decisions"],
+): MessagingApprovalIntent["decisions"] {
+  const byId = new Map(original.map((decision) => [decision.id, decision]));
+  return limited
+    .map((action) => {
+      const source = byId.get(action.id);
+      if (!source) {
+        return undefined;
+      }
+      return { ...source, label: action.label };
+    })
+    .filter((value): value is MessagingApprovalIntent["decisions"][number] =>
+      Boolean(value),
+    );
 }
 
 function titleForRequest(request: AppServerPendingRequestNotification): string {

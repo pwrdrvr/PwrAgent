@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { PERMISSIVE_CAPABILITY_PROFILE, type MessagingSurfaceIntent } from "@pwragent/messaging-interface";
+import type { MessagingSurfaceIntent } from "@pwragent/messaging-interface";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import type { MessagingStore } from "../messaging/core/messaging-store";
 import type { DesktopMessagingConfig } from "../messaging/messaging-config";
 import type {

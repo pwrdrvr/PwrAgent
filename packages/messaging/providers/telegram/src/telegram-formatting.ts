@@ -1,5 +1,6 @@
 import type {
   MessagingActionLayoutPolicy,
+  MessagingCapabilityProfile,
   MessagingContentPart,
   MessagingMarkdownPolicy,
   MessagingSurfaceAction,
@@ -143,13 +144,23 @@ export function buildTelegramKeyboard(
   actions: MessagingSurfaceAction[],
   createCallbackData: (action: MessagingSurfaceAction) => string,
   layout?: MessagingActionLayoutPolicy,
+  profile?: MessagingCapabilityProfile,
 ): TelegramInlineKeyboardMarkup | undefined {
+  // Defensive caps. Producers should already have applied these via
+  // applyActionCapabilityLimits; the adapter enforces Telegram's hard
+  // limits as a safety net. Read from profile so the numbers stay in sync.
+  const maxActions = profile?.actions?.maxActions ?? 100;
+  const maxLabelLength = profile?.actions?.maxLabelLength ?? 64;
+  const maxColumns = profile?.actions?.maxActionsPerRow ?? 8;
   const items = actions
     .filter((action) => !action.disabled)
+    .slice(0, maxActions)
     .map((action) => ({
       action,
       component: {
-        text: action.label,
+        text: action.label.length > maxLabelLength
+          ? action.label.slice(0, maxLabelLength)
+          : action.label,
         callback_data: createCallbackData(action),
       },
     }));
@@ -161,7 +172,7 @@ export function buildTelegramKeyboard(
   return {
     inline_keyboard: layoutMessagingActionRows(items, {
       defaultColumns: layout?.columns ?? 1,
-      maxColumns: 8,
+      maxColumns,
     }),
   };
 }
