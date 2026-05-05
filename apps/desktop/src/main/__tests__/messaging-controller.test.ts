@@ -7,12 +7,6 @@ import type {
   AppServerPendingRequestNotification,
   HandoffThreadWorkspaceRequest,
   ListBackendsResponse,
-  MessagingSurfaceAction,
-  MessagingDeliveryResult,
-  MessagingInboundCallbackEvent,
-  MessagingInboundEvent,
-  MessagingInboundTextEvent,
-  MessagingSurfaceIntent,
   MessagingToolUpdateMode,
   NavigationSnapshot,
   SetThreadExecutionModeRequest,
@@ -22,6 +16,14 @@ import type {
   SteerTurnRequest,
   SubmitServerRequestRequest,
 } from "@pwragent/shared";
+import type {
+  MessagingSurfaceAction,
+  MessagingDeliveryResult,
+  MessagingInboundCallbackEvent,
+  MessagingInboundEvent,
+  MessagingInboundTextEvent,
+  MessagingSurfaceIntent,
+} from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import {
   MessagingController,

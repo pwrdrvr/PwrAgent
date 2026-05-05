@@ -1,5 +1,8 @@
 import type {
   AppServerToolRequestUserInputNotification,
+  NavigationSnapshot,
+} from "@pwragent/shared";
+import type {
   MessagingActivityIntent,
   MessagingConfirmationIntent,
   MessagingErrorIntent,
@@ -8,8 +11,7 @@ import type {
   MessagingSurfaceAction,
   MessagingMessageIntent,
   MessagingThreadPickerIntent,
-  NavigationSnapshot,
-} from "@pwragent/shared";
+} from "@pwragent/messaging-interface";
 import {
   applyActionCapabilityLimits,
   type MessagingCapabilityProfile,

@@ -3,7 +3,7 @@ import type {
   MessagingQuestionnaireIntent,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
-} from "@pwragent/shared";
+} from "@pwragent/messaging-interface";
 import type {
   MessagingInteractionMapper,
   MessagingInteractionMapperResult,

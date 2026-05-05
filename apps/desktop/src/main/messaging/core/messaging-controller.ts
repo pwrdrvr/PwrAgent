@@ -9,6 +9,14 @@ import type {
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
+  MessagingToolUpdateMode,
+  NavigationDirectorySummary,
+  NavigationSnapshot,
+  NavigationThreadSummary,
+  ThreadExecutionMode,
+  ThreadIdentifier,
+} from "@pwragent/shared";
+import type {
   MessagingBindingRecord,
   MessagingCallbackHandleRecord,
   MessagingBrowseSessionRecord,
@@ -26,13 +34,7 @@ import type {
   MessagingStreamUpdateIntent,
   MessagingSurfaceRef,
   MessagingSurfaceIntent,
-  MessagingToolUpdateMode,
-  NavigationDirectorySummary,
-  NavigationSnapshot,
-  NavigationThreadSummary,
-  ThreadExecutionMode,
-  ThreadIdentifier,
-} from "@pwragent/shared";
+} from "@pwragent/messaging-interface";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import type { MessagingStoreLike } from "../../state/messaging-store-sqlite";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";

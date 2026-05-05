@@ -1,9 +1,11 @@
 import type {
   AppServerPendingRequestNotification,
+} from "@pwragent/shared";
+import type {
   MessagingApprovalDecision,
   MessagingApprovalIntent,
   MessagingSurfaceAction,
-} from "@pwragent/shared";
+} from "@pwragent/messaging-interface";
 import {
   applyActionCapabilityLimits,
   type MessagingCapabilityProfile,

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { MessagingBrowseSessionRecord, NavigationSnapshot } from "@pwragent/shared";
+import type {
+  NavigationSnapshot,
+} from "@pwragent/shared";
+import type {
+  MessagingBrowseSessionRecord,
+} from "@pwragent/messaging-interface";
 import {
   buildResumeIntent,
   parseResumeCommandArgs,
