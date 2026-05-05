@@ -496,34 +496,45 @@ inside the wrapper. Ship after Phase 1.
 
 ### Phase 3 — Archived carve-out (R13)
 
-**Files:**
-- `apps/desktop/src/main/app-server/backend-registry.ts`
-  (`resolveExpectedThreadBranch` returns `undefined` for archived)
-- `packages/agent-core/src/domain/navigation-state.ts` (verify the
-  renderer's `selectedThread` snapshot also surfaces `gitBranch` as
-  undefined for archived threads, since the chip reads overlay-merged
-  state, not the IPC reply)
-- Tests in `backend-registry.test.ts` and `thread-view.test.tsx`.
+**Implementation finding (2026-05-04):** R13 is satisfied entirely by
+R3's `observed === "HEAD"` short-circuit. No new code is required.
 
-**Deliverables:**
-- Archived-thread predicate centralized in `resolveExpectedThreadBranch`.
-- Parallel guard in `navigation-state.ts` if the audit reveals one is
-  needed for chip consistency.
+Investigation revealed:
 
-**Tests:**
-- `backend-registry.test.ts`: `checkThreadBranchDrift` for an archived
-  thread returns `drifted: false` regardless of git state.
-- `thread-view.test.tsx`: archived thread with drift state in overlay
-  renders no dialog.
-- `ThreadMetaChips` unit test (if not already present): archived thread
-  shows no `! now <branch>` chip.
+1. **Archived threads are not in the navigation snapshot.** The
+   navigation `listThreads` flow filters by `archived: false` by
+   default (see `backend-registry.ts:2643` and
+   `session-state.ts:89`). A thread that has been archived simply
+   does not appear in `selectedThread` for the renderer, so neither
+   the chip nor the dialog runs against it.
+2. **Archive lives at the worktree, not the thread.** `archivedAt`
+   exists on `WorktreeSnapshotSummary` (per-worktree) and the per-thread
+   archived bucket on the backend. There is no top-level
+   `thread.archivedAt` for the predicate to read, so the planned
+   `Boolean(thread.archivedAt)` carve-out has no input.
+3. **Restored archive worktrees land on detached HEAD.** Per the
+   archive-restore plan, restoring a snapshot puts the workspace on a
+   snapshot ref in detached HEAD. `git rev-parse --abbrev-ref HEAD`
+   returns `"HEAD"` in that state, which the R3 rule already
+   short-circuits. Both `isBranchDrifted("feature/x", "HEAD")` and
+   the backend predicate return `drifted: false`.
+
+**Deliverables (this phase):**
+- New `backend-registry.test.ts` case
+  `"does not flag drift when observed branch is HEAD (restored archived snapshot)"`
+  that locks in R3 for the restored-archive scenario explicitly,
+  preventing future regressions of the SpecFlow-flagged
+  "saved by R3 but only by accident" concern.
+- Documentation update in this plan recording the finding.
+
+**Tests:** new test added in this phase; existing 46 backend-registry
+tests preserved.
 
 **Success criteria:**
-- All tests pass.
-- Manual: archive a fixture thread that has drift, confirm sidebar chip
-  and detail pane both stop showing drift artifacts.
+- New test passes.
+- No code change to `resolveExpectedThreadBranch`.
 
-**Independence:** standalone. Can ship before Phase 2 if convenient.
+**Independence:** standalone documentation/test phase.
 
 ### Phase 4 — Retention scoping + E2E coverage (R14)
 
