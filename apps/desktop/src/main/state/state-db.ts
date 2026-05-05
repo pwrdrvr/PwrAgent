@@ -100,8 +100,38 @@ CREATE TABLE secrets (
 );
 `;
 
+const SCHEMA_V2 = `
+CREATE TABLE messaging_activity_log (
+  id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+  platform                 TEXT NOT NULL,
+  kind                     TEXT NOT NULL,
+  thread_id                TEXT,
+  binding_id               TEXT,
+  conversation_id          TEXT,
+  conversation_title       TEXT,
+  actor_id                 TEXT,
+  actor_display_name       TEXT,
+  summary                  TEXT NOT NULL,
+  created_at               INTEGER NOT NULL,
+  payload                  TEXT NOT NULL
+);
+CREATE INDEX idx_messaging_activity_log_created
+  ON messaging_activity_log(created_at DESC);
+CREATE INDEX idx_messaging_activity_log_platform_created
+  ON messaging_activity_log(platform, created_at DESC);
+CREATE INDEX idx_messaging_activity_log_thread
+  ON messaging_activity_log(thread_id);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+/**
+ * Per-platform cap for the messaging activity log. Older rows are
+ * evicted FIFO so the table stays small even on busy platforms. Tuned
+ * to ~hours of normal traffic; raise via a future setting if anyone
+ * needs deeper history.
+ */
+const MESSAGING_ACTIVITY_LOG_PER_PLATFORM_CAP = 500;
 
 export class StateDb {
   private db: BetterSqlite3.Database;
@@ -131,6 +161,10 @@ export class StateDb {
         );
       }
       db.pragma("user_version = 1");
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 2) {
+      db.exec(SCHEMA_V2);
+      db.pragma("user_version = 2");
     }
 
     return new StateDb(db);
@@ -177,6 +211,28 @@ export class StateDb {
           "DELETE FROM bindings WHERE revoked_at IS NOT NULL AND revoked_at < ?",
         )
         .run(now - REVOKED_BINDINGS_RETENTION_MS);
+      // Per-platform FIFO eviction for the activity log: keep the
+      // newest N per platform; delete the rest. Iterate the (cheap)
+      // distinct-platform set rather than wrestling with sqlite
+      // correlated-subquery semantics.
+      const platforms = this.db
+        .prepare(
+          "SELECT DISTINCT platform FROM messaging_activity_log",
+        )
+        .all() as { platform: string }[];
+      const evict = this.db.prepare(
+        `DELETE FROM messaging_activity_log
+         WHERE platform = ?
+           AND id NOT IN (
+             SELECT id FROM messaging_activity_log
+             WHERE platform = ?
+             ORDER BY id DESC
+             LIMIT ?
+           )`,
+      );
+      for (const { platform } of platforms) {
+        evict.run(platform, platform, MESSAGING_ACTIVITY_LOG_PER_PLATFORM_CAP);
+      }
     });
     cleanup();
     this.db.pragma("incremental_vacuum");

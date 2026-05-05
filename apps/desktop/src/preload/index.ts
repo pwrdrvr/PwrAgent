@@ -38,6 +38,8 @@ import type {
   SetThreadReactionResponse,
   GetGhStatusRequest,
   GhStatus,
+  ListMessagingActivityRequest,
+  ListMessagingActivityResponse,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
   UnbindMessagingThreadRequest,
@@ -116,6 +118,7 @@ import {
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
+  MESSAGING_LIST_ACTIVITY_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_UNBIND_THREAD_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
@@ -357,6 +360,10 @@ const desktopApi = Object.freeze({
     request: UnbindMessagingThreadRequest,
   ): Promise<UnbindMessagingThreadResponse> =>
     await ipcRenderer.invoke(MESSAGING_UNBIND_THREAD_CHANNEL, request),
+  listMessagingActivity: async (
+    request?: ListMessagingActivityRequest,
+  ): Promise<ListMessagingActivityResponse> =>
+    await ipcRenderer.invoke(MESSAGING_LIST_ACTIVITY_CHANNEL, request),
   onMessagingPlatformStatusEvent: (
     callback: (event: MessagingPlatformStatusEvent) => void,
   ): (() => void) => {

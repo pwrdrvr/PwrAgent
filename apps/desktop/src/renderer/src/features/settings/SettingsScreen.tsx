@@ -9,12 +9,14 @@ import { ExperimentalSettings } from "./ExperimentalSettings";
 import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
+import { MessagingActivityScreen } from "../messaging-activity/MessagingActivityScreen";
 import { WorktreesSettings } from "./WorktreesSettings";
 import { useState } from "react";
 
 type SettingsSection =
   | "experimental"
   | "messaging"
+  | "messaging-activity"
   | "models"
   | "applications"
   | "worktrees"
@@ -24,6 +26,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "applications", label: "Applications" },
   { id: "worktrees", label: "Worktrees" },
   { id: "messaging", label: "Messaging" },
+  { id: "messaging-activity", label: "Messaging activity" },
   { id: "models", label: "Models" },
   { id: "experimental", label: "Experimental" },
   { id: "about", label: "About" },
@@ -246,6 +249,10 @@ function SettingsSectionBody(props: {
         }}
       />
     );
+  }
+
+  if (props.section === "messaging-activity") {
+    return <MessagingActivityScreen desktopApi={props.desktopApi} />;
   }
 
   return (

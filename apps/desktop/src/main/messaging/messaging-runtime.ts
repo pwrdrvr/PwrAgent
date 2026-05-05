@@ -28,6 +28,7 @@ import {
   type DesktopMessagingConfig,
 } from "./messaging-config";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
+import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
 import { loadConfiguredMessagingAdapters } from "./provider-loader";
 
 export type DesktopMessagingAdapter = {
@@ -119,8 +120,12 @@ export class DesktopMessagingRuntime {
           // checks — the platform is active even when the message is
           // rejected, and the user wants the dot to reflect that.
           this.emitPlatformActivity(adapter.channel);
+          const authorized = authorizedActorIdSet.has(
+            event.actor.platformUserId,
+          );
+          this.recordActivityFromInbound(adapter.channel, event, authorized);
           try {
-            if (!authorizedActorIdSet.has(event.actor.platformUserId)) {
+            if (!authorized) {
               messagingLog.warn("messaging event rejected by authorization", {
                 actorDisplayName: event.actor.displayName,
                 actorId: event.actor.platformUserId,
@@ -285,6 +290,45 @@ export class DesktopMessagingRuntime {
       this.platformStatuses.set(platform, { ...previous, lastActivityAt: at });
     }
     this.broadcastPlatformStatus({ kind: "activity", platform, at });
+  }
+
+  private recordActivityFromInbound(
+    platform: MessagingChannelKind,
+    event: MessagingInboundEvent,
+    authorized: boolean,
+  ): void {
+    // Best-effort write — never throw out of the adapter listener path.
+    // The activity log is observability, not the source of truth for
+    // routing decisions, so a failed write means we lose a row, not a
+    // misrouted message.
+    try {
+      const conversation = event.channel.conversation;
+      const summary = authorized
+        ? `Inbound from ${event.actor.displayName ?? event.actor.platformUserId}`
+        : `Rejected inbound from ${event.actor.displayName ?? event.actor.platformUserId}`;
+      getDesktopMessagingActivityLog().record({
+        platform,
+        kind: authorized ? "inbound-routed" : "inbound-rejected",
+        conversationId: conversation.id,
+        conversationTitle: conversation.title,
+        actorId: event.actor.platformUserId,
+        actorDisplayName: event.actor.displayName,
+        summary,
+        payload: {
+          eventId: event.id,
+          eventKind: event.kind,
+          conversationKind: conversation.kind,
+          actorUsername: event.actor.username,
+          actorIsBot: event.actor.isBot,
+        },
+      });
+    } catch (error) {
+      messagingLog.warn("messaging activity log write failed", {
+        platform,
+        eventId: event.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private broadcastPlatformStatus(event: MessagingPlatformStatusEvent): void {

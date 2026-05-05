@@ -150,6 +150,53 @@ export type MessagingPlatformStatusEvent =
       at: number;
     };
 
+/**
+ * One row in the persisted messaging activity log. The desktop writes
+ * one of these for every inbound (routed, rejected, or ignored) and
+ * every outbound delivery, capped per-platform with FIFO eviction.
+ *
+ * `kind` controls how the renderer groups + colors the row:
+ *   - `inbound-routed`  authorized inbound that reached its bound thread
+ *   - `inbound-rejected` inbound from an unauthorized sender
+ *   - `inbound-ignored`  inbound from an unbound conversation (post-revoke)
+ *   - `outbound`         delivery the desktop sent to the platform
+ */
+export type MessagingActivityKind =
+  | "inbound-routed"
+  | "inbound-rejected"
+  | "inbound-ignored"
+  | "outbound";
+
+export type MessagingActivityEntry = {
+  id: number;
+  platform: MessagingChannelKind;
+  kind: MessagingActivityKind;
+  /** Backend + thread the entry routed to / from, if known. */
+  backend?: AppServerBackendKind;
+  threadId?: ThreadIdentifier;
+  /** Stable binding id when the row routed via an active binding. */
+  bindingId?: string;
+  conversationId?: string;
+  conversationTitle?: string;
+  actorId?: string;
+  actorDisplayName?: string;
+  /** One-line human-readable summary for the activity row. */
+  summary: string;
+  /** Wall-clock ms when the event happened. */
+  createdAt: number;
+};
+
+export type ListMessagingActivityRequest = {
+  /** Most recent first. Default 100, capped at 500. */
+  limit?: number;
+  /** When set, only entries strictly newer than `sinceId` are returned. */
+  sinceId?: number;
+};
+
+export type ListMessagingActivityResponse = {
+  entries: MessagingActivityEntry[];
+};
+
 export type UnbindMessagingThreadRequest = {
   bindingId: string;
 };

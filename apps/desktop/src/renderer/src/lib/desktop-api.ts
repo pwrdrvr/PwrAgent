@@ -38,6 +38,8 @@ import type {
   SetThreadReactionResponse,
   GetGhStatusRequest,
   GhStatus,
+  ListMessagingActivityRequest,
+  ListMessagingActivityResponse,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
   UnbindMessagingThreadRequest,
@@ -210,6 +212,9 @@ export type DesktopApi = {
   unbindMessagingThread?: (
     request: UnbindMessagingThreadRequest,
   ) => Promise<UnbindMessagingThreadResponse>;
+  listMessagingActivity?: (
+    request?: ListMessagingActivityRequest,
+  ) => Promise<ListMessagingActivityResponse>;
   onWindowFocus?: (callback: () => void) => () => void;
   platform?: string;
   versions?: {
