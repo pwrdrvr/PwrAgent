@@ -73,3 +73,4 @@
 
 - Additional desktop-app instructions live in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
 - Messaging package boundary instructions live in [packages/messaging/AGENTS.md](packages/messaging/AGENTS.md). Review them before adding messaging integrations, changing messaging provider code, or deciding where messaging calls and workflow logic should live.
+- For messaging architecture (separation of concerns between interface, providers, and desktop orchestration; data-flow diagrams; the capability-profile system; file map), read [docs/messaging-architecture.md](docs/messaging-architecture.md). For the per-adapter technical contract, [docs/messaging-adapter-contract.md](docs/messaging-adapter-contract.md). For operator setup and the command surface, [docs/messaging-platform-integration.md](docs/messaging-platform-integration.md).

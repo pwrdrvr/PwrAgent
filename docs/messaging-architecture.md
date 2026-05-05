@@ -1,0 +1,284 @@
+# Messaging Architecture
+
+How the messaging system is layered, where types live, how messages flow, and how the capability-profile system lets providers declare their constraints without producers ever branching on platform names.
+
+For setup and operator-facing commands see [`docs/messaging-platform-integration.md`](messaging-platform-integration.md). For the adapter contract that platform implementers must satisfy see [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md). For package boundary enforcement see [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md).
+
+## Layers and separation of concerns
+
+```mermaid
+graph TB
+    subgraph DesktopApp["apps/desktop — Electron main"]
+        direction TB
+        Runtime["DesktopMessagingRuntime<br/>1 controller per adapter"]
+        Controller["MessagingController<br/>workflow logic, turn admission,<br/>browse sessions, callbacks"]
+        Bridge["DesktopMessagingBackendBridge<br/>(thread, turn, navigation)"]
+        Store["MessagingStore (sqlite)<br/>bindings, browse sessions,<br/>callback handles, audit"]
+        BackendBridge["BackendRegistry<br/>Codex / Grok protocol"]
+        Runtime --> Controller
+        Controller --> Bridge
+        Controller --> Store
+        Bridge --> BackendBridge
+    end
+
+    subgraph Interface["packages/messaging/interface<br/>(@pwragent/messaging-interface)"]
+        direction TB
+        Types["Generic types:<br/>MessagingSurfaceIntent,<br/>MessagingInboundEvent,<br/>MessagingSurfaceAction,<br/>MessagingCapabilityProfile,<br/>MessagingChannelKind"]
+        Helpers["Helpers:<br/>applyActionCapabilityLimits,<br/>truncateActionsByPriority,<br/>capabilityProfilePageSize,<br/>layoutMessagingActionRows"]
+        TestingExport["./testing subpath:<br/>PERMISSIVE_CAPABILITY_PROFILE<br/>(test fixtures only)"]
+    end
+
+    subgraph Providers["packages/messaging/providers/*"]
+        direction TB
+        Telegram["telegram<br/>uses grammy"]
+        Discord["discord<br/>uses discord.js"]
+        Future["future:<br/>mattermost, slack,<br/>signal, feishu, …"]
+    end
+
+    subgraph Shared["packages/shared"]
+        direction TB
+        AppTypes["App-server / navigation types:<br/>AppServerBackendKind, ThreadIdentifier,<br/>NavigationSnapshot, …<br/>+ MessagingToolUpdateMode primitive"]
+    end
+
+    Controller -->|generic intents/events| Interface
+    Telegram -->|implements adapter contract| Interface
+    Discord -->|implements adapter contract| Interface
+    Future -->|implements adapter contract| Interface
+    Interface -->|imports app/nav types| Shared
+    DesktopApp -->|imports messaging types| Interface
+    DesktopApp -->|imports app/nav types| Shared
+```
+
+**Three packages, three jobs:**
+
+| Layer | Package | Job |
+|---|---|---|
+| Generic contract | `@pwragent/messaging-interface` | Channel-neutral types, capability profile, layout helpers, runtime helpers like `applyActionCapabilityLimits`. **No provider names. No SDK imports.** |
+| Provider adapters | `@pwragent/messaging-provider-{telegram,discord,…}` | Translate intents → platform messages, translate platform events → inbound events. **Each adapter is its own package; cannot import other providers, cannot import desktop or app-server code.** |
+| Workflow orchestration | `apps/desktop/src/main/messaging/` | Turn admission, binding lifecycle, picker state machines, audit trails, sqlite persistence. **Speaks only the generic interface.** |
+
+`@pwragent/shared` carries cross-package types that are not messaging-specific (app-server protocol enums, navigation snapshots, thread identifiers). It also holds one messaging primitive — `MessagingToolUpdateMode` — because desktop settings need it without depending on the messaging interface. Everything else messaging-related lives in `@pwragent/messaging-interface`.
+
+The dependency direction is one-way: `interface → shared`, `providers → interface`, `desktop → interface (+ providers via the loader)`. Enforced by `pnpm lint:boundaries` (`.dependency-cruiser.cjs`).
+
+## Data flow
+
+### Inbound (user message arrives at the bot)
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Platform as Platform<br/>(Telegram/Discord)
+    participant Adapter as Provider Adapter
+    participant Controller as MessagingController
+    participant Bridge as Backend Bridge
+    participant Backend as Codex / Grok
+
+    User->>Platform: types message / taps button
+    Platform->>Adapter: webhook / gateway event
+    Note over Adapter: normalize to<br/>MessagingInboundEvent<br/>(text/command/callback/media/lifecycle)
+    Adapter->>Controller: handleInboundEvent(event)
+    Note over Controller: authorize actor,<br/>resolve binding,<br/>turn admission
+    Controller->>Bridge: turn/start, turn/steer, etc.
+    Bridge->>Backend: protocol call
+```
+
+The adapter's job ends at "I converted a platform-specific event into a `MessagingInboundEvent`". Workflow decisions — debouncing, queueing, steering, binding resolution — all live in `MessagingController`. Adapters must not call `turn/start` themselves.
+
+### Outbound (agent produces output)
+
+```mermaid
+sequenceDiagram
+    participant Backend as Codex / Grok
+    participant Bridge as Backend Bridge
+    participant Controller as MessagingController
+    participant Producer as Producer<br/>(buildBindingStatusIntent,<br/>buildResumeIntent, …)
+    participant Adapter as Provider Adapter
+    participant Platform as Platform
+
+    Backend->>Bridge: turn/completed, item/agentMessage/delta, …
+    Bridge->>Controller: AgentEvent
+    Controller->>Producer: build…Intent({ …, capabilityProfile })
+    Note over Producer: applyActionCapabilityLimits<br/>(truncate by priority,<br/>cap labels to maxLabelLength)
+    Producer-->>Controller: MessagingSurfaceIntent (channel-neutral)
+    Controller->>Adapter: deliver(intent)
+    Note over Adapter: render to platform-native<br/>(inline keyboard / components / …),<br/>defensive caps as safety net
+    Adapter->>Platform: send message / edit / pin
+```
+
+**Key invariant:** the producer never sees the adapter, the channel kind, or any provider name. It receives a `MessagingCapabilityProfile` describing what the destination supports and adapts content to fit. Producers thread through the controller's `this.capabilityProfile`, which the controller reads once at construction from `options.adapter.capabilityProfile`.
+
+## 1:1 controller:adapter mapping
+
+Each adapter gets its own controller. Backend events broadcast to all controllers in parallel; each one decides whether the event is relevant to any of its bindings and renders to its own adapter.
+
+```mermaid
+graph LR
+    subgraph Runtime["DesktopMessagingRuntime"]
+        BB[Backend Bridge]
+    end
+
+    subgraph TG["Telegram pipeline"]
+        TGC["MessagingController<br/>(profile = Telegram)"]
+        TGA[Telegram Adapter]
+        TGC --> TGA
+    end
+
+    subgraph DC["Discord pipeline"]
+        DCC["MessagingController<br/>(profile = Discord)"]
+        DCA[Discord Adapter]
+        DCC --> DCA
+    end
+
+    BB -.broadcast AgentEvent.-> TGC
+    BB -.broadcast AgentEvent.-> DCC
+```
+
+Why this shape:
+- Each controller owns one capability profile, so producers can adapt deterministically.
+- A thread bound to both Telegram and Discord renders independently per channel — Discord users see Discord-native buttons, Telegram users see Telegram-native buttons. No cross-channel contamination.
+- Shared state lives only in the sqlite `MessagingStore` (bindings, browse sessions, callback handles). Both controllers read/write the same store but never reach into each other's runtime state.
+
+## Capability profile
+
+Providers declare what they can render. Producers consume the declaration to adapt output. No producer ever branches on a channel name.
+
+### What a profile declares
+
+```typescript
+type MessagingCapabilityProfile = {
+  // omit `actions` for text-only providers (e.g., a future Signal adapter)
+  actions?: {
+    maxActions: number;          // Discord: 25, Telegram: 100
+    maxActionsPerRow: number;    // Discord: 5, Telegram: 8
+    maxRows?: number;            // Discord: 5, Telegram: unlimited
+    maxLabelLength: number;      // Discord: 80, Telegram: 64
+    supportsStyles: boolean;     // Discord: true, Telegram: false
+    supportsDisabled: boolean;
+    supportsLayoutHints: boolean;
+    maxCallbackPayloadBytes: number;
+  };
+  text: {
+    maxLength: number;
+    encoding: "utf8-bytes" | "utf16-units" | "characters";
+    markdownDialect: "plain" | "html" | "slack-mrkdwn" | "discord-markdown" | "markdown";
+    supportsCodeBlocks: boolean;
+    supportsBold: boolean;
+    supportsItalic: boolean;
+    supportsLinks: boolean;
+    supportsInlineCode: boolean;
+    maxCaptionLength?: number;
+    supportsMessageEdit: boolean;
+  };
+  inboundAttachments?: { /* user-upload limits */ };
+  outboundAttachments?: { /* file-delivery limits — see Plan/Review delivery issue */ };
+};
+```
+
+Each provider declares its own profile literal at the top of its `*ProviderAdapter` class. Discord and Telegram declarations live at:
+- `packages/messaging/providers/discord/src/discord-adapter.ts:236-265`
+- `packages/messaging/providers/telegram/src/telegram-adapter.ts:339-372`
+
+### What producers consume
+
+```mermaid
+graph LR
+    Profile["adapter.capabilityProfile"] -->|construction| Controller["MessagingController.capabilityProfile"]
+    Controller --> Producer["Producer<br/>(e.g. buildBindingStatusIntent)"]
+    Producer --> Apply["applyActionCapabilityLimits(actions, profile)"]
+    Apply --> Truncate["truncateActionsByPriority<br/>(drop lowest-priority)"]
+    Apply --> Label["truncateMessagingLabel<br/>(cap to maxLabelLength)"]
+    Truncate --> Result["Adapted MessagingSurfaceIntent"]
+    Label --> Result
+    Result --> Adapter["adapter.deliver(intent)"]
+```
+
+`applyActionCapabilityLimits(actions, profile)` does both action-count truncation (by priority) and label-length truncation in one pass. It returns `[]` when the profile declares no `actions` capability — the caller is then expected to render text-only.
+
+`MessagingSurfaceAction` carries a `priority?: number` field. **Lower numbers are higher priority.** Actions without an explicit priority are treated as lowest (dropped first). Status card example:
+
+```typescript
+const actions = [
+  { id: "status:model", label: "Model", priority: 4 },
+  { id: "status:reasoning", label: "…", priority: 5 },
+  // … 8 more …
+  { id: "status:stop", label: "Stop", priority: 1 },     // always kept
+  { id: "status:refresh", label: "Refresh", priority: 2 },
+  { id: "status:detach", label: "Detach", priority: 3 },
+];
+```
+
+On a hypothetical 5-button provider, `Stop` / `Refresh` / `Detach` / `Model` / `Reasoning` survive truncation; the rest drop and remain accessible via text-reply fallback.
+
+### Page-size adaptation
+
+The resume browser computes its page size from the profile rather than a constant:
+
+```typescript
+const pageSize = capabilityProfilePageSize(
+  profile,             // adapter's declared profile
+  navActionCount,      // 5 for Prev/Next/Projects/New/Cancel
+  RESUME_BROWSER_MAX,  // soft cap of 8 to keep UX readable
+);
+```
+
+For Discord (`maxActions: 25`) and Telegram (`maxActions: 100`) this resolves to the soft cap of 8 — preserving the established UX. A provider with tighter limits gets fewer items per page automatically. A text-only provider returns a larger page size (20) since there are no buttons to budget against.
+
+The handoff branch picker uses the same helper with a two-pass calc: try `navActionCount = 3` first (Back/Refresh/Cancel only), and if branches don't all fit on one page, recompute with `navActionCount = 5` to leave room for `Previous` and `Next` on middle pages.
+
+### Adapter-side defensive caps
+
+Producers should already have applied all limits before the intent reaches the adapter. The adapter still enforces them as a safety net:
+
+```typescript
+// inside Discord buildDiscordComponents
+const maxActions = profile?.actions?.maxActions ?? 25;
+const maxLabelLength = profile?.actions?.maxLabelLength ?? 80;
+const items = actions
+  .filter((action) => !action.disabled)
+  .slice(0, maxActions)
+  .map((action) => ({
+    component: { label: action.label.slice(0, maxLabelLength), ... },
+  }));
+```
+
+If the producer respected the profile, the slices are no-ops. If the producer somehow emitted too much, the adapter clips it rather than letting the platform reject the request. The numbers come from the same profile the adapter declared, so producer and adapter caps stay in sync.
+
+## How to add a provider
+
+The full procedure is in [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md). At a high level:
+
+1. Create `packages/messaging/providers/<channel>/` with its own `package.json` and `tsconfig.json`. Depends only on `@pwragent/messaging-interface` and the channel's own SDK.
+2. Implement the adapter shape: `start(listener)`, `stop()`, `deliver(intent)`, `downloadAttachment?`, `setConversationTitle?`.
+3. Declare the `capabilityProfile` literal at the top of the class with real numbers researched from the platform's docs.
+4. Translate inbound platform events into `MessagingInboundEvent`. Authorize on stable platform user IDs. Use short opaque callback handles persisted in the messaging store.
+5. Translate outbound `MessagingSurfaceIntent` into platform-native messages. Apply defensive caps from the profile. Stay channel-neutral — the workflow logic in `MessagingController` should not need any changes.
+6. Add to `apps/desktop/src/main/messaging/provider-loader.ts` so the desktop runtime can load it.
+7. Tests cover: command normalization, authorization, callbacks, markdown rendering, long-text chunking, inbound media handling, restart-safe binding behavior, and capability-profile reads in the formatter.
+
+## File map
+
+| Path | What's there |
+|---|---|
+| `packages/messaging/interface/src/index.ts` | Generic types, `applyActionCapabilityLimits`, `truncateActionsByPriority`, `capabilityProfilePageSize`, `truncateMessagingLabel`, `layoutMessagingActionRows`, intent shapes, callback-handle store contract |
+| `packages/messaging/interface/src/testing.ts` | `PERMISSIVE_CAPABILITY_PROFILE` for test mocks. Imported via `@pwragent/messaging-interface/testing`. **Production code must not import from this path.** |
+| `packages/messaging/interface/AGENTS.md` | Package guidance |
+| `packages/messaging/providers/<channel>/src/<channel>-adapter.ts` | The adapter class, capability profile declaration, inbound event translation, outbound intent rendering |
+| `packages/messaging/providers/<channel>/src/<channel>-formatting.ts` | Pure formatters that turn intents into platform-native components/text. Reads the profile for layout caps. |
+| `apps/desktop/src/main/messaging/messaging-runtime.ts` | Constructs one controller per adapter, wires backend events |
+| `apps/desktop/src/main/messaging/core/messaging-controller.ts` | Workflow logic — turn admission, picker state, status card, handoff flow, audit |
+| `apps/desktop/src/main/messaging/core/messaging-renderer.ts` | Producers for thread picker, confirmation, questionnaire, error |
+| `apps/desktop/src/main/messaging/core/messaging-status-card.ts` | Producers for status card, model picker, reasoning picker, handoff overview/branch-picker/confirmation |
+| `apps/desktop/src/main/messaging/core/messaging-resume-browser.ts` | Producer for resume browser (`/resume`) — picker pagination, project/thread filtering |
+| `apps/desktop/src/main/messaging/core/messaging-approval-renderer.ts` | Producer for approval prompts |
+| `apps/desktop/src/main/messaging/core/messaging-attachment-processor.ts` | Inbound attachment normalization (size caps, MIME sniffing, image conversion) |
+| `apps/desktop/src/main/messaging/core/messaging-store.ts` | Persistence interface (bindings, browse sessions, callback handles, pending intents) |
+| `apps/desktop/src/main/state/messaging-store-sqlite.ts` | Sqlite implementation of the store |
+
+## Cross-references
+
+- [`docs/messaging-platform-integration.md`](messaging-platform-integration.md) — operator setup, command surface, button layout policy
+- [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md) — the technical contract for new platform adapters
+- [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md) — package boundary rules and enforcement
+- [`docs/plans/2026-05-04-002-feat-messaging-capability-discovery-plan.md`](plans/2026-05-04-002-feat-messaging-capability-discovery-plan.md) — the design plan that introduced the capability profile system
+- [`docs/plans/2026-05-05-001-feat-messaging-plan-review-attachment-delivery-plan.md`](plans/2026-05-05-001-feat-messaging-plan-review-attachment-delivery-plan.md) — planned consumer of `outboundAttachments` for plan/review surface delivery
