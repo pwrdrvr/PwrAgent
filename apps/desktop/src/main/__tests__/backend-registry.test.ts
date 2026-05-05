@@ -2878,6 +2878,120 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("does not persist a retained branch drift pair when expected branch is HEAD", async () => {
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-head": {
+          backend: "codex",
+          threadId: "thread-head",
+          gitBranch: "HEAD",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    const response = await registry.retainThreadBranchDrift({
+      backend: "codex",
+      threadId: "thread-head",
+      expectedBranch: "HEAD",
+      observedBranch: "feature/foo",
+    });
+
+    // Response still echoes the request so the renderer can update its
+    // dialog state, but no pair is persisted.
+    expect(response.expectedBranch).toBe("HEAD");
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-head",
+    });
+    expect(overlay?.retainedBranchDriftPairs ?? []).toEqual([]);
+
+    // Sanity: a non-HEAD pair still persists.
+    await registry.retainThreadBranchDrift({
+      backend: "codex",
+      threadId: "thread-head",
+      expectedBranch: "feature/old",
+      observedBranch: "feature/new",
+    });
+    const overlayAfter = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-head",
+    });
+    expect(overlayAfter?.retainedBranchDriftPairs).toHaveLength(1);
+
+    await registry.close();
+  });
+
+  it("does not flag drift when observed branch is HEAD (restored archived snapshot)", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-archived",
+      title: "Restored from archive",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "local",
+        },
+      ],
+      source: "codex",
+      gitBranch: "feature/work-from-archive",
+      // Worktree was restored to a snapshot ref → detached HEAD.
+      observedGitBranch: "HEAD",
+      updatedAt: 2,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-archived": {
+          backend: "codex",
+          threadId: "thread-archived",
+          gitBranch: "feature/work-from-archive",
+          observedGitBranch: "HEAD",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [thread],
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/list"] },
+        threads: [],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    const response = await registry.checkThreadBranchDrift({
+      backend: "codex",
+      threadId: "thread-archived",
+    });
+
+    expect(response).toMatchObject({
+      observedBranch: "HEAD",
+      drifted: false,
+    });
+
+    await registry.close();
+  });
+
   it("restores threads through the selected backend client", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/unarchive"] },

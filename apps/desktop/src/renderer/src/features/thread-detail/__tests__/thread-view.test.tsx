@@ -2866,6 +2866,236 @@ describe("ThreadView", () => {
     }
   });
 
+  it("suppresses the branch drift dialog while a turn is active", async () => {
+    const driftThread = {
+      id: "thread-branch",
+      title: "Branch drift",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      gitBranch: "feature/old",
+      observedGitBranch: "main",
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    function Harness({ activeTurnId }: { activeTurnId?: string }) {
+      return (
+        <ThreadView
+          activeTurnId={activeTurnId}
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          composerDisabled={false}
+          desktopApi={{}}
+          loading={false}
+          loadingMore={false}
+          messageCount={1}
+          selectedThread={driftThread}
+          skills={[]}
+          transcriptEntries={[]}
+          clearPendingRequest={() => undefined}
+          onLoadOlder={async () => undefined}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    }
+
+    const { rerender } = render(<Harness activeTurnId="turn-1" />);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      screen.queryByRole("dialog", { name: "Thread branch changed" }),
+    ).not.toBeInTheDocument();
+
+    rerender(<Harness activeTurnId={undefined} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("dialog", { name: "Thread branch changed" }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("re-checks branch drift on end-of-turn falling edge", async () => {
+    const checkThreadBranchDrift = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-branch",
+      checkedAt: Date.now(),
+      expectedBranch: "feature/old",
+      observedBranch: "main",
+      drifted: true,
+    }));
+
+    function Harness({ activeTurnId }: { activeTurnId?: string }) {
+      return (
+        <ThreadView
+          activeTurnId={activeTurnId}
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          composerDisabled={false}
+          desktopApi={{ checkThreadBranchDrift }}
+          loading={false}
+          loadingMore={false}
+          messageCount={1}
+          selectedThread={{
+            id: "thread-branch",
+            title: "Branch drift",
+            titleSource: "explicit",
+            source: "codex",
+            gitBranch: "feature/old",
+            observedGitBranch: "feature/old",
+            updatedAt: Date.now(),
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+          skills={[]}
+          transcriptEntries={[]}
+          clearPendingRequest={() => undefined}
+          onLoadOlder={async () => undefined}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    }
+
+    const { rerender } = render(<Harness activeTurnId="turn-1" />);
+
+    // Mount triggers the focus check, but the gate suppresses the
+    // dialog while activeTurnId is set.
+    await waitFor(() => {
+      expect(checkThreadBranchDrift).toHaveBeenCalled();
+    });
+    expect(
+      screen.queryByRole("dialog", { name: "Thread branch changed" }),
+    ).not.toBeInTheDocument();
+
+    const callsBeforeEnd = checkThreadBranchDrift.mock.calls.length;
+
+    rerender(<Harness activeTurnId={undefined} />);
+
+    await waitFor(() => {
+      expect(checkThreadBranchDrift.mock.calls.length).toBeGreaterThan(callsBeforeEnd);
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("dialog", { name: "Thread branch changed" }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("ignores retained pairs where expected branch is HEAD (R14)", async () => {
+    // Thread overlay has a retained (HEAD, fix/foo) pair from an older
+    // client version. The dialog must STILL surface a (HEAD, fix/foo)
+    // drift because R14 ignores HEAD-expected retained pairs on read.
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{}}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "thread-head-retention",
+          title: "HEAD retention",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "HEAD",
+          observedGitBranch: "fix/foo",
+          retainedBranchDriftPairs: [
+            { expectedBranch: "HEAD", observedBranch: "fix/foo", retainedAt: 1 },
+          ],
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />,
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Thread branch changed",
+    });
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it("does not fire end-of-turn drift check when both thread and activeTurnId change in one render", async () => {
+    const checkThreadBranchDrift = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-b",
+      checkedAt: Date.now(),
+      expectedBranch: "feature/b",
+      observedBranch: "feature/b",
+      drifted: false,
+    }));
+
+    function Harness({
+      activeTurnId,
+      threadId,
+    }: {
+      activeTurnId?: string;
+      threadId: string;
+    }) {
+      return (
+        <ThreadView
+          activeTurnId={activeTurnId}
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          composerDisabled={false}
+          desktopApi={{ checkThreadBranchDrift }}
+          loading={false}
+          loadingMore={false}
+          messageCount={1}
+          selectedThread={{
+            id: threadId,
+            title: threadId,
+            titleSource: "explicit",
+            source: "codex",
+            gitBranch: "feature/b",
+            observedGitBranch: "feature/b",
+            updatedAt: Date.now(),
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+          skills={[]}
+          transcriptEntries={[]}
+          clearPendingRequest={() => undefined}
+          onLoadOlder={async () => undefined}
+          removeOptimisticMessage={(_id) => undefined}
+        />
+      );
+    }
+
+    // Thread A with active turn.
+    const { rerender } = render(<Harness activeTurnId="turn-1" threadId="thread-a" />);
+    await waitFor(() => {
+      expect(checkThreadBranchDrift).toHaveBeenCalled();
+    });
+    const callsAfterMount = checkThreadBranchDrift.mock.calls.length;
+
+    // Same render: switch to thread B AND clear activeTurnId. The
+    // falling-edge guard requires threadKey unchanged, so no extra
+    // recheck should fire from the falling-edge effect (only the
+    // normal focus-on-selection check).
+    rerender(<Harness activeTurnId={undefined} threadId="thread-b" />);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // One additional call from the focus-path effect (selection change)
+    // is acceptable. The falling-edge effect should NOT have added a
+    // separate one for thread A.
+    const callsAfterSwitch = checkThreadBranchDrift.mock.calls.length;
+    expect(callsAfterSwitch - callsAfterMount).toBeLessThanOrEqual(1);
+
+    // No dialog should appear because the IPC reports no drift on B.
+    expect(
+      screen.queryByRole("dialog", { name: "Thread branch changed" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("defers completed live transcript publishing outside the render phase", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const onPublished = vi.fn();

@@ -28,6 +28,7 @@ import {
   type BackendSummary,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
+  isBranchDrifted,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
   type ListBackendsRequest,
@@ -1840,13 +1841,11 @@ export class DesktopBackendRegistry {
       branch: normalizedObservedBranch,
     });
 
+    const drifted = isBranchDrifted(expectedBranch, normalizedObservedBranch);
+
     backendRegistryLog.debug("checked thread branch drift", {
       backend: params.backend,
-      drifted:
-        Boolean(expectedBranch && normalizedObservedBranch) &&
-        expectedBranch !== "HEAD" &&
-        normalizedObservedBranch !== "HEAD" &&
-        expectedBranch !== normalizedObservedBranch,
+      drifted,
       expectedBranch,
       observedBranch: normalizedObservedBranch,
       sourcePath,
@@ -1858,11 +1857,7 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       expectedBranch,
       observedBranch: normalizedObservedBranch,
-      drifted:
-        Boolean(expectedBranch && normalizedObservedBranch) &&
-        expectedBranch !== "HEAD" &&
-        normalizedObservedBranch !== "HEAD" &&
-        expectedBranch !== normalizedObservedBranch,
+      drifted,
       checkedAt: Date.now(),
     };
   }
@@ -1904,13 +1899,18 @@ export class DesktopBackendRegistry {
     params: RetainThreadBranchDriftRequest,
   ): Promise<RetainThreadBranchDriftResponse> {
     const retainedAt = Date.now();
-    await this.overlayStore.retainThreadBranchDrift({
-      backend: params.backend,
-      threadId: params.threadId,
-      expectedBranch: params.expectedBranch,
-      observedBranch: params.observedBranch,
-      retainedAt,
-    });
+    // R14: refuse to persist (HEAD, *) pairs. Each "first named branch
+    // after detached HEAD" is a meaningful new context that should
+    // re-prompt the user, not be permanently silenced.
+    if (params.expectedBranch !== "HEAD") {
+      await this.overlayStore.retainThreadBranchDrift({
+        backend: params.backend,
+        threadId: params.threadId,
+        expectedBranch: params.expectedBranch,
+        observedBranch: params.observedBranch,
+        retainedAt,
+      });
+    }
 
     return {
       ...params,
