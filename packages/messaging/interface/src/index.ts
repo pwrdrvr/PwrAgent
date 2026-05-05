@@ -800,12 +800,30 @@ export type MessagingTextCapabilities = {
   supportsMessageEdit: boolean;
 };
 
+/**
+ * Inbound attachment capabilities — what we accept from the user. Read by
+ * the desktop attachment processor when normalizing user-uploaded files
+ * before they reach the agent.
+ */
 export type MessagingAttachmentCapabilities = {
   maxAttachmentCount?: number;
   maxDownloadBytes?: number;
   supportsDownload: boolean;
 };
 
+/**
+ * Outbound attachment capabilities — what we can deliver to the user.
+ *
+ * Reserved for forthcoming Plan/Review surface delivery: the agent's plan
+ * artifact (and code-review artifact) is intended to ride out as a
+ * Markdown file attachment with a truncated inline preview, mirroring the
+ * pattern proven in openclaw-app-server (`buildCodexPlanMarkdownPreview` +
+ * `formatCodexPlanAttachmentSummary` + `formatCodexPlanAttachmentFallback`).
+ * Producers will read `supportsFileUpload` and `maxUploadBytes` to decide
+ * between attachment-with-preview and inline-only fallback.
+ *
+ * Tracked in: docs/plans/2026-05-05-001-feat-messaging-plan-review-attachment-delivery-plan.md
+ */
 export type MessagingOutboundAttachmentCapabilities = {
   maxUploadBytes?: number;
   supportsFileUpload: boolean;
@@ -817,7 +835,12 @@ export type MessagingCapabilityProfile = {
   /** Action/button capabilities. Omit for text-only providers (e.g., Signal). */
   actions?: MessagingActionCapabilities;
   text: MessagingTextCapabilities;
+  /** Inbound attachment limits — read by the desktop attachment processor. */
   inboundAttachments?: MessagingAttachmentCapabilities;
+  /**
+   * Outbound attachment limits — reserved for Plan/Review surface delivery.
+   * See `MessagingOutboundAttachmentCapabilities` for the planned consumer.
+   */
   outboundAttachments?: MessagingOutboundAttachmentCapabilities;
 };
 
@@ -926,12 +949,6 @@ export function truncateActionsByPriority<T extends MessagingSurfaceAction>(
   const keptIndices = new Set(indexed.slice(0, maxActions).map((entry) => entry.index));
   return actions.filter((_, index) => keptIndices.has(index));
 }
-
-/** @deprecated Use MessagingCapabilityProfile instead. */
-export type MessagingAdapterCapabilities = {
-  inboundAttachments?: MessagingAttachmentCapabilities;
-  outboundAttachments?: MessagingOutboundAttachmentCapabilities;
-};
 
 export type MessagingCallbackHandleStore = {
   resolveCallbackHandle(params: {
