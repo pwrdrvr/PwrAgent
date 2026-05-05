@@ -259,10 +259,19 @@ textarea,
 }
 
 .thread-row__binding-chips {
+  /* Render the chips at the bottom-left of the row, *outside* the main
+     <button> so the chip's own <button> receives clicks (nested
+     buttons are invalid HTML and the browser eats inner-click events).
+     Absolute positioning keeps the visual placement identical to the
+     pre-fix in-row layout. */
+  position: absolute;
+  left: 14px;
+  bottom: 10px;
+  z-index: 2;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-top: 4px;
+  pointer-events: auto;
 }
 
 .thread-row__binding-chip {
@@ -851,6 +860,12 @@ textarea,
 .thread-row.is-selected {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
+}
+
+/* Reserve room for the absolutely-positioned binding chips so they
+   don't overlap the PR chips above them. */
+.thread-row-shell:has(.thread-row__binding-chips) .thread-row {
+  padding-bottom: 36px;
 }
 
 .thread-row__overflow-button {
