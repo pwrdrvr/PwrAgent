@@ -184,11 +184,20 @@ export type MessagingActionStyle =
   | "danger"
   | "navigation";
 
+export type MessagingActionLayoutHint = {
+  row?: number;
+  column?: number;
+  rowBreakBefore?: boolean;
+  rowBreakAfter?: boolean;
+  width?: "auto" | "full";
+};
+
 export type MessagingSurfaceAction = {
   id: string;
   label: string;
   description?: string;
   style?: MessagingActionStyle;
+  layout?: MessagingActionLayoutHint;
   value?: MessagingJsonValue;
   disabled?: boolean;
   fallbackText?: string;
