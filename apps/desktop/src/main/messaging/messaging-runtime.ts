@@ -6,7 +6,13 @@ import type {
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
 } from "./core/messaging-adapter";
-import type { AgentEvent, AppServerPendingRequestNotification } from "@pwragent/shared";
+import type {
+  AgentEvent,
+  AppServerPendingRequestNotification,
+  MessagingPlatformHealth,
+  MessagingPlatformStatus,
+  MessagingPlatformStatusEvent,
+} from "@pwragent/shared";
 import type {
   MessagingChannelKind,
   MessagingDeliveryResult,
@@ -54,6 +60,19 @@ export class DesktopMessagingRuntime {
   private controllers: MessagingController[] = [];
   private unsubscribeBackendEvents?: () => void;
   private started = false;
+  /**
+   * Per-platform health snapshot. Keyed by `MessagingChannelKind`. Updated
+   * by `setPlatformHealth` and read by `getPlatformStatuses` for the
+   * renderer's initial paint. Survives `stop()` so a paused state shows
+   * `suspended` in the UI rather than disappearing.
+   */
+  private readonly platformStatuses = new Map<
+    MessagingChannelKind,
+    MessagingPlatformStatus
+  >();
+  private readonly platformStatusListeners = new Set<
+    (event: MessagingPlatformStatusEvent) => void
+  >();
 
   constructor(
     private readonly options: {
@@ -96,6 +115,10 @@ export class DesktopMessagingRuntime {
 
       try {
         await adapter.start?.(async (event) => {
+          // Activity ping fires on every inbound, *before* authorization
+          // checks — the platform is active even when the message is
+          // rejected, and the user wants the dot to reflect that.
+          this.emitPlatformActivity(adapter.channel);
           try {
             if (!authorizedActorIdSet.has(event.actor.platformUserId)) {
               messagingLog.warn("messaging event rejected by authorization", {
@@ -131,6 +154,9 @@ export class DesktopMessagingRuntime {
           error: error instanceof Error ? error.message : String(error),
         });
         failedChannels.push(adapter.channel);
+        this.setPlatformHealth(adapter.channel, "errored", {
+          reason: error instanceof Error ? error.message : String(error),
+        });
         continue;
       }
 
@@ -139,6 +165,7 @@ export class DesktopMessagingRuntime {
       });
       this.adapters.push(adapter);
       this.controllers.push(controller);
+      this.setPlatformHealth(adapter.channel, "enabled");
     }
 
     this.unsubscribeBackendEvents = this.options.backendBridge.onEvent?.(async (event) => {
@@ -186,9 +213,92 @@ export class DesktopMessagingRuntime {
     this.unsubscribeBackendEvents?.();
     this.unsubscribeBackendEvents = undefined;
     this.controllers.forEach((controller) => controller.dispose());
+    const stoppedChannels = this.adapters.map((adapter) => adapter.channel);
     await Promise.all(this.adapters.map(async (adapter) => adapter.stop?.()));
     this.adapters = [];
     this.controllers = [];
+    // Mark each previously-running platform as suspended (not removed),
+    // so the renderer keeps the icon visible with a gray dot — the user
+    // knows it's configured but currently off.
+    for (const channel of stoppedChannels) {
+      this.setPlatformHealth(channel, "suspended");
+    }
+  }
+
+  /**
+   * Subscribe to platform status transitions. Returns an unsubscribe.
+   * Listeners receive every `health-changed` and `activity` event;
+   * synchronous, off the runtime's event loop. The renderer uses this
+   * to keep its `MessagingPlatformStatus[]` cache in sync without
+   * polling.
+   */
+  onPlatformStatus(
+    listener: (event: MessagingPlatformStatusEvent) => void,
+  ): () => void {
+    this.platformStatusListeners.add(listener);
+    return () => {
+      this.platformStatusListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Snapshot of the current per-platform health. Used by the IPC
+   * handler that backs the renderer's initial paint — the renderer
+   * subscribes to the event stream right after to stay current.
+   */
+  getPlatformStatuses(): MessagingPlatformStatus[] {
+    return [...this.platformStatuses.values()];
+  }
+
+  private setPlatformHealth(
+    platform: MessagingChannelKind,
+    health: MessagingPlatformHealth,
+    options: { reason?: string } = {},
+  ): void {
+    const at = Date.now();
+    const previous = this.platformStatuses.get(platform);
+    const next: MessagingPlatformStatus = {
+      ...previous,
+      platform,
+      health,
+      changedAt: at,
+      reason: options.reason,
+      // Preserve the existing activity timestamp through health
+      // transitions; activity is independent of health and shouldn't
+      // be reset just because the user toggled messaging off.
+      lastActivityAt: previous?.lastActivityAt,
+    };
+    this.platformStatuses.set(platform, next);
+    this.broadcastPlatformStatus({
+      kind: "health-changed",
+      platform,
+      health,
+      reason: options.reason,
+      at,
+    });
+  }
+
+  private emitPlatformActivity(platform: MessagingChannelKind): void {
+    const at = Date.now();
+    const previous = this.platformStatuses.get(platform);
+    if (previous) {
+      this.platformStatuses.set(platform, { ...previous, lastActivityAt: at });
+    }
+    this.broadcastPlatformStatus({ kind: "activity", platform, at });
+  }
+
+  private broadcastPlatformStatus(event: MessagingPlatformStatusEvent): void {
+    for (const listener of this.platformStatusListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        messagingLog.error("messaging platform status listener threw", {
+          error: error instanceof Error ? error.message : String(error),
+          platform: event.platform,
+          kind: event.kind,
+        });
+      }
+    }
   }
 
   private async loadConfig(

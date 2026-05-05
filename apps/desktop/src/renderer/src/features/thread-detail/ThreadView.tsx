@@ -1496,7 +1496,7 @@ export function ThreadView(props: ThreadViewProps) {
 
   return (
     <section className="thread-view">
-      <ThreadHeader thread={selectedThread!} />
+      <ThreadHeader desktopApi={props.desktopApi} thread={selectedThread!} />
 
       <div
         className={`thread-view__layout${

@@ -26,6 +26,8 @@ const initializeMainLoggerMock = vi.fn();
 const mainLogInfoMock = vi.fn();
 const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
+const registerMessagingStatusIpcHandlersMock = vi.fn();
+const disposeMessagingStatusIpcHandlersMock = vi.fn();
 const setApplicationMenuMock = vi.fn();
 const buildFromTemplateMock = vi.fn(() => ({ kind: "menu" }));
 const setNameMock = vi.fn();
@@ -129,8 +131,15 @@ vi.mock("../log", () => ({
 vi.mock("../messaging/messaging-runtime", () => ({
   getDesktopMessagingRuntime: vi.fn(() => ({
     start: messagingRuntimeStartMock,
+    onPlatformStatus: vi.fn(() => () => {}),
+    getPlatformStatuses: vi.fn(() => []),
   })),
   disposeDesktopMessagingRuntime: disposeDesktopMessagingRuntimeMock,
+}));
+
+vi.mock("../ipc/messaging-status", () => ({
+  registerMessagingStatusIpcHandlers: registerMessagingStatusIpcHandlersMock,
+  disposeMessagingStatusIpcHandlers: disposeMessagingStatusIpcHandlersMock,
 }));
 
 vi.mock("../diagnostics/startup-cpu-profiler", () => ({
@@ -167,6 +176,8 @@ describe("bootstrapApp", () => {
     messagingRuntimeStartMock.mockReset();
     messagingRuntimeStartMock.mockResolvedValue();
     disposeDesktopMessagingRuntimeMock.mockReset();
+    registerMessagingStatusIpcHandlersMock.mockReset();
+    disposeMessagingStatusIpcHandlersMock.mockReset();
     setApplicationMenuMock.mockReset();
     buildFromTemplateMock.mockClear();
     setNameMock.mockReset();

@@ -38,6 +38,8 @@ import type {
   SetThreadReactionResponse,
   GetGhStatusRequest,
   GhStatus,
+  MessagingPlatformStatus,
+  MessagingPlatformStatusEvent,
   RefreshThreadPullRequestsRequest,
   RefreshThreadPullRequestsResponse,
   NavigationSnapshot,
@@ -199,6 +201,10 @@ export type DesktopApi = {
   logRendererDiagnostic?: (request: RendererDiagnosticLogRequest) => Promise<void>;
   reportRendererError?: (report: RendererErrorReport) => Promise<void>;
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
+  getMessagingPlatformStatuses?: () => Promise<MessagingPlatformStatus[]>;
+  onMessagingPlatformStatusEvent?: (
+    callback: (event: MessagingPlatformStatusEvent) => void,
+  ) => () => void;
   onWindowFocus?: (callback: () => void) => () => void;
   platform?: string;
   versions?: {

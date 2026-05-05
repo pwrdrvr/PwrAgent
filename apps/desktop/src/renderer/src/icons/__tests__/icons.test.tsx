@@ -3,9 +3,11 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BranchIcon,
+  DiscordIcon,
   FolderIcon,
   NewThreadIcon,
   SettingsIcon,
+  TelegramIcon,
   UnlinkedDotIcon,
   WorkspaceIcon,
   WorktreeIcon,
@@ -57,6 +59,24 @@ describe("icon library", () => {
     expect(svg).toHaveAttribute("aria-label", "Local directory");
     expect(svg).toHaveAttribute("aria-hidden", "false");
   });
+
+  it.each([
+    ["TelegramIcon", TelegramIcon],
+    ["DiscordIcon", DiscordIcon],
+  ] as const)(
+    "%s renders as a filled glyph using currentColor",
+    (_name, Icon) => {
+      const { container } = render(<Icon />);
+      const svg = container.querySelector("svg");
+      expect(svg).toBeInTheDocument();
+      expect(svg).toHaveAttribute("width", "16");
+      expect(svg).toHaveAttribute("height", "16");
+      expect(svg).toHaveAttribute("viewBox", "0 0 24 24");
+      expect(svg).toHaveAttribute("fill", "currentColor");
+      expect(svg).toHaveAttribute("stroke", "none");
+      expect(svg).toHaveAttribute("aria-hidden", "true");
+    },
+  );
 
   it("flows currentColor through to children via parent CSS", () => {
     const { container } = render(

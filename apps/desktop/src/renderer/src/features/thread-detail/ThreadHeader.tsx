@@ -1,8 +1,11 @@
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
+import type { DesktopApi } from "../../lib/desktop-api";
 
 type ThreadHeaderProps = {
+  desktopApi?: DesktopApi;
   thread: NavigationThreadSummary;
 };
 
@@ -20,7 +23,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
 
   return (
     <header className="thread-header">
-      <div>
+      <div className="thread-header__main">
         <div className="thread-header__eyebrow-row">
           <h2 className="thread-header__compact-title" title={props.thread.title}>
             {props.thread.title}
@@ -39,6 +42,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           </p>
         ) : null}
       </div>
+      <MessagingStatusBar desktopApi={props.desktopApi} />
     </header>
   );
 }

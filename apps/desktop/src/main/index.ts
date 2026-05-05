@@ -19,6 +19,10 @@ import {
   registerImageNormalizationIpcHandlers,
 } from "./ipc/image-normalization";
 import {
+  disposeMessagingStatusIpcHandlers,
+  registerMessagingStatusIpcHandlers,
+} from "./ipc/messaging-status";
+import {
   disposePreloadLogIpcHandlers,
   registerPreloadLogIpcHandlers,
 } from "./ipc/preload-log";
@@ -120,6 +124,11 @@ export function bootstrapApp(): void {
         ),
       ).start();
     }
+    // Register status IPC after the runtime is constructed so the
+    // initial subscriber attaches before the renderer asks for the
+    // current snapshot. When messaging is disabled the runtime singleton
+    // still exists (default config); status returns []  / never emits.
+    registerMessagingStatusIpcHandlers();
     createMainWindow({
       startupCpuProfiler,
     });
@@ -154,6 +163,7 @@ export function bootstrapApp(): void {
     if (isDevelopment) {
       disposeRuntimeIdentityIpcHandlers();
     }
+    void disposeMessagingStatusIpcHandlers();
     void disposeDesktopMessagingRuntime();
     void disposeAppServerIpcHandlers();
     disposeAppState();

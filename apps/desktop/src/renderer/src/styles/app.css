@@ -190,6 +190,63 @@ textarea,
   -webkit-app-region: no-drag;
 }
 
+.thread-header__main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.messaging-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  -webkit-app-region: no-drag;
+}
+
+.messaging-status-bar * {
+  -webkit-app-region: no-drag;
+}
+
+.messaging-status-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-muted);
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.messaging-status-chip--enabled {
+  color: var(--text-primary);
+}
+
+.messaging-status-chip--errored {
+  color: var(--danger-text);
+}
+
+.messaging-status-chip__fallback {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.messaging-status-chip > .status-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--bg-panel);
+}
+
 .sidebar__icon-button {
   display: inline-flex;
   width: 34px;

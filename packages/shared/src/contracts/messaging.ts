@@ -93,6 +93,63 @@ export type MessagingChannelKind =
   | "voice-call"
   | "custom";
 
+/**
+ * Health/lifecycle state for a single configured messaging platform.
+ *
+ *   - `enabled`   adapter started successfully and is currently listening
+ *   - `suspended` configured but stopped (user toggled messaging off, or the
+ *                 platform is paused mid-session)
+ *   - `errored`   the adapter failed to start, or hit a fatal runtime error
+ *   - `unknown`   we know the platform is configured but haven't observed
+ *                 a transition yet (initial-load / pre-start state)
+ */
+export type MessagingPlatformHealth =
+  | "enabled"
+  | "suspended"
+  | "errored"
+  | "unknown";
+
+/**
+ * Snapshot of one platform's current state. Renderer holds an array of
+ * these (one per *configured* platform) and updates it from individual
+ * `MessagingPlatformStatusEvent`s. The optional `activeAt` lets the UI
+ * blink the status dot while the platform is sending or receiving.
+ */
+export type MessagingPlatformStatus = {
+  platform: MessagingChannelKind;
+  health: MessagingPlatformHealth;
+  /** Wall-clock ms when the health last changed. */
+  changedAt: number;
+  /** When errored, a human-readable reason for the UI tooltip. */
+  reason?: string;
+  /**
+   * Wall-clock ms of the last sent or received message that the runtime
+   * told us about. Renderer uses this to keep the activity dot blinking
+   * for a short tail (~2s) after the last event.
+   */
+  lastActivityAt?: number;
+};
+
+/**
+ * One status transition emitted by the messaging runtime. Subscribers on
+ * the renderer side fold this into their `MessagingPlatformStatus[]`
+ * cache. For the initial render, callers should fetch the current full
+ * snapshot via the IPC layer rather than waiting for the next event.
+ */
+export type MessagingPlatformStatusEvent =
+  | {
+      kind: "health-changed";
+      platform: MessagingChannelKind;
+      health: MessagingPlatformHealth;
+      reason?: string;
+      at: number;
+    }
+  | {
+      kind: "activity";
+      platform: MessagingChannelKind;
+      at: number;
+    };
+
 export type MessagingJsonPrimitive = string | number | boolean | null;
 export type MessagingJsonValue =
   | MessagingJsonPrimitive

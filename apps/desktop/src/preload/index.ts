@@ -38,6 +38,8 @@ import type {
   SetThreadReactionResponse,
   GetGhStatusRequest,
   GhStatus,
+  MessagingPlatformStatus,
+  MessagingPlatformStatusEvent,
   RefreshThreadPullRequestsRequest,
   RefreshThreadPullRequestsResponse,
   NavigationSnapshot,
@@ -111,6 +113,8 @@ import {
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
+  MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
+  MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
@@ -342,6 +346,20 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(AGENT_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(AGENT_EVENT_CHANNEL, listener);
+    };
+  },
+  getMessagingPlatformStatuses: async (): Promise<MessagingPlatformStatus[]> =>
+    await ipcRenderer.invoke(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL),
+  onMessagingPlatformStatusEvent: (
+    callback: (event: MessagingPlatformStatusEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: MessagingPlatformStatusEvent,
+    ) => callback(payload);
+    ipcRenderer.on(MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL, listener);
     };
   },
   platform: process.platform,
