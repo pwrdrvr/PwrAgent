@@ -87,6 +87,7 @@ export function materializeNavigationThreads(params: {
       linkedDirectories,
       worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
       reactions: overlay?.reactions ?? [],
+      prs: overlay?.prs ?? [],
       inbox: deriveInboxState({
         firstSnapshot: params.firstSnapshot,
         isNewThread: !previousKnownThreadKeys.has(threadKey),
@@ -186,6 +187,18 @@ export function buildNavigationSnapshotHash(params: {
         reason: thread.inbox.reason ?? null,
         lastSeenUpdatedAt: thread.inbox.lastSeenUpdatedAt ?? null,
       },
+      reactions: thread.reactions ?? [],
+      // Include prs in the hash so refreshThreadPullRequests writes to
+      // the overlay actually propagate to the renderer. Without this,
+      // the next snapshot tick computes an identical hash, gets marked
+      // unchanged, and the renderer keeps the stale empty thread.prs.
+      prs: (thread.prs ?? []).map((pr) => ({
+        number: pr.number,
+        org: pr.org,
+        repo: pr.repo,
+        state: pr.state,
+        url: pr.url,
+      })),
     })),
     directories: (params.directories ?? []).map((directory) => ({
       key: directory.key,

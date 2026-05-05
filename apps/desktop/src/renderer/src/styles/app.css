@@ -1076,6 +1076,83 @@ textarea,
   line-height: 1;
 }
 
+/* PR chips on thread rows. Color comes from the --status-* tokens
+   (Phase 0) plus a tangerine fallback for `merged` since GitHub merged
+   PRs are conventionally purple/violet — but we keep one accent color
+   per the Tangerine Terminal thesis and use a desaturated violet only
+   for the dot, not the whole chip. */
+
+.thread-row__pr-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.pr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  height: 22px;
+  appearance: none;
+  cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.pr-chip:hover,
+.pr-chip:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+  outline: none;
+}
+
+.pr-chip__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-suspended);
+  flex: 0 0 auto;
+}
+
+.pr-chip__label {
+  white-space: nowrap;
+}
+
+.pr-chip--passing .pr-chip__dot {
+  background: var(--status-ok);
+}
+
+.pr-chip--failing .pr-chip__dot {
+  background: var(--status-error);
+}
+
+.pr-chip--pending .pr-chip__dot {
+  background: var(--status-warning);
+}
+
+.pr-chip--merged .pr-chip__dot {
+  /* Desaturated violet — distinct from accent without competing with it. */
+  background: #8a6dc4;
+}
+
+.pr-chip--draft .pr-chip__dot,
+.pr-chip--closed .pr-chip__dot,
+.pr-chip--unknown .pr-chip__dot {
+  background: var(--status-suspended);
+}
+
 .thread-row__chip--muted {
   background: var(--bg-panel-elevated);
   color: var(--text-secondary);
@@ -1893,6 +1970,66 @@ textarea,
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.settings-panel__hint {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-panel__hint code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg-input);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.settings-gh-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-pill {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.settings-pill--ok {
+  border-color: var(--accent-border);
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.settings-pill--warn {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.settings-pill--bad {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.settings-pill--neutral {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-elevated);
+  color: var(--text-muted);
+}
+
+.settings-error {
+  color: var(--danger-text);
 }
 
 .thread-view--launchpad {

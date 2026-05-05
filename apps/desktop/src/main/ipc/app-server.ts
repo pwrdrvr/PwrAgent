@@ -19,6 +19,10 @@ import type {
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
+  GetGhStatusRequest,
+  GhStatus,
+  RefreshThreadPullRequestsRequest,
+  RefreshThreadPullRequestsResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   NavigationSnapshot,
@@ -51,6 +55,8 @@ import {
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   FOCUSED_DIFF_ANALYZE_CHANNEL,
+  NAVIGATION_GET_GH_STATUS_CHANNEL,
+  NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -60,6 +66,8 @@ import {
 } from "../../shared/ipc";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { getMainLogger } from "../log";
+import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
+import { detectPullRequestsForThread } from "../pr-status/pr-detection";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -106,6 +114,7 @@ class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
   private focusedDiffServiceApiKey: string | undefined;
   private focusedDiffServiceModel: string | undefined;
+  private prFetcher: GithubPrFetcher | undefined;
   private readonly pendingNavigationSnapshots = new Map<
     string,
     Promise<NavigationSnapshot>
@@ -370,6 +379,100 @@ class DesktopAppServerService {
     return response;
   }
 
+  async refreshThreadPullRequests(
+    request: RefreshThreadPullRequestsRequest,
+  ): Promise<RefreshThreadPullRequestsResponse> {
+    const backend = request.backend ?? "codex";
+    const fetcher = this.getPrFetcher();
+    const ghAvailable = await fetcher.isGhAvailable();
+    if (!ghAvailable) {
+      return {
+        backend,
+        threadId: request.threadId,
+        prs: [],
+        ghAvailable: false,
+      };
+    }
+
+    const overlay = this.getOverlayStore();
+    const existing = await overlay.getThreadOverlayState({
+      backend,
+      threadId: request.threadId,
+    });
+    const existingPrs = existing?.prs ?? [];
+    // Terminal-state short-circuit: once a PR is merged or closed, we
+    // never re-query gh for that thread. The chip is frozen at its
+    // terminal color and we just hand back what's persisted.
+    const hasTerminalPr = existingPrs.some(
+      (pr) => pr.state === "merged" || pr.state === "closed",
+    );
+    if (hasTerminalPr) {
+      logDebug("refreshThreadPullRequests:short-circuit", {
+        backend,
+        threadId: request.threadId,
+        prCount: existingPrs.length,
+      });
+      return {
+        backend,
+        threadId: request.threadId,
+        prs: existingPrs,
+        ghAvailable: true,
+        shortCircuited: true,
+      };
+    }
+
+    const branch = request.branch.trim();
+    if (!branch || request.directoryPaths.length === 0) {
+      return {
+        backend,
+        threadId: request.threadId,
+        prs: existingPrs,
+        ghAvailable: true,
+      };
+    }
+
+    const prs = await detectPullRequestsForThread({
+      fetcher,
+      branch,
+      directoryPaths: request.directoryPaths,
+    });
+
+    // Persist even an empty result so we don't refetch unchanged state on
+    // every renderer trigger. The fetchedAt timestamp lets a future TTL
+    // policy (if we add one) reason about staleness without any extra
+    // bookkeeping.
+    await overlay.setThreadPullRequests({
+      backend,
+      threadId: request.threadId,
+      prs,
+    });
+
+    logDebug("refreshThreadPullRequests", {
+      backend,
+      threadId: request.threadId,
+      branch,
+      directoryCount: request.directoryPaths.length,
+      prCount: prs.length,
+    });
+
+    return { backend, threadId: request.threadId, prs, ghAvailable: true };
+  }
+
+  async getGhStatus(request: GetGhStatusRequest): Promise<GhStatus> {
+    const fetcher = this.getPrFetcher();
+    if (request.recheck) {
+      fetcher.invalidateGhAvailable();
+    }
+    const status = await fetcher.getAuthStatus();
+    logDebug("getGhStatus", {
+      installed: status.installed,
+      loggedIn: status.loggedIn,
+      hasRepoScope: status.hasRepoScope,
+      scopeCount: status.scopes.length,
+    });
+    return status;
+  }
+
   async setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> {
@@ -476,7 +579,15 @@ class DesktopAppServerService {
     this.focusedDiffService = null;
     this.focusedDiffServiceApiKey = undefined;
     this.focusedDiffServiceModel = undefined;
+    this.prFetcher = undefined;
     await disposeDesktopBackendRegistry();
+  }
+
+  private getPrFetcher(): GithubPrFetcher {
+    if (!this.prFetcher) {
+      this.prFetcher = new GithubPrFetcher();
+    }
+    return this.prFetcher;
   }
 
   private getOverlayStore(): OverlayStoreLike {
@@ -636,6 +747,23 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.setThreadReaction(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+    async (
+      _event,
+      request: RefreshThreadPullRequestsRequest,
+    ): Promise<RefreshThreadPullRequestsResponse> => {
+      return await appServerService.refreshThreadPullRequests(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_GET_GH_STATUS_CHANNEL,
+    async (_event, request: GetGhStatusRequest | undefined): Promise<GhStatus> => {
+      return await appServerService.getGhStatus(request ?? {});
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.handle(
     NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -682,6 +810,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);

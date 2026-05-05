@@ -62,6 +62,12 @@ type SidebarProps = {
     emoji: string,
     present: boolean,
   ) => Promise<void>;
+  /**
+   * Called by thread rows when the user hovers a non-merged PR chip
+   * (or the row itself, depending on chip strategy). Used to prefetch
+   * fresh PR status before they click in.
+   */
+  onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
   onResizeStart?: (event: PointerEvent<HTMLElement>) => void;
   onResizeByKeyboard?: (delta: number) => void;
 };
@@ -355,6 +361,7 @@ export function Sidebar(props: SidebarProps) {
               thinkingThreadKeys={props.thinkingThreadKeys}
               threads={props.inboxThreads}
               onOpenThreadContextMenu={openThreadContextMenu}
+              onPrefetchPullRequests={props.onPrefetchPullRequests}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetThreadReaction}
             />
@@ -367,6 +374,7 @@ export function Sidebar(props: SidebarProps) {
               threads={props.threads}
               onOpenThreadContextMenu={openThreadContextMenu}
               onOpenLaunchpad={props.onOpenLaunchpad}
+              onPrefetchPullRequests={props.onPrefetchPullRequests}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetThreadReaction}
             />
@@ -380,6 +388,7 @@ export function Sidebar(props: SidebarProps) {
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 threads={props.threads}
                 onOpenThreadContextMenu={openThreadContextMenu}
+                onPrefetchPullRequests={props.onPrefetchPullRequests}
                 onSelectThread={props.onSelectThread}
                 onSetReaction={props.onSetThreadReaction}
               />

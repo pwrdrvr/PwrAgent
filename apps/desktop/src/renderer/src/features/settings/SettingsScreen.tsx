@@ -219,6 +219,7 @@ function SettingsSectionBody(props: {
   if (props.section === "applications") {
     return (
       <ApplicationsSettings
+        desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}
         onPreferredApplicationChange={async (kind, preferredId) => {

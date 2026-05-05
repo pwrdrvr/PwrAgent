@@ -30,6 +30,10 @@ export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
 export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
+export const NAVIGATION_REFRESH_THREAD_PRS_CHANNEL =
+  "navigation:refresh-thread-prs";
+export const NAVIGATION_GET_GH_STATUS_CHANNEL =
+  "navigation:get-gh-status";
 export const NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "navigation:ensure-directory-launchpad";
 export const NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL =

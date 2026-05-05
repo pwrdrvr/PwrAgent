@@ -36,6 +36,10 @@ import type {
   MarkThreadSeenResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  GetGhStatusRequest,
+  GhStatus,
+  RefreshThreadPullRequestsRequest,
+  RefreshThreadPullRequestsResponse,
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
@@ -107,6 +111,8 @@ import {
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
+  NAVIGATION_GET_GH_STATUS_CHANNEL,
+  NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -288,6 +294,12 @@ const desktopApi = Object.freeze({
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_REACTION_CHANNEL, request),
+  refreshThreadPullRequests: async (
+    request: RefreshThreadPullRequestsRequest,
+  ): Promise<RefreshThreadPullRequestsResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL, request),
+  getGhStatus: async (request?: GetGhStatusRequest): Promise<GhStatus> =>
+    await ipcRenderer.invoke(NAVIGATION_GET_GH_STATUS_CHANNEL, request),
   ensureDirectoryLaunchpad: async (
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> =>

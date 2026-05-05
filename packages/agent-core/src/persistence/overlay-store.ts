@@ -10,6 +10,7 @@ import type {
   NavigationDirectoryGitStatus,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
+  PrSummary,
   ThreadExecutionMode,
   ThreadOverlayState,
   WorktreeSnapshotSummary,
@@ -381,6 +382,30 @@ export class OverlayStore {
       const nextState: ThreadOverlayState = {
         ...current,
         reactions: nextReactions,
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
+  }
+
+  async setThreadPullRequests(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    prs: PrSummary[];
+    fetchedAt?: number;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const nextState: ThreadOverlayState = {
+        ...current,
+        prs: params.prs,
+        prsFetchedAt: params.fetchedAt ?? Date.now(),
       };
       data.threads[threadKey] = nextState;
       return nextState;
