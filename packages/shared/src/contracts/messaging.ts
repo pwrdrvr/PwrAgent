@@ -657,7 +657,8 @@ export type MessagingOutboundAttachmentCapabilities = {
 };
 
 export type MessagingCapabilityProfile = {
-  actions: MessagingActionCapabilities | null;
+  /** Action/button capabilities. Omit for text-only providers (e.g., Signal). */
+  actions?: MessagingActionCapabilities;
   text: MessagingTextCapabilities;
   inboundAttachments?: MessagingAttachmentCapabilities;
   outboundAttachments?: MessagingOutboundAttachmentCapabilities;

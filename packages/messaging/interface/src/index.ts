@@ -817,7 +817,8 @@ export type MessagingOutboundAttachmentCapabilities = {
 };
 
 export type MessagingCapabilityProfile = {
-  actions: MessagingActionCapabilities | null;
+  /** Action/button capabilities. Omit for text-only providers (e.g., Signal). */
+  actions?: MessagingActionCapabilities;
   text: MessagingTextCapabilities;
   inboundAttachments?: MessagingAttachmentCapabilities;
   outboundAttachments?: MessagingOutboundAttachmentCapabilities;
@@ -848,12 +849,17 @@ export function capabilityProfilePageSize(
   navActionCount: number,
   maxPageSize?: number,
 ): number {
-  if (profile.actions === null) {
+  if (!profile.actions) {
     return DEFAULT_TEXT_MODE_PAGE_SIZE;
   }
   const available = profile.actions.maxActions - navActionCount;
+  if (available <= 0) {
+    // Nav buttons consume the entire action budget; no room for items.
+    // Caller should fall back to text-only rendering.
+    return 0;
+  }
   const cap = maxPageSize ?? DEFAULT_MAX_PAGE_SIZE;
-  return Math.max(1, Math.min(available, cap));
+  return Math.min(available, cap);
 }
 
 export function capabilityProfileMinActions(
@@ -866,7 +872,7 @@ export function capabilityProfileSupportsActions(
   profile: MessagingCapabilityProfile,
   surfaceKind: MessagingCapabilitySurfaceKind,
 ): boolean {
-  if (profile.actions === null) {
+  if (!profile.actions) {
     return false;
   }
   return profile.actions.maxActions >= CAPABILITY_MIN_ACTIONS[surfaceKind];
@@ -879,16 +885,17 @@ export function truncateActionsByPriority(
   if (actions.length <= maxActions) {
     return actions;
   }
-  const sorted = [...actions].sort((a, b) => {
-    const pa = a.priority ?? Number.MAX_SAFE_INTEGER;
-    const pb = b.priority ?? Number.MAX_SAFE_INTEGER;
-    if (pa !== pb) {
-      return pa - pb;
+  const indexed = actions.map((action, index) => ({ action, index }));
+  indexed.sort((left, right) => {
+    const lp = left.action.priority ?? Number.POSITIVE_INFINITY;
+    const rp = right.action.priority ?? Number.POSITIVE_INFINITY;
+    if (lp !== rp) {
+      return lp - rp;
     }
-    return actions.indexOf(a) - actions.indexOf(b);
+    return left.index - right.index;
   });
-  const kept = new Set(sorted.slice(0, maxActions));
-  return actions.filter((action) => kept.has(action));
+  const keptIndices = new Set(indexed.slice(0, maxActions).map((entry) => entry.index));
+  return actions.filter((_, index) => keptIndices.has(index));
 }
 
 export const PERMISSIVE_CAPABILITY_PROFILE: MessagingCapabilityProfile = {

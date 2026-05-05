@@ -356,7 +356,6 @@ export function buildHandoffOverviewIntent(params: {
 
 export function buildHandoffBranchPickerIntent(params: {
   binding: MessagingBindingRecord;
-  capabilityProfile?: MessagingCapabilityProfile;
   context: MessagingWorkspaceHandoffContext;
   createdAt: number;
   id: string;
