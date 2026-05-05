@@ -538,6 +538,20 @@ tests preserved.
 
 ### Phase 4 — Retention scoping + E2E coverage (R14)
 
+**Implementation status (2026-05-04):**
+- Retention filter-on-read + reject-on-write: LANDED.
+- Unit tests for both surfaces: LANDED.
+- Turn-active E2E variant: DEFERRED to a follow-up. The existing
+  branch-drift E2E was hand-rolled without using the seeding skill;
+  extending it with `turn/started`/`turn/completed` notification steps
+  is non-trivial (~250 LOC fixture-format study). Coverage of the
+  active-turn gate is provided by the renderer unit tests added in
+  Phase 2 (`suppresses the branch drift dialog while a turn is active`,
+  `re-checks branch drift on end-of-turn falling edge`,
+  `does not fire end-of-turn drift check when both thread and activeTurnId change in one render`).
+  The trade-off: the IPC plumbing isn't smoke-tested for the turn-gate
+  case end-to-end, but the gate logic itself is well-covered.
+
 **Files:**
 - `apps/desktop/src/renderer/src/features/thread-detail/ThreadView.tsx`
   (`branchDriftRetained` filters via `expected !== "HEAD"`)
