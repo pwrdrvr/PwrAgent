@@ -48,6 +48,45 @@ pnpm --filter @pwragent/desktop dev:no-messaging
 - The `dev` script (without `no-messaging`) also works but will attempt to connect messaging providers.
 - If the app starts but shows no threads, you are likely running from the wrong directory or with overridden env vars.
 
+## Thread-State Update Bus
+
+When mutating persistent thread state (model, reasoning effort, fast mode,
+permissions/execution mode, name, compaction), `BackendRegistry` MUST emit a
+typed `AppServerNotification` from the mutation method on success. That
+notification fans out through two existing listeners:
+
+- **Renderer**: `apps/desktop/src/main/ipc/agent-ipc.ts:broadcastAgentEvent` →
+  `agent:event` IPC → `desktopApi.onAgentEvent` → `useThreadNavigation`
+  patches the navigation snapshot in place.
+- **Messaging controllers**: `apps/desktop/src/main/messaging/messaging-runtime.ts`
+  fans the event out to every `MessagingController.handleBackendEvent`,
+  which routes thread-state methods to `refreshStatusSurfacesForThread`
+  to re-render every binding's status surface on its channel.
+
+This is what keeps Telegram, Discord, and the desktop UI in sync when any
+surface changes a setting. The cross-surface refresh is automatic — do
+NOT add ad-hoc IPC channels or per-controller refresh fan-outs for new
+thread-state fields. Instead:
+
+1. Add the new notification method to `AppServerNotification` in
+   `packages/shared/src/contracts/normalized-app-server.ts`.
+2. Emit from the registry mutation method via `await this.emit(...)`.
+3. Add a handler branch in `useThreadNavigation`'s `onAgentEvent`
+   subscription, mirroring `applyThreadModelSettingsUpdate` /
+   `applyThreadExecutionModeUpdate`.
+4. Add a method-name branch in `MessagingController.handleBackendEvent`
+   that routes to `refreshStatusSurfacesForThread`.
+
+Mutation handlers in `MessagingController` (e.g. `togglePermissionsMode`)
+should NOT call `renderBindingStatus` inline for state that flows through
+the bus — the bus is the single source of refresh, and an inline render
+would be redundant. Update binding-local preferences before the registry
+call so the bus-path render sees fresh prefs.
+
+For binding-local mutations that do NOT flow through the registry
+(e.g. `cycleToolUpdateMode`, `syncConversationName`), keep the inline
+`renderBindingStatus` call — there's no bus event for those.
+
 ## Implementation Notes
 
 - Centralize visual tokens in `styles/app.css` before expanding renderer surfaces.

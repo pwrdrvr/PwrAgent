@@ -18,6 +18,33 @@ This tree defines the generic messaging contract and the provider adapters that 
 - If a future provider needs a feature the interface cannot express, extend the generic interface first, then implement the extension in providers that can support it.
 - Prefer restart-safe behavior. Callback/action mappings that can be encoded generically or persisted should not rely only on provider process memory.
 
+## Thread-State Update Bus
+
+When the desktop user, a Telegram callback, or a Discord callback changes
+persistent thread state (model, reasoning effort, fast mode, permissions,
+name, compaction), the change is broadcast on a single in-process bus —
+the existing `BackendRegistry` event emitter — and every controller plus
+the renderer learns about it. Each `MessagingController` then re-renders
+its own bindings' status surfaces via `refreshStatusSurfacesForThread`.
+
+This is what keeps Discord, Telegram, and the desktop UI in sync after a
+user clicks the Permissions button on any one of them. Do NOT add
+provider-specific cross-surface refresh logic, parallel buses, or
+ad-hoc event channels. The pattern is: registry mutation method →
+typed `AppServerNotification` emit → fan-out via the existing
+`messaging-runtime.onEvent` → controller's `handleBackendEvent` routes
+the method to `refreshStatusSurfacesForThread`.
+
+Mutation handlers in `MessagingController` (e.g. `togglePermissionsMode`,
+`setBindingModel`) should NOT call `renderBindingStatus` inline for state
+that flows through the bus — the bus is the single refresh source.
+For binding-local mutations (`cycleToolUpdateMode`,
+`syncConversationName`) keep the inline render — there's no bus event
+for binding-scoped preferences.
+
+See `apps/desktop/AGENTS.md` for the registry-side emit pattern and
+the renderer-side subscription branches.
+
 ## Enforcement
 
 - Boundary rules are enforced by `.dependency-cruiser.cjs` via `pnpm lint:boundaries`.

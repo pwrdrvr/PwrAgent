@@ -460,6 +460,43 @@ function applyThreadModelSettingsUpdate(
     : snapshot;
 }
 
+function applyThreadExecutionModeUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    executionMode: "default" | "full-access";
+  }
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+
+    if (thread.executionMode === params.executionMode) {
+      return thread;
+    }
+
+    changed = true;
+    return {
+      ...thread,
+      executionMode: params.executionMode,
+    };
+  });
+
+  return changed
+    ? {
+        ...snapshot,
+        threads,
+      }
+    : snapshot;
+}
+
 function applyLaunchpadUpdate(
   snapshot: NavigationSnapshot | undefined,
   launchpad: NavigationLaunchpadDraft,
@@ -1164,6 +1201,55 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
         );
         setOptimisticThread((current) =>
           current?.source === event.backend && current.id === threadId ? undefined : current
+        );
+        return;
+      }
+
+      if (method === "thread/executionMode/updated") {
+        const { threadId, executionMode } = event.notification.params as {
+          threadId: string;
+          executionMode: "default" | "full-access";
+        };
+        setState((current) => ({
+          ...current,
+          response: applyThreadExecutionModeUpdate(current.response, {
+            backend: event.backend,
+            threadId,
+            executionMode,
+          }),
+        }));
+        setOptimisticThread((current) =>
+          current?.source === event.backend && current.id === threadId
+            ? { ...current, executionMode }
+            : current
+        );
+        return;
+      }
+
+      if (method === "thread/modelSettings/updated") {
+        const { threadId, model, reasoningEffort, serviceTier, fastMode } =
+          event.notification.params as {
+            threadId: string;
+            model?: string;
+            reasoningEffort?: string;
+            serviceTier?: string;
+            fastMode?: boolean;
+          };
+        setState((current) => ({
+          ...current,
+          response: applyThreadModelSettingsUpdate(current.response, {
+            backend: event.backend,
+            threadId,
+            model,
+            reasoningEffort,
+            serviceTier,
+            fastMode,
+          }),
+        }));
+        setOptimisticThread((current) =>
+          current?.source === event.backend && current.id === threadId
+            ? { ...current, model, reasoningEffort, serviceTier, fastMode }
+            : current
         );
         return;
       }

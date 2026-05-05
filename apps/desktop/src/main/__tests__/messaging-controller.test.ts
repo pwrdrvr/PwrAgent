@@ -15,6 +15,8 @@ import type {
   MessagingSurfaceIntent,
   MessagingToolUpdateMode,
   NavigationSnapshot,
+  SetThreadExecutionModeRequest,
+  SetThreadModelSettingsRequest,
   StartThreadRequest,
   StartTurnRequest,
   SteerTurnRequest,
@@ -3352,8 +3354,43 @@ async function createHarness(options?: {
     itemId: "compact-item-1",
   }));
   const interruptTurn = vi.fn(async (request) => request);
-  const setThreadExecutionMode = vi.fn(async (request) => request);
-  const setThreadModelSettings = vi.fn(async (request) => request);
+  // Mirror the real BackendRegistry emit-after-mutation behavior: the
+  // mutation methods also fan out a notification on the bus so the
+  // controller's refreshStatusSurfacesForThread path runs end-to-end.
+  let controllerRef: MessagingController | undefined;
+  const setThreadExecutionMode = vi.fn(async (request: SetThreadExecutionModeRequest) => {
+    if (controllerRef) {
+      await controllerRef.handleBackendEvent({
+        backend: request.backend,
+        notification: {
+          method: "thread/executionMode/updated",
+          params: {
+            threadId: request.threadId,
+            executionMode: request.executionMode,
+          },
+        },
+      });
+    }
+    return request;
+  });
+  const setThreadModelSettings = vi.fn(async (request: SetThreadModelSettingsRequest) => {
+    if (controllerRef) {
+      await controllerRef.handleBackendEvent({
+        backend: request.backend,
+        notification: {
+          method: "thread/modelSettings/updated",
+          params: {
+            threadId: request.threadId,
+            ...(request.model !== undefined ? { model: request.model } : {}),
+            ...(request.fastMode !== undefined ? { fastMode: request.fastMode } : {}),
+            ...(request.reasoningEffort !== undefined ? { reasoningEffort: request.reasoningEffort } : {}),
+            ...(request.serviceTier !== undefined ? { serviceTier: request.serviceTier } : {}),
+          },
+        },
+      });
+    }
+    return request;
+  });
   const handoffThreadWorkspace =
     options?.handoff === false
       ? undefined
@@ -3412,17 +3449,20 @@ async function createHarness(options?: {
     submitServerRequest,
   };
 
+  const controller = new MessagingController({
+    adapter,
+    authorizedActorIds: ["user-1"],
+    backend,
+    inputDebounceMs: options?.inputDebounceMs ?? 0,
+    logger: options?.logger,
+    now: options?.now ?? (() => 1000),
+    store,
+    toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
+  });
+  controllerRef = controller;
+
   return {
-    controller: new MessagingController({
-      adapter,
-      authorizedActorIds: ["user-1"],
-      backend,
-      inputDebounceMs: options?.inputDebounceMs ?? 0,
-      logger: options?.logger,
-      now: options?.now ?? (() => 1000),
-      store,
-      toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
-    }),
+    controller,
     compactThread,
     delivered,
     getNavigationSnapshot,

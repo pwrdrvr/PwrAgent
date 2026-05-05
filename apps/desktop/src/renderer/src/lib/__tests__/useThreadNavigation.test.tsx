@@ -1321,4 +1321,140 @@ describe("useThreadNavigation", () => {
       expect(result.current.selectedThread?.title).toBe("First thread");
     });
   });
+
+  it("patches the snapshot for thread/executionMode/updated without refetching", async () => {
+    const listeners = new Set<(event: any) => void>();
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          executionMode: "default" as const,
+          inbox: { inInbox: true, reason: "new-thread" as const },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.executionMode).toBe("default");
+    });
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/executionMode/updated",
+            params: {
+              threadId: "thread-1",
+              executionMode: "full-access",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.executionMode).toBe("full-access");
+    });
+    // Push-driven patch — no full snapshot re-fetch.
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("patches the snapshot for thread/modelSettings/updated without refetching", async () => {
+    const listeners = new Set<(event: any) => void>();
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          model: "gpt-5",
+          reasoningEffort: "low",
+          fastMode: false,
+          inbox: { inInbox: true, reason: "new-thread" as const },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.model).toBe("gpt-5");
+    });
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/modelSettings/updated",
+            params: {
+              threadId: "thread-1",
+              model: "gpt-5.5",
+              reasoningEffort: "high",
+              fastMode: true,
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.model).toBe("gpt-5.5");
+      expect(result.current.selectedThread?.reasoningEffort).toBe("high");
+      expect(result.current.selectedThread?.fastMode).toBe(true);
+    });
+    // Push-driven patch — no full snapshot re-fetch.
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+  });
 });
