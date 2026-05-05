@@ -4,10 +4,14 @@ Adapters translate PwrAgent semantic messaging intents into a platform-native
 surface and translate platform events back into normalized inbound events. They
 must not make thread, project, questionnaire, or approval workflow decisions.
 
+For an architecture overview (layered diagram, data flow, capability-profile
+explanation, file map) see [`docs/messaging-architecture.md`](messaging-architecture.md).
+
 ## Inputs
 
 The controller sends `MessagingSurfaceIntent` values from
-`packages/shared/src/contracts/messaging.ts`.
+`packages/messaging/interface/src/index.ts` (the canonical home for messaging
+types). Adapters import them via `@pwragent/messaging-interface`.
 
 Adapters should support:
 
@@ -141,26 +145,90 @@ Workspace handoff is expressed with the same generic status, single-select,
 confirmation, and error intents as other messaging workflows. Adapters should
 render its `Handoff`, branch, confirm, back, refresh, and cancel actions like
 any other `MessagingSurfaceAction`; provider payloads must remain short opaque
-handles. If a platform cannot show every button, text fallback remains the
-required escape hatch until PwrAgent has a generic low-button-count variation
-policy.
+handles. The earlier "low-button-count variation policy" deferral is now
+implemented via the capability profile (see below) — producers truncate by
+priority and adapters apply defensive caps from their own profile.
+
+## Capability Profile
+
+Each adapter declares a `MessagingCapabilityProfile` literal at the top of its
+provider class. The profile describes what the platform supports across four
+dimensions:
+
+- **actions** — interactive button limits: `maxActions`, `maxActionsPerRow`,
+  `maxRows`, `maxLabelLength`, plus support flags for styles, disabled buttons,
+  and explicit layout hints. Omit `actions` entirely for a text-only provider
+  (e.g., a future Signal adapter); producers will fall back to text rendering.
+- **text** — message-body limits: `maxLength`, `encoding` (utf8-bytes,
+  utf16-units, characters), `markdownDialect`, formatting feature flags,
+  `supportsMessageEdit`.
+- **inboundAttachments** — what we accept from the user (size caps, count
+  caps, download support).
+- **outboundAttachments** — what we can deliver to the user (file upload size,
+  image upload, remote URL support). Reserved for the forthcoming Plan/Review
+  surface delivery (see the plan-review attachment delivery plan in
+  `docs/plans/`).
+
+Existing examples in the tree:
+
+- `packages/messaging/providers/discord/src/discord-adapter.ts` — Discord
+  profile (25 actions, 5×5 grid, 80-char labels, discord-markdown dialect).
+- `packages/messaging/providers/telegram/src/telegram-adapter.ts` — Telegram
+  profile (100 actions, 8 per row, 64-char labels, HTML dialect).
+
+The controller reads the adapter's profile once at construction and threads it
+to every producer. Producers call
+`applyActionCapabilityLimits(actions, profile)` to (a) drop lowest-priority
+actions when the count exceeds the profile's `maxActions` and (b) truncate
+labels longer than `maxLabelLength`. `MessagingSurfaceAction.priority` orders
+the list — **lower numbers are higher priority**, items without explicit
+priority drop first.
+
+Adapter formatting code reads the same profile to apply defensive caps as a
+safety net (e.g., `actions.slice(0, profile.actions.maxActions)`). If the
+producer respected the profile, those slices are no-ops; if a producer
+misbehaves, the adapter clips it before the platform rejects the request.
+
+The page-size helper `capabilityProfilePageSize(profile, navActionCount,
+maxPageSize?)` computes how many items can fit on a paginated picker after
+reserving slots for nav buttons. The resume browser and handoff branch picker
+both use it.
+
+Profile design rule: the profile is the single source of truth for
+cross-boundary numbers (max actions, max label length, max columns/rows).
+Constants that live entirely inside an adapter's own formatting code — body
+length used for chunking, callback-payload byte budget used for handle
+encoding — stay as adapter-local constants. The profile is for things
+producers need to know.
+
+A permissive profile for tests (`PERMISSIVE_CAPABILITY_PROFILE`) is exported
+from the dedicated `@pwragent/messaging-interface/testing` subpath. Production
+code must never import it — every adapter must declare a real profile.
 
 ## Adding A New Adapter
 
 To add Mattermost, Feishu/Lark, Slack, Matrix, or another channel:
 
-1. Implement the desktop adapter shape from
-   `apps/desktop/src/main/messaging/messaging-runtime.ts`.
-2. Normalize inbound platform events into `MessagingInboundEvent`.
-3. Render `MessagingSurfaceIntent` without changing `MessagingController`.
-4. Store platform-specific details only in `MessagingAdapterState`.
-5. Use short callback handles and resolve them back to semantic actions inside
-   the adapter.
-6. Add tests for command normalization, authorization by stable ID, callbacks,
-   markdown/code rendering, long text chunking, unsupported inbound media, and
-   restart-safe binding behavior.
-7. Document any capability gaps as adapter degradation, not workflow branches.
+1. Create `packages/messaging/providers/<channel>/` with its own
+   `package.json` and `tsconfig.json`. Depend only on
+   `@pwragent/messaging-interface` and the channel's SDK.
+2. Implement the desktop adapter shape from
+   `apps/desktop/src/main/messaging/messaging-runtime.ts`
+   (`DesktopMessagingAdapter`).
+3. Declare a `capabilityProfile: MessagingCapabilityProfile` literal at the
+   top of the adapter class with real numbers from the platform's docs.
+4. Normalize inbound platform events into `MessagingInboundEvent`.
+5. Render `MessagingSurfaceIntent` without changing `MessagingController`.
+   Apply defensive caps from the adapter's own `capabilityProfile`.
+6. Store platform-specific details only in `MessagingAdapterState`.
+7. Use short callback handles and resolve them back to semantic actions
+   inside the adapter.
+8. Add tests for command normalization, authorization by stable ID, callbacks,
+   markdown/code rendering, long text chunking, unsupported inbound media,
+   restart-safe binding behavior, and capability-profile reads in formatting.
+9. Document any capability gaps as adapter degradation or as profile fields
+   the new platform leaves unset, not as workflow branches.
 
-If a platform exposes a useful feature that the generic surface cannot express,
-extend `packages/shared/src/contracts/messaging.ts` first and keep the new
-workflow semantic.
+If a platform exposes a useful feature that the generic surface cannot
+express, extend `packages/messaging/interface/src/index.ts` first and keep
+the new workflow semantic channel-neutral.

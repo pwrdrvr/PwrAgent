@@ -2,6 +2,8 @@
 
 This tree defines the generic messaging contract and the provider adapters that implement it.
 
+For a layered architecture overview with diagrams, data-flow sequences, the capability-profile system, and a file map, see [`docs/messaging-architecture.md`](../../docs/messaging-architecture.md). For the technical contract every adapter must satisfy, see [`docs/messaging-adapter-contract.md`](../../docs/messaging-adapter-contract.md).
+
 ## Package Boundaries
 
 - `packages/messaging/interface` is the only generic messaging contract. It may define channel-neutral types, capabilities, delivery policies, opaque adapter state, callback handles, and rendering primitives.
