@@ -22,6 +22,7 @@ import type {
   SteerTurnRequest,
   SubmitServerRequestRequest,
 } from "@pwragent/shared";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface";
 import {
   MessagingController,
   type MessagingControllerOptions,
@@ -3308,6 +3309,7 @@ async function createHarness(options?: {
   const store = await createStore();
   const delivered: MessagingSurfaceIntent[] = [];
   const adapter: MessagingAdapter = {
+    capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
     ...(options?.downloadAttachment
       ? { downloadAttachment: options.downloadAttachment }
       : {}),

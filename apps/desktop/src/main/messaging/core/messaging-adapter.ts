@@ -14,7 +14,7 @@ import type {
   MessagingDeliveryResult,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
-  MessagingAdapterCapabilities,
+  MessagingCapabilityProfile,
   MessagingInboundEvent,
   MessagingActorIdentity,
   MessagingAdapterState,
@@ -53,7 +53,7 @@ export type MessagingConversationTitleUpdateResult = {
 };
 
 export type MessagingAdapter = {
-  capabilities?: MessagingAdapterCapabilities;
+  capabilityProfile: MessagingCapabilityProfile;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   downloadAttachment?(
     request: MessagingAttachmentDownloadRequest,

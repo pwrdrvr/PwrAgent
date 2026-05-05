@@ -13,7 +13,7 @@ import {
   type User,
 } from "discord.js";
 import type {
-  MessagingAdapterCapabilities,
+  MessagingCapabilityProfile,
   MessagingAdapterState,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
@@ -215,7 +215,7 @@ type DiscordAdapterOptions = {
 
 export type DiscordProviderAdapter = {
   authorizedActorIds: readonly string[];
-  capabilities?: MessagingAdapterCapabilities;
+  capabilityProfile: MessagingCapabilityProfile;
   channel: "discord";
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   downloadAttachment?(
@@ -230,7 +230,28 @@ export type DiscordProviderAdapter = {
 
 export class DiscordAdapter implements DiscordProviderAdapter {
   readonly channel = "discord" as const;
-  readonly capabilities: MessagingAdapterCapabilities = {
+  readonly capabilityProfile: MessagingCapabilityProfile = {
+    actions: {
+      maxActions: 25,
+      maxActionsPerRow: 5,
+      maxRows: 5,
+      maxLabelLength: 80,
+      supportsStyles: true,
+      supportsDisabled: true,
+      supportsLayoutHints: true,
+      maxCallbackPayloadBytes: 100,
+    },
+    text: {
+      maxLength: 2000,
+      encoding: "characters",
+      markdownDialect: "discord-markdown",
+      supportsCodeBlocks: true,
+      supportsBold: true,
+      supportsItalic: true,
+      supportsLinks: true,
+      supportsInlineCode: true,
+      supportsMessageEdit: true,
+    },
     inboundAttachments: {
       maxAttachmentCount: 10,
       maxDownloadBytes: 25 * 1024 * 1024,

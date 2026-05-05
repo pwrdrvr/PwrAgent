@@ -15,8 +15,24 @@ import type {
   ThreadIdentifier,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
+import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
+import { capabilityProfilePageSize } from "@pwragent/messaging-interface";
 
 export const RESUME_BROWSER_PAGE_SIZE = 8;
+const RESUME_BROWSER_NAV_ACTION_COUNT = 5;
+
+export function resumeBrowserPageSize(
+  profile?: MessagingCapabilityProfile,
+): number {
+  if (!profile) {
+    return RESUME_BROWSER_PAGE_SIZE;
+  }
+  return capabilityProfilePageSize(
+    profile,
+    RESUME_BROWSER_NAV_ACTION_COUNT,
+    RESUME_BROWSER_PAGE_SIZE,
+  );
+}
 
 export type ParsedResumeCommand = {
   mode: MessagingBrowseMode;

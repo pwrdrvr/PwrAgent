@@ -8,6 +8,7 @@ import type {
 } from "./core/messaging-adapter";
 import type { AgentEvent, AppServerPendingRequestNotification } from "@pwragent/shared";
 import type {
+  MessagingCapabilityProfile,
   MessagingChannelKind,
   MessagingDeliveryResult,
   MessagingInboundEvent,
@@ -26,6 +27,7 @@ import { loadConfiguredMessagingAdapters } from "./provider-loader";
 
 export type DesktopMessagingAdapter = {
   authorizedActorIds: readonly string[];
+  capabilityProfile: MessagingCapabilityProfile;
   channel: MessagingChannelKind;
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];

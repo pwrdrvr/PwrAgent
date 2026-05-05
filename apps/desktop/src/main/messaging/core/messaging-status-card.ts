@@ -11,6 +11,11 @@ import type {
   ThreadIdentifier,
 } from "@pwragent/shared";
 import { shortenDerivedThreadTitle } from "@pwragent/shared";
+import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
+import {
+  capabilityProfileSupportsActions,
+  truncateActionsByPriority,
+} from "@pwragent/messaging-interface";
 import type { MessagingResolvedThreadState } from "./messaging-thread-state.js";
 
 export type MessagingWorkspaceHandoffContext = {
@@ -29,6 +34,7 @@ export const HANDOFF_BRANCH_PAGE_SIZE = 8;
 
 export function buildBindingStatusIntent(params: {
   binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
   createdAt: number;
   handoff?: MessagingWorkspaceHandoffContext;
   id: string;
@@ -98,83 +104,122 @@ export function buildBindingStatusIntent(params: {
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n"),
-    actions: [
-      {
-        id: "status:model",
-        label: "Model",
-        style: "secondary",
-        fallbackText: "model",
-      },
-      {
-        id: "status:reasoning",
-        label: `Reasoning: ${reasoning}`,
-        style: "secondary",
-        fallbackText: "reasoning",
-      },
-      {
-        id: "status:fast",
-        label: fastMode ? "Fast: on" : "Fast: off",
-        style: "secondary",
-        fallbackText: "fast",
-      },
-      {
-        id: "status:permissions",
-        label:
-          permissionsMode === "full-access"
-            ? "Permissions: Full Access"
-            : "Permissions: Default",
-        style: "secondary",
-        fallbackText: "permissions",
-      },
-      ...(params.handoff
-        ? [
-            {
-              id: "status:handoff",
-              label: "Handoff",
-              style: "secondary" as const,
-              fallbackText: "handoff",
-              value: handoffValue(params.handoff),
-            },
-          ]
-        : []),
-      {
-        id: "status:tool-updates",
-        label: `Tools: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
-        style: "secondary",
-        fallbackText: "tools",
-      },
-      {
-        id: "status:compact",
-        label: "Compact",
-        style: "secondary",
-        fallbackText: "compact",
-      },
-      {
-        id: "status:sync-name",
-        label: "Sync name",
-        style: "secondary",
-        fallbackText: "sync name",
-      },
-      {
-        id: "status:stop",
-        label: "Stop",
-        style: "danger",
-        fallbackText: "stop",
-      },
-      {
-        id: "status:refresh",
-        label: "Refresh",
-        style: "secondary",
-        fallbackText: "refresh",
-      },
-      {
-        id: "status:detach",
-        label: "Detach",
-        style: "danger",
-        fallbackText: "detach",
-      },
-    ],
+    actions: buildStatusActions({
+      capabilityProfile: params.capabilityProfile,
+      fastMode,
+      handoff: params.handoff,
+      permissionsMode,
+      reasoning,
+      toolUpdateMode,
+    }),
   };
+}
+
+function buildStatusActions(params: {
+  capabilityProfile?: MessagingCapabilityProfile;
+  fastMode: boolean | undefined;
+  handoff?: MessagingWorkspaceHandoffContext;
+  permissionsMode: string;
+  reasoning: string;
+  toolUpdateMode: MessagingToolUpdateMode;
+}): MessagingSurfaceAction[] {
+  const profile = params.capabilityProfile;
+  if (profile && !capabilityProfileSupportsActions(profile, "status")) {
+    return [];
+  }
+
+  const allActions: MessagingSurfaceAction[] = [
+    {
+      id: "status:stop",
+      label: "Stop",
+      style: "danger",
+      fallbackText: "stop",
+      priority: 1,
+    },
+    {
+      id: "status:refresh",
+      label: "Refresh",
+      style: "secondary",
+      fallbackText: "refresh",
+      priority: 2,
+    },
+    {
+      id: "status:detach",
+      label: "Detach",
+      style: "danger",
+      fallbackText: "detach",
+      priority: 3,
+    },
+    {
+      id: "status:model",
+      label: "Model",
+      style: "secondary",
+      fallbackText: "model",
+      priority: 4,
+    },
+    {
+      id: "status:reasoning",
+      label: `Reasoning: ${params.reasoning}`,
+      style: "secondary",
+      fallbackText: "reasoning",
+      priority: 5,
+    },
+    {
+      id: "status:fast",
+      label: params.fastMode ? "Fast: on" : "Fast: off",
+      style: "secondary",
+      fallbackText: "fast",
+      priority: 6,
+    },
+    {
+      id: "status:permissions",
+      label:
+        params.permissionsMode === "full-access"
+          ? "Permissions: Full Access"
+          : "Permissions: Default",
+      style: "secondary",
+      fallbackText: "permissions",
+      priority: 7,
+    },
+    ...(params.handoff
+      ? [
+          {
+            id: "status:handoff",
+            label: "Handoff",
+            style: "secondary" as const,
+            fallbackText: "handoff",
+            value: handoffValue(params.handoff),
+            priority: 8,
+          },
+        ]
+      : []),
+    {
+      id: "status:tool-updates",
+      label: `Tools: ${formatMessagingToolUpdateModeLabel(params.toolUpdateMode)}`,
+      style: "secondary",
+      fallbackText: "tools",
+      priority: 9,
+    },
+    {
+      id: "status:compact",
+      label: "Compact",
+      style: "secondary",
+      fallbackText: "compact",
+      priority: 10,
+    },
+    {
+      id: "status:sync-name",
+      label: "Sync name",
+      style: "secondary",
+      fallbackText: "sync name",
+      priority: 11,
+    },
+  ];
+
+  if (profile?.actions) {
+    return truncateActionsByPriority(allActions, profile.actions.maxActions);
+  }
+  return allActions;
 }
 
 function formatStatusBindingTitle(
@@ -310,6 +355,7 @@ export function buildHandoffOverviewIntent(params: {
 
 export function buildHandoffBranchPickerIntent(params: {
   binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
   context: MessagingWorkspaceHandoffContext;
   createdAt: number;
   id: string;

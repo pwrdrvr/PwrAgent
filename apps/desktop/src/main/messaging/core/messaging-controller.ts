@@ -35,6 +35,7 @@ import type {
 } from "@pwragent/shared";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import type { MessagingStoreLike } from "../../state/messaging-store-sqlite";
+import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import type { MessagingAdapter, MessagingBackendBridge } from "./messaging-adapter.js";
 import {
   buildActivityIntent,
@@ -55,7 +56,7 @@ import {
   buildResumeIntent,
   directoryForProjectSelection,
   parseResumeCommandArgs,
-  RESUME_BROWSER_PAGE_SIZE,
+  resumeBrowserPageSize,
   selectProjectFromValue,
   selectThreadFromValue,
 } from "./messaging-resume-browser.js";
@@ -194,6 +195,7 @@ export type MessagingControllerOptions = {
 
 export class MessagingController {
   private readonly authorizedActorIds: Set<string>;
+  private readonly capabilityProfile: MessagingCapabilityProfile;
   private readonly deliveredAssistantMessageKeys = new Set<string>();
   private readonly assistantStreamBuffers = new Map<string, AssistantStreamBuffer>();
   private readonly assistantStreamDeliveryQueues = new Map<string, Promise<void>>();
@@ -208,6 +210,7 @@ export class MessagingController {
 
   constructor(private readonly options: MessagingControllerOptions) {
     this.authorizedActorIds = new Set(options.authorizedActorIds);
+    this.capabilityProfile = options.adapter.capabilityProfile;
     this.now = options.now ?? Date.now;
     this.pendingIntentTtlMs =
       options.pendingIntentTtlMs ?? DEFAULT_PENDING_INTENT_TTL_MS;
@@ -1588,7 +1591,7 @@ export class MessagingController {
       launchAction: parsed.launchAction,
       mode: selectedDirectory && parsed.mode === "recents" ? "project_threads" : parsed.mode,
       pageIndex: 0,
-      pageSize: RESUME_BROWSER_PAGE_SIZE,
+      pageSize: resumeBrowserPageSize(this.capabilityProfile),
       preferences: parsed.preferences
         ? {
             ...parsed.preferences,
@@ -2106,6 +2109,7 @@ export class MessagingController {
         ...buildHandoffBranchPickerIntent({
           id: this.newIntentId("handoff-branch"),
           binding,
+          capabilityProfile: this.capabilityProfile,
           context,
           createdAt: this.now(),
           pageIndex,
@@ -2812,6 +2816,7 @@ export class MessagingController {
           ...buildBindingStatusIntent({
             id: this.newIntentId("status-retire"),
             binding,
+            capabilityProfile: this.capabilityProfile,
             createdAt: this.now(),
             threadState: resolveMessagingThreadState({
               activeTurn: this.getActiveTurn(binding),
@@ -2891,6 +2896,7 @@ export class MessagingController {
     const intent = buildBindingStatusIntent({
       id: this.newIntentId("status"),
       binding,
+      capabilityProfile: this.capabilityProfile,
       createdAt: this.now(),
       handoff: this.options.backend.handoffThreadWorkspace
         ? handoffContextForBinding(binding, snapshot)

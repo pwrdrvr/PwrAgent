@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Bot, InputFile } from "grammy";
 import type {
   MessagingAdapterState,
-  MessagingAdapterCapabilities,
+  MessagingCapabilityProfile,
   MessagingAttachmentDescriptor,
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
@@ -320,7 +320,7 @@ export type TelegramGrammyBotLike = {
 
 export type TelegramProviderAdapter = {
   authorizedActorIds: readonly string[];
-  capabilities?: MessagingAdapterCapabilities;
+  capabilityProfile: MessagingCapabilityProfile;
   channel: "telegram";
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   downloadAttachment?(
@@ -335,7 +335,28 @@ export type TelegramProviderAdapter = {
 
 export class TelegramAdapter implements TelegramProviderAdapter {
   readonly channel = "telegram" as const;
-  readonly capabilities: MessagingAdapterCapabilities = {
+  readonly capabilityProfile: MessagingCapabilityProfile = {
+    actions: {
+      maxActions: 100,
+      maxActionsPerRow: 8,
+      maxLabelLength: 64,
+      supportsStyles: false,
+      supportsDisabled: false,
+      supportsLayoutHints: true,
+      maxCallbackPayloadBytes: 64,
+    },
+    text: {
+      maxLength: 4096,
+      encoding: "utf8-bytes",
+      markdownDialect: "html",
+      supportsCodeBlocks: true,
+      supportsBold: true,
+      supportsItalic: true,
+      supportsLinks: true,
+      supportsInlineCode: true,
+      maxCaptionLength: 1024,
+      supportsMessageEdit: true,
+    },
     inboundAttachments: {
       maxAttachmentCount: 10,
       maxDownloadBytes: 20 * 1024 * 1024,
