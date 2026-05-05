@@ -1182,12 +1182,22 @@ export class MessagingController {
         threadId,
       }),
     );
-    for (const binding of bindings) {
-      if (!binding.statusSurface && !binding.pinnedStatusSurface) {
-        continue;
-      }
+    const renderableBindings = bindings.filter(
+      (binding) => binding.statusSurface || binding.pinnedStatusSurface,
+    );
+    if (renderableBindings.length === 0) {
+      return;
+    }
+    // Fetch the navigation snapshot once and reuse it across every binding's
+    // render. Without this, each renderBindingStatus call would issue its own
+    // getNavigationSnapshot — N bindings on the same thread = N redundant
+    // backend calls.
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    for (const binding of renderableBindings) {
       try {
-        await this.renderBindingStatus(binding);
+        await this.renderBindingStatus(binding, undefined, navigation);
       } catch (error) {
         this.logger.debug?.("messaging status refresh failed", {
           backend,

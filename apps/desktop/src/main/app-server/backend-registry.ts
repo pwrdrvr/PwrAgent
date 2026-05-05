@@ -1800,35 +1800,42 @@ export class DesktopBackendRegistry {
   async setThreadExecutionMode(
     params: SetThreadExecutionModeRequest
   ): Promise<SetThreadExecutionModeResponse> {
-    if (params.backend !== "codex") {
-      return params;
-    }
+    let resolvedThreadId = params.threadId;
 
-    const modeSettings = EXECUTION_MODE_SUMMARIES[params.executionMode];
-    const result = await this.withCodexThreadClient(params.threadId, async (client) => {
-      if (!client.setThreadPermissions) {
-        throw new Error("Selected backend does not support execution mode updates");
-      }
+    if (params.backend === "codex") {
+      const modeSettings = EXECUTION_MODE_SUMMARIES[params.executionMode];
+      const result = await this.withCodexThreadClient(params.threadId, async (client) => {
+        if (!client.setThreadPermissions) {
+          throw new Error("Selected backend does not support execution mode updates");
+        }
 
-      return await client.setThreadPermissions({
-        threadId: params.threadId,
-        approvalPolicy: modeSettings.approvalPolicy,
-        sandbox: modeSettings.sandbox,
+        return await client.setThreadPermissions({
+          threadId: params.threadId,
+          approvalPolicy: modeSettings.approvalPolicy,
+          sandbox: modeSettings.sandbox,
+        });
       });
-    });
 
-    await this.overlayStore.setThreadExecutionMode({
-      backend: "codex",
-      threadId: result.threadId,
-      executionMode: params.executionMode,
-    });
+      resolvedThreadId = result.threadId;
+
+      await this.overlayStore.setThreadExecutionMode({
+        backend: "codex",
+        threadId: result.threadId,
+        executionMode: params.executionMode,
+      });
+    }
+    // Non-codex backends (e.g. Grok) currently no-op on execution mode —
+    // no overlay write, no backend change. We still emit on the bus so all
+    // surfaces stay visually consistent with the user's click. The
+    // optimistic UI is the same lie either way; symmetric emission is
+    // better than partial fan-out.
 
     await this.emit({
-      backend: "codex",
+      backend: params.backend,
       notification: {
         method: "thread/executionMode/updated",
         params: {
-          threadId: result.threadId,
+          threadId: resolvedThreadId,
           executionMode: params.executionMode,
         },
       },
@@ -1836,7 +1843,7 @@ export class DesktopBackendRegistry {
 
     return {
       backend: params.backend,
-      threadId: result.threadId,
+      threadId: resolvedThreadId,
       executionMode: params.executionMode,
     };
   }

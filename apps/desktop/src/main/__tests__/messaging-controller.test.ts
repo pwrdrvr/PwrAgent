@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
-  AppServerBackendKind,
   AppServerPendingRequestNotification,
   HandoffThreadWorkspaceRequest,
   ListBackendsResponse,
@@ -16,6 +15,8 @@ import type {
   MessagingSurfaceIntent,
   MessagingToolUpdateMode,
   NavigationSnapshot,
+  SetThreadExecutionModeRequest,
+  SetThreadModelSettingsRequest,
   StartThreadRequest,
   StartTurnRequest,
   SteerTurnRequest,
@@ -3357,7 +3358,7 @@ async function createHarness(options?: {
   // mutation methods also fan out a notification on the bus so the
   // controller's refreshStatusSurfacesForThread path runs end-to-end.
   let controllerRef: MessagingController | undefined;
-  const setThreadExecutionMode = vi.fn(async (request: { backend: AppServerBackendKind; threadId: string; executionMode: "default" | "full-access" }) => {
+  const setThreadExecutionMode = vi.fn(async (request: SetThreadExecutionModeRequest) => {
     if (controllerRef) {
       await controllerRef.handleBackendEvent({
         backend: request.backend,
@@ -3372,7 +3373,7 @@ async function createHarness(options?: {
     }
     return request;
   });
-  const setThreadModelSettings = vi.fn(async (request: { backend: AppServerBackendKind; threadId: string; model?: string; fastMode?: boolean; reasoningEffort?: string; serviceTier?: string }) => {
+  const setThreadModelSettings = vi.fn(async (request: SetThreadModelSettingsRequest) => {
     if (controllerRef) {
       await controllerRef.handleBackendEvent({
         backend: request.backend,
