@@ -87,6 +87,7 @@ export function materializeNavigationThreads(params: {
       linkedDirectories,
       worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
       reactions: overlay?.reactions ?? [],
+      prs: overlay?.prs ?? [],
       inbox: deriveInboxState({
         firstSnapshot: params.firstSnapshot,
         isNewThread: !previousKnownThreadKeys.has(threadKey),

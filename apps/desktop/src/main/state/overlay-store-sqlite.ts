@@ -7,6 +7,7 @@ import type {
   NavigationDirectoryGitStatus,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
+  PrSummary,
   ThreadExecutionMode,
   ThreadOverlayState,
   WorktreeSnapshotSummary,
@@ -222,6 +223,28 @@ export class SqliteOverlayStore {
     const nextState: ThreadOverlayState = {
       ...current,
       reactions: nextReactions,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async setThreadPullRequests(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    prs: PrSummary[];
+    fetchedAt?: number;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      prs: params.prs,
+      prsFetchedAt: params.fetchedAt ?? Date.now(),
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -563,6 +586,7 @@ export type OverlayStoreLike = Pick<
   | "getThreadOverlayState"
   | "getThreadOverlayStates"
   | "setThreadReaction"
+  | "setThreadPullRequests"
   | "upsertWorktreeSnapshot"
   | "setThreadExecutionMode"
   | "setThreadModelSettings"

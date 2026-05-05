@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { PrChipState, PrSummary } from "@pwragent/shared";
+import type { GhStatus, PrChipState, PrSummary } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 
 const execFileAsync = promisify(execFile);
@@ -20,8 +20,10 @@ const GH_FIELDS = [
   "statusCheckRollup",
 ].join(",");
 
-const DEFAULT_CACHE_TTL_MS = 60_000;
+/** Default per-call subprocess timeout. */
 const DEFAULT_TIMEOUT_MS = 5_000;
+/** Re-probe `gh --version` no more than this often. */
+const GH_AVAILABLE_CACHE_TTL_MS = 60_000;
 
 /** Subset of fields returned by `gh pr list --json …` that we actually read. */
 type GhPrPayload = {
@@ -43,13 +45,13 @@ type GhCheckRunPayload = {
   name?: string;
 };
 
-type CacheEntry = {
-  fetchedAt: number;
-  prs: PrSummary[];
-};
+/**
+ * Parsed result of `gh auth status --hostname github.com`. Re-exports the
+ * shared `GhStatus` type so tests and the IPC layer can refer to either name.
+ */
+export type GhAuthStatus = GhStatus;
 
 export type GithubPrFetcherOptions = {
-  cacheTtlMs?: number;
   timeoutMs?: number;
   /** Override the subprocess runner — used by tests to inject canned output. */
   exec?: (
@@ -58,47 +60,103 @@ export type GithubPrFetcherOptions = {
   ) => Promise<{ stdout: string; stderr: string }>;
   /** Override `gh --version` probe — used by tests. */
   probeGhAvailable?: () => Promise<boolean>;
+  /** Override `gh auth status` runner — used by tests. */
+  runGhAuthStatus?: () => Promise<{ stdout: string; stderr: string; ok: boolean }>;
 };
 
 export class GithubPrFetcher {
-  private readonly cache = new Map<string, CacheEntry>();
-  private readonly cacheTtlMs: number;
   private readonly timeoutMs: number;
   private readonly exec: NonNullable<GithubPrFetcherOptions["exec"]>;
   private readonly probeGhAvailable: NonNullable<
     GithubPrFetcherOptions["probeGhAvailable"]
   >;
-  private ghAvailableCache: boolean | undefined;
+  private readonly runGhAuthStatus: NonNullable<
+    GithubPrFetcherOptions["runGhAuthStatus"]
+  >;
+  private ghAvailableCache: { value: boolean; fetchedAt: number } | undefined;
 
   constructor(options: GithubPrFetcherOptions = {}) {
-    this.cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.exec = options.exec ?? defaultExec(this.timeoutMs);
     this.probeGhAvailable = options.probeGhAvailable ?? defaultProbeGhAvailable;
+    this.runGhAuthStatus = options.runGhAuthStatus ?? defaultRunGhAuthStatus;
   }
 
   async isGhAvailable(): Promise<boolean> {
-    if (this.ghAvailableCache !== undefined) {
-      return this.ghAvailableCache;
+    if (
+      this.ghAvailableCache
+      && Date.now() - this.ghAvailableCache.fetchedAt < GH_AVAILABLE_CACHE_TTL_MS
+    ) {
+      return this.ghAvailableCache.value;
     }
-    this.ghAvailableCache = await this.probeGhAvailable();
-    return this.ghAvailableCache;
+    const value = await this.probeGhAvailable();
+    this.ghAvailableCache = { value, fetchedAt: Date.now() };
+    return value;
   }
 
-  async fetchForBranch(params: {
+  /**
+   * Fetch all open PRs for the given branches in a single `gh pr list` call.
+   * Caller batches by cwd (each cwd is a separate repo from gh's POV).
+   *
+   * Why open-only: merged/closed PRs are terminal states. Once we've stored
+   * a `merged` chip on the overlay, we never re-fetch — so this call only
+   * needs to surface non-terminal PRs we might want to refresh.
+   *
+   * Filter by headRefName client-side: gh's `--head` flag accepts only one
+   * branch, but `--state open --json …` over the whole repo returns at most
+   * a few dozen open PRs which we filter cheaply.
+   */
+  async fetchOpenPullRequests(params: {
     cwd: string;
-    branch: string;
+    branches: string[];
   }): Promise<PrSummary[]> {
-    const cacheKey = `${params.cwd}::${params.branch}`;
-    const entry = this.cache.get(cacheKey);
-    if (entry && Date.now() - entry.fetchedAt < this.cacheTtlMs) {
-      return entry.prs;
+    if (params.branches.length === 0) {
+      return [];
     }
-
     if (!(await this.isGhAvailable())) {
       return [];
     }
 
+    const wanted = new Set(params.branches);
+    try {
+      const { stdout } = await this.exec(params.cwd, [
+        "pr",
+        "list",
+        "--state",
+        "open",
+        "--json",
+        GH_FIELDS,
+        "--limit",
+        "30",
+      ]);
+      const payload = JSON.parse(stdout) as GhPrPayload[];
+      return payload
+        .filter((row) => wanted.has(row.headRefName))
+        .map(parseGhPrPayload);
+    } catch (error) {
+      fetcherLog.warn("gh pr list failed", {
+        cwd: params.cwd,
+        branchCount: params.branches.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Fetch the latest state for a single (possibly terminal) PR. Uses
+   * `gh pr list --state all --head <branch>` so we catch merged/closed
+   * states too — this is the one place the renderer asks "give me the
+   * authoritative state for this PR right now," typically on first
+   * selection of a thread.
+   */
+  async fetchAllPullRequestsForBranch(params: {
+    cwd: string;
+    branch: string;
+  }): Promise<PrSummary[]> {
+    if (!(await this.isGhAvailable())) {
+      return [];
+    }
     try {
       const { stdout } = await this.exec(params.cwd, [
         "pr",
@@ -113,25 +171,39 @@ export class GithubPrFetcher {
         "5",
       ]);
       const payload = JSON.parse(stdout) as GhPrPayload[];
-      const prs = payload.map(parseGhPrPayload);
-      this.cache.set(cacheKey, { fetchedAt: Date.now(), prs });
-      return prs;
+      return payload.map(parseGhPrPayload);
     } catch (error) {
-      // Network out, gh auth missing, branch not pushed, etc. — log + cache
-      // a stale-empty so we don't hammer the subprocess on every render.
-      fetcherLog.warn("gh pr list failed", {
+      fetcherLog.warn("gh pr list (single-branch) failed", {
         cwd: params.cwd,
         branch: params.branch,
         error: error instanceof Error ? error.message : String(error),
       });
-      this.cache.set(cacheKey, { fetchedAt: Date.now(), prs: [] });
       return [];
     }
   }
 
-  /** Test/dev hook — wipe everything. */
-  clearCache(): void {
-    this.cache.clear();
+  /**
+   * Probe `gh auth status` and return parsed installed / logged-in /
+   * scopes info for the Applications settings panel. Always runs fresh
+   * — used by a "Re-check" button.
+   */
+  async getAuthStatus(): Promise<GhAuthStatus> {
+    if (!(await this.isGhAvailable())) {
+      return {
+        installed: false,
+        loggedIn: false,
+        scopes: [],
+        hasRepoScope: false,
+        reason: "gh CLI is not installed",
+      };
+    }
+
+    const result = await this.runGhAuthStatus();
+    return parseGhAuthStatus(result);
+  }
+
+  /** Force the next `isGhAvailable` call to re-probe — used by Re-check. */
+  invalidateGhAvailable(): void {
     this.ghAvailableCache = undefined;
   }
 }
@@ -179,10 +251,10 @@ export function deriveChipState(row: GhPrPayload): PrChipState {
       return "failing";
     }
     if (
-      check.status &&
-      check.status !== "COMPLETED" &&
+      check.status
+      && check.status !== "COMPLETED"
       // Some legacy StatusContext entries omit status entirely.
-      check.status !== "STATUS_CONTEXT"
+      && check.status !== "STATUS_CONTEXT"
     ) {
       pendingCount += 1;
     } else if (!check.conclusion) {
@@ -194,6 +266,56 @@ export function deriveChipState(row: GhPrPayload): PrChipState {
   }
   if (pendingCount > 0) return "pending";
   return "passing";
+}
+
+/**
+ * Parse `gh auth status --hostname github.com` text. Pinned against gh 2.88.1
+ * output. Sample (Logged in):
+ *
+ *     github.com
+ *       ✓ Logged in to github.com account huntharo (keyring)
+ *       - Active account: true
+ *       - Git operations protocol: ssh
+ *       - Token: gho_************************************
+ *       - Token scopes: 'repo', 'read:org', 'workflow'
+ *
+ * Sample (Not logged in): "You are not logged into any GitHub hosts."
+ */
+export function parseGhAuthStatus(input: {
+  stdout: string;
+  stderr: string;
+  ok: boolean;
+}): GhAuthStatus {
+  // gh writes the human-readable status to stderr; older versions used
+  // stdout. Handle both.
+  const text = `${input.stdout}\n${input.stderr}`;
+  const accountMatch = text.match(
+    /Logged in to github\.com account ([^\s]+)/i,
+  )
+    ?? text.match(/Logged in to github\.com as ([^\s]+)/i);
+  const scopesMatch = text.match(/Token scopes:\s*(.+)/i);
+  const scopes = scopesMatch
+    ? scopesMatch[1]!
+        .split(",")
+        .map((scope) => scope.trim().replace(/^['"]|['"]$/g, ""))
+        .filter(Boolean)
+    : [];
+  const hasRepoScope = scopes.includes("repo") || scopes.includes("public_repo");
+  const loggedIn = Boolean(accountMatch) || /Logged in to github\.com/i.test(text);
+
+  return {
+    installed: true,
+    loggedIn,
+    account: accountMatch?.[1],
+    scopes,
+    hasRepoScope,
+    rawOutput: text.trim(),
+    reason: loggedIn
+      ? hasRepoScope
+        ? undefined
+        : "Token is missing the `repo` scope. Run `gh auth refresh -s repo` to grant it."
+      : "Run `gh auth login` to sign in to github.com.",
+  };
 }
 
 function defaultExec(
@@ -216,5 +338,28 @@ async function defaultProbeGhAvailable(): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function defaultRunGhAuthStatus(): Promise<{
+  stdout: string;
+  stderr: string;
+  ok: boolean;
+}> {
+  try {
+    const result = await execFileAsync(
+      "gh",
+      ["auth", "status", "--hostname", "github.com"],
+      { timeout: 5_000, encoding: "utf8" },
+    );
+    return { stdout: result.stdout, stderr: result.stderr, ok: true };
+  } catch (error) {
+    // gh exits non-zero when not logged in; capture its stderr/stdout for parsing.
+    const err = error as { stdout?: string; stderr?: string };
+    return {
+      stdout: err.stdout ?? "",
+      stderr: err.stderr ?? (error instanceof Error ? error.message : ""),
+      ok: false,
+    };
   }
 }

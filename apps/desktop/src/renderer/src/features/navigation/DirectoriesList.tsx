@@ -3,7 +3,6 @@ import type {
   AppServerBackendKind,
   NavigationDirectorySummary,
   NavigationThreadSummary,
-  PrSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { FolderIcon, UnlinkedDotIcon, WorkspaceIcon } from "../../icons";
@@ -24,12 +23,12 @@ type DirectoriesListProps = {
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
+  onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
   onSetReaction?: (
     thread: NavigationThreadSummary,
     emoji: string,
     present: boolean,
   ) => Promise<void>;
-  prsByThreadKey?: Record<string, PrSummary[]>;
 };
 
 function buildLaunchpadSelectionKey(directoryKey: string): string {
@@ -182,8 +181,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           selectedThreadKey={props.selectedItemKey}
                           thinkingThreadKeys={props.thinkingThreadKeys}
                           thread={thread}
-                          prs={props.prsByThreadKey?.[threadKey]}
                           onOpenContextMenu={props.onOpenThreadContextMenu}
+                          onPrefetchPullRequests={props.onPrefetchPullRequests}
                           onSelectThread={props.onSelectThread}
                           onSetReaction={props.onSetReaction}
                         />

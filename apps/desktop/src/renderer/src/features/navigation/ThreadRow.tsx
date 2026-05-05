@@ -1,10 +1,12 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import { PrChip } from "../pr-status/PrChip";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
+
+const HOVER_PREFETCH_DELAY_MS = 750;
 
 type ThreadRowProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
@@ -14,12 +16,16 @@ type ThreadRowProps = {
   selectedThreadKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   thread: NavigationThreadSummary;
-  /** PRs detected for this specific thread; rendered as chips. */
-  prs?: PrSummary[];
   onOpenContextMenu: (
     thread: NavigationThreadSummary,
     position: { x: number; y: number; anchorTop?: number }
   ) => void;
+  /**
+   * Fired after a 750ms hover over a non-merged PR chip. The parent
+   * decides whether to actually issue an IPC fetch (e.g. dedupe by
+   * thread key, respect terminal-state short-circuit on the main side).
+   */
+  onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onSetReaction?: (
     thread: NavigationThreadSummary,
@@ -38,9 +44,41 @@ export function ThreadRow(props: ThreadRowProps) {
   const addReactionRef = useRef<HTMLButtonElement>(null);
   const reactions = props.thread.reactions ?? [];
   const canReact = Boolean(props.onSetReaction);
-  const prs = props.prs ?? [];
+  // Pull straight from the navigation snapshot — main persists PR state
+  // to the overlay store and surfaces it through the snapshot, so the
+  // chips render instantly on app launch and stay in sync without any
+  // renderer-side cache.
+  const prs = props.thread.prs ?? [];
   const showRepoPrefix = needsRepoPrefix(prs);
   const openPr = props.onOpenPullRequest ?? defaultOpenPullRequest;
+  const hasNonTerminalPr = prs.some(
+    (pr) => pr.state !== "merged" && pr.state !== "closed",
+  );
+  // Hover prefetch: 750ms intent timer — long enough that simply scrolling
+  // past doesn't fire, short enough that a deliberate hover beats the
+  // user's first click.
+  const hoverTimerRef = useRef<number | undefined>(undefined);
+  useEffect(() => () => {
+    if (hoverTimerRef.current !== undefined) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = undefined;
+    }
+  }, []);
+  const armHoverPrefetch = (): void => {
+    if (!props.onPrefetchPullRequests) return;
+    if (!hasNonTerminalPr) return;
+    if (hoverTimerRef.current !== undefined) return;
+    hoverTimerRef.current = window.setTimeout(() => {
+      hoverTimerRef.current = undefined;
+      props.onPrefetchPullRequests?.(props.thread);
+    }, HOVER_PREFETCH_DELAY_MS);
+  };
+  const cancelHoverPrefetch = (): void => {
+    if (hoverTimerRef.current !== undefined) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = undefined;
+    }
+  };
 
   const toggleReaction = (emoji: string): void => {
     if (!props.onSetReaction) {
@@ -88,7 +126,11 @@ export function ThreadRow(props: ThreadRowProps) {
         />
 
         {prs.length > 0 ? (
-          <span className="thread-row__pr-chips">
+          <span
+            className="thread-row__pr-chips"
+            onMouseEnter={armHoverPrefetch}
+            onMouseLeave={cancelHoverPrefetch}
+          >
             {prs.map((pr) => (
               <PrChip
                 key={pr.url}

@@ -1972,6 +1972,66 @@ textarea,
   white-space: nowrap;
 }
 
+.settings-panel__hint {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-panel__hint code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg-input);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.settings-gh-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-pill {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.settings-pill--ok {
+  border-color: var(--accent-border);
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.settings-pill--warn {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.settings-pill--bad {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.settings-pill--neutral {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-elevated);
+  color: var(--text-muted);
+}
+
+.settings-error {
+  color: var(--danger-text);
+}
+
 .thread-view--launchpad {
   gap: 12px;
   padding-right: 24px;

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   GithubPrFetcher,
   deriveChipState,
+  parseGhAuthStatus,
   parseGhPrPayload,
 } from "../pr-status/github-pr-fetcher";
 
@@ -200,95 +201,207 @@ describe("deriveChipState", () => {
   });
 });
 
+describe("parseGhAuthStatus", () => {
+  // Pinned against `gh auth status --hostname github.com` from gh 2.88.1.
+  const loggedInOutput = `github.com
+  ✓ Logged in to github.com account huntharo (keyring)
+  - Active account: true
+  - Git operations protocol: ssh
+  - Token: gho_************************************
+  - Token scopes: 'repo', 'read:org', 'workflow'`;
+
+  it("flags installed=true, loggedIn=true, hasRepoScope=true on a healthy login", () => {
+    const result = parseGhAuthStatus({
+      stdout: "",
+      stderr: loggedInOutput,
+      ok: true,
+    });
+    expect(result.installed).toBe(true);
+    expect(result.loggedIn).toBe(true);
+    expect(result.account).toBe("huntharo");
+    expect(result.scopes).toEqual(["repo", "read:org", "workflow"]);
+    expect(result.hasRepoScope).toBe(true);
+    expect(result.reason).toBeUndefined();
+  });
+
+  it("flags missing repo scope when scopes are present but `repo` is not", () => {
+    const result = parseGhAuthStatus({
+      stdout: "",
+      stderr: loggedInOutput.replace(
+        "'repo', 'read:org', 'workflow'",
+        "'read:org', 'workflow'",
+      ),
+      ok: true,
+    });
+    expect(result.loggedIn).toBe(true);
+    expect(result.hasRepoScope).toBe(false);
+    expect(result.reason).toMatch(/repo.*scope/);
+  });
+
+  it("accepts public_repo as a sufficient scope for read-only access", () => {
+    const result = parseGhAuthStatus({
+      stdout: "",
+      stderr: loggedInOutput.replace("'repo'", "'public_repo'"),
+      ok: true,
+    });
+    expect(result.hasRepoScope).toBe(true);
+  });
+
+  it("flags loggedIn=false when no auth status is present", () => {
+    const result = parseGhAuthStatus({
+      stdout: "",
+      stderr: "You are not logged into any GitHub hosts.\n",
+      ok: false,
+    });
+    expect(result.installed).toBe(true);
+    expect(result.loggedIn).toBe(false);
+    expect(result.account).toBeUndefined();
+    expect(result.scopes).toEqual([]);
+    expect(result.reason).toMatch(/gh auth login/);
+  });
+
+  it("supports the older 'Logged in to github.com as <name>' format", () => {
+    const result = parseGhAuthStatus({
+      stdout: "",
+      stderr: "github.com\n  ✓ Logged in to github.com as legacy-name\n",
+      ok: true,
+    });
+    expect(result.account).toBe("legacy-name");
+    expect(result.loggedIn).toBe(true);
+  });
+});
+
 describe("GithubPrFetcher", () => {
   function buildFetcher(overrides: {
     stdout?: string;
     error?: Error;
     ghAvailable?: boolean;
-    cacheTtlMs?: number;
   } = {}) {
-    const exec = vi.fn(async () => {
+    const exec = vi.fn(async (_cwd: string, _args: string[]) => {
       if (overrides.error) throw overrides.error;
       return { stdout: overrides.stdout ?? "[]", stderr: "" };
     });
     const probeGhAvailable = vi.fn(async () => overrides.ghAvailable ?? true);
-    const fetcher = new GithubPrFetcher({
-      exec,
-      probeGhAvailable,
-      cacheTtlMs: overrides.cacheTtlMs,
-    });
+    const fetcher = new GithubPrFetcher({ exec, probeGhAvailable });
     return { fetcher, exec, probeGhAvailable };
   }
 
-  it("returns [] without invoking gh when gh is not available", async () => {
-    const { fetcher, exec } = buildFetcher({ ghAvailable: false });
-    const result = await fetcher.fetchForBranch({
-      cwd: "/tmp/repo",
-      branch: "feat/x",
+  describe("fetchOpenPullRequests (batched by repo)", () => {
+    it("returns [] without invoking gh when gh is not available", async () => {
+      const { fetcher, exec } = buildFetcher({ ghAvailable: false });
+      const result = await fetcher.fetchOpenPullRequests({
+        cwd: "/tmp/repo",
+        branches: ["feat/x"],
+      });
+      expect(result).toEqual([]);
+      expect(exec).not.toHaveBeenCalled();
     });
-    expect(result).toEqual([]);
-    expect(exec).not.toHaveBeenCalled();
+
+    it("returns [] without invoking gh when no branches are requested", async () => {
+      const { fetcher, exec } = buildFetcher();
+      const result = await fetcher.fetchOpenPullRequests({
+        cwd: "/tmp/repo",
+        branches: [],
+      });
+      expect(result).toEqual([]);
+      expect(exec).not.toHaveBeenCalled();
+    });
+
+    it("filters gh output by requested branches", async () => {
+      const { fetcher, exec } = buildFetcher({
+        stdout: JSON.stringify([
+          { ...rawMergedPr(), state: "OPEN", headRefName: "feat/a", number: 1 },
+          { ...rawMergedPr(), state: "OPEN", headRefName: "feat/b", number: 2 },
+          { ...rawMergedPr(), state: "OPEN", headRefName: "feat/c", number: 3 },
+        ]),
+      });
+      const result = await fetcher.fetchOpenPullRequests({
+        cwd: "/tmp/repo",
+        branches: ["feat/a", "feat/c"],
+      });
+      expect(result.map((pr) => pr.number)).toEqual([1, 3]);
+      expect(exec).toHaveBeenCalledTimes(1);
+      const args = exec.mock.calls[0]![1];
+      expect(args).toContain("--state");
+      expect(args).toContain("open");
+    });
+
+    it("returns [] on subprocess failure (no caching — overlay handles persistence)", async () => {
+      const { fetcher, exec } = buildFetcher({
+        error: new Error("gh: not authorized"),
+      });
+      const first = await fetcher.fetchOpenPullRequests({
+        cwd: "/tmp/repo",
+        branches: ["feat/x"],
+      });
+      const second = await fetcher.fetchOpenPullRequests({
+        cwd: "/tmp/repo",
+        branches: ["feat/x"],
+      });
+      expect(first).toEqual([]);
+      expect(second).toEqual([]);
+      expect(exec).toHaveBeenCalledTimes(2);
+    });
   });
 
-  it("parses gh output and caches the result", async () => {
-    const { fetcher, exec } = buildFetcher({
-      stdout: JSON.stringify([rawMergedPr()]),
+  describe("fetchAllPullRequestsForBranch (single thread, all states)", () => {
+    it("uses --state all so we catch merged + closed too", async () => {
+      const { fetcher, exec } = buildFetcher({
+        stdout: JSON.stringify([rawMergedPr()]),
+      });
+      const result = await fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/tmp/repo",
+        branch: "feat/x",
+      });
+      expect(result).toEqual([
+        {
+          number: 178,
+          org: "pwrdrvr",
+          repo: "PwrAgent",
+          state: "merged",
+          url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
+        },
+      ]);
+      const args = exec.mock.calls[0]![1];
+      expect(args).toEqual([
+        "pr",
+        "list",
+        "--state",
+        "all",
+        "--head",
+        "feat/x",
+        "--json",
+        expect.any(String),
+        "--limit",
+        "5",
+      ]);
     });
-    const first = await fetcher.fetchForBranch({
-      cwd: "/tmp/repo",
-      branch: "feat/x",
+
+    it("returns [] on subprocess failure", async () => {
+      const { fetcher } = buildFetcher({ error: new Error("gh failed") });
+      const result = await fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/tmp/repo",
+        branch: "feat/x",
+      });
+      expect(result).toEqual([]);
     });
-    const second = await fetcher.fetchForBranch({
-      cwd: "/tmp/repo",
-      branch: "feat/x",
-    });
-    expect(first).toEqual([
-      {
-        number: 178,
-        org: "pwrdrvr",
-        repo: "PwrAgent",
-        state: "merged",
-        url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
-      },
-    ]);
-    expect(second).toBe(first); // same array reference from cache
-    expect(exec).toHaveBeenCalledTimes(1);
   });
 
-  it("evicts the cache after the TTL expires", async () => {
-    const { fetcher, exec } = buildFetcher({
-      stdout: "[]",
-      cacheTtlMs: 1, // millisecond — expires immediately
+  describe("isGhAvailable / invalidateGhAvailable", () => {
+    it("caches the probe and re-uses for repeated calls within the TTL", async () => {
+      const { fetcher, probeGhAvailable } = buildFetcher();
+      await fetcher.isGhAvailable();
+      await fetcher.isGhAvailable();
+      await fetcher.isGhAvailable();
+      expect(probeGhAvailable).toHaveBeenCalledTimes(1);
     });
-    await fetcher.fetchForBranch({ cwd: "/tmp/repo", branch: "feat/x" });
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await fetcher.fetchForBranch({ cwd: "/tmp/repo", branch: "feat/x" });
-    expect(exec).toHaveBeenCalledTimes(2);
-  });
 
-  it("returns [] and caches a stale-empty entry on subprocess failure", async () => {
-    const { fetcher, exec } = buildFetcher({
-      error: new Error("gh: not authorized"),
+    it("re-probes after invalidateGhAvailable() — backs the Re-check button", async () => {
+      const { fetcher, probeGhAvailable } = buildFetcher();
+      await fetcher.isGhAvailable();
+      fetcher.invalidateGhAvailable();
+      await fetcher.isGhAvailable();
+      expect(probeGhAvailable).toHaveBeenCalledTimes(2);
     });
-    const first = await fetcher.fetchForBranch({
-      cwd: "/tmp/repo",
-      branch: "feat/x",
-    });
-    const second = await fetcher.fetchForBranch({
-      cwd: "/tmp/repo",
-      branch: "feat/x",
-    });
-    expect(first).toEqual([]);
-    expect(second).toEqual([]);
-    // Failure result is cached so we don't hammer gh on every render.
-    expect(exec).toHaveBeenCalledTimes(1);
-  });
-
-  it("scopes cache by (cwd, branch)", async () => {
-    const { fetcher, exec } = buildFetcher({ stdout: "[]" });
-    await fetcher.fetchForBranch({ cwd: "/tmp/repo-a", branch: "main" });
-    await fetcher.fetchForBranch({ cwd: "/tmp/repo-a", branch: "feat" });
-    await fetcher.fetchForBranch({ cwd: "/tmp/repo-b", branch: "main" });
-    expect(exec).toHaveBeenCalledTimes(3);
   });
 });
