@@ -1979,7 +1979,9 @@ export class MessagingController {
       return;
     }
 
-    if (actionId === "status:refresh") {
+    if (actionId === "status:refresh" || actionId === "handoff:back-to-status") {
+      // "Back" buttons from handoff sub-flows resolve to a status card
+      // refresh, same as an explicit Refresh tap.
       await this.renderBindingStatus(binding, event);
       return;
     }
