@@ -7,6 +7,7 @@ import {
   FolderIcon,
   NewThreadIcon,
   SettingsIcon,
+  SmileyIcon,
   TelegramIcon,
   UnlinkedDotIcon,
   WorkspaceIcon,
@@ -24,6 +25,7 @@ const ALL_ICONS = [
   ["WorktreeIcon", WorktreeIcon],
   ["UnlinkedDotIcon", UnlinkedDotIcon],
   ["SettingsIcon", SettingsIcon],
+  ["SmileyIcon", SmileyIcon],
   ["NewThreadIcon", NewThreadIcon],
 ] as const;
 

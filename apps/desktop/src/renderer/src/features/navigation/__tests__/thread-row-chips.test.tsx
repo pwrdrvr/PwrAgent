@@ -23,7 +23,8 @@ import { ThreadRow } from "../ThreadRow";
 //   - Interactive chips are `<span role="button">` (NOT `<button>`),
 //     and their click events do not propagate into the row's
 //     onSelectThread handler.
-//   - The add-reaction glyph is the smiley (🙂), not a "+".
+//   - The add-reaction trigger is the SmileyIcon SVG (not a "+" or
+//     the OS-rendered 🙂 emoji which read as bright yellow on dark).
 
 const baseThread: NavigationThreadSummary = {
   id: "thread-chips",
@@ -132,13 +133,17 @@ describe("ThreadRow chip flow", () => {
     expect(onSetReaction).toHaveBeenCalledOnce();
   });
 
-  it("renders the smiley emoji as the add-reaction glyph (regression: not '+')", () => {
+  it("renders SmileyIcon SVG as the add-reaction trigger (regression: not '+' or OS emoji)", () => {
     const { container } = renderRow();
     const addReaction = container.querySelector(
       ".thread-row__chip--add-reaction",
     );
-    expect(addReaction?.textContent).toContain("🙂");
-    expect(addReaction?.textContent).not.toContain("+");
+    // Stroke-based SVG icon, not the OS-rendered 🙂 emoji (which
+    // ignored the chip's foreground color and looked yellow), and
+    // not the literal "+" plus sign that we used pre-refactor.
+    expect(addReaction?.querySelector("svg")).not.toBeNull();
+    expect(addReaction?.textContent ?? "").not.toContain("🙂");
+    expect(addReaction?.textContent ?? "").not.toContain("+");
   });
 
   it("still selects the thread when the row body (outside chips) is clicked", () => {
