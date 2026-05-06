@@ -39,10 +39,25 @@ export type MattermostInteractiveCallbackBody = {
   context?: Record<string, unknown>;
 };
 
+/**
+ * Result a `MattermostCallbackHandler` may return to influence the HTTP
+ * response Mattermost receives. The body shape is the standard
+ * Mattermost integration response: `{ update?: Post, ephemeral_text? }`.
+ *
+ * Today we only ever set `update.props.attachments = []` to clear the
+ * clicked-on buttons inline, but the type stays open so future callers
+ * (e.g., per-callback ephemeral acknowledgments) can extend it without
+ * a signature change.
+ */
+export type MattermostCallbackHandlerResult = {
+  clearAttachments?: boolean;
+  ephemeralText?: string;
+};
+
 export type MattermostCallbackHandler = (
   body: MattermostInteractiveCallbackBody,
   rawBody: string,
-) => Promise<void> | void;
+) => Promise<MattermostCallbackHandlerResult | void> | MattermostCallbackHandlerResult | void;
 
 export type MattermostCallbackServerConfig = {
   /**
@@ -127,10 +142,27 @@ export function createMattermostCallbackServer(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> => {
-    const respondAck = (): void => {
+    const respondAck = (
+      result?: MattermostCallbackHandlerResult,
+    ): void => {
       response.statusCode = 200;
       response.setHeader("Content-Type", "application/json");
-      response.end('{"update":null}');
+      const payload: Record<string, unknown> = {};
+      if (result?.clearAttachments) {
+        // Mattermost applies this `update` to the post BEFORE returning
+        // control to the user's client — the buttons disappear in the
+        // same render cycle as the click. The post's main `message`
+        // text is preserved (we only nuke `props.attachments`); since
+        // our adapter never puts informational text inside attachments
+        // (only actions), this is a safe blanket clear.
+        payload.update = { props: { attachments: [] } };
+      } else {
+        payload.update = null;
+      }
+      if (result?.ephemeralText) {
+        payload.ephemeral_text = result.ephemeralText;
+      }
+      response.end(JSON.stringify(payload));
     };
 
     if (request.method !== "POST") {
@@ -209,8 +241,9 @@ export function createMattermostCallbackServer(
       return;
     }
 
+    let handlerResult: MattermostCallbackHandlerResult | void = undefined;
     try {
-      await config.handler(body, rawBody);
+      handlerResult = await config.handler(body, rawBody);
     } catch (error) {
       config.logger.error("mattermost callback handler threw", {
         error: error instanceof Error ? error.message : String(error),
@@ -219,7 +252,7 @@ export function createMattermostCallbackServer(
       });
     }
 
-    respondAck();
+    respondAck(handlerResult ?? undefined);
   };
 
   return {

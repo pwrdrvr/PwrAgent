@@ -33,6 +33,7 @@ import type { MattermostMessagingConfig } from "./mattermost-config.ts";
 import {
   createMattermostCallbackServer,
   generateMattermostHmacSecret,
+  type MattermostCallbackHandlerResult,
   type MattermostCallbackServer,
   type MattermostInteractiveCallbackBody,
 } from "./mattermost-callback-server.ts";
@@ -523,7 +524,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private async handleInteractiveCallback(
     body: MattermostInteractiveCallbackBody,
     rawBody: string,
-  ): Promise<void> {
+  ): Promise<MattermostCallbackHandlerResult | void> {
     if (!this.listener) {
       return;
     }
@@ -619,6 +620,15 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         },
       },
     });
+
+    // Tell Mattermost to clear the post's interactive attachments inline
+    // — the buttons disappear in the same render cycle as the click,
+    // before the producer's controller-side update intent (if any) makes
+    // its own round-trip. Our adapter never embeds informational text
+    // inside attachments, only `actions`, so a blanket clear is safe.
+    // A subsequent producer `delivery.mode = "update"` intent will
+    // restore or replace attachments as needed.
+    return { clearAttachments: true };
   }
 
   private async dispatchTextEvent(params: {
@@ -807,10 +817,25 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     };
 
     if (target.existingPostId && target.canUpdate) {
+      // Mattermost's PATCH /posts only updates fields you provide — a
+      // missing `props` key keeps the old props (and old buttons). When
+      // the producer says "this update has no buttons" or
+      // `delivery.replaceMarkup: true`, we must actively send
+      // `props: { attachments: [] }` to clear them. This mirrors
+      // Telegram (`reply_markup: { inline_keyboard: [] }`) and Discord
+      // (`components: []`).
+      const replaceMarkup =
+        Boolean((intent as { delivery?: { replaceMarkup?: boolean } }).delivery?.replaceMarkup);
+      const propsForPatch =
+        post.props
+          ? post.props
+          : replaceMarkup
+            ? { attachments: [] as MattermostMessageAttachment[] }
+            : undefined;
       const patched = await this.client.patchPost({
         id: target.existingPostId,
         message: post.message,
-        ...(post.props ? { props: post.props } : {}),
+        ...(propsForPatch ? { props: propsForPatch } : {}),
         ...(fileIds.length > 0 ? { file_ids: fileIds } : {}),
       });
       const surface: MessagingSurfaceRef = surfaceRefForPost(
