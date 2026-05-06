@@ -2662,6 +2662,17 @@ export class DesktopBackendRegistry {
     requestedMode?: ThreadExecutionMode,
   ): Promise<T> {
     if (requestedMode) {
+      // Diagnostic for #203-class regressions: any silent escalation
+      // from Default → Full Access (or vice versa) is the load-bearing
+      // security property of execution-mode routing. Log the
+      // requestedMode and the client we resolved to so post-mortem
+      // log review can prove which Codex sandbox actually ran a turn.
+      backendRegistryLog.info("codex thread client routing", {
+        threadId,
+        requestedMode,
+        resolvedMode: requestedMode,
+        source: "explicit",
+      });
       return await operation(this.getClient("codex", requestedMode), requestedMode);
     }
 
@@ -2677,7 +2688,15 @@ export class DesktopBackendRegistry {
     let lastError: unknown;
     for (const mode of modes) {
       try {
-        return await operation(this.getClient("codex", mode), mode);
+        const result = await operation(this.getClient("codex", mode), mode);
+        backendRegistryLog.info("codex thread client routing", {
+          threadId,
+          requestedMode: undefined,
+          resolvedMode: mode,
+          source: preferredMode === mode ? "overlay" : "fallback",
+          overlayMode: preferredMode,
+        });
+        return result;
       } catch (error) {
         lastError = error;
       }

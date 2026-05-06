@@ -117,17 +117,36 @@ type AssistantStreamBuffer = AssistantStreamDelta & {
   text: string;
 };
 
+type ExecutionModeResolution = {
+  mode: ThreadExecutionMode | undefined;
+  source: "thread" | "binding-preferences" | "permissions-mode" | "unset";
+};
+
+function resolveExecutionModeForBinding(
+  binding: MessagingBindingRecord,
+  navigation?: NavigationSnapshot,
+): ExecutionModeResolution {
+  const thread = findThreadForBinding(navigation, binding);
+  if (thread?.executionMode) {
+    return { mode: thread.executionMode, source: "thread" };
+  }
+  if (binding.preferences?.executionMode) {
+    return { mode: binding.preferences.executionMode, source: "binding-preferences" };
+  }
+  if (binding.preferences?.permissionsMode === "full-access") {
+    return { mode: "full-access", source: "permissions-mode" };
+  }
+  if (binding.preferences?.permissionsMode === "default") {
+    return { mode: "default", source: "permissions-mode" };
+  }
+  return { mode: undefined, source: "unset" };
+}
+
 function executionModeForBinding(
   binding: MessagingBindingRecord,
   navigation?: NavigationSnapshot,
 ): ThreadExecutionMode | undefined {
-  const thread = findThreadForBinding(navigation, binding);
-  return (
-    thread?.executionMode ??
-    binding.preferences?.executionMode ??
-    (binding.preferences?.permissionsMode === "full-access" ? "full-access" : undefined) ??
-    (binding.preferences?.permissionsMode === "default" ? "default" : undefined)
-  );
+  return resolveExecutionModeForBinding(binding, navigation).mode;
 }
 
 function turnSettingsForBinding(
@@ -169,6 +188,8 @@ function formatAttachmentRejections(
 
 type MessagingControllerLogger = {
   debug?(message: string, data?: Record<string, unknown>): void;
+  info?(message: string, data?: Record<string, unknown>): void;
+  warn?(message: string, data?: Record<string, unknown>): void;
 };
 
 type MessagingToolUpdateDefaultModeResolver =
@@ -851,6 +872,31 @@ export class MessagingController {
         backend: "all",
       });
       const turnSettings = turnSettingsForBinding(params.binding, navigation);
+      const executionResolution = resolveExecutionModeForBinding(
+        params.binding,
+        navigation,
+      );
+      // Diagnostic for #203-class regressions: a turn that the UI shows
+      // as Default Access but routes to the Full Access codex client is
+      // a silent security bug — the user thinks they're sandboxed but
+      // commands like `npm view` succeed because the full-access client
+      // skipped the network sandbox. We log the resolved mode + where
+      // it came from here at the messaging layer; the registry's
+      // `codex thread client routing` log shows which client actually
+      // received the turn. Cross-reference both lines by threadId to
+      // verify the routing matched intent. `executionModeSource` of
+      // anything other than `thread` is suspicious for a thread the UI
+      // claims has been explicitly toggled.
+      this.logger.info?.("messaging starting turn", {
+        backend: params.binding.backend,
+        bindingId: params.binding.id,
+        channel: params.binding.channel.channel,
+        threadId: params.binding.threadId,
+        executionMode: turnSettings.executionMode ?? "unset",
+        executionModeSource: executionResolution.source,
+        model: turnSettings.model,
+        fastMode: turnSettings.fastMode,
+      });
       const started = await this.options.backend.startTurn({
         backend: params.binding.backend,
         threadId: params.binding.threadId,
@@ -858,6 +904,12 @@ export class MessagingController {
         ...turnSettings,
       });
       turnStarted = true;
+      this.logger.info?.("messaging turn started", {
+        bindingId: params.binding.id,
+        threadId: params.binding.threadId,
+        turnId: started.turnId,
+        requestedExecutionMode: turnSettings.executionMode ?? "unset",
+      });
       const activeTurn: MessagingActiveTurnSummary = {
         turnId: started.turnId,
         status: "working",
