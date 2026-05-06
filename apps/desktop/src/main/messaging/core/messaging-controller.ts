@@ -597,14 +597,26 @@ export class MessagingController {
       await this.presentResumeBrowser(event);
       return;
     }
-
+    // `help` and any unrecognized command both fall through to the
+    // help surface — for unknown commands this serves as a "did you
+    // mean?" prompt with the canonical list. Keeping `Resume` as the
+    // primary action because it's the most common entry point and
+    // works as a button-driven shortcut for anyone who prefers
+    // tapping over typing.
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("help"),
         capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
-        title: "PwrAgent",
-        body: "Use /resume to choose a thread to control from this conversation.",
+        title: "PwrAgent commands",
+        body: [
+          "• `resume` — choose a thread to control from this conversation",
+          "• `status` — show the current binding and controls",
+          "• `detach` — detach this conversation from its thread",
+          "• `help` — show this message",
+          "",
+          "Invoke via the slash menu (`/<cmd>`) or by mentioning the bot (`@<bot> <cmd>`).",
+        ].join("\n"),
         actions: [
           {
             id: "command:resume",
