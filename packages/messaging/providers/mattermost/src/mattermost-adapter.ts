@@ -732,6 +732,16 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   ): Promise<MessagingDeliveryResult> {
     const target = await this.resolveTarget(intent);
     if (!target) {
+      this.logger.warn("mattermost deliver: no channel resolved for intent", {
+        intentKind: intent.kind,
+        intentId: intent.id,
+        hasAudit: Boolean(
+          (intent as { audit?: unknown }).audit,
+        ),
+        hasTargetSurface: Boolean(
+          (intent as { targetSurface?: unknown }).targetSurface,
+        ),
+      });
       return {
         channel: this.channel,
         deliveredAt: this.now(),
@@ -956,21 +966,27 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         canUpdate: boolean;
       }
   > {
-    // Most intents target an existing surface (status update, dismissal,
-    // confirmation of an in-flight flow). When `targetSurface` carries
-    // our opaque post state we reuse it; otherwise we expect the
-    // controller to have populated `requestContext.channel` so we know
-    // which Mattermost channel/thread to post into.
+    // Two sources of truth, mirroring Telegram/Discord:
+    // 1. `intent.audit?.channel` — populated by the controller for fresh
+    //    intents replying to an inbound message; this is the primary
+    //    routing signal.
+    // 2. `intent.targetSurface.state.opaque` — populated when we
+    //    previously delivered a post and want to update or thread off of
+    //    it. Tracks Mattermost channel/post/root IDs across restarts via
+    //    `MessagingAdapterState.opaque`.
     const targetSurface = (intent as { targetSurface?: MessagingSurfaceRef })
       .targetSurface;
     const targetOpaque = targetSurface?.state?.opaque as
       | MattermostSurfaceOpaqueState
       | undefined;
-    const requestContext = (intent as { requestContext?: { channel?: MessagingChannelRef; actor?: MessagingActorIdentity } })
-      .requestContext;
-    const channelRef = requestContext?.channel;
+    const auditChannel = (intent as { audit?: { channel?: MessagingChannelRef; actor?: MessagingActorIdentity } })
+      .audit;
+    const channelRefFromAudit = auditChannel?.channel;
     const actorId =
-      requestContext?.actor?.platformUserId ?? this.authorizedActorIds[0] ?? "";
+      auditChannel?.actor?.platformUserId
+      ?? this.authorizedActorIds[0]
+      ?? "";
+
     if (targetOpaque?.channelId) {
       const canUpdate =
         ((intent as { delivery?: { mode?: string } }).delivery?.mode === "update");
@@ -979,7 +995,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         rootId: targetOpaque.rootId,
         actorId,
         channelRef:
-          channelRef ?? {
+          channelRefFromAudit ?? {
             channel: this.channel,
             conversation: {
               id: targetOpaque.channelId,
@@ -990,16 +1006,22 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         canUpdate,
       };
     }
-    if (!channelRef) {
+    if (!channelRefFromAudit) {
       return undefined;
     }
+    // Encoding from `channelRefForPost`:
+    //   conversation.id        = Mattermost channel_id (always)
+    //   conversation.parentId  = root post id (thread replies only)
+    // Mattermost's createPost takes (channel_id, root_id?), so this
+    // mapping is direct — unlike Discord where the thread *is* a
+    // channel, or Telegram where parentId is the chat id.
+    const conv = channelRefFromAudit.conversation;
+    const rootId = conv.kind === "thread" ? conv.parentId : undefined;
     return {
-      channelId: channelRef.conversation.id,
-      rootId: channelRef.conversation.kind === "thread"
-        ? channelRef.conversation.parentId
-        : undefined,
+      channelId: conv.id,
+      rootId,
       actorId,
-      channelRef,
+      channelRef: channelRefFromAudit,
       canUpdate: false,
     };
   }
