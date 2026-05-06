@@ -3,10 +3,59 @@ module.exports = {
     {
       name: "no-circular",
       severity: "error",
-      comment: "Messaging package and desktop messaging dependencies must stay acyclic.",
+      comment:
+        "All dependencies in the repository must remain acyclic.",
       from: {},
       to: {
         circular: true,
+      },
+    },
+    {
+      name: "shared-is-a-leaf",
+      severity: "error",
+      comment:
+        "packages/shared must not import any internal workspace package.",
+      from: {
+        path: "^packages/shared/",
+      },
+      to: {
+        path: "^(@pwragent/|apps/|packages/(?!shared/))",
+      },
+    },
+    {
+      name: "codex-protocol-is-a-leaf",
+      severity: "error",
+      comment:
+        "packages/codex-app-server-protocol must not import any internal workspace package.",
+      from: {
+        path: "^packages/codex-app-server-protocol/",
+      },
+      to: {
+        path: "^(@pwragent/|apps/|packages/(?!codex-app-server-protocol/))",
+      },
+    },
+    {
+      name: "agent-core-only-imports-shared",
+      severity: "error",
+      comment:
+        "agent-core may only depend on packages/shared internally.",
+      from: {
+        path: "^packages/agent-core/",
+      },
+      to: {
+        path: "^(@pwragent/(?!shared)|apps/|packages/(?!shared/|agent-core/))",
+      },
+    },
+    {
+      name: "desktop-renderer-only-imports-shared",
+      severity: "error",
+      comment:
+        "The renderer process may only import @pwragent/shared. All other package access goes through IPC.",
+      from: {
+        path: "^apps/desktop/src/renderer/",
+      },
+      to: {
+        path: "^(@pwragent/(?!shared)|packages/(?!shared/))",
       },
     },
     {
@@ -18,7 +67,7 @@ module.exports = {
         path: "^packages/messaging/interface/",
       },
       to: {
-        path: "^(apps/|packages/agent-core/|packages/messaging/providers/)",
+        path: "^(@pwragent/(agent-core|messaging-provider|codex-app-server-protocol|desktop)|apps/|packages/agent-core/|packages/codex-app-server-protocol/|packages/messaging/providers/)",
       },
     },
     {
@@ -30,7 +79,7 @@ module.exports = {
         path: "^packages/messaging/providers/",
       },
       to: {
-        path: "^(apps/|packages/agent-core/)",
+        path: "^(@pwragent/(agent-core|codex-app-server-protocol|desktop)|apps/|packages/agent-core/|packages/codex-app-server-protocol/)",
       },
     },
     {
@@ -42,7 +91,7 @@ module.exports = {
         path: "^packages/messaging/providers/",
       },
       to: {
-        path: "^packages/shared/",
+        path: "^(@pwragent/shared|packages/shared/)",
       },
     },
     {
@@ -54,7 +103,7 @@ module.exports = {
         path: "^packages/messaging/providers/([^/]+)/",
       },
       to: {
-        path: "^packages/messaging/providers/",
+        path: "^(@pwragent/messaging-provider-|packages/messaging/providers/)",
         pathNot: "^packages/messaging/providers/$1/",
       },
     },
@@ -67,7 +116,7 @@ module.exports = {
         path: "^apps/desktop/src/main/messaging/core/",
       },
       to: {
-        path: "^packages/messaging/providers/",
+        path: "^(@pwragent/messaging-provider-|packages/messaging/providers/)",
       },
     },
     {

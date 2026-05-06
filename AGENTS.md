@@ -70,6 +70,28 @@
 - Recents is the default browsing lens.
 - A thread may be associated with multiple linked Git directories.
 
+## Dependency Boundary Enforcement
+
+**DO NOT, under any circumstances, loosen the dependency boundary rules.**
+
+This repository enforces a strict layered dependency architecture via
+`dependency-cruiser` (`.dependency-cruiser.cjs`). These rules are load-bearing:
+
+- **DO NOT** add exceptions, allowlists, or `severity: "ignore"` overrides to `.dependency-cruiser.cjs`
+- **DO NOT** add imports from packages above a package's layer in the dependency hierarchy
+- **DO NOT** introduce circular dependencies between any modules
+- **DO NOT** move or restructure code to circumvent boundary rules
+- If a rule blocks your change, the change is architecturally wrong — redesign it
+
+The dependency hierarchy (bottom to top):
+- **Leaves** (import nothing internal): `packages/shared`, `packages/codex-app-server-protocol`
+- **Mid-tier**: `packages/messaging/interface` (→ shared only), `packages/messaging/providers/*` (→ messaging/interface only), `packages/agent-core` (→ shared only)
+- **Top**: `apps/desktop` (→ any package)
+
+Additional renderer constraint: `apps/desktop/src/renderer/` may only import `@pwragent/shared`. All other package access crosses the IPC bridge via the main process.
+
+Enforcement runs via `pnpm lint:boundaries` and fails CI on any violation. Run it locally before pushing.
+
 ## App-Specific Guidance
 
 - Additional desktop-app instructions live in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).

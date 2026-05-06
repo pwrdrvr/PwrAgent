@@ -48,8 +48,18 @@ for binding-scoped preferences.
 See `apps/desktop/AGENTS.md` for the registry-side emit pattern and
 the renderer-side subscription branches.
 
-## Enforcement
+## Dependency Boundary Enforcement
 
-- Boundary rules are enforced by `.dependency-cruiser.cjs` via `pnpm lint:boundaries`.
-- Each package has its own `tsconfig.json`; keep provider source inside its package root and avoid cross-package relative imports.
-- Run `pnpm lint` after changing this tree. For provider behavior, add tests in the provider package or the relevant desktop messaging adapter test, depending on where the behavior is exercised.
+**DO NOT, under any circumstances, loosen the dependency boundary rules.**
+
+This tree's allowed imports:
+- `packages/messaging/interface` may only import `@pwragent/shared`
+- `packages/messaging/providers/*` may only import `@pwragent/messaging-interface` (not shared, not desktop, not agent-core, not sibling providers)
+
+- **DO NOT** add exceptions, allowlists, or `severity: "ignore"` overrides to `.dependency-cruiser.cjs`
+- **DO NOT** add imports from packages above this tree's layer in the dependency hierarchy
+- **DO NOT** introduce circular dependencies between any modules
+- **DO NOT** import provider SDKs (`grammy`, `discord.js`, `telegraf`) from the interface package or from desktop messaging core
+- If a rule blocks your change, the change is architecturally wrong — redesign it
+
+Boundary rules are enforced by `.dependency-cruiser.cjs` via `pnpm lint:boundaries`. Each package has its own `tsconfig.json`; keep provider source inside its package root and avoid cross-package relative imports. Run `pnpm lint` after changing this tree. For provider behavior, add tests in the provider package or the relevant desktop messaging adapter test, depending on where the behavior is exercised.
