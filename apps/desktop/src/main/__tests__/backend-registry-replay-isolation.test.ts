@@ -8,13 +8,15 @@ const REPLAY_FIXTURE_PATH_ENV = "PWRAGENT_REPLAY_FIXTURE_PATH";
 
 const constructorState = vi.hoisted(() => ({
   codexCount: 0,
+  codexArgs: [] as Array<string[] | undefined>,
   grokCount: 0,
 }));
 
 vi.mock("../codex-app-server/client", () => ({
   CodexAppServerClient: class {
-    constructor() {
+    constructor(options?: { args?: string[] }) {
       constructorState.codexCount += 1;
+      constructorState.codexArgs.push(options?.args);
     }
 
     async close(): Promise<void> {
@@ -64,6 +66,12 @@ vi.mock("../codex-app-server/client", () => ({
       return { threadId: "noop-thread", turnId: "noop-turn" };
     }
   }
+}));
+
+vi.mock("../settings/desktop-settings-singleton", () => ({
+  getDesktopSettingsService: () => ({
+    resolveCodexCommandPreference: () => undefined,
+  }),
 }));
 
 vi.mock("../grok-app-server/client", () => ({
@@ -147,6 +155,7 @@ function createOverlayStoreMock() {
 
 beforeEach(() => {
   constructorState.codexCount = 0;
+  constructorState.codexArgs = [];
   constructorState.grokCount = 0;
 });
 
@@ -234,6 +243,30 @@ describe("DesktopBackendRegistry replay isolation", () => {
     await expect(registry.listThreads({ backend: "grok" })).resolves.toEqual([]);
     expect(constructorState.codexCount).toBe(0);
     expect(constructorState.grokCount).toBe(0);
+
+    await registry.close();
+  });
+
+  it("spawns both codex clients with explicit sandbox args so neither inherits permissive upstream defaults", async () => {
+    const registry = new DesktopBackendRegistry({
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    expect(constructorState.codexCount).toBe(2);
+    expect(constructorState.codexArgs).toEqual([
+      [
+        "-c",
+        'approval_policy="on-request"',
+        "-c",
+        'sandbox_mode="workspace-write"',
+      ],
+      [
+        "-c",
+        'approval_policy="never"',
+        "-c",
+        'sandbox_mode="danger-full-access"',
+      ],
+    ]);
 
     await registry.close();
   });
