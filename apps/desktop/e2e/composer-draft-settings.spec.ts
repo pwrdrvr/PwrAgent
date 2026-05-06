@@ -196,11 +196,14 @@ test("keeps a thread reply draft after opening settings and returning to the thr
     await expect(replyValue).toHaveAttribute("data-value", draft);
 
     await app.window.getByRole("button", { name: "Open settings" }).click();
+    // Confirm the Settings overlay is open. The previous level-1
+    // "Settings" heading was removed when the overlay adopted the
+    // title-bar style chrome (see plan
+    // 2026-05-05-004-feat-settings-overlay-titlebar-plan.md). Use
+    // the settings-sections nav (aria-label) as the new visibility
+    // signal — it's a stable structural element of the overlay.
     await expect(
-      app.window.getByRole("heading", {
-        level: 1,
-        name: "Settings",
-      }),
+      app.window.getByRole("navigation", { name: "Settings sections" }),
     ).toBeVisible();
 
     const threadButtonCoveredBySettings = await app.window
