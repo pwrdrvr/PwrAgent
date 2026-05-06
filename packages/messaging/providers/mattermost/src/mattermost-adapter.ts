@@ -2,32 +2,16 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { Client4, WebSocketClient, type WebSocketMessage } from "@mattermost/client";
 
-// `@mattermost/client`'s `WebSocketClient` is browser-first: during
-// `initialize()` it calls `window.addEventListener('online'/'offline', …)`
-// to react to network changes, and a few rarer code paths read
-// `window.navigator.userAgent`. Electron's main process is a Node
-// environment with no `window`, so without a polyfill the WS connection
-// throws "window is not defined" at start.
-//
-// Install a minimal stub once at module load. The library only uses
-// methods we can safely no-op (add/removeEventListener) plus a userAgent
-// string. Cast through unknown rather than redeclaring `window` —
-// `lib.dom` already declares it globally and the TS shapes don't match
-// the no-op stub we want.
-const globalScope = globalThis as unknown as {
-  window?: {
-    addEventListener: (...args: unknown[]) => void;
-    removeEventListener: (...args: unknown[]) => void;
-    navigator: { userAgent: string };
-  };
-};
-if (typeof globalScope.window === "undefined") {
-  globalScope.window = {
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    navigator: { userAgent: "PwrAgent" },
-  };
-}
+// Note on `window` access in `@mattermost/client`'s `WebSocketClient`: prior
+// to @mattermost/client@11.4.0 the WS code touched bare `window` references
+// at startup (`window.addEventListener('online'/'offline', …)` and
+// `window.navigator.userAgent`), which threw "window is not defined" in
+// Node/Electron-main. That was a known upstream bug — see
+// https://github.com/mattermost/mattermost/issues/33581 and PR #35195
+// (MM-67137) — fixed in 11.4.0 by switching to `globalThis.window?.…` with
+// optional chaining. We pin `^11.4.0` in package.json so no polyfill is
+// needed; if you ever downgrade below 11.4.0, you'll need to stub
+// `globalThis.window` before importing this module.
 import type {
   MessagingActorIdentity,
   MessagingAdapterState,
@@ -204,15 +188,11 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     this.client.setToken(options.config.botToken);
     this.client.setUserAgent("PwrAgent");
 
-    // @mattermost/client's WebSocketClient defaults to `window.WebSocket`,
-    // which is undefined in Electron's main process (Node-only). Inject the
-    // global Node WebSocket constructor (stable since Node 22; Electron 41
-    // ships Node 22+) so the WS connection actually opens.
-    this.websocketClient =
-      options.websocketClient
-      ?? new WebSocketClient({
-        newWebSocketFn: (url) => new WebSocket(url),
-      });
+    // @mattermost/client@11.4.0+ defaults `newWebSocketFn` to
+    // `(url) => new WebSocket(url)`, which resolves to Node's global
+    // `WebSocket` (stable since Node 22; Electron 41 ships Node 22+). No
+    // explicit injection needed.
+    this.websocketClient = options.websocketClient ?? new WebSocketClient();
 
     this.callbackServer =
       options.callbackServer ??

@@ -166,8 +166,8 @@ importers:
   packages/messaging/providers/mattermost:
     dependencies:
       '@mattermost/client':
-        specifier: ^10.5.0
-        version: 10.12.0(@mattermost/types@10.12.0(typescript@6.0.2))(typescript@6.0.2)
+        specifier: ^11.4.0
+        version: 11.6.0(@mattermost/types@11.6.0(typescript@6.0.2))(typescript@6.0.2)
       '@pwragent/messaging-interface':
         specifier: workspace:*
         version: link:../../interface
@@ -822,17 +822,17 @@ packages:
     resolution: {integrity: sha512-9QOtNffcOF/c1seMCDnjckb3R9WHcG34tky+FHpNKKCW0wc/scYLwMtO+ptyGUfMW0/b/n4qRiALlaFHc9Oj7Q==}
     engines: {node: '>= 10.0.0'}
 
-  '@mattermost/client@10.12.0':
-    resolution: {integrity: sha512-O+PRXXoR/8VXsMuE6ShsWAt/iuvCdyFhXtsJxYCeBrfg99L22lvTaIxE8xZN8lVDIOwJI9jYxFgb8CTGND/l9Q==}
+  '@mattermost/client@11.6.0':
+    resolution: {integrity: sha512-2su6eOr8Vj7xeeb9tKaLgpg3a8u2vgmBfK82d61sjKTjKZt7ySy15xhbFFsnLo8fXePQG0zUZP8YtY+/NutD0Q==}
     peerDependencies:
-      '@mattermost/types': 10.12.0
+      '@mattermost/types': 11.6.0
       typescript: ^4.3.0 || ^5.0.0
     peerDependenciesMeta:
       typescript:
         optional: true
 
-  '@mattermost/types@10.12.0':
-    resolution: {integrity: sha512-FGTpj7enl+2M9ElUyivW46K7j0/eGh6vrfPsw/C64W55In3yyal6YhLRv1UTGGSdmGwtLwZuFuv3Ot/kCIY8Jw==}
+  '@mattermost/types@11.6.0':
+    resolution: {integrity: sha512-0sBZaN1QYB+P0qo7ByiMU8Ja2VTepFWfgqFcx7KA9/TT6+dWiemOQav6SHK1fP4oAlWdh2nikaD01I8VPg4ZRQ==}
     peerDependencies:
       typescript: ^4.3.0 || ^5.0.0
     peerDependenciesMeta:
@@ -4157,13 +4157,13 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@mattermost/client@10.12.0(@mattermost/types@10.12.0(typescript@6.0.2))(typescript@6.0.2)':
+  '@mattermost/client@11.6.0(@mattermost/types@11.6.0(typescript@6.0.2))(typescript@6.0.2)':
     dependencies:
-      '@mattermost/types': 10.12.0(typescript@6.0.2)
+      '@mattermost/types': 11.6.0(typescript@6.0.2)
     optionalDependencies:
       typescript: 6.0.2
 
-  '@mattermost/types@10.12.0(typescript@6.0.2)':
+  '@mattermost/types@11.6.0(typescript@6.0.2)':
     optionalDependencies:
       typescript: 6.0.2
 

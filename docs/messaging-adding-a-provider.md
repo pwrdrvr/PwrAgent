@@ -453,20 +453,24 @@ new Uint8Array(buffer).set(bytes);
 formData.append("files", new Blob([buffer], { type: mime }), name);
 ```
 
-### Browser-first SDKs need `window` and `WebSocket` polyfills in Electron's main process
-Some platform SDKs are written browser-first and assume `window` and the
-DOM-style `WebSocket` global are present. The Mattermost client's
-`WebSocketClient` defaults to `(url) => new window.WebSocket(url)` and
-also calls `window.addEventListener('online'/'offline', …)` during
-`initialize()`. Electron's **main** process is a Node environment with
-no `window` — even though Node 22+ has a global `WebSocket`, the SDK
-won't reach for it without help. Two surgical fixes go together:
+### Browser-first SDKs and `window` access in Electron's main process
+Some platform SDKs are written browser-first and reach for `window` or a
+DOM `WebSocket` at startup. Electron's **main** process is a Node
+environment with no `window`, so a bare `window.addEventListener(…)`
+throws "window is not defined" the moment the SDK initializes — even
+though Node 22+ has a global `WebSocket`.
 
-1. Inject the global Node `WebSocket` constructor:
-   ```ts
-   new WebSocketClient({ newWebSocketFn: (url) => new WebSocket(url) });
-   ```
-2. Install a minimal `window` stub once at module load:
+The defense in depth is:
+
+1. **Pin a version of the SDK that uses `globalThis.window?.…`**
+   (optional chaining), so missing-`window` no-ops cleanly. For
+   `@mattermost/client` this is `^11.4.0` — the upstream fix landed in
+   [mattermost/mattermost#35195](https://github.com/mattermost/mattermost/pull/35195)
+   (issue [#33581](https://github.com/mattermost/mattermost/issues/33581),
+   ticket MM-67137). Older versions (10.8.0–10.12.x, 11.0.x) require the
+   workaround below.
+2. **If you must use a pre-fix version**, install a minimal `window`
+   stub once at module load, before the SDK imports:
    ```ts
    if (typeof (globalThis as { window?: unknown }).window === "undefined") {
      (globalThis as { window?: unknown }).window = {
@@ -476,10 +480,12 @@ won't reach for it without help. Two surgical fixes go together:
      };
    }
    ```
-
-Use `globalThis as unknown as { window?: ... }` to avoid colliding with
-`lib.dom`'s own `Window` global type — the stub shape we want is much
-narrower than the real `Window` interface.
+   Use `globalThis as unknown as { window?: ... }` to avoid colliding
+   with `lib.dom`'s own `Window` global type — the stub shape we want is
+   much narrower than the real `Window` interface.
+3. **WebSocket constructor** — modern SDK versions default
+   `newWebSocketFn` to `(url) => new WebSocket(url)`, which resolves to
+   Node's global `WebSocket`. No explicit injection is needed on Node 22+.
 
 If your platform's SDK is Node-first (Telegram's `grammy`, Discord's
 `discord.js`), no polyfill is needed.
