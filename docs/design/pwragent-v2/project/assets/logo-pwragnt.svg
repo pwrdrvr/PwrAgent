@@ -1,0 +1,8 @@
+<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="PwrAgnt">
+  <g fill="currentColor">
+    <rect x="28" y="32" width="60" height="10" rx="2"></rect>
+    <rect x="28" y="50" width="72" height="10" rx="2" opacity="0.65"></rect>
+    <rect x="28" y="68" width="44" height="10" rx="2" opacity="0.4"></rect>
+    <rect x="28" y="86" width="56" height="10" rx="2" opacity="0.25"></rect>
+  </g>
+</svg>
