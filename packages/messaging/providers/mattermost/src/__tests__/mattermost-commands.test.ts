@@ -112,23 +112,29 @@ describe("appendCommandPath", () => {
 });
 
 describe("desiredMattermostCommands", () => {
-  it("namespaces the canonical Discord-parity surface with the default prefix", () => {
+  it("namespaces the canonical command surface with the default prefix", () => {
     const triggers = desiredMattermostCommands().map((c) => c.trigger);
     expect(triggers).toEqual([
       "pwragent_resume",
       "pwragent_status",
       "pwragent_detach",
+      "pwragent_help",
     ]);
   });
 
   it("uses bare triggers when prefix is empty", () => {
     const triggers = desiredMattermostCommands("").map((c) => c.trigger);
-    expect(triggers).toEqual(["resume", "status", "detach"]);
+    expect(triggers).toEqual(["resume", "status", "detach", "help"]);
   });
 
   it("supports custom prefixes", () => {
     const triggers = desiredMattermostCommands("agent.").map((c) => c.trigger);
-    expect(triggers).toEqual(["agent.resume", "agent.status", "agent.detach"]);
+    expect(triggers).toEqual([
+      "agent.resume",
+      "agent.status",
+      "agent.detach",
+      "agent.help",
+    ]);
   });
 });
 

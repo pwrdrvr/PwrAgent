@@ -606,6 +606,29 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       return;
     }
 
+    // `@<botUsername> <verb>` text mention → command. Works on every
+    // Mattermost server version (the WS `posted` event always carries
+    // full thread context via `post.root_id`), unlike v10.x slash
+    // commands which need the response_url workaround. Users get a
+    // path that "just works" in threads without depending on server
+    // version. The mention prefix is case-insensitive because
+    // Mattermost's autocomplete inserts the canonical username but
+    // users may type-correct or use shell-style tab completion.
+    const stripped = stripBotMention(messageText, this.botUsername);
+    if (stripped !== undefined) {
+      await this.dispatchCommandEvent({
+        actor,
+        channel: channelRef,
+        eventId: post.id,
+        // Synthesize the slash form so `dispatchCommandEvent`'s
+        // existing parser strips the leading `/` and produces a
+        // standard `MessagingInboundCommandEvent` — the controller
+        // sees the same shape regardless of slash-vs-mention origin.
+        rawText: `/${stripped}`,
+      });
+      return;
+    }
+
     await this.dispatchTextEvent({
       actor,
       channel: channelRef,
@@ -1912,6 +1935,53 @@ function clampHeader(text: string): string {
  * longer. Empty input yields an empty string — the caller treats that
  * as "no title available."
  */
+/**
+ * If `text` starts with `@<botUsername>` (case-insensitive, optional
+ * leading whitespace), return the rest of the message with that
+ * prefix stripped and trimmed. Otherwise return `undefined`.
+ *
+ * Used to detect `@pwragent <verb>` text-mention commands so the
+ * adapter can dispatch them through the same command pathway as
+ * slash commands. Works on every Mattermost server version because
+ * the WS `posted` event always carries full thread context — unlike
+ * v10.x slash commands which need the `response_url` workaround.
+ *
+ * Returns `undefined` when:
+ *   - `botUsername` is unset (adapter hasn't `start()`'d yet)
+ *   - the message doesn't begin with the mention
+ *   - the mention is the entire message (no command verb following)
+ */
+export function stripBotMention(
+  text: string,
+  botUsername: string | undefined,
+): string | undefined {
+  if (!botUsername) {
+    return undefined;
+  }
+  const trimmedStart = text.replace(/^\s+/, "");
+  const mention = `@${botUsername}`;
+  if (trimmedStart.length < mention.length) {
+    return undefined;
+  }
+  if (
+    trimmedStart.slice(0, mention.length).toLowerCase()
+    !== mention.toLowerCase()
+  ) {
+    return undefined;
+  }
+  // Require a word boundary after the mention so `@pwragent2` doesn't
+  // match `@pwragent`. Either whitespace or end-of-string qualifies.
+  const after = trimmedStart.charAt(mention.length);
+  if (after !== "" && !/\s/.test(after)) {
+    return undefined;
+  }
+  const remainder = trimmedStart.slice(mention.length).trim();
+  if (remainder.length === 0) {
+    return undefined;
+  }
+  return remainder;
+}
+
 export function summarizeThreadRoot(text: string): string {
   const single = text.replace(/\s+/g, " ").trim();
   if (single.length === 0) {

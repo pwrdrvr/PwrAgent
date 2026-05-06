@@ -101,6 +101,12 @@ const CANONICAL_COMMAND_BASES: readonly CanonicalCommandBase[] = [
     description: "Detach this conversation from its current PwrAgent thread.",
     autoCompleteDesc: "Detach this conversation from its current PwrAgent thread.",
   },
+  {
+    base: "help",
+    displayNameSuffix: "Help",
+    description: "Show available PwrAgent commands and how to invoke them.",
+    autoCompleteDesc: "Show available PwrAgent commands and how to invoke them.",
+  },
 ];
 
 /**

@@ -522,18 +522,29 @@ should succeed before moving to the next:
     the parent channel), and the resulting binding should be
     `kind: "thread"` with the channel as `parentTitle` on the chip.
 
-    Implementation note: Mattermost's outgoing webhook body for
-    custom slash commands does NOT include `root_id` on v10.11 or
-    earlier — that's a Mattermost upstream gap, fixed on `master`
-    but not yet shipped. To work around it, the adapter routes the
-    first delivery in response to a slash command through
-    Mattermost's `response_url` endpoint, which posts our payload
-    with `RootId = args.RootId` server-side (Mattermost knows the
-    thread context internally; it just didn't propagate it to us
-    via the webhook body until `master`). Subsequent renders use
-    the standard `createPost` path with the recovered `root_id`.
-    See `mattermost response_url outbound` log lines to verify the
-    path fired.
+    Implementation note: Mattermost server v10.x (and earlier)
+    does NOT include `root_id` in the slash-command webhook body —
+    fixed in v11.0+ but not backported. The adapter routes the
+    first delivery via Mattermost's `response_url` endpoint, which
+    posts our payload with `RootId = args.RootId` server-side
+    (Mattermost knows the thread context internally; v10.x just
+    didn't propagate it via the webhook body). Subsequent renders
+    use `createPost` with the recovered `root_id`. See `mattermost
+    response_url outbound` log lines to verify the path fired.
+
+1c-mention. **Recommended for threads on any version**: send
+    `@pwragent resume` (or `@pwragent status` / `@pwragent help`)
+    from inside a thread reply. Text mentions go through the WS
+    `posted` event which always carries full thread context
+    (`post.root_id`), so this path works without the response_url
+    workaround. On any provider where slash commands are
+    namespaced (Mattermost: `/pwragent_*`), text mention is
+    typically the more discoverable invocation in threads where
+    the slash menu may be cluttered.
+
+1c-help. Send `@pwragent help` (or `/pwragent_help`) anywhere the
+    bot can see. The bot replies with the canonical command list
+    and notes both invocation styles.
 1d. From a separate browser/account that is NOT in
     `PWRAGENT_MESSAGING_MATTERMOST_AUTHORIZED_USER_IDS`, run
     `/pwragent_resume`. The command executes (Mattermost has no

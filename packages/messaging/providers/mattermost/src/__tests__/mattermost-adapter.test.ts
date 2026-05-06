@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MattermostAdapter, summarizeThreadRoot } from "../mattermost-adapter.ts";
+import { MattermostAdapter, stripBotMention, summarizeThreadRoot } from "../mattermost-adapter.ts";
 import type {
   MessagingCallbackHandleRecord,
   MessagingCallbackHandleStore,
@@ -591,6 +591,47 @@ describe("summarizeThreadRoot", () => {
   it("returns empty string for empty / whitespace-only input", () => {
     expect(summarizeThreadRoot("")).toBe("");
     expect(summarizeThreadRoot("   \n\n\t  ")).toBe("");
+  });
+});
+
+describe("stripBotMention", () => {
+  it("returns undefined when text doesn't start with the mention", () => {
+    expect(stripBotMention("hello world", "pwragent")).toBeUndefined();
+    expect(stripBotMention("user said: @pwragent resume", "pwragent")).toBeUndefined();
+  });
+
+  it("strips the @<botUsername> prefix and returns the remainder", () => {
+    expect(stripBotMention("@pwragent resume", "pwragent")).toBe("resume");
+    expect(stripBotMention("@pwragent status with args", "pwragent")).toBe(
+      "status with args",
+    );
+  });
+
+  it("is case-insensitive on the username", () => {
+    expect(stripBotMention("@PwrAgent resume", "pwragent")).toBe("resume");
+    expect(stripBotMention("@pwragent resume", "PwrAgent")).toBe("resume");
+  });
+
+  it("ignores leading whitespace before the mention", () => {
+    expect(stripBotMention("  @pwragent help", "pwragent")).toBe("help");
+  });
+
+  it("requires a word boundary so similar usernames don't false-match", () => {
+    // `@pwragent2` is a DIFFERENT user; must not match `@pwragent`.
+    expect(stripBotMention("@pwragent2 resume", "pwragent")).toBeUndefined();
+  });
+
+  it("returns undefined when only the mention appears (no verb)", () => {
+    expect(stripBotMention("@pwragent", "pwragent")).toBeUndefined();
+    expect(stripBotMention("@pwragent   ", "pwragent")).toBeUndefined();
+  });
+
+  it("returns undefined when botUsername is not yet set", () => {
+    expect(stripBotMention("@pwragent resume", undefined)).toBeUndefined();
+  });
+
+  it("trims trailing whitespace from the remainder", () => {
+    expect(stripBotMention("@pwragent  resume   ", "pwragent")).toBe("resume");
   });
 });
 
