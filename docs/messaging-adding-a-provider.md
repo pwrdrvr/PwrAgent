@@ -453,6 +453,37 @@ new Uint8Array(buffer).set(bytes);
 formData.append("files", new Blob([buffer], { type: mime }), name);
 ```
 
+### Browser-first SDKs need `window` and `WebSocket` polyfills in Electron's main process
+Some platform SDKs are written browser-first and assume `window` and the
+DOM-style `WebSocket` global are present. The Mattermost client's
+`WebSocketClient` defaults to `(url) => new window.WebSocket(url)` and
+also calls `window.addEventListener('online'/'offline', …)` during
+`initialize()`. Electron's **main** process is a Node environment with
+no `window` — even though Node 22+ has a global `WebSocket`, the SDK
+won't reach for it without help. Two surgical fixes go together:
+
+1. Inject the global Node `WebSocket` constructor:
+   ```ts
+   new WebSocketClient({ newWebSocketFn: (url) => new WebSocket(url) });
+   ```
+2. Install a minimal `window` stub once at module load:
+   ```ts
+   if (typeof (globalThis as { window?: unknown }).window === "undefined") {
+     (globalThis as { window?: unknown }).window = {
+       addEventListener: () => {},
+       removeEventListener: () => {},
+       navigator: { userAgent: "PwrAgent" },
+     };
+   }
+   ```
+
+Use `globalThis as unknown as { window?: ... }` to avoid colliding with
+`lib.dom`'s own `Window` global type — the stub shape we want is much
+narrower than the real `Window` interface.
+
+If your platform's SDK is Node-first (Telegram's `grammy`, Discord's
+`discord.js`), no polyfill is needed.
+
 ### `electron-vite` workspace bundling list (silent runtime failure)
 The desktop main process bundles workspace packages explicitly via
 `apps/desktop/electron.vite.config.ts`'s `externalizeDepsPlugin.exclude`
