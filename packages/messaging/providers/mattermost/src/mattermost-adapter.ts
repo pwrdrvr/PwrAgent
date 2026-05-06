@@ -621,14 +621,16 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       },
     });
 
-    // Tell Mattermost to clear the post's interactive attachments inline
-    // — the buttons disappear in the same render cycle as the click,
-    // before the producer's controller-side update intent (if any) makes
-    // its own round-trip. Our adapter never embeds informational text
-    // inside attachments, only `actions`, so a blanket clear is safe.
-    // A subsequent producer `delivery.mode = "update"` intent will
-    // restore or replace attachments as needed.
-    return { clearAttachments: true };
+    // Channel-neutral principle: the producer (controller) is the
+    // single source of truth for what a post looks like after a click.
+    // We do NOT issue an inline `update` here — that would be wrong for
+    // refresh-style buttons (the producer re-renders with fresh data
+    // and we'd race it), and it requires fetching the existing post to
+    // preserve `message` text (Mattermost's `update` field treats a
+    // missing `message` as "set to empty"). Keep the response a bare
+    // ack and let the producer's update intent rewrite the surface the
+    // same way it does on Telegram and Discord.
+    return undefined;
   }
 
   private async dispatchTextEvent(params: {
