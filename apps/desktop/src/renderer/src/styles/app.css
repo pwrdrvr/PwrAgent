@@ -397,10 +397,16 @@ textarea,
   line-height: 1;
 }
 
+/* Brand-accent must use --accent everywhere — sidebar, settings nav,
+   and activity-window titlebar all read identically. Locked in
+   `theme-contract.test.tsx`. */
 .activity-titlebar__brand-accent {
-  color: var(--accent-bright);
+  color: var(--accent);
 }
 
+/* Breadcrumb tokens mirror `.settings-titlebar__*` so the chrome
+   reads the same on both windows. Locked in
+   `theme-contract.test.tsx`. */
 .activity-titlebar__breadcrumb {
   display: inline-flex;
   align-items: center;
@@ -412,16 +418,18 @@ textarea,
 }
 
 .activity-titlebar__eyebrow {
-  color: var(--text-muted);
+  flex: 0 0 auto;
+  color: var(--accent);
   font-size: 10px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.08em;
   line-height: 1;
   text-transform: uppercase;
 }
 
 .activity-titlebar__separator {
-  color: var(--text-subtle);
+  flex: 0 0 auto;
+  color: var(--text-muted);
   font-size: 13px;
   line-height: 1;
 }
