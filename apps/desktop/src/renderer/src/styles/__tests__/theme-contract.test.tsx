@@ -168,6 +168,79 @@ describe("Tangerine Terminal theme contract", () => {
     expect(autocompleteRule).not.toContain("background: rgba(10, 10, 10, 0.98);");
   });
 
+  it("uses --accent (not --accent-bright) for every brand-accent mark", () => {
+    // The visual brand `Pwr<accent>Agent</accent>` reads identically
+    // wherever it appears (main sidebar, Settings nav, Activity
+    // window titlebar). Picking --accent-bright instead of --accent
+    // produced a mismatched lighter shade in the Activity window
+    // — caught visually only after the window shipped.
+    //
+    // Lock the contract: every `__brand-accent` rule must use
+    // `var(--accent)`. If a future window/strip needs a different
+    // accent, change THIS test deliberately along with the rule.
+    const brandAccentSelectors = [
+      ".sidebar__brand-accent",
+      ".settings-nav__brand-accent",
+      ".activity-titlebar__brand-accent",
+    ];
+    for (const selector of brandAccentSelectors) {
+      const rule = extractRuleBody(css, selector);
+      expect(rule, `${selector} must use var(--accent)`).toContain(
+        "color: var(--accent);",
+      );
+      expect(rule, `${selector} must NOT use var(--accent-bright)`).not.toContain(
+        "color: var(--accent-bright);",
+      );
+    }
+  });
+
+  it("keeps Activity and Settings titlebar breadcrumbs visually identical", () => {
+    // The Activity window's titlebar mirrors the Settings overlay's
+    // right-pane titlebar — same eyebrow color, same separator
+    // color, same current-segment color, same breadcrumb container
+    // styling. Drift between the two reads as a visual bug.
+    const settingsBreadcrumb = extractRuleBody(
+      css,
+      ".settings-titlebar__breadcrumb",
+    );
+    const activityBreadcrumb = extractRuleBody(
+      css,
+      ".activity-titlebar__breadcrumb",
+    );
+    for (const fragment of [
+      "color: var(--text-muted);",
+      "font-size: 12px;",
+      "font-weight: 500;",
+      "gap: 6px;",
+    ]) {
+      expect(settingsBreadcrumb).toContain(fragment);
+      expect(activityBreadcrumb).toContain(fragment);
+    }
+
+    const settingsEyebrow = extractRuleBody(css, ".settings-titlebar__eyebrow");
+    const activityEyebrow = extractRuleBody(css, ".activity-titlebar__eyebrow");
+    expect(settingsEyebrow).toContain("color: var(--accent);");
+    expect(activityEyebrow).toContain("color: var(--accent);");
+    expect(activityEyebrow).not.toContain("color: var(--text-muted);");
+
+    const settingsSeparator = extractRuleBody(
+      css,
+      ".settings-titlebar__separator",
+    );
+    const activitySeparator = extractRuleBody(
+      css,
+      ".activity-titlebar__separator",
+    );
+    expect(settingsSeparator).toContain("color: var(--text-muted);");
+    expect(activitySeparator).toContain("color: var(--text-muted);");
+    expect(activitySeparator).not.toContain("color: var(--text-subtle);");
+
+    const settingsCurrent = extractRuleBody(css, ".settings-titlebar__current");
+    const activityCurrent = extractRuleBody(css, ".activity-titlebar__current");
+    expect(settingsCurrent).toContain("color: var(--text-primary);");
+    expect(activityCurrent).toContain("color: var(--text-primary);");
+  });
+
   it("keeps thinking scanner variants on one shared visible sweep", () => {
     expect(css).toContain("--thinking-scanner-progress: 0;");
     expect(css).toContain("--thinking-scanner-full-offset: 0px;");

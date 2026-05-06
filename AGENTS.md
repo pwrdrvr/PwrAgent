@@ -63,6 +63,31 @@
 - Favor thread-first information hierarchy over generic dashboard layout.
 - Do not ship scaffold narration or placeholder implementation copy in user-facing UI.
 
+### Reuse existing chrome — copy tokens, don't pick new ones
+
+When you build new chrome (a title bar strip, a brand mark, a breadcrumb,
+an eyebrow, a path/app row), open `apps/desktop/src/renderer/src/styles/app.css`
+and copy the token references from the existing primitive that solves the
+same problem. Don't pick a new token because it "looks similar" — the brand
+across windows must read identically.
+
+Canonical primitives and the tokens they read:
+
+| Primitive | Brand | Brand accent | Eyebrow | Breadcrumb separator | Breadcrumb current |
+|---|---|---|---|---|---|
+| `.sidebar__brand` (main sidebar) | `--text-primary` | `--accent` | n/a | n/a | n/a |
+| `.settings-nav__brand` (Settings nav) | `--text-primary` | `--accent` | n/a | n/a | n/a |
+| `.settings-titlebar__*` (Settings right-pane) | n/a | n/a | `--accent` | `--text-muted` | `--text-primary` |
+| `.activity-titlebar__*` (Activity window) | `--text-primary` | `--accent` | `--accent` | `--text-muted` | `--text-primary` |
+
+`apps/desktop/src/renderer/src/styles/__tests__/theme-contract.test.tsx`
+locks the brand-accent + breadcrumb token contract across these primitives.
+A test fails if anyone (you, a future PR) picks a different accent token
+for a brand mark or drifts the Activity titlebar breadcrumb away from the
+Settings titlebar. **If you need to deliberately change a chrome token,
+change the test in the same commit** so the intent is reviewed, not
+accidental.
+
 ## Current Product Direction
 
 - Threads are first-class and may exist without a directory.
