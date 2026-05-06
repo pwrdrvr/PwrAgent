@@ -515,15 +515,20 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
 }
 
 function buildCodexClientArgs(mode: ThreadExecutionMode): string[] {
-  if (mode !== "full-access") {
-    return [];
+  if (mode === "full-access") {
+    return [
+      "-c",
+      'approval_policy="never"',
+      "-c",
+      'sandbox_mode="danger-full-access"',
+    ];
   }
 
   return [
     "-c",
-    'approval_policy="never"',
+    'approval_policy="on-request"',
     "-c",
-    'sandbox_mode="danger-full-access"',
+    'sandbox_mode="workspace-write"',
   ];
 }
 
@@ -1092,6 +1097,7 @@ export class DesktopBackendRegistry {
       options?.codexClient ??
       replayClients?.codexDefaultClient ??
       new CodexAppServerClient({
+        args: buildCodexClientArgs("default"),
         command: codexCommand,
         connectionObserver: codexDefaultObserver,
         clientVersion,
