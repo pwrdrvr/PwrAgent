@@ -11,6 +11,7 @@ For a layered architecture overview with diagrams, data-flow sequences, the capa
 - Provider packages under `packages/messaging/providers/*` are isolated TypeScript packages. They may import `@pwragent/messaging-interface` and their own provider SDKs, but they must not import desktop, agent-core, shared app contracts, or sibling providers.
 - Provider SDKs such as `grammy` and `discord.js` belong only inside their provider package. Do not import those SDKs from desktop messaging workflow code or from the generic interface.
 - Desktop messaging orchestration lives outside this tree, currently in `apps/desktop/src/main/messaging`. It should speak the generic interface and load providers through the provider loader, not through provider-specific workflow branches.
+- **Providers must not touch persistence directly.** No provider may import `apps/desktop/**`, `better-sqlite3`, `drizzle`, any module that exposes raw SQL, or the desktop messaging store implementation. Persistent state reaches providers only through opaque interfaces declared in `@pwragent/messaging-interface` (today: `MessagingCallbackHandleStore`, plus `MessagingAdapterState.opaque` for routing/surface state the workflow layer echoes but never parses). New persistence needs become new interface methods, not new tables. Providers that want to own a schema are doing it wrong — see [`docs/messaging-architecture.md` § Architectural principles](../../docs/messaging-architecture.md#architectural-principles).
 
 ## Design Rules
 

@@ -1457,4 +1457,105 @@ describe("useThreadNavigation", () => {
     // Push-driven patch — no full snapshot re-fetch.
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
+
+  it("removes a revoked messaging binding from the thread row after onMessagingBindingsChanged fires", async () => {
+    const bindingsListeners = new Set<(event: { at: number }) => void>();
+    let navigationCallCount = 0;
+    const getNavigationSnapshot = vi.fn(async () => {
+      navigationCallCount += 1;
+      const messagingBindings =
+        navigationCallCount === 1
+          ? [
+              {
+                bindingId: "binding:telegram:topic:-1003841603622:5642:codex:thread-1",
+                platform: "telegram" as const,
+                conversationKind: "topic" as const,
+                conversationTitle: "Knock Knock Rock",
+                parentTitle: "PwrDrvr",
+              },
+              {
+                bindingId: "binding:discord:channel:1480554271907905731:1501244021886943405:codex:thread-1",
+                platform: "discord" as const,
+                conversationKind: "channel" as const,
+                conversationTitle: "knock-knock-rock",
+                parentTitle: "PwrDrvr",
+              },
+            ]
+          : [
+              {
+                bindingId: "binding:discord:channel:1480554271907905731:1501244021886943405:codex:thread-1",
+                platform: "discord" as const,
+                conversationKind: "channel" as const,
+                conversationTitle: "knock-knock-rock",
+                parentTitle: "PwrDrvr",
+              },
+            ];
+      return {
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [
+          {
+            id: "thread-1",
+            title: "Knock Knock Rock",
+            titleSource: "explicit" as const,
+            summary: "A thread that's bound to two messaging platforms.",
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: {
+              inInbox: false,
+            },
+            // The reconciler bug we're regression-testing: this updatedAt
+            // does NOT change between fetches, because the messaging
+            // store mutates only the binding row, not the thread row.
+            // Without `messagingBindings` in `threadSummariesEqual`, the
+            // reconciler decides "nothing changed" and reuses the
+            // previous thread reference (with stale bindings).
+            updatedAt: 1_000,
+            messagingBindings,
+          },
+        ],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      };
+    });
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      onMessagingBindingsChanged: (callback: (event: { at: number }) => void) => {
+        bindingsListeners.add(callback);
+        return () => {
+          bindingsListeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+    expect(result.current.selectedThread?.messagingBindings).toHaveLength(2);
+
+    // Simulate the bus event the runtime fans out after a UI-originated
+    // unbind: backend revokes the binding, fires onMessagingBindingsChanged,
+    // and the renderer refetches. The next snapshot has only one binding.
+    await act(async () => {
+      for (const listener of bindingsListeners) {
+        listener({ at: Date.now() });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.messagingBindings).toHaveLength(1);
+    });
+    expect(
+      result.current.selectedThread?.messagingBindings?.[0]?.platform,
+    ).toBe("discord");
+  });
 });

@@ -8,7 +8,6 @@ import type {
   UnbindMessagingThreadResponse,
 } from "@pwragent/shared";
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
-import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import { getDesktopMessagingActivityLog } from "../messaging/desktop-messaging-activity-log";
 import { getMainLogger } from "../log";
 import {
@@ -90,28 +89,22 @@ export function registerMessagingStatusIpcHandlers(): void {
       _event,
       request: UnbindMessagingThreadRequest,
     ): Promise<UnbindMessagingThreadResponse> => {
-      const store = getDesktopMessagingStore();
-      const revoked = await store.revokeBinding({ bindingId: request.bindingId });
+      // Emit on the runtime bus rather than touching the store
+      // directly. The runtime fans out to whichever controller owns
+      // the binding's channel, which delivers the platform-side
+      // retirement + "Thread detached" confirmation. This keeps the
+      // IPC layer free of any per-platform knowledge — adding
+      // Slack / Mattermost requires zero changes here.
+      const result = await runtime.requestBindingRevoke({
+        bindingId: request.bindingId,
+        origin: "ui",
+      });
       log.info("messaging binding unbound", {
         bindingId: request.bindingId,
-        revoked: Boolean(revoked),
-        platform: revoked?.channel?.channel ?? null,
-        backend: revoked?.backend ?? null,
-        threadId: revoked?.threadId ?? null,
+        revoked: result.revoked,
+        notifiedPlatform: result.notifiedPlatform,
       });
-      // Same fan-out the controller paths use — the desktop UI
-      // initiated the unbind, so refetch the snapshot now to remove
-      // the chip without waiting for a backend tick.
-      if (revoked) {
-        try {
-          getDesktopMessagingRuntime().notifyBindingsChanged();
-        } catch (error) {
-          log.debug("failed to broadcast bindings-changed after unbind", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-      return { revoked: Boolean(revoked), bindingId: request.bindingId };
+      return { revoked: result.revoked, bindingId: request.bindingId };
     },
   );
 }
