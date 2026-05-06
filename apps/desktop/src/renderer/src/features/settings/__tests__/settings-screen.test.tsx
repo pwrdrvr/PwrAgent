@@ -368,7 +368,11 @@ describe("SettingsScreen", () => {
     expect(current?.textContent).toBe("Messaging");
   });
 
-  it("switches to the messaging-activity section when a platform chip is clicked", async () => {
+  it("fires onOpenMessagingActivity when a title-bar platform chip is clicked", async () => {
+    // Activity is its own top-level mainView, NOT a settings section,
+    // so a chip click in the Settings title-bar strip delegates to
+    // App.tsx via this callback. The App-level handler closes the
+    // Settings overlay and opens the Messaging Activity overlay.
     const desktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => [
         {
@@ -378,24 +382,27 @@ describe("SettingsScreen", () => {
         },
       ]),
     } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+    const onOpenMessagingActivity = vi.fn();
 
     render(
       <SettingsScreen
         desktopApi={desktopApi}
         settings={createSettingsState()}
         onClose={() => undefined}
+        onOpenMessagingActivity={onOpenMessagingActivity}
       />,
     );
 
     const chip = await screen.findByRole("button", { name: /Telegram/i });
     fireEvent.click(chip);
 
-    // Active section flipped to messaging-activity → the breadcrumb
-    // text follows.
     await waitFor(() => {
-      const current = document.querySelector(".settings-titlebar__current");
-      expect(current?.textContent).toBe("Messaging activity");
+      expect(onOpenMessagingActivity).toHaveBeenCalled();
     });
+    // The breadcrumb stays on whatever section was active — chip
+    // clicks no longer mutate the section selection.
+    const current = document.querySelector(".settings-titlebar__current");
+    expect(current?.textContent).not.toBe("Messaging activity");
   });
 
   it("places Exit Settings as the first row of the settings nav (NOT in the title bar)", () => {
