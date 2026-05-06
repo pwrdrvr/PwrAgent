@@ -336,11 +336,24 @@ textarea,
 }
 
 /* ============================================================
-   MESSAGING ACTIVITY OVERLAY — its own top-level mainView (not
-   nested in Settings). See:
-   - apps/desktop/src/renderer/src/features/messaging-activity/MessagingActivityOverlay.tsx
+   MESSAGING ACTIVITY WINDOW — its own dedicated BrowserWindow (NOT a
+   settings section, NOT an in-window overlay). The window opens via
+   `desktopApi.openMessagingActivityWindow()` → main process spawns a
+   new BrowserWindow with `#messaging-activity` hash; main.tsx routes
+   that hash to `<MessagingActivityWindow />`. See:
+   - apps/desktop/src/main/messaging-activity-window.ts
+   - apps/desktop/src/renderer/src/features/messaging-activity/MessagingActivityWindow.tsx
    - docs/design/pwragent-v2/project/PwrAgnt v2.html (screen === "activity")
    ============================================================ */
+
+/* Root container in the dedicated window — fills the OS window. */
+.messaging-activity-window {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-app);
+}
 
 .activity-screen {
   display: flex;
@@ -351,17 +364,20 @@ textarea,
   background: var(--bg-app);
 }
 
-/* Title-bar strip — same visual register as `.settings-titlebar`,
-   shifted to a single-row chrome (no left nav). The strip covers the
-   stoplight gutter; macOS hiddenInset draws the stoplights over the
-   left padding. */
+/* Title-bar strip — single-row chrome with stoplight clearance on
+   the left. Padding mirrors `.settings-nav__masthead` (10/0/0/96)
+   so the brand visually aligns with the macOS traffic-light center
+   on `titleBarStyle: "hiddenInset"` windows. The 96px left clearance
+   matches the effective Settings-nav left offset (16px nav padding +
+   80px masthead padding); stoplights end at ~x=72, brand lands at
+   x=96, giving 24px breathing room. */
 .activity-titlebar {
   display: flex;
   align-items: center;
   gap: 16px;
   flex: 0 0 auto;
   min-height: 44px;
-  padding: 10px 14px 10px 80px;
+  padding: 10px 14px 0 96px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-panel-elevated);
   -webkit-app-region: drag;
@@ -388,8 +404,11 @@ textarea,
 .activity-titlebar__breadcrumb {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
 }
 
 .activity-titlebar__eyebrow {
@@ -1846,8 +1865,7 @@ textarea,
   overflow: hidden;
 }
 
-.app-shell__settings-layer,
-.app-shell__activity-layer {
+.app-shell__settings-layer {
   display: flex;
   position: absolute;
   z-index: 30;

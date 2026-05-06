@@ -120,6 +120,7 @@ import {
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
   MESSAGING_LIST_ACTIVITY_CHANNEL,
+  MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_UNBIND_THREAD_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
@@ -365,6 +366,9 @@ const desktopApi = Object.freeze({
     request?: ListMessagingActivityRequest,
   ): Promise<ListMessagingActivityResponse> =>
     await ipcRenderer.invoke(MESSAGING_LIST_ACTIVITY_CHANNEL, request),
+  openMessagingActivityWindow: async (): Promise<void> => {
+    await ipcRenderer.invoke(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL);
+  },
   onMessagingPlatformStatusEvent: (
     callback: (event: MessagingPlatformStatusEvent) => void,
   ): (() => void) => {

@@ -10,10 +10,12 @@ import type {
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
 import { getDesktopMessagingActivityLog } from "../messaging/desktop-messaging-activity-log";
 import { getMainLogger } from "../log";
+import { showMessagingActivityWindow } from "../messaging-activity-window";
 import {
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
   MESSAGING_LIST_ACTIVITY_CHANNEL,
+  MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_UNBIND_THREAD_CHANNEL,
 } from "../../shared/ipc";
@@ -107,6 +109,11 @@ export function registerMessagingStatusIpcHandlers(): void {
       return { revoked: result.revoked, bindingId: request.bindingId };
     },
   );
+
+  ipcMain.removeHandler(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL);
+  ipcMain.handle(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL, async (): Promise<void> => {
+    showMessagingActivityWindow();
+  });
 }
 
 export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
@@ -117,4 +124,5 @@ export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL);
   ipcMain.removeHandler(MESSAGING_LIST_ACTIVITY_CHANNEL);
   ipcMain.removeHandler(MESSAGING_UNBIND_THREAD_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL);
 }

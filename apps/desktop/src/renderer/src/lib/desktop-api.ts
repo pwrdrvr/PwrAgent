@@ -226,6 +226,8 @@ export type DesktopApi = {
   listMessagingActivity?: (
     request?: ListMessagingActivityRequest,
   ) => Promise<ListMessagingActivityResponse>;
+  /** Spawns or focuses the dedicated Messaging Activity window. */
+  openMessagingActivityWindow?: () => Promise<void>;
   onWindowFocus?: (callback: () => void) => () => void;
   platform?: string;
   versions?: {
