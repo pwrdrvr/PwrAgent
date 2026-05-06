@@ -448,31 +448,6 @@ textarea,
   flex: 1;
 }
 
-.activity-titlebar__close {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 12px;
-  appearance: none;
-  cursor: pointer;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-panel);
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  -webkit-app-region: no-drag;
-}
-
-.activity-titlebar__close:hover,
-.activity-titlebar__close:focus-visible {
-  border-color: var(--accent-border);
-  color: var(--text-primary);
-  outline: none;
-}
-
 /* Content region — fills the remaining vertical space; the inner
    `.messaging-activity` flex column does the pinned/flex/capped
    work. */

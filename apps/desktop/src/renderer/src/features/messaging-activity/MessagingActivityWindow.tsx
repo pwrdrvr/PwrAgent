@@ -29,10 +29,7 @@ export function MessagingActivityWindow() {
 
   return (
     <div className="messaging-activity-window">
-      <MessagingActivityOverlay
-        desktopApi={desktopApi}
-        onClose={() => window.close()}
-      />
+      <MessagingActivityOverlay desktopApi={desktopApi} />
     </div>
   );
 }
