@@ -1,10 +1,10 @@
 # Messaging Platform Integration
 
 PwrAgent can run messaging adapters from the Electron main process so an
-allowlisted Telegram or Discord user can choose a thread, bind the current
-conversation, and send free-form text into that thread. The workflow logic is
-shared; Telegram and Discord only own transport, formatting, callback handles,
-and platform limits.
+allowlisted Telegram, Discord, or Mattermost user can choose a thread, bind
+the current conversation, and send free-form text into that thread. The
+workflow logic is shared; the providers only own transport, formatting,
+callback handles, and platform limits.
 
 ## Commands
 
@@ -334,6 +334,128 @@ Discord:
 Discord currently has parity for the shared workflow and button actions, but it
 does not pin or edit status cards yet; status updates degrade to normal
 messages until those adapter capabilities are added.
+
+## Mattermost Setup
+
+Mattermost is supported as a third provider alongside Telegram and Discord.
+Unlike the other two, Mattermost delivers interactive button clicks
+**out-of-band** via HTTP POST to a callback URL the bot must host. PwrAgent
+binds the callback listener to `127.0.0.1` only; production deployments
+front it with a tunnel (Cloudflare Tunnel or Tailscale Funnel) which
+terminates TLS and forwards to localhost.
+
+### 1. Create a bot account
+
+In Mattermost: System Console → Integrations → Bot Accounts → Add Bot Account.
+
+- Display name: anything (e.g., `PwrAgent`).
+- Permissions: needs to post in target channels, read posts, upload/download
+  files, edit its own posts, and update channel headers if you want
+  conversation-title updates.
+- Copy the access token. Store as `PWRAGENT_MESSAGING_MATTERMOST_BOT_TOKEN`
+  or via the desktop Settings UI when that's wired (issue #195 tracks the
+  per-platform Settings UI).
+
+Add the bot to the channels where you want PwrAgent to be addressable.
+Without explicit channel membership, Mattermost does not deliver `posted`
+events to the bot — outgoing posts will fail with `403`.
+
+### 2. Choose a tunnel for the callback URL
+
+Pick one. Both work; trade-offs differ.
+
+#### Option A — Cloudflare Tunnel + Zero Trust (recommended)
+
+Cloudflare Tunnel runs a `cloudflared` daemon on the PwrAgent host. The
+daemon dials out to Cloudflare's edge; Cloudflare publishes a hostname
+(`https://pwragent.example.com`) that proxies to `127.0.0.1:<port>` on
+your host. No inbound port opening on your network.
+
+Steps:
+
+1. Create a tunnel on `dash.cloudflare.com` → Zero Trust → Networks → Tunnels.
+2. Run `cloudflared tunnel run <tunnel-id>` on the PwrAgent host (typically
+   as a launchd / systemd service).
+3. Configure the public hostname route to forward to
+   `http://localhost:47821` (or whatever port you set
+   `PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_PORT` to).
+
+**Recommended hardening (defense in depth on top of PwrAgent's HMAC):**
+
+- **IP allowlist:** restrict the public hostname to Mattermost's outbound IP
+  range. Self-hosted Mattermost: the operator's egress IPs. Mattermost
+  Cloud: their published egress ranges.
+- **Cloudflare Access policies:** add an Access policy on the route so only
+  requests from the allowlisted IP range reach `cloudflared`.
+- **Custom security header (optional):** configure Mattermost (or a
+  Cloudflare Worker / Page Rule) to add a header like
+  `X-PwrAgent-Mattermost-Tunnel: <secret>` and verify in the listener.
+  Tracked as a follow-up — the in-process HMAC over `(intentId,
+  actionId, issuedAt)` already authenticates the payload.
+
+#### Option B — Tailscale Funnel (free-ish)
+
+Tailscale Funnel publishes a `https://<host>.tail<id>.ts.net` URL that
+forwards to a localhost port on your tailnet device. Free for personal
+use up to a quota.
+
+Steps:
+
+1. Install Tailscale on the PwrAgent host. Sign in.
+2. Enable Funnel for the device:
+   `tailscale funnel 47821` (forwards `https://<host>.tail<id>.ts.net/`
+   to `localhost:47821`).
+3. Set `PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_BASE_URL` to that
+   `https://<host>.tail<id>.ts.net/` URL.
+
+Funnel does not provide a built-in IP allowlist. Rely on PwrAgent's HMAC
+verification (which you'd want anyway) and consider rotating the
+generated HMAC secret if you suspect leakage. Restart the adapter
+regenerates the secret automatically.
+
+#### Option C — `ngrok` (development only)
+
+`ngrok http 47821` for a quick disposable HTTPS URL. Free tier rotates
+the URL each restart. Don't use for production — there's no IP
+allowlist and the URL is publicly enumerable. Useful for the live
+smoke test in development.
+
+### 3. Configure PwrAgent
+
+Set environment variables before launching:
+
+```bash
+PWRAGENT_MESSAGING_MATTERMOST_ENABLED=true
+PWRAGENT_MESSAGING_MATTERMOST_BOT_TOKEN=<bot access token>
+PWRAGENT_MESSAGING_MATTERMOST_SERVER_URL=https://chat.example.com
+PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_BASE_URL=https://pwragent.example.com/messaging/mattermost/callback
+PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_PORT=47821    # optional; default 47821
+PWRAGENT_MESSAGING_MATTERMOST_AUTHORIZED_USER_IDS=<mattermost user id>,<another id>
+```
+
+Authorize on stable Mattermost user IDs (UUIDs visible via Settings →
+Profile → Account Settings → Display → Username, then
+`/api/v4/users/username/<name>` returns the `id`). Mutable usernames
+are not authorization-safe.
+
+`PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_HMAC_SECRET` is optional. By
+default the adapter generates a fresh secret per process start, which
+acts as automatic TTL on outstanding callback URLs. Override only for
+deterministic test runs.
+
+### 4. Validate
+
+1. Send `@<bot> hello` in a channel where the bot is a member. The bot
+   posts a thread-picker.
+2. Tap a thread; verify the channel header / status card updates.
+3. Click any interactive button; verify the action fires (HTTP POST
+   round-trips through the tunnel, HMAC verifies, controller dispatches).
+4. Restart PwrAgent. Verify pre-existing pickers' buttons no longer
+   work (HMAC secret regenerated — outstanding handles fail
+   verification cleanly).
+5. Tear down the tunnel temporarily and click a button; verify the
+   click silently fails (no client-visible error, but the controller
+   never sees the dispatch). Restore the tunnel.
 
 ## Chat SDK Decision
 

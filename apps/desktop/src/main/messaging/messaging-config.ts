@@ -1,4 +1,5 @@
 import type { DiscordMessagingConfig } from "@pwragent/messaging-provider-discord";
+import type { MattermostMessagingConfig } from "@pwragent/messaging-provider-mattermost";
 import type { TelegramMessagingConfig } from "@pwragent/messaging-provider-telegram";
 import type { MessagingToolUpdateMode } from "@pwragent/shared";
 import type { MessagingAttachmentPolicy } from "./core/messaging-attachment-processor";
@@ -10,6 +11,14 @@ import {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  MATTERMOST_AUTHORIZED_USER_IDS_ENV,
+  MATTERMOST_BOT_TOKEN_ENV,
+  MATTERMOST_CALLBACK_BASE_URL_ENV,
+  MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
+  MATTERMOST_CALLBACK_PORT_ENV,
+  MATTERMOST_ENABLED_ENV,
+  MATTERMOST_SERVER_URL_ENV,
+  MATTERMOST_STREAMING_RESPONSES_ENV,
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
@@ -29,6 +38,14 @@ export {
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
   DISCORD_STREAMING_RESPONSES_ENV,
+  MATTERMOST_AUTHORIZED_USER_IDS_ENV,
+  MATTERMOST_BOT_TOKEN_ENV,
+  MATTERMOST_CALLBACK_BASE_URL_ENV,
+  MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
+  MATTERMOST_CALLBACK_PORT_ENV,
+  MATTERMOST_ENABLED_ENV,
+  MATTERMOST_SERVER_URL_ENV,
+  MATTERMOST_STREAMING_RESPONSES_ENV,
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
@@ -43,6 +60,7 @@ export type DesktopMessagingConfig = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   discord?: DiscordMessagingConfig;
   inputDebounceMs?: number;
+  mattermost?: MattermostMessagingConfig;
   telegram?: TelegramMessagingConfig;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
 };
@@ -63,6 +81,17 @@ export function loadDesktopMessagingConfig(
   const telegramAuthorizedActorIds = parseList(env[TELEGRAM_AUTHORIZED_USER_IDS_ENV]);
   const discordBotToken = readEnv(env, DISCORD_BOT_TOKEN_ENV, "DISCORD_BOT_TOKEN");
   const discordAuthorizedActorIds = parseList(env[DISCORD_AUTHORIZED_USER_IDS_ENV]);
+  const mattermostBotToken = readEnv(env, MATTERMOST_BOT_TOKEN_ENV);
+  const mattermostServerUrl = readEnv(env, MATTERMOST_SERVER_URL_ENV);
+  const mattermostCallbackBaseUrl = readEnv(env, MATTERMOST_CALLBACK_BASE_URL_ENV);
+  const mattermostAuthorizedActorIds = parseList(
+    env[MATTERMOST_AUTHORIZED_USER_IDS_ENV],
+  );
+  const mattermostCallbackPort = readEnvInteger(env, MATTERMOST_CALLBACK_PORT_ENV).value;
+  const mattermostCallbackHmacSecret = readEnv(
+    env,
+    MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
+  );
   const attachmentPolicy = readAttachmentPolicyFromEnv(env);
 
   return {
@@ -95,6 +124,31 @@ export function loadDesktopMessagingConfig(
               DISCORD_STREAMING_RESPONSES_ENV,
             ).value ?? false,
             authorizedActorIds: discordAuthorizedActorIds,
+          },
+        }
+      : {}),
+    ...(mattermostBotToken
+      && mattermostServerUrl
+      && mattermostCallbackBaseUrl
+      && mattermostAuthorizedActorIds.length > 0
+      ? {
+          mattermost: {
+            channel: "mattermost" as const,
+            enabled: true,
+            botToken: mattermostBotToken,
+            serverUrl: mattermostServerUrl,
+            callbackBaseUrl: mattermostCallbackBaseUrl,
+            ...(mattermostCallbackPort !== undefined
+              ? { callbackPort: mattermostCallbackPort }
+              : {}),
+            ...(mattermostCallbackHmacSecret
+              ? { callbackHmacSecret: mattermostCallbackHmacSecret }
+              : {}),
+            streamingResponses: readEnvBoolean(
+              env,
+              MATTERMOST_STREAMING_RESPONSES_ENV,
+            ).value ?? false,
+            authorizedActorIds: mattermostAuthorizedActorIds,
           },
         }
       : {}),
@@ -267,6 +321,21 @@ export function redactDesktopMessagingConfig(
           botToken: "[REDACTED]",
           streamingResponses: config.discord.streamingResponses ?? false,
           authorizedActorCount: config.discord.authorizedActorIds.length,
+        }
+      : undefined,
+    mattermost: config.mattermost
+      ? {
+          channel: config.mattermost.channel,
+          enabled: config.mattermost.enabled !== false,
+          serverUrl: config.mattermost.serverUrl,
+          callbackBaseUrl: config.mattermost.callbackBaseUrl,
+          callbackPort: config.mattermost.callbackPort,
+          botToken: "[REDACTED]",
+          callbackHmacSecret: config.mattermost.callbackHmacSecret
+            ? "[REDACTED]"
+            : "[GENERATED]",
+          streamingResponses: config.mattermost.streamingResponses ?? false,
+          authorizedActorCount: config.mattermost.authorizedActorIds.length,
         }
       : undefined,
     attachmentPolicy: config.attachmentPolicy,

@@ -86,18 +86,23 @@ licensed `UNLICENSED`.
 
 ### Messaging Integrations
 
-Telegram and Discord adapters can be enabled from the desktop main process with
-PwrAgent-prefixed environment variables and allowlisted platform user IDs.
+Telegram, Discord, and Mattermost adapters can be enabled from the desktop
+main process with PwrAgent-prefixed environment variables and allowlisted
+platform user IDs.
 
 - [docs/messaging-architecture.md](docs/messaging-architecture.md) —
   layered architecture, data-flow diagrams, the capability-profile system that
-  lets producers adapt content per-platform without channel branching.
+  lets producers adapt content per-platform without channel branching, and
+  the inline-stream vs out-of-band HTTP callback delivery models.
+- [docs/messaging-adding-a-provider.md](docs/messaging-adding-a-provider.md) —
+  hands-on, step-by-step walkthrough for building a new platform adapter
+  (Slack, Signal, Feishu/Lark, Matrix, etc.).
 - [docs/messaging-platform-integration.md](docs/messaging-platform-integration.md)
-  — operator setup, command surface, security notes, smoke validation.
+  — operator setup, command surface, security notes, smoke validation,
+  Cloudflare-Tunnel / Tailscale-Funnel deployment guidance for HTTP-callback
+  providers like Mattermost.
 - [docs/messaging-adapter-contract.md](docs/messaging-adapter-contract.md) —
-  technical contract every platform adapter must satisfy. Required reading
-  before adding Mattermost, Feishu/Lark, Slack, Matrix, Signal, or any other
-  new channel.
+  formal contract every platform adapter must satisfy.
 - [packages/messaging/AGENTS.md](packages/messaging/AGENTS.md) — package
   boundary rules and `pnpm lint:boundaries` enforcement.
 

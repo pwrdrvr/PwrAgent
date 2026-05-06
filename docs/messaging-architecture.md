@@ -32,7 +32,8 @@ graph TB
         direction TB
         Telegram["telegram<br/>uses grammy"]
         Discord["discord<br/>uses discord.js"]
-        Future["future:<br/>mattermost, slack,<br/>signal, feishu, …"]
+        Mattermost["mattermost<br/>uses @mattermost/client<br/>+ HTTP callback listener"]
+        Future["future:<br/>slack, signal,<br/>feishu, matrix, …"]
     end
 
     subgraph Shared["packages/shared"]
@@ -43,6 +44,7 @@ graph TB
     Controller -->|generic intents/events| Interface
     Telegram -->|implements adapter contract| Interface
     Discord -->|implements adapter contract| Interface
+    Mattermost -->|implements adapter contract| Interface
     Future -->|implements adapter contract| Interface
     Interface -->|imports app/nav types| Shared
     DesktopApp -->|imports messaging types| Interface
@@ -138,6 +140,18 @@ Why this shape:
 - Each controller owns one capability profile, so producers can adapt deterministically.
 - A thread bound to both Telegram and Discord renders independently per channel — Discord users see Discord-native buttons, Telegram users see Telegram-native buttons. No cross-channel contamination.
 - Shared state lives only in the sqlite `MessagingStore` (bindings, browse sessions, callback handles). Both controllers read/write the same store but never reach into each other's runtime state.
+
+## Callback delivery models
+
+Different platforms deliver button clicks back to the bot through different transports. The interface is the same on PwrAgent's side (`MessagingInboundEvent.kind = "callback"`), but the adapter has to bridge whatever the platform does:
+
+| Provider | Transport | Listener |
+|---|---|---|
+| Telegram | Long-poll callbacks via `grammy` | The same connection used for `posted`-style events. |
+| Discord | Gateway component-interaction events via `discord.js` | The same gateway connection. |
+| **Mattermost** | **Out-of-band HTTP POST** to a URL the bot supplies as `integration.url` on each rendered button | **A small HTTP listener bound to `127.0.0.1:<port>`** inside the adapter package. Production deployments expose it through Cloudflare Tunnel or Tailscale Funnel; the listener never binds to a public interface. HMAC-signed `integration.context` defends against forged callbacks (the platform doesn't sign them). |
+
+Inline-stream providers don't need a listener — clicks ride back over their existing connection. HTTP-callback providers need an authenticated, tunneled listener; PwrAgent's pattern uses HMAC over `(intentId, actionId, issuedAt)` with a per-process secret that regenerates on adapter restart (acts as automatic TTL for outstanding callback URLs). See [`docs/messaging-platform-integration.md`](messaging-platform-integration.md) for the recommended Cloudflare Tunnel + Zero Trust deployment posture and the Tailscale Funnel free-ish alternative.
 
 ## Capability profile
 
@@ -338,7 +352,7 @@ The help surface and unknown-command fallback automatically pick up the new verb
 
 ## How to add a provider
 
-The full procedure is in [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md). At a high level:
+The full hands-on walkthrough — including a capability-profile workshop, the inbound/outbound translation tables, the callback-handle round-trip pattern, and the Cloudflare-Tunnel deployment guidance for HTTP-callback platforms — is in [`docs/messaging-adding-a-provider.md`](messaging-adding-a-provider.md). The formal contract every adapter must satisfy is in [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md). At a high level:
 
 1. Create `packages/messaging/providers/<channel>/` with its own `package.json` and `tsconfig.json`. Depends only on `@pwragent/messaging-interface` and the channel's own SDK.
 2. Implement the adapter shape: `start(listener)`, `stop()`, `deliver(intent)`, `downloadAttachment?`, `setConversationTitle?`.
@@ -359,6 +373,7 @@ The full procedure is in [`docs/messaging-adapter-contract.md`](messaging-adapte
 | `packages/messaging/providers/<channel>/src/<channel>-adapter.ts` | The adapter class, capability profile declaration, inbound event translation, outbound intent rendering |
 | `packages/messaging/providers/<channel>/src/<channel>-formatting.ts` | Pure formatters that turn intents into platform-native components/text. Reads the profile for layout caps. |
 | `packages/messaging/providers/<channel>/src/validate-credentials.ts` | Top-level `validateCredentials(config)` exported from the package barrel. Stateless smoke check using the platform's real SDK (`grammy.Bot.api.getMe()`, `discord.js.REST.get(Routes.user("@me"))`, …). Driven by Settings → Connection-test via `DesktopMessagingRuntime.requestCredentialValidation`. Contract: [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md) § "Credential Validation". |
+| `packages/messaging/providers/mattermost/src/mattermost-callback-server.ts` | (HTTP-callback providers only) Localhost-bound HTTP listener with HMAC verification — bridges out-of-band button clicks back into the controller. |
 | `apps/desktop/src/main/messaging/messaging-runtime.ts` | Constructs one controller per adapter, wires backend events |
 | `apps/desktop/src/main/messaging/core/messaging-controller.ts` | Workflow logic — turn admission, picker state, status card, handoff flow, audit |
 | `apps/desktop/src/main/messaging/core/messaging-command-catalog.ts` | Canonical command catalog (verb + description), `matchMessagingCommandVerb` for dispatch lookup, `formatMessagingCommandHelpBody` for `/help` body generation, `paginateHelpCatalog` + `buildHelpActions` for the paginated command-button row |
@@ -372,8 +387,10 @@ The full procedure is in [`docs/messaging-adapter-contract.md`](messaging-adapte
 
 ## Cross-references
 
-- [`docs/messaging-platform-integration.md`](messaging-platform-integration.md) — operator setup, command surface, button layout policy
-- [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md) — the technical contract for new platform adapters
+- [`docs/messaging-adding-a-provider.md`](messaging-adding-a-provider.md) — hands-on walkthrough for adding a new platform adapter
+- [`docs/messaging-platform-integration.md`](messaging-platform-integration.md) — operator setup, command surface, button layout policy, Cloudflare-Tunnel / Tailscale-Funnel deployment for HTTP-callback providers
+- [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md) — the formal contract for new platform adapters
 - [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md) — package boundary rules and enforcement
 - [`docs/plans/2026-05-04-002-feat-messaging-capability-discovery-plan.md`](plans/2026-05-04-002-feat-messaging-capability-discovery-plan.md) — the design plan that introduced the capability profile system
 - [`docs/plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md`](plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md) — planned consumer of `outboundAttachments` for plan/review surface delivery
+- [`docs/plans/2026-05-06-001-feat-messaging-mattermost-adapter-and-provider-guide-plan.md`](plans/2026-05-06-001-feat-messaging-mattermost-adapter-and-provider-guide-plan.md) — the Mattermost adapter implementation plan
