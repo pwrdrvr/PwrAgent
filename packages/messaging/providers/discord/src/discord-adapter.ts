@@ -848,6 +848,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const result = await reconcileDiscordApplicationCommands({
       api: this.api,
       applicationId,
+      log: (message, extra) => this.options.logger?.debug(message, extra),
     });
 
     this.options.logger?.debug("discord slash commands reconciled", result);

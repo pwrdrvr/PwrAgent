@@ -92,6 +92,7 @@ export async function reconcileDiscordApplicationCommands(params: {
   api: DiscordApplicationCommandApi;
   applicationId: string;
   commands?: DiscordApplicationCommandBody[];
+  log?: (message: string, extra?: Record<string, unknown>) => void;
 }): Promise<{
   created: number;
   deleted: number;
@@ -99,6 +100,7 @@ export async function reconcileDiscordApplicationCommands(params: {
   liveCount: number;
   updated: number;
 }> {
+  const log = params.log ?? (() => {});
   const desiredBodies = params.commands ?? DISCORD_APPLICATION_COMMANDS;
   const liveCommands = await params.api.listApplicationCommands(params.applicationId);
   const liveByKey = new Map(
@@ -119,6 +121,7 @@ export async function reconcileDiscordApplicationCommands(params: {
       continue;
     }
 
+    log("deleting stale command", { key, id: live.id });
     await params.api.deleteApplicationCommand(params.applicationId, live.id);
     liveByKey.delete(key);
     deleted += 1;
@@ -132,6 +135,15 @@ export async function reconcileDiscordApplicationCommands(params: {
     if (commandsEqual(existing, desired.body)) {
       continue;
     }
+
+    const normalizedLive = normalizeLiveCommand(existing);
+    const normalizedDesired = normalizeCommand(desired.body);
+    log("command drift detected — updating", {
+      key: desired.key,
+      live: normalizedLive,
+      desired: normalizedDesired,
+      rawLiveKeys: Object.keys(existing).sort(),
+    });
 
     const patched = await params.api.updateApplicationCommand(
       params.applicationId,
@@ -178,6 +190,7 @@ function commandsEqual(
 function normalizeLiveCommand(command: DiscordApplicationCommand): unknown {
   const responseOnlyFields = new Set([
     "application_id",
+    "default_member_permissions",
     "description_localized",
     "dm_permission",
     "guild_id",
