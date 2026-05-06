@@ -462,6 +462,13 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       this.startPromise = this.bot.start?.({
         allowed_updates: [...TELEGRAM_ALLOWED_UPDATES],
       });
+      // Eagerly handle rejection so it doesn't become unhandled if the
+      // process exits before stop() can await startPromise.
+      this.startPromise?.catch((error) => {
+        this.options.logger?.warn?.("telegram polling loop exited with error", {
+          error: errorMessage(error),
+        });
+      });
     }
   }
 
