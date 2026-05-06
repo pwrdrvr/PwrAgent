@@ -24,6 +24,21 @@ const GH_FIELDS = [
 const DEFAULT_TIMEOUT_MS = 5_000;
 /** Re-probe `gh --version` no more than this often. */
 const GH_AVAILABLE_CACHE_TTL_MS = 60_000;
+/**
+ * Re-probe `gh auth status` no more than this often. The auth-status
+ * call spawns a subprocess and parses its output; the Applications
+ * settings panel mounts every time the user opens that section (and
+ * twice in development under React StrictMode). Without this cache
+ * each panel open ran `gh auth status` twice. The cached value is
+ * still considered fresh enough that switching between panels shows
+ * an instant pill instead of a "Checking…" flash.
+ *
+ * Five minutes matches the ballpark of how often gh's session token
+ * could change in practice (login, scope grant, sign-out). Users who
+ * just changed their gh login can click "Re-check" — that bypasses
+ * the cache via `invalidateGhCaches()`.
+ */
+const GH_AUTH_STATUS_CACHE_TTL_MS = 5 * 60_000;
 
 /** Subset of fields returned by `gh pr list --json …` that we actually read. */
 type GhPrPayload = {
@@ -74,6 +89,9 @@ export class GithubPrFetcher {
     GithubPrFetcherOptions["runGhAuthStatus"]
   >;
   private ghAvailableCache: { value: boolean; fetchedAt: number } | undefined;
+  private authStatusCache:
+    | { value: GhAuthStatus; fetchedAt: number }
+    | undefined;
 
   constructor(options: GithubPrFetcherOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -184,27 +202,55 @@ export class GithubPrFetcher {
 
   /**
    * Probe `gh auth status` and return parsed installed / logged-in /
-   * scopes info for the Applications settings panel. Always runs fresh
-   * — used by a "Re-check" button.
+   * scopes info for the Applications settings panel. Result is cached
+   * for `GH_AUTH_STATUS_CACHE_TTL_MS` so reopening the Applications
+   * pane (or React StrictMode's intentional double-mount in dev) does
+   * not re-spawn the subprocess. Use `invalidateGhCaches()` (which
+   * the Re-check button drives via `recheck: true`) to force a
+   * fresh probe.
+   *
+   * Returns `{ cached }` so callers can decide whether to log — the
+   * value is otherwise identical regardless of cache state.
    */
-  async getAuthStatus(): Promise<GhAuthStatus> {
+  async getAuthStatus(): Promise<GhAuthStatus & { cached: boolean }> {
+    if (
+      this.authStatusCache
+      && Date.now() - this.authStatusCache.fetchedAt < GH_AUTH_STATUS_CACHE_TTL_MS
+    ) {
+      return { ...this.authStatusCache.value, cached: true };
+    }
+
+    let value: GhAuthStatus;
     if (!(await this.isGhAvailable())) {
-      return {
+      value = {
         installed: false,
         loggedIn: false,
         scopes: [],
         hasRepoScope: false,
         reason: "gh CLI is not installed",
       };
+    } else {
+      const result = await this.runGhAuthStatus();
+      value = parseGhAuthStatus(result);
     }
 
-    const result = await this.runGhAuthStatus();
-    return parseGhAuthStatus(result);
+    this.authStatusCache = { value, fetchedAt: Date.now() };
+    return { ...value, cached: false };
   }
 
   /** Force the next `isGhAvailable` call to re-probe — used by Re-check. */
   invalidateGhAvailable(): void {
     this.ghAvailableCache = undefined;
+  }
+
+  /**
+   * Clear both the gh-availability cache AND the parsed-auth-status
+   * cache. The IPC handler for `getGhStatus({ recheck: true })`
+   * routes here so the Re-check button starts from a clean slate.
+   */
+  invalidateGhCaches(): void {
+    this.ghAvailableCache = undefined;
+    this.authStatusCache = undefined;
   }
 }
 

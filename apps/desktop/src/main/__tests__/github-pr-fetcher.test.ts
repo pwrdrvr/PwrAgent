@@ -404,4 +404,72 @@ describe("GithubPrFetcher", () => {
       expect(probeGhAvailable).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe("getAuthStatus / invalidateGhCaches", () => {
+    function buildAuthFetcher() {
+      const probeGhAvailable = vi.fn(async () => true);
+      const runGhAuthStatus = vi.fn(async () => ({
+        stdout:
+          "github.com\n  ✓ Logged in to github.com account huntharo\n  - Token scopes: 'gist', 'repo', 'workflow'\n",
+        stderr: "",
+        ok: true,
+      }));
+      const fetcher = new GithubPrFetcher({
+        probeGhAvailable,
+        runGhAuthStatus,
+      });
+      return { fetcher, probeGhAvailable, runGhAuthStatus };
+    }
+
+    it("caches the auth status across repeat calls — second call is marked cached", async () => {
+      // The Applications settings panel mounts twice in dev under
+      // React StrictMode. The first call probes; the second must
+      // return the cached value WITHOUT spawning `gh auth status`
+      // again.
+      const { fetcher, runGhAuthStatus } = buildAuthFetcher();
+      const first = await fetcher.getAuthStatus();
+      const second = await fetcher.getAuthStatus();
+      expect(runGhAuthStatus).toHaveBeenCalledTimes(1);
+      expect(first.cached).toBe(false);
+      expect(second.cached).toBe(true);
+      // Cached value carries the same parsed shape.
+      expect(second.installed).toBe(first.installed);
+      expect(second.loggedIn).toBe(first.loggedIn);
+      expect(second.scopes).toEqual(first.scopes);
+    });
+
+    it("re-runs after invalidateGhCaches() — drives the Re-check button", async () => {
+      const { fetcher, probeGhAvailable, runGhAuthStatus } = buildAuthFetcher();
+      await fetcher.getAuthStatus();
+      fetcher.invalidateGhCaches();
+      const refreshed = await fetcher.getAuthStatus();
+      expect(runGhAuthStatus).toHaveBeenCalledTimes(2);
+      // invalidateGhCaches must clear the gh-availability cache too,
+      // otherwise the `gh --version` probe stays stale across a
+      // Re-check.
+      expect(probeGhAvailable).toHaveBeenCalledTimes(2);
+      expect(refreshed.cached).toBe(false);
+    });
+
+    it("caches the negative result when gh is not installed", async () => {
+      const probeGhAvailable = vi.fn(async () => false);
+      const runGhAuthStatus = vi.fn(async () => ({
+        stdout: "",
+        stderr: "",
+        ok: false,
+      }));
+      const fetcher = new GithubPrFetcher({
+        probeGhAvailable,
+        runGhAuthStatus,
+      });
+      const first = await fetcher.getAuthStatus();
+      const second = await fetcher.getAuthStatus();
+      expect(first.installed).toBe(false);
+      expect(first.cached).toBe(false);
+      expect(second.cached).toBe(true);
+      // Never spawned `gh auth status` when gh wasn't installed —
+      // and the negative result is cached too.
+      expect(runGhAuthStatus).not.toHaveBeenCalled();
+    });
+  });
 });
