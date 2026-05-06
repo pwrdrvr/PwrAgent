@@ -25,6 +25,7 @@ import type {
   MessagingConversationKind,
   MessagingDeliveryResult,
   MessagingInboundEvent,
+  MessagingJsonValue,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
@@ -110,11 +111,30 @@ type MattermostInboundListener = (event: MessagingInboundEvent) => Promise<void>
 /**
  * Internal post-state we persist in `MessagingAdapterState.opaque` so the
  * controller can echo it back on update / dismiss / pin operations.
+ *
+ * Two shapes share this slot:
+ *
+ * 1. **Post-tracking** (after delivery): `postId`, `channelId`, and
+ *    optionally `rootId` are populated from the server's response. Used
+ *    by `resolveTarget` to drive `patchPost` / `pinPost` lookups for
+ *    follow-up updates to the same surface.
+ *
+ * 2. **Slash-command response_url hint** (before first delivery): the
+ *    slash-command path stashes `responseUrl` here so `deliverPostIntent`
+ *    can route the FIRST outbound delivery via Mattermost's
+ *    `response_url` integration endpoint instead of `Client4.createPost`.
+ *    This is the workaround for Mattermost's missing `root_id` field on
+ *    custom slash-command webhook bodies (v10.11 and earlier — fixed on
+ *    `master`). See `docs/messaging-platform-integration.md` for details.
+ *    Mattermost preserves thread context server-side when posting via
+ *    response_url, so the picker renders in-thread without us ever
+ *    knowing the root_id directly.
  */
 type MattermostSurfaceOpaqueState = {
-  postId: string;
-  channelId: string;
+  postId?: string;
+  channelId?: string;
   rootId?: string;
+  responseUrl?: string;
 };
 
 export class MattermostAdapter implements MattermostProviderAdapter {
@@ -897,11 +917,31 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     const rawText = body.text.length > 0
       ? `${cmdToken} ${body.text}`
       : cmdToken;
+
+    // Stash `response_url` on the inbound event's `routingState` so the
+    // controller propagates it onto the FIRST outbound intent's
+    // `targetSurface.state.opaque`. `deliverPostIntent` consumes it
+    // there and routes the delivery via Mattermost's response_url
+    // endpoint instead of `Client4.createPost` — which lets Mattermost
+    // post the response with `RootId = args.RootId` server-side,
+    // preserving thread context that v10.11 doesn't propagate to
+    // outgoing webhook bodies. See `deliverPostIntent` for the
+    // consumer side and `docs/messaging-platform-integration.md` for
+    // the upstream context.
+    const routingState: MessagingAdapterState | undefined = body.response_url
+      ? {
+          opaque: {
+            responseUrl: body.response_url,
+          } satisfies MattermostSurfaceOpaqueState as MessagingJsonValue,
+        }
+      : undefined;
+
     await this.dispatchCommandEvent({
       actor,
       channel: channelRef,
       eventId: this.newEventId("slashcmd"),
       rawText,
+      ...(routingState ? { routingState } : {}),
     });
     return undefined;
   }
@@ -911,6 +951,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     channel: MessagingChannelRef;
     eventId: string;
     rawText: string;
+    routingState?: MessagingAdapterState;
   }): Promise<void> {
     if (!this.listener) {
       return;
@@ -927,6 +968,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       command,
       args: rest,
       rawText: params.rawText,
+      ...(params.routingState ? { routingState: params.routingState } : {}),
     });
   }
 
@@ -1107,6 +1149,51 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       };
     }
 
+    // response_url path — first delivery in response to a slash
+    // command. Mattermost's webhook body for v10.11 doesn't include
+    // `root_id`, but it DOES include `response_url`, and posts
+    // created via response_url inherit the server-side `args.RootId`
+    // (which Mattermost has but didn't propagate to us). Posting via
+    // response_url is the only way to make `/pwragent_resume` from a
+    // thread land its picker in the same thread on v10.11.
+    if (target.responseUrl) {
+      this.logger.info("mattermost response_url outbound", {
+        intentId: intent.id,
+        intentKind: intent.kind,
+        channelId: target.channelId,
+        hasButtons: post.props !== undefined,
+        messagePreview: post.message.slice(0, 60),
+      });
+      const recovered = await this.deliverViaResponseUrl({
+        channelId: target.channelId,
+        message: post.message,
+        attachment,
+        responseUrl: target.responseUrl,
+      });
+      if (!recovered) {
+        // response_url POST or post_id recovery failed — fall through
+        // to createPost so the picker still renders, just in the
+        // parent channel (the v10.11 channel-scoped behavior). User
+        // sees something rather than nothing.
+        this.logger.warn("mattermost response_url delivery failed; falling back to createPost", {
+          intentId: intent.id,
+          intentKind: intent.kind,
+        });
+      } else {
+        const surface: MessagingSurfaceRef = surfaceRefForPost(
+          recovered.postId,
+          recovered.channelId,
+          recovered.rootId,
+        );
+        return {
+          channel: this.channel,
+          deliveredAt: this.now(),
+          outcome: "presented",
+          surface,
+        };
+      }
+    }
+
     // Diagnostic for thread-routing bugs (paired with the
     // `mattermost slash command received` log on the inbound side).
     // If `rootId` is `(none)` here for a picker that should have
@@ -1155,6 +1242,93 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       outcome,
       surface,
     };
+  }
+
+  /**
+   * POST a slash-command delayed response to Mattermost's response_url
+   * endpoint, then look up the resulting post to recover its `postId`
+   * and (server-set) `root_id`.
+   *
+   * Why this exists: Mattermost v10.11's outgoing webhook body for
+   * custom slash commands omits `root_id`, so we can't tell whether
+   * the user invoked the command from a channel or a thread reply.
+   * Mattermost's server-side `args.RootId` IS available — they use it
+   * when posting integration responses via response_url. Routing
+   * through response_url lets Mattermost handle thread context for
+   * us; we just need to recover the post_id afterward so the
+   * surface ref returned to the controller targets the right post
+   * for follow-up updates.
+   *
+   * Failure modes are bubbled up via `undefined` return so the caller
+   * can fall back to `createPost`. The picker will land in the
+   * parent channel rather than the thread (the pre-fix behavior),
+   * which is degraded but functional.
+   */
+  private async deliverViaResponseUrl(params: {
+    channelId: string;
+    message: string;
+    attachment: MattermostMessageAttachment | undefined;
+    responseUrl: string;
+  }): Promise<{ postId: string; channelId: string; rootId?: string } | undefined> {
+    const payload: Record<string, unknown> = {
+      // `in_channel` makes the response visible to everyone (vs.
+      // `ephemeral` = invoker only). Pickers and status surfaces
+      // are channel-scoped by design — same as createPost behavior.
+      response_type: "in_channel",
+      text: params.message,
+      ...(params.attachment ? { attachments: [params.attachment] } : {}),
+    };
+    const before = this.now();
+    try {
+      const res = await fetch(params.responseUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        this.logger.warn("mattermost response_url POST returned non-2xx", {
+          status: res.status,
+        });
+        return undefined;
+      }
+    } catch (error) {
+      this.logger.warn("mattermost response_url POST threw", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+
+    // Recover the post we just created. response_url POSTs don't
+    // echo the resulting post object, so we query for posts in the
+    // channel since slightly before our request and pick the most
+    // recent one authored by our bot.
+    try {
+      const since = before - 2_000; // 2s of slop for clock skew + mid-flight latency
+      const list = (await this.client.getPostsSince(
+        params.channelId,
+        since,
+      )) as { posts?: Record<string, { id: string; user_id: string; root_id?: string; create_at: number }> };
+      const ours = Object.values(list.posts ?? {})
+        .filter((p) => p.user_id === this.botUserId)
+        .sort((a, b) => b.create_at - a.create_at)[0];
+      if (!ours) {
+        this.logger.warn("mattermost response_url getPostsSince found no matching post", {
+          channelId: params.channelId,
+          since,
+        });
+        return undefined;
+      }
+      return {
+        postId: ours.id,
+        channelId: params.channelId,
+        rootId: ours.root_id && ours.root_id.length > 0 ? ours.root_id : undefined,
+      };
+    } catch (error) {
+      this.logger.warn("mattermost response_url getPostsSince failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   private async deliverActivity(
@@ -1296,16 +1470,29 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         channelRef: MessagingChannelRef;
         existingPostId?: string;
         canUpdate: boolean;
+        /**
+         * Set when the FIRST delivery in response to a slash command
+         * should be routed via Mattermost's response_url endpoint.
+         * Mattermost preserves thread context server-side (sets
+         * `RootId` from `args.RootId`) when posting via this URL —
+         * required because v10.11 doesn't include `root_id` in
+         * outgoing slash-command webhook bodies.
+         */
+        responseUrl?: string;
       }
   > {
-    // Two sources of truth, mirroring Telegram/Discord:
-    // 1. `intent.audit?.channel` — populated by the controller for fresh
-    //    intents replying to an inbound message; this is the primary
-    //    routing signal.
-    // 2. `intent.targetSurface.state.opaque` — populated when we
-    //    previously delivered a post and want to update or thread off of
-    //    it. Tracks Mattermost channel/post/root IDs across restarts via
-    //    `MessagingAdapterState.opaque`.
+    // Three sources of truth, in priority order:
+    // 1. `intent.targetSurface.state.opaque.responseUrl` — slash-command
+    //    response_url stash (one-shot, only set on the first delivery
+    //    in response to a slash command). When present, route via
+    //    response_url so Mattermost preserves thread context.
+    // 2. `intent.targetSurface.state.opaque.channelId/postId` —
+    //    populated when we previously delivered a post and want to
+    //    update / thread off of it. Tracks Mattermost channel/post/
+    //    root IDs across restarts via `MessagingAdapterState.opaque`.
+    // 3. `intent.audit?.channel` — populated by the controller for
+    //    fresh intents replying to an inbound message; primary
+    //    routing signal for everything not covered by (1) or (2).
     const targetSurface = (intent as { targetSurface?: MessagingSurfaceRef })
       .targetSurface;
     const targetOpaque = targetSurface?.state?.opaque as
@@ -1319,6 +1506,24 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       ?? this.authorizedActorIds[0]
       ?? "";
 
+    // (1) response_url path: stash from slash command, fresh delivery.
+    // The audit channel must also be present (controller always sets
+    // it for command-initiated intents); we use it for channelId.
+    if (targetOpaque?.responseUrl && channelRefFromAudit) {
+      const conv = channelRefFromAudit.conversation;
+      return {
+        channelId: conv.id,
+        // root_id will be discovered server-side; we don't have it
+        // until after the response_url POST + getPostsSince lookup.
+        rootId: undefined,
+        actorId,
+        channelRef: channelRefFromAudit,
+        canUpdate: false,
+        responseUrl: targetOpaque.responseUrl,
+      };
+    }
+
+    // (2) post-tracking path: existing surface, follow-up update.
     if (targetOpaque?.channelId) {
       const canUpdate =
         ((intent as { delivery?: { mode?: string } }).delivery?.mode === "update");
@@ -1338,9 +1543,11 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         canUpdate,
       };
     }
+
     if (!channelRefFromAudit) {
       return undefined;
     }
+    // (3) audit channel path: fresh intent on a known channel.
     // Encoding from `channelRefForPost`:
     //   conversation.id        = Mattermost channel_id (always)
     //   conversation.parentId  = root post id (thread replies only)

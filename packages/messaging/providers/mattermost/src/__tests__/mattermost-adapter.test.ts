@@ -65,6 +65,12 @@ type PatchedPost = {
 function fakeClient4(spies: {
   createdPosts: CreatedPost[];
   patchedPosts: PatchedPost[];
+  postsSinceResults?: Array<{
+    id: string;
+    user_id: string;
+    root_id?: string;
+    create_at: number;
+  }>;
 }): Client4 {
   return {
     setUrl: () => {},
@@ -80,6 +86,24 @@ function fakeClient4(spies: {
       return { id: post.id };
     },
     pinPost: async () => undefined,
+    getPostsSince: async () => ({
+      posts: Object.fromEntries(
+        (spies.postsSinceResults ?? []).map((p) => [p.id, p]),
+      ),
+      order: (spies.postsSinceResults ?? []).map((p) => p.id),
+    }),
+    // Stubs sufficient for `adapter.start()` to complete without
+    // throwing — slash-command reconciliation runs against an empty
+    // team list, the WS init is no-op'd by the websocket fake.
+    getMyTeams: async () => [],
+    getCustomTeamCommands: async () => [],
+    addCommand: async (cmd: { trigger: string }) => ({
+      id: `cmd-${cmd.trigger}`,
+      token: `token-${cmd.trigger}`,
+      ...cmd,
+    }),
+    editCommand: async (cmd: { id: string }) => cmd,
+    deleteCommand: async () => ({ status: "OK" }),
   } as unknown as Client4;
 }
 
@@ -372,6 +396,153 @@ describe("MattermostAdapter — conversation kind round-trip", () => {
     expect(persisted[0].channel.conversation.kind).toBe("dm");
     expect(persisted[0].channel.conversation.id).toBe("dm-id");
     expect(persisted[0].actionId).toBe("action-resume");
+  });
+});
+
+/**
+ * Regression coverage for the slash-command response_url path.
+ * Mattermost v10.11 doesn't propagate `root_id` to outgoing webhook
+ * bodies, so we route the first delivery in response to a slash
+ * command via Mattermost's `response_url` endpoint instead — the
+ * server posts our payload with `RootId = args.RootId` set
+ * server-side, preserving thread context.
+ */
+describe("MattermostAdapter — slash command response_url", () => {
+  it("posts to response_url and recovers post_id + root_id from getPostsSince", async () => {
+    const fetchCalls: Array<{ url: string; body: unknown }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      fetchCalls.push({
+        url: String(url),
+        body: init?.body ? JSON.parse(init.body) : undefined,
+      });
+      return { ok: true, status: 200 } as Response;
+    }) as typeof fetch;
+
+    try {
+      const spies = {
+        createdPosts: [] as CreatedPost[],
+        patchedPosts: [] as PatchedPost[],
+        // Simulate Mattermost having posted our payload server-side
+        // to a thread reply: the resulting post has root_id set.
+        postsSinceResults: [
+          {
+            id: "picker-post-1",
+            user_id: "bot-user-id",
+            root_id: "thread-root-1",
+            create_at: 1_700_000_000_500,
+          },
+        ],
+      };
+      const adapter = new MattermostAdapter({
+        callbackHandleStore: fakeStore,
+        client: fakeClient4(spies),
+        config: baseConfig,
+        logger: silentLogger,
+        websocketClient: fakeWebSocketClient(),
+        callbackServer: { start: async () => {}, stop: async () => {}, signContext: () => ({ hmac: "x", issuedAt: 0 }) } as never,
+        now: () => 1_700_000_000_000,
+      });
+      // start() populates botUserId via getMe() — required because
+      // the response_url post-recovery filters by bot user id.
+      await adapter.start(async () => {});
+      // Simulate the controller delivering an intent whose
+      // targetSurface carries the response_url stash from the slash
+      // command. handleSlashCommand → routingState → controller →
+      // intent.targetSurface.state.opaque.responseUrl.
+      const intent: MessagingSurfaceIntent = {
+        id: "intent-picker-1",
+        kind: "thread_picker",
+        createdAt: 1_700_000_000_000,
+        capabilityProfile: { text: { maxLength: 16_383, encoding: "characters" } },
+        prompt: "Choose a thread",
+        page: { actions: [], items: [], pageIndex: 0, pageSize: 10, totalItems: 0 },
+        audit: {
+          channel: { channel: "mattermost", conversation: { id: "channel-1", kind: "channel" } },
+          actor: { platformUserId: "user-1" },
+        },
+        targetSurface: {
+          channel: "mattermost",
+          id: "slashcmd-event-1",
+          state: {
+            opaque: {
+              responseUrl: "https://mattermost.example.com/hooks/commands/abc123",
+            },
+          },
+        },
+      } as unknown as MessagingSurfaceIntent;
+
+      const result = await adapter.deliver(intent);
+
+      expect(result.outcome).toBe("presented");
+      expect(spies.createdPosts).toHaveLength(0); // did NOT use createPost
+      expect(fetchCalls).toHaveLength(1);
+      expect(fetchCalls[0].url).toBe(
+        "https://mattermost.example.com/hooks/commands/abc123",
+      );
+      expect(fetchCalls[0].body).toMatchObject({
+        response_type: "in_channel",
+      });
+      // Surface ref should reflect the recovered post_id + root_id
+      // so subsequent updates target the right post in the thread.
+      const opaque = (result.surface?.state?.opaque ?? {}) as Record<string, unknown>;
+      expect(opaque.postId).toBe("picker-post-1");
+      expect(opaque.rootId).toBe("thread-root-1");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("falls back to createPost when response_url POST returns non-2xx", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      ({ ok: false, status: 410 } as Response)) as typeof fetch;
+
+    try {
+      const spies = {
+        createdPosts: [] as CreatedPost[],
+        patchedPosts: [] as PatchedPost[],
+      };
+      const adapter = new MattermostAdapter({
+        callbackHandleStore: fakeStore,
+        client: fakeClient4(spies),
+        config: baseConfig,
+        logger: silentLogger,
+        websocketClient: fakeWebSocketClient(),
+        callbackServer: { start: async () => {}, stop: async () => {}, signContext: () => ({ hmac: "x", issuedAt: 0 }) } as never,
+        now: () => 1_700_000_000_000,
+      });
+      await adapter.start(async () => {});
+      const intent: MessagingSurfaceIntent = {
+        id: "intent-fallback-1",
+        kind: "thread_picker",
+        createdAt: 1_700_000_000_000,
+        capabilityProfile: { text: { maxLength: 16_383, encoding: "characters" } },
+        prompt: "Choose a thread",
+        page: { actions: [], items: [], pageIndex: 0, pageSize: 10, totalItems: 0 },
+        audit: {
+          channel: { channel: "mattermost", conversation: { id: "channel-1", kind: "channel" } },
+          actor: { platformUserId: "user-1" },
+        },
+        targetSurface: {
+          channel: "mattermost",
+          id: "slashcmd-event-2",
+          state: {
+            opaque: {
+              responseUrl: "https://mattermost.example.com/hooks/commands/expired",
+            },
+          },
+        },
+      } as unknown as MessagingSurfaceIntent;
+
+      const result = await adapter.deliver(intent);
+
+      expect(result.outcome).toBe("presented");
+      expect(spies.createdPosts).toHaveLength(1); // fallback fired
+      expect(spies.createdPosts[0].channel_id).toBe("channel-1");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 
