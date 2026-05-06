@@ -122,6 +122,52 @@ function retainedBranchDriftPairsEqual(
   });
 }
 
+function messagingBindingsEqual(
+  left: NavigationThreadSummary["messagingBindings"],
+  right: NavigationThreadSummary["messagingBindings"]
+): boolean {
+  const leftBindings = left ?? [];
+  const rightBindings = right ?? [];
+  if (leftBindings.length !== rightBindings.length) {
+    return false;
+  }
+
+  return leftBindings.every((binding, index) => {
+    const candidate = rightBindings[index];
+    return (
+      candidate?.bindingId === binding.bindingId &&
+      candidate.platform === binding.platform &&
+      candidate.conversationKind === binding.conversationKind &&
+      candidate.conversationTitle === binding.conversationTitle &&
+      candidate.parentTitle === binding.parentTitle &&
+      candidate.ancestorTitle === binding.ancestorTitle &&
+      candidate.activeAt === binding.activeAt
+    );
+  });
+}
+
+function prSummariesEqual(
+  left: NavigationThreadSummary["prs"],
+  right: NavigationThreadSummary["prs"]
+): boolean {
+  const leftPrs = left ?? [];
+  const rightPrs = right ?? [];
+  if (leftPrs.length !== rightPrs.length) {
+    return false;
+  }
+
+  return leftPrs.every((pr, index) => {
+    const candidate = rightPrs[index];
+    return (
+      candidate?.number === pr.number &&
+      candidate.org === pr.org &&
+      candidate.repo === pr.repo &&
+      candidate.state === pr.state &&
+      candidate.url === pr.url
+    );
+  });
+}
+
 function threadSummariesEqual(
   left: NavigationThreadSummary,
   right: NavigationThreadSummary
@@ -148,7 +194,15 @@ function threadSummariesEqual(
     ) &&
     linkedDirectoriesEqual(left.linkedDirectories, right.linkedDirectories) &&
     worktreeSnapshotsEqual(left.worktreeSnapshots, right.worktreeSnapshots) &&
-    threadInboxEqual(left.inbox, right.inbox)
+    threadInboxEqual(left.inbox, right.inbox) &&
+    // Bindings and PRs mutate independently of `updatedAt`: the messaging
+    // store revokes a binding row without touching the thread row, and
+    // GitHub PR detection runs on its own cadence. Without these checks
+    // the reconciler reuses the previous thread reference whenever
+    // nothing else changed and chips on the row stay stale until
+    // something else triggers a re-render.
+    messagingBindingsEqual(left.messagingBindings, right.messagingBindings) &&
+    prSummariesEqual(left.prs, right.prs)
   );
 }
 
