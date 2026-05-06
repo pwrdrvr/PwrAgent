@@ -194,6 +194,23 @@ describe("Tangerine Terminal theme contract", () => {
     }
   });
 
+  it("`SettingsSection` and `SettingsPathRow` chips share the same tone CSS modifiers", () => {
+    // Both primitives now consume the shared `SettingsChipTone` enum
+    // (default | muted | ok | err | warn). Lock the CSS rules so a
+    // future PR that adds a new tone to one primitive can't silently
+    // skip the other.
+    for (const tone of ["ok", "err", "warn"] as const) {
+      expect(
+        css,
+        `.settings-card__chip--${tone} should be defined`,
+      ).toMatch(new RegExp(`\\.settings-card__chip--${tone}\\s*\\{`));
+      expect(
+        css,
+        `.settings-pathrow__chip--${tone} should be defined`,
+      ).toMatch(new RegExp(`\\.settings-pathrow__chip--${tone}\\s*\\{`));
+    }
+  });
+
   it("keeps Activity and Settings titlebar breadcrumbs visually identical", () => {
     // The Activity window's titlebar mirrors the Settings overlay's
     // right-pane titlebar — same eyebrow color, same separator

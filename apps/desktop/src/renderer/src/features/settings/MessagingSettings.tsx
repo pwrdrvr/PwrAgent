@@ -8,7 +8,7 @@ import {
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
-  type SettingsCardChipKind,
+  type SettingsChipTone,
 } from "./SettingsLayout";
 import { SettingsSwitch } from "./SettingsSwitch";
 import {
@@ -294,7 +294,7 @@ function chipLabelForBotToken(
 
 function chipKindForBotToken(
   botToken: DesktopSettingsSnapshot["messaging"]["telegram"]["botToken"],
-): SettingsCardChipKind {
+): SettingsChipTone {
   if (botToken.source === "env") return "warn";
   if (botToken.configured) return "ok";
   return "default";

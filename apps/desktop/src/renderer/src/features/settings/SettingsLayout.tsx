@@ -14,7 +14,20 @@ import type { ReactNode } from "react";
  * - composer-options as a vertical list with custom radio bullets
  */
 
-export type SettingsCardChipKind = "default" | "ok" | "err" | "warn";
+/**
+ * Shared chip-tone vocabulary used by both `SettingsSection.chipKind`
+ * and `SettingsPathRowChip.tone`. Defined once here so the two
+ * primitives can never drift apart.
+ *
+ * - `default`: neutral chip, panel-elevated background, muted text.
+ * - `muted`: same neutrality as `default` — alias kept for callers
+ *   whose semantics read better as "muted" (e.g. a path-row source
+ *   tag like `application` / `path`).
+ * - `ok`: success-tinted (configured, healthy, currently in use).
+ * - `err`: danger-tinted (failed, unavailable).
+ * - `warn`: accent-tinted (env override active, attention needed).
+ */
+export type SettingsChipTone = "default" | "muted" | "ok" | "err" | "warn";
 
 export function SettingsPanelHead(props: {
   eyebrow: string;
@@ -46,7 +59,7 @@ export function SettingsSection(props: {
   children: ReactNode;
   /** Optional right-side chip in the card header. */
   chip?: ReactNode;
-  chipKind?: SettingsCardChipKind;
+  chipKind?: SettingsChipTone;
   "aria-label"?: string;
 }) {
   const headingId = `settings-section-${props.title
@@ -55,7 +68,7 @@ export function SettingsSection(props: {
     .replace(/^-|-$/g, "")}`;
 
   const chipClass =
-    props.chipKind && props.chipKind !== "default"
+    props.chipKind && props.chipKind !== "default" && props.chipKind !== "muted"
       ? `settings-card__chip settings-card__chip--${props.chipKind}`
       : "settings-card__chip";
 
@@ -86,7 +99,10 @@ export function SettingsSection(props: {
  * on right.
  */
 export function SettingsField(props: {
-  label: ReactNode;
+  /** Visible label adjacent to the control. Narrowed to `string` so
+   *  the accessibility contract is explicit — empty/null/array would
+   *  render a malformed label. */
+  label: string;
   /** 12-px description below the label. Single sentence framing. */
   sub?: ReactNode;
   /** 11.5-px hint below the control. */
@@ -119,38 +135,6 @@ export function SettingsField(props: {
           </p>
         ) : null}
       </div>
-    </div>
-  );
-}
-
-/**
- * Legacy row primitive — kept for callsites that still want a flat
- * inline label/control without the design's 220-px label column. New
- * settings code should prefer `SettingsField`.
- */
-export function SettingsRow(props: {
-  label: string;
-  help?: ReactNode;
-  control: ReactNode;
-  inline?: boolean;
-  error?: ReactNode;
-}) {
-  return (
-    <div
-      className={`settings-row${props.inline ? " settings-row--inline" : ""}`}
-    >
-      <div className="settings-row__label">
-        <span className="settings-row__label-text">{props.label}</span>
-        {props.help ? (
-          <span className="settings-row__help">{props.help}</span>
-        ) : null}
-      </div>
-      <div className="settings-row__control">{props.control}</div>
-      {props.error ? (
-        <p className="settings-row__error" role="alert">
-          {props.error}
-        </p>
-      ) : null}
     </div>
   );
 }
