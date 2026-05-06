@@ -818,6 +818,25 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (!this.listener) {
       return;
     }
+    // Diagnostic for thread-routing bugs: the picker rendering in the
+    // parent channel instead of the invoking thread is a `root_id`
+    // propagation problem; logging the raw `root_id` (along with
+    // channel id and command) lets us bisect whether Mattermost sent
+    // it in the body, whether we parsed it, and whether the resulting
+    // channel ref carries the right kind/parentId. Pair this log with
+    // the `mattermost createPost outbound` log in `deliverPostIntent`
+    // — if the slash log shows `root_id` set but the createPost log
+    // shows `root_id: undefined`, the loss is in the
+    // controller/audit-channel layer.
+    this.logger.info("mattermost slash command received", {
+      command: body.command,
+      userId: body.user_id,
+      channelId: body.channel_id,
+      channelName: body.channel_name,
+      teamId: body.team_id,
+      rootId: body.root_id ?? "(none — not a thread reply)",
+      hasArgs: body.text.length > 0,
+    });
     if (!this.authorizedActorIds.includes(body.user_id)) {
       this.logger.warn("mattermost ignored unauthorized slash-command actor", {
         actorId: body.user_id,
@@ -1088,6 +1107,22 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       };
     }
 
+    // Diagnostic for thread-routing bugs (paired with the
+    // `mattermost slash command received` log on the inbound side).
+    // If `rootId` is `(none)` here for a picker that should have
+    // landed in a thread, we lost the thread context somewhere
+    // between handleSlashCommand and resolveTarget — most likely an
+    // audit-channel override from an existing channel-scoped binding.
+    this.logger.info("mattermost createPost outbound", {
+      intentId: intent.id,
+      intentKind: intent.kind,
+      channelId: target.channelId,
+      rootId: target.rootId ?? "(none — top-level post)",
+      channelKind: target.channelRef.conversation.kind,
+      channelRefParentId: target.channelRef.conversation.parentId ?? "(none)",
+      hasButtons: post.props !== undefined,
+      messagePreview: post.message.slice(0, 60),
+    });
     const created = await this.client.createPost({
       channel_id: target.channelId,
       message: post.message,
