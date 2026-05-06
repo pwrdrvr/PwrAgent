@@ -50,6 +50,7 @@ import type {
   AskForApproval as CodexAskForApproval,
   ModelListParams as CodexModelListParams,
   SandboxMode as CodexSandboxMode,
+  SandboxPolicy as CodexSandboxPolicy,
   ReviewStartParams as CodexReviewStartParams,
   SkillsListParams as CodexSkillsListParams,
   ThreadListParams as CodexThreadListParams,
@@ -2943,6 +2944,28 @@ function normalizeCodexSandboxMode(
   return undefined;
 }
 
+function buildCodexSandboxPolicy(
+  value?: string
+): CodexSandboxPolicy | undefined {
+  const mode = normalizeCodexSandboxMode(value);
+  if (!mode) {
+    return undefined;
+  }
+  if (mode === "danger-full-access") {
+    return { type: "dangerFullAccess" };
+  }
+  if (mode === "read-only") {
+    return { type: "readOnly", networkAccess: false };
+  }
+  return {
+    type: "workspaceWrite",
+    writableRoots: [],
+    networkAccess: false,
+    excludeTmpdirEnvVar: false,
+    excludeSlashTmp: false,
+  };
+}
+
 function normalizeCodexServiceTier(
   value?: string
 ): CodexServiceTier | undefined {
@@ -3149,6 +3172,8 @@ function buildTurnStartPayload(params: {
   model?: string;
   reasoningEffort?: string;
   serviceTier?: string;
+  approvalPolicy?: string;
+  sandbox?: string;
   outputSchema?: CodexTurnStartParams["outputSchema"];
   collaborationMode?: AppServerCollaborationModeRequest;
   collaborationFallbackModel?: string;
@@ -3173,6 +3198,14 @@ function buildTurnStartPayload(params: {
   const serviceTier = normalizeCodexServiceTier(params.serviceTier);
   if (serviceTier) {
     base.serviceTier = serviceTier;
+  }
+  const approvalPolicy = normalizeCodexApprovalPolicy(params.approvalPolicy);
+  if (approvalPolicy) {
+    base.approvalPolicy = approvalPolicy;
+  }
+  const sandboxPolicy = buildCodexSandboxPolicy(params.sandbox);
+  if (sandboxPolicy) {
+    base.sandboxPolicy = sandboxPolicy;
   }
   if (params.outputSchema) {
     base.outputSchema = params.outputSchema;
@@ -3878,6 +3911,13 @@ export class CodexAppServerClient {
   }> {
     await this.ensureInitialized();
 
+    // thread/resume primes the per-thread permission profile in codex
+    // before turn/start runs. We don't fail the whole turn if resume
+    // fails — turn/start carries the same approvalPolicy + sandboxPolicy
+    // overrides as a defense-in-depth path — but a silent failure is a
+    // real signal that the user's expected mode may diverge from codex's
+    // actual profile (#217 drift detection's whole reason to exist), so
+    // we log it with the full requested-policy context for diagnosis.
     const resumeResult = await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/resume"],
@@ -3892,7 +3932,15 @@ export class CodexAppServerClient {
         fastMode: params.fastMode
       }),
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-    }).catch(() => undefined);
+    }).catch((error: unknown) => {
+      codexClientLog.warn("thread/resume failed before turn/start", {
+        threadId: params.threadId,
+        requestedApprovalPolicy: params.approvalPolicy ?? null,
+        requestedSandbox: params.sandbox ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    });
 
     const result = await requestWithFallbacks({
       client: this.connection,
@@ -3905,6 +3953,8 @@ export class CodexAppServerClient {
           model: params.model,
           reasoningEffort: params.reasoningEffort,
           serviceTier: params.serviceTier,
+          approvalPolicy: params.approvalPolicy,
+          sandbox: params.sandbox,
           collaborationMode: params.collaborationMode,
           collaborationFallbackModel:
             params.model?.trim() || extractStringProperty(resumeResult, "model"),

@@ -66,6 +66,9 @@ class MockTransport implements JsonRpcTransport {
     rateLimitsByLimitId: {}
   };
   static turnInterruptResponseMode: "success" | "timeout" = "success";
+  static threadResumeError:
+    | { code?: number; message: string }
+    | undefined = undefined;
 
   readonly sentMessages: string[] = [];
   private messageHandler: (message: string) => void = () => undefined;
@@ -641,6 +644,19 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/resume") {
+      if (MockTransport.threadResumeError) {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            error: {
+              code: MockTransport.threadResumeError.code ?? -32000,
+              message: MockTransport.threadResumeError.message,
+            },
+          })
+        );
+        return;
+      }
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -835,6 +851,7 @@ describe("CodexAppServerClient", () => {
       rateLimitsByLimitId: {}
     };
     MockTransport.turnInterruptResponseMode = "success";
+    MockTransport.threadResumeError = undefined;
   });
 
   it("initializes once and normalizes thread/list results", async () => {
@@ -3449,6 +3466,112 @@ describe("CodexAppServerClient", () => {
     expect(turnStartPayload?.params).toMatchObject({
       threadId: "thread-2",
       cwd: "/repo/app/.worktrees/thread-2/app",
+    });
+
+    await client.close();
+  });
+
+  it("forwards approvalPolicy and sandboxPolicy on every turn/start so per-thread permission profile refreshes", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-mode-toggle",
+      input: [{ type: "text", text: "Run this with default-mode permissions" }],
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    const turnStartPayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "turn/start");
+    expect(turnStartPayload?.params).toMatchObject({
+      threadId: "thread-mode-toggle",
+      approvalPolicy: "on-request",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      },
+    });
+
+    await client.close();
+  });
+
+  it("encodes danger-full-access as the dangerFullAccess SandboxPolicy variant on turn/start", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-full-access",
+      input: [{ type: "text", text: "Run this with full-access permissions" }],
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    const turnStartPayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "turn/start");
+    expect(turnStartPayload?.params).toMatchObject({
+      threadId: "thread-full-access",
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "dangerFullAccess" },
+    });
+
+    await client.close();
+  });
+
+  it("still emits the per-turn permission overrides on turn/start when thread/resume fails", async () => {
+    // The defense-in-depth behavior: thread/resume primes codex's
+    // per-thread profile, but if it fails (rare race or transient
+    // codex error) the turn/start payload must still carry the
+    // approvalPolicy + sandboxPolicy override so codex doesn't run
+    // the turn under whatever stale profile was on the thread.
+    // This was the bug Codex Assistant flagged on May 7 — silent
+    // .catch() on resume meant a Full-Access toggle could land turn
+    // execution under Default-Access permissions.
+    MockTransport.threadResumeError = {
+      code: -32000,
+      message: "transient codex error",
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-resume-fails",
+      input: [{ type: "text", text: "Resume fails but turn still goes out" }],
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const turnStartPayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "turn/start");
+    expect(turnStartPayload?.params).toMatchObject({
+      threadId: "thread-resume-fails",
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "dangerFullAccess" },
     });
 
     await client.close();
