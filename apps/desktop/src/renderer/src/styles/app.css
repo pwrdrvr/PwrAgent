@@ -2261,8 +2261,7 @@ textarea,
 
 /* Field row — 220px label column, label + sub-line stack on left,
    control + help stack on right. */
-.settings-field,
-.settings-row {
+.settings-field {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
   align-items: start;
@@ -2271,25 +2270,11 @@ textarea,
   border-top: 1px solid var(--border-subtle);
 }
 
-.settings-field:first-child,
-.settings-row:first-child {
+.settings-field:first-child {
   border-top: 0;
 }
 
-.settings-row--toggle {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-}
-
-.settings-row--inline {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 16px;
-}
-
-.settings-field__label,
-.settings-row__label {
+.settings-field__label {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -2299,12 +2284,7 @@ textarea,
   line-height: 1.3;
 }
 
-.settings-row__label-text {
-  display: block;
-}
-
-.settings-field__sub,
-.settings-row__sub {
+.settings-field__sub {
   display: block;
   max-width: 28ch;
   color: var(--text-muted);
@@ -2313,16 +2293,7 @@ textarea,
   line-height: 1.45;
 }
 
-.settings-row__help {
-  display: block;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.45;
-}
-
-.settings-field__control,
-.settings-row__control {
+.settings-field__control {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -2691,6 +2662,12 @@ textarea,
   border-color: var(--danger-border);
   background: var(--danger-soft);
   color: var(--danger-text);
+}
+
+.settings-pathrow__chip--warn {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
 }
 
 .settings-pathrow__action {

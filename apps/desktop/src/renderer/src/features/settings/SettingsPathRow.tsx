@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
+import type { SettingsChipTone } from "./SettingsLayout";
 
 export interface SettingsPathRowChip {
   label: ReactNode;
-  /** Visual tone — `ok` = success, `err` = danger, `muted` = neutral default. */
-  tone?: "ok" | "err" | "muted";
+  /** Visual tone — see `SettingsChipTone` for the shared vocabulary. */
+  tone?: SettingsChipTone;
 }
 
 /**
@@ -55,11 +56,9 @@ export function SettingsPathRow(props: {
         <div className="settings-pathrow__chips">
           {props.chips.map((chip, index) => {
             const toneClass =
-              chip.tone === "ok"
-                ? " settings-pathrow__chip--ok"
-                : chip.tone === "err"
-                  ? " settings-pathrow__chip--err"
-                  : "";
+              chip.tone && chip.tone !== "default" && chip.tone !== "muted"
+                ? ` settings-pathrow__chip--${chip.tone}`
+                : "";
             return (
               <span
                 key={index}
