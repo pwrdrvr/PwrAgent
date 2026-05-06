@@ -13,6 +13,8 @@
     "dev": "pnpm --filter @pwragent/desktop dev",
     "dev:no-messaging": "PWRAGENT_DISABLE_MESSAGING=1 pnpm --filter @pwragent/desktop dev -- --disable-messaging",
     "dev:op": "node ./scripts/op-run.mjs dev",
+    "op:dev": "node ./scripts/op-run.mjs dev",
+    "op:run": "node ./scripts/op-run.mjs run",
     "lint": "pnpm typecheck && pnpm lint:boundaries",
     "lint:boundaries": "depcruise --config .dependency-cruiser.cjs packages/ apps/desktop/src/",
     "release:check": "node ./scripts/check-desktop-release-metadata.mjs",
