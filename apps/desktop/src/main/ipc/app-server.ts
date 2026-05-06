@@ -467,15 +467,21 @@ class DesktopAppServerService {
   async getGhStatus(request: GetGhStatusRequest): Promise<GhStatus> {
     const fetcher = this.getPrFetcher();
     if (request.recheck) {
-      fetcher.invalidateGhAvailable();
+      fetcher.invalidateGhCaches();
     }
-    const status = await fetcher.getAuthStatus();
-    logDebug("getGhStatus", {
-      installed: status.installed,
-      loggedIn: status.loggedIn,
-      hasRepoScope: status.hasRepoScope,
-      scopeCount: status.scopes.length,
-    });
+    const { cached, ...status } = await fetcher.getAuthStatus();
+    // Only log on cache miss — repeated calls inside the TTL (e.g.
+    // React StrictMode's dev-mode double-mount of the Applications
+    // pane) would otherwise log identical lines and look like a
+    // duplicate-call bug.
+    if (!cached) {
+      logDebug("getGhStatus", {
+        installed: status.installed,
+        loggedIn: status.loggedIn,
+        hasRepoScope: status.hasRepoScope,
+        scopeCount: status.scopes.length,
+      });
+    }
     return status;
   }
 
