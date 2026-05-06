@@ -4,6 +4,7 @@ import type {
   AppUpdateCheckResult,
 } from "../../../../shared/app-metadata";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { SettingsPanelHead, SettingsSection } from "./SettingsLayout";
 
 export function AboutSettings(props: { desktopApi?: DesktopApi }) {
   const [metadata, setMetadata] = useState<AppMetadata | undefined>(undefined);
@@ -57,72 +58,91 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
 
   if (error) {
     return (
-      <div className="settings-panel" role="alert">
-        <p className="settings-row__error">Could not load app info: {error}</p>
-      </div>
+      <section className="settings-stack" aria-label="About PwrAgent">
+        <SettingsPanelHead
+          eyebrow="About"
+          title="PwrAgent"
+          help="Thread-centric coding agent. Built by PwrDrvr LLC."
+        />
+        <div className="settings-panel" role="alert">
+          <p className="settings-row__error">Could not load app info: {error}</p>
+        </div>
+      </section>
     );
   }
 
   if (!metadata) {
     return (
-      <div className="settings-panel">
-        <p className="settings-empty">Loading…</p>
-      </div>
+      <section className="settings-stack" aria-label="About PwrAgent">
+        <SettingsPanelHead
+          eyebrow="About"
+          title="PwrAgent"
+          help="Thread-centric coding agent. Built by PwrDrvr LLC."
+        />
+        <div className="settings-panel">
+          <p className="settings-empty">Loading…</p>
+        </div>
+      </section>
     );
   }
 
   return (
-    <div className="settings-panel">
-      <div className="settings-panel__header">
-        <div>
-          <p className="eyebrow">About</p>
-          <h2>{metadata.applicationName}</h2>
-        </div>
-        {checkForUpdates ? (
-          <button
-            className="button button--secondary"
-            type="button"
-            disabled={updateChecking}
-            onClick={() => {
-              void handleCheckForUpdates();
-            }}
-          >
-            {updateChecking ? "Checking…" : "Check for updates"}
-          </button>
-        ) : null}
-      </div>
-      <dl className="settings-row">
-        <div>
-          <dt>Version</dt>
-          <dd>{metadata.applicationVersion}</dd>
-        </div>
-        <div>
-          <dt>Copyright</dt>
-          <dd>{metadata.copyright}</dd>
-        </div>
-        <div>
-          <dt>Website</dt>
-          <dd>
-            <a href={metadata.homepage} target="_blank" rel="noreferrer">
-              {metadata.homepage}
-            </a>
-          </dd>
-        </div>
-        <div>
-          <dt>Electron</dt>
-          <dd>{metadata.electronVersion}</dd>
-        </div>
-        <div>
-          <dt>Chromium</dt>
-          <dd>{metadata.chromeVersion}</dd>
-        </div>
-        <div>
-          <dt>Node</dt>
-          <dd>{metadata.nodeVersion}</dd>
-        </div>
-      </dl>
+    <section className="settings-stack" aria-label="About PwrAgent">
+      <SettingsPanelHead
+        eyebrow="About"
+        title={metadata.applicationName}
+        help="Thread-centric coding agent. Built by PwrDrvr LLC."
+        action={
+          checkForUpdates ? (
+            <button
+              className="button button--secondary"
+              type="button"
+              disabled={updateChecking}
+              onClick={() => {
+                void handleCheckForUpdates();
+              }}
+            >
+              {updateChecking ? "Checking…" : "Check for updates"}
+            </button>
+          ) : null
+        }
+      />
+
+      <SettingsSection eyebrow="About" title="Build">
+        <dl className="settings-aboutkv">
+          <div>
+            <dt>Version</dt>
+            <dd>{metadata.applicationVersion}</dd>
+          </div>
+          <div>
+            <dt>Copyright</dt>
+            <dd>{metadata.copyright}</dd>
+          </div>
+          <div>
+            <dt>Website</dt>
+            <dd>
+              <a href={metadata.homepage} target="_blank" rel="noreferrer">
+                {metadata.homepage}
+              </a>
+            </dd>
+          </div>
+          <div>
+            <dt>Electron</dt>
+            <dd>{metadata.electronVersion}</dd>
+          </div>
+          <div>
+            <dt>Chromium</dt>
+            <dd>{metadata.chromeVersion}</dd>
+          </div>
+          <div>
+            <dt>Node</dt>
+            <dd>{metadata.nodeVersion}</dd>
+          </div>
+        </dl>
+      </SettingsSection>
+
       {updateResult ? <UpdateResultStatus result={updateResult} /> : null}
-    </div>
+    </section>
   );
 }
 

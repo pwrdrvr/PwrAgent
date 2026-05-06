@@ -220,7 +220,7 @@ describe("SettingsScreen", () => {
     });
     expect(screen.getByRole("heading", { name: "Telegram" })).toBeInTheDocument();
     expect(screen.getByText("Authorized SuperGroups")).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole("checkbox", { name: "Streaming Responses" })[0]!);
+    fireEvent.click(screen.getAllByRole("switch", { name: "Streaming Responses" })[0]!);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
@@ -245,8 +245,14 @@ describe("SettingsScreen", () => {
     expect(screen.getByText("0.130.0")).toBeInTheDocument();
     expect(screen.getByText("Using /usr/local/bin/codex")).toBeInTheDocument();
 
+    // Codex pathrow only renders a "Use" button on candidates that
+    // are NOT currently selected (the selected one shows a "Using"
+    // chip instead). With the seed data the selected candidate is
+    // `/usr/local/bin/codex`, so the single "Use" here points at
+    // `/Applications/Codex.app/Contents/Resources/codex`.
     const useButtons = screen.getAllByRole("button", { name: "Use" });
-    fireEvent.click(useButtons[1]);
+    expect(useButtons).toHaveLength(1);
+    fireEvent.click(useButtons[0]!);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         models: {
@@ -329,9 +335,14 @@ describe("SettingsScreen", () => {
     expect(brandAccent?.closest(".settings-nav__masthead")).not.toBeNull();
     expect(brandAccent?.closest(".settings-titlebar")).toBeNull();
 
-    // The 34px tangerine "Settings" h1 from the old layout is gone —
-    // no level-1 heading anywhere in the screen.
-    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+    // The 34px tangerine "Settings" h1 from the old chrome is gone.
+    // Each pane now renders its own per-pane head (eyebrow + 22px h1
+    // + helper paragraph) per the v2 design — but that h1 lives in
+    // `.settings-content`, NEVER in the title-bar strip.
+    const headings = screen.queryAllByRole("heading", { level: 1 });
+    for (const heading of headings) {
+      expect(heading.closest(".settings-titlebar")).toBeNull();
+    }
 
     // MessagingStatusBar is mounted in the title-bar strip's actions
     // slot; wait for the async platform-status hook to resolve.

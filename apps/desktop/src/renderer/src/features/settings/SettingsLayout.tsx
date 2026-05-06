@@ -172,6 +172,7 @@ export function SettingsCompOption<TValue extends string>(props: {
   return (
     <button
       aria-checked={props.active}
+      aria-label={props.title}
       className={`settings-comp-opt${props.active ? " is-active" : ""}`}
       disabled={props.disabled}
       role="radio"

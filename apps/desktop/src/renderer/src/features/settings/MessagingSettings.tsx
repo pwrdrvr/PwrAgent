@@ -5,6 +5,13 @@ import type {
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import {
+  SettingsField,
+  SettingsPanelHead,
+  SettingsSection,
+  type SettingsCardChipKind,
+} from "./SettingsLayout";
+import { SettingsSwitch } from "./SettingsSwitch";
+import {
   formatSourceLabel,
   joinListValue,
   optionalListSourceBadge,
@@ -38,6 +45,12 @@ export function MessagingSettings(props: {
 
   return (
     <section className="settings-stack" aria-label="Messaging settings">
+      <SettingsPanelHead
+        eyebrow="Messaging"
+        title="Connected chat platforms"
+        help="Bridge PwrAgent threads to messaging platforms so you can drive runs from your phone. Tokens are stored in the system keychain. Each platform's enabled switch is independent of the global messaging switch."
+      />
+
       {runtimeMessaging.disabled ? (
         <section className="settings-panel settings-panel--warning" role="status">
           <div className="settings-panel__header">
@@ -52,180 +65,210 @@ export function MessagingSettings(props: {
           </p>
         </section>
       ) : null}
-      <MessagingGroup title="General">
-        <SegmentedField
-          disabled={props.saving}
-          label="Tool usage notifications"
-          options={TOOL_UPDATE_MODE_OPTIONS}
-          source={sourceBadge(toolUpdateMode)}
-          value={toolUpdateMode.value}
-          onChange={(mode) => {
-            void props.onToolUpdateModeChange(mode);
-          }}
-        />
-        <NumberField
-          description="Wait briefly for split text, code blocks, images, or files before starting one agent turn. Use 0 to disable the pre-start wait."
-          disabled={props.saving}
-          label="Input debounce"
-          max={5000}
-          min={0}
-          source={sourceBadge(inputDebounceMs)}
-          suffix="ms"
-          value={inputDebounceMs.value}
-          onSave={props.onInputDebounceMsChange}
-        />
-      </MessagingGroup>
 
-      <MessagingGroup title="Telegram">
-        <ToggleField
-          checked={telegram.enabled.value}
-          disabled={props.saving}
-          label="Enabled"
-          source={sourceBadge(telegram.enabled)}
-          onChange={(enabled) => {
-            void props.onSaveTelegram({
-              ...telegram,
-              enabled: { ...telegram.enabled, value: enabled },
-            });
-          }}
-        />
-        <SecretField
-          disabled={props.saving || !telegram.botToken.writable}
-          label="Bot Token"
-          secret="telegramBotToken"
-          state={telegram.botToken}
-          onClearSecret={props.onClearSecret}
-          onReplaceSecret={props.onReplaceSecret}
-        />
-        <ToggleField
-          checked={telegram.streamingResponses.value}
-          disabled={props.saving}
-          label="Streaming Responses"
-          source={sourceBadge(telegram.streamingResponses)}
-          onChange={(streamingResponses) => {
-            void props.onSaveTelegram({
-              ...telegram,
-              streamingResponses: {
-                ...telegram.streamingResponses,
-                value: streamingResponses,
-              },
-            });
-          }}
-        />
-        <ListField
-          disabled={props.saving}
-          label="Authorized User IDs"
-          source={optionalListSourceBadge(telegram.authorizedUserIds)}
-          value={telegram.authorizedUserIds.value}
-          onSave={(authorizedUserIds) => {
-            void props.onSaveTelegram({
-              ...telegram,
-              authorizedUserIds: {
-                ...telegram.authorizedUserIds,
-                value: authorizedUserIds,
-              },
-            });
-          }}
-        />
-        <ListField
-          disabled={props.saving}
-          label="Authorized SuperGroups"
-          source={optionalListSourceBadge(telegram.authorizedSupergroups)}
-          value={telegram.authorizedSupergroups.value}
-          onSave={(authorizedSupergroups) => {
-            void props.onSaveTelegram({
-              ...telegram,
-              authorizedSupergroups: {
-                ...telegram.authorizedSupergroups,
-                value: authorizedSupergroups,
-              },
-            });
-          }}
-        />
-      </MessagingGroup>
+      <SettingsSection eyebrow="Messaging" title="General">
+        <div className="settings-fields">
+          <SegmentedField
+            disabled={props.saving}
+            label="Tool usage notifications"
+            sub="How chatty bridged messages are when the agent runs tools."
+            options={TOOL_UPDATE_MODE_OPTIONS}
+            source={sourceBadge(toolUpdateMode)}
+            value={toolUpdateMode.value}
+            onChange={(mode) => {
+              void props.onToolUpdateModeChange(mode);
+            }}
+          />
+          <NumberField
+            disabled={props.saving}
+            label="Input debounce"
+            sub="Wait this long for split text, code blocks, images, or files before starting one agent turn."
+            help="Use 0 to disable the pre-start wait."
+            max={5000}
+            min={0}
+            source={sourceBadge(inputDebounceMs)}
+            suffix="ms"
+            value={inputDebounceMs.value}
+            onSave={props.onInputDebounceMsChange}
+          />
+        </div>
+      </SettingsSection>
 
-      <MessagingGroup title="Discord">
-        <ToggleField
-          checked={discord.enabled.value}
-          disabled={props.saving}
-          label="Enabled"
-          source={sourceBadge(discord.enabled)}
-          onChange={(enabled) => {
-            void props.onSaveDiscord({
-              ...discord,
-              enabled: { ...discord.enabled, value: enabled },
-            });
-          }}
-        />
-        <SecretField
-          disabled={props.saving || !discord.botToken.writable}
-          label="Bot Token"
-          secret="discordBotToken"
-          state={discord.botToken}
-          onClearSecret={props.onClearSecret}
-          onReplaceSecret={props.onReplaceSecret}
-        />
-        <ToggleField
-          checked={discord.streamingResponses.value}
-          disabled={props.saving}
-          label="Streaming Responses"
-          source={sourceBadge(discord.streamingResponses)}
-          onChange={(streamingResponses) => {
-            void props.onSaveDiscord({
-              ...discord,
-              streamingResponses: {
-                ...discord.streamingResponses,
-                value: streamingResponses,
-              },
-            });
-          }}
-        />
-        <TextField
-          disabled={props.saving}
-          label="Application ID"
-          source={optionalStringSourceBadge(discord.applicationId)}
-          value={discord.applicationId.value}
-          onSave={(applicationId) => {
-            void props.onSaveDiscord({
-              ...discord,
-              applicationId: {
-                ...discord.applicationId,
-                value: applicationId,
-              },
-            });
-          }}
-        />
-        <ListField
-          disabled={props.saving}
-          label="Authorized User IDs"
-          source={optionalListSourceBadge(discord.authorizedUserIds)}
-          value={discord.authorizedUserIds.value}
-          onSave={(authorizedUserIds) => {
-            void props.onSaveDiscord({
-              ...discord,
-              authorizedUserIds: {
-                ...discord.authorizedUserIds,
-                value: authorizedUserIds,
-              },
-            });
-          }}
-        />
-        <ListField
-          disabled={props.saving}
-          label="Authorized Guilds"
-          source={optionalListSourceBadge(discord.authorizedGuilds)}
-          value={discord.authorizedGuilds.value}
-          onSave={(authorizedGuilds) => {
-            void props.onSaveDiscord({
-              ...discord,
-              authorizedGuilds: {
-                ...discord.authorizedGuilds,
-                value: authorizedGuilds,
-              },
-            });
-          }}
-        />
-      </MessagingGroup>
+      <SettingsSection
+        eyebrow="Messaging"
+        title="Telegram"
+        chip={chipLabelForBotToken(telegram.botToken)}
+        chipKind={chipKindForBotToken(telegram.botToken)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={telegram.enabled.value}
+            disabled={props.saving}
+            label="Enabled"
+            sub="Turn the Telegram adapter on or off independently of the global messaging switch."
+            source={sourceBadge(telegram.enabled)}
+            onChange={(enabled) => {
+              void props.onSaveTelegram({
+                ...telegram,
+                enabled: { ...telegram.enabled, value: enabled },
+              });
+            }}
+          />
+          <SecretField
+            disabled={props.saving || !telegram.botToken.writable}
+            label="Bot Token"
+            sub="Stored in the system keychain."
+            secret="telegramBotToken"
+            state={telegram.botToken}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <ToggleField
+            checked={telegram.streamingResponses.value}
+            disabled={props.saving}
+            label="Streaming Responses"
+            sub="Send partial assistant tokens as Telegram message edits."
+            source={sourceBadge(telegram.streamingResponses)}
+            onChange={(streamingResponses) => {
+              void props.onSaveTelegram({
+                ...telegram,
+                streamingResponses: {
+                  ...telegram.streamingResponses,
+                  value: streamingResponses,
+                },
+              });
+            }}
+          />
+          <ListField
+            disabled={props.saving}
+            label="Authorized User IDs"
+            sub="Comma-separated Telegram user IDs that can DM the bot."
+            source={optionalListSourceBadge(telegram.authorizedUserIds)}
+            value={telegram.authorizedUserIds.value}
+            onSave={(authorizedUserIds) => {
+              void props.onSaveTelegram({
+                ...telegram,
+                authorizedUserIds: {
+                  ...telegram.authorizedUserIds,
+                  value: authorizedUserIds,
+                },
+              });
+            }}
+          />
+          <ListField
+            disabled={props.saving}
+            label="Authorized SuperGroups"
+            sub="Comma-separated Telegram supergroup IDs that may host bound threads."
+            source={optionalListSourceBadge(telegram.authorizedSupergroups)}
+            value={telegram.authorizedSupergroups.value}
+            onSave={(authorizedSupergroups) => {
+              void props.onSaveTelegram({
+                ...telegram,
+                authorizedSupergroups: {
+                  ...telegram.authorizedSupergroups,
+                  value: authorizedSupergroups,
+                },
+              });
+            }}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Messaging"
+        title="Discord"
+        chip={chipLabelForBotToken(discord.botToken)}
+        chipKind={chipKindForBotToken(discord.botToken)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={discord.enabled.value}
+            disabled={props.saving}
+            label="Enabled"
+            sub="Turn the Discord adapter on or off independently of the global messaging switch."
+            source={sourceBadge(discord.enabled)}
+            onChange={(enabled) => {
+              void props.onSaveDiscord({
+                ...discord,
+                enabled: { ...discord.enabled, value: enabled },
+              });
+            }}
+          />
+          <SecretField
+            disabled={props.saving || !discord.botToken.writable}
+            label="Bot Token"
+            sub="Stored in the system keychain."
+            secret="discordBotToken"
+            state={discord.botToken}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <ToggleField
+            checked={discord.streamingResponses.value}
+            disabled={props.saving}
+            label="Streaming Responses"
+            sub="Send partial assistant tokens as Discord message edits."
+            source={sourceBadge(discord.streamingResponses)}
+            onChange={(streamingResponses) => {
+              void props.onSaveDiscord({
+                ...discord,
+                streamingResponses: {
+                  ...discord.streamingResponses,
+                  value: streamingResponses,
+                },
+              });
+            }}
+          />
+          <TextField
+            disabled={props.saving}
+            label="Application ID"
+            sub="Discord application ID (snowflake) for slash commands."
+            source={optionalStringSourceBadge(discord.applicationId)}
+            value={discord.applicationId.value}
+            onSave={(applicationId) => {
+              void props.onSaveDiscord({
+                ...discord,
+                applicationId: {
+                  ...discord.applicationId,
+                  value: applicationId,
+                },
+              });
+            }}
+          />
+          <ListField
+            disabled={props.saving}
+            label="Authorized User IDs"
+            sub="Comma-separated Discord user IDs that can DM the bot."
+            source={optionalListSourceBadge(discord.authorizedUserIds)}
+            value={discord.authorizedUserIds.value}
+            onSave={(authorizedUserIds) => {
+              void props.onSaveDiscord({
+                ...discord,
+                authorizedUserIds: {
+                  ...discord.authorizedUserIds,
+                  value: authorizedUserIds,
+                },
+              });
+            }}
+          />
+          <ListField
+            disabled={props.saving}
+            label="Authorized Guilds"
+            sub="Comma-separated Discord guild (server) IDs that may host bound threads."
+            source={optionalListSourceBadge(discord.authorizedGuilds)}
+            value={discord.authorizedGuilds.value}
+            onSave={(authorizedGuilds) => {
+              void props.onSaveDiscord({
+                ...discord,
+                authorizedGuilds: {
+                  ...discord.authorizedGuilds,
+                  value: authorizedGuilds,
+                },
+              });
+            }}
+          />
+        </div>
+      </SettingsSection>
     </section>
   );
 }
@@ -241,50 +284,60 @@ const TOOL_UPDATE_MODE_OPTIONS: Array<{
   { label: "Show All", value: "show_all" },
 ];
 
-function MessagingGroup(props: { children: ReactNode; title: string }) {
-  return (
-    <section className="settings-panel" aria-labelledby={`settings-${props.title}-title`}>
-      <div className="settings-panel__header">
-        <div>
-          <p className="eyebrow">Messaging</p>
-          <h2 id={`settings-${props.title}-title`}>{props.title}</h2>
-        </div>
-      </div>
-      <div className="settings-fields">{props.children}</div>
-    </section>
-  );
+function chipLabelForBotToken(
+  botToken: DesktopSettingsSnapshot["messaging"]["telegram"]["botToken"],
+): ReactNode {
+  if (botToken.source === "env") return "env override";
+  if (botToken.configured) return "Configured";
+  return "Not configured";
+}
+
+function chipKindForBotToken(
+  botToken: DesktopSettingsSnapshot["messaging"]["telegram"]["botToken"],
+): SettingsCardChipKind {
+  if (botToken.source === "env") return "warn";
+  if (botToken.configured) return "ok";
+  return "default";
 }
 
 function SegmentedField<TValue extends string>(props: {
   disabled?: boolean;
   label: string;
+  sub?: ReactNode;
   options: Array<{ label: string; value: TValue }>;
   source: string;
   value: TValue;
   onChange: (value: TValue) => void;
 }) {
   return (
-    <div className="settings-field">
-      <div className="settings-row__label">{props.label}</div>
-      <span className="settings-source">{props.source}</span>
-      <div className="settings-segmented" role="radiogroup" aria-label={props.label}>
-        {props.options.map((option) => (
-          <button
-            key={option.value}
-            aria-checked={props.value === option.value}
-            className={`settings-segmented__button${
-              props.value === option.value ? " is-active" : ""
-            }`}
-            disabled={props.disabled}
-            role="radio"
-            type="button"
-            onClick={() => props.onChange(option.value)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-    </div>
+    <SettingsField
+      label={props.label}
+      sub={props.sub}
+      source={props.source}
+      control={
+        <div
+          className="settings-segmented"
+          role="radiogroup"
+          aria-label={props.label}
+        >
+          {props.options.map((option) => (
+            <button
+              key={option.value}
+              aria-checked={props.value === option.value}
+              className={`settings-segmented__button${
+                props.value === option.value ? " is-active" : ""
+              }`}
+              disabled={props.disabled}
+              role="radio"
+              type="button"
+              onClick={() => props.onChange(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      }
+    />
   );
 }
 
@@ -292,29 +345,31 @@ function ToggleField(props: {
   checked: boolean;
   disabled?: boolean;
   label: string;
+  sub?: ReactNode;
   source: string;
   onChange: (value: boolean) => void;
 }) {
   return (
-    <label className="settings-row settings-row--toggle">
-      <span>
-        <span className="settings-row__label">{props.label}</span>
-        <span className="settings-source">{props.source}</span>
-      </span>
-      <input
-        aria-label={props.label}
-        checked={props.checked}
-        disabled={props.disabled}
-        type="checkbox"
-        onChange={(event) => props.onChange(event.currentTarget.checked)}
-      />
-    </label>
+    <SettingsField
+      label={props.label}
+      sub={props.sub}
+      source={props.source}
+      control={
+        <SettingsSwitch
+          checked={props.checked}
+          disabled={props.disabled}
+          label={props.label}
+          onChange={props.onChange}
+        />
+      }
+    />
   );
 }
 
 function TextField(props: {
   disabled?: boolean;
   label: string;
+  sub?: ReactNode;
   source: string;
   value: string;
   onSave: (value: string) => void;
@@ -322,24 +377,29 @@ function TextField(props: {
   const [value, setValue] = useState(props.value);
 
   return (
-    <label className="settings-row">
-      <span className="settings-row__label">{props.label}</span>
-      <span className="settings-source">{props.source}</span>
-      <input
-        className="settings-input"
-        disabled={props.disabled}
-        value={value}
-        onBlur={() => props.onSave(value.trim())}
-        onChange={(event) => setValue(event.currentTarget.value)}
-      />
-    </label>
+    <SettingsField
+      label={props.label}
+      sub={props.sub}
+      source={props.source}
+      control={
+        <input
+          aria-label={props.label}
+          className="settings-input"
+          disabled={props.disabled}
+          value={value}
+          onBlur={() => props.onSave(value.trim())}
+          onChange={(event) => setValue(event.currentTarget.value)}
+        />
+      }
+    />
   );
 }
 
 function NumberField(props: {
-  description?: string;
   disabled?: boolean;
   label: string;
+  sub?: ReactNode;
+  help?: ReactNode;
   max?: number;
   min?: number;
   source: string;
@@ -350,45 +410,52 @@ function NumberField(props: {
   const [value, setValue] = useState(String(props.value));
 
   return (
-    <label className="settings-row">
-      <span className="settings-row__label">{props.label}</span>
-      <span className="settings-source">{props.source}</span>
-      <span className="settings-number">
-        <input
-          aria-label={props.label}
-          className="settings-input"
-          disabled={props.disabled}
-          max={props.max}
-          min={props.min}
-          type="number"
-          value={value}
-          onBlur={() => {
-            const parsed = Number(value);
-            if (!Number.isFinite(parsed)) {
-              setValue(String(props.value));
-              return;
-            }
-            const clamped = Math.min(
-              Math.max(Math.trunc(parsed), props.min ?? Number.MIN_SAFE_INTEGER),
-              props.max ?? Number.MAX_SAFE_INTEGER,
-            );
-            setValue(String(clamped));
-            props.onSave(clamped);
-          }}
-          onChange={(event) => setValue(event.currentTarget.value)}
-        />
-        {props.suffix ? <span className="settings-source">{props.suffix}</span> : null}
-      </span>
-      {props.description ? (
-        <span className="settings-row__description">{props.description}</span>
-      ) : null}
-    </label>
+    <SettingsField
+      label={props.label}
+      sub={props.sub}
+      help={props.help}
+      source={props.source}
+      control={
+        <span className="settings-number">
+          <input
+            aria-label={props.label}
+            className="settings-input settings-input--inline"
+            disabled={props.disabled}
+            max={props.max}
+            min={props.min}
+            type="number"
+            value={value}
+            onBlur={() => {
+              const parsed = Number(value);
+              if (!Number.isFinite(parsed)) {
+                setValue(String(props.value));
+                return;
+              }
+              const clamped = Math.min(
+                Math.max(
+                  Math.trunc(parsed),
+                  props.min ?? Number.MIN_SAFE_INTEGER,
+                ),
+                props.max ?? Number.MAX_SAFE_INTEGER,
+              );
+              setValue(String(clamped));
+              props.onSave(clamped);
+            }}
+            onChange={(event) => setValue(event.currentTarget.value)}
+          />
+          {props.suffix ? (
+            <span className="settings-source">{props.suffix}</span>
+          ) : null}
+        </span>
+      }
+    />
   );
 }
 
 function ListField(props: {
   disabled?: boolean;
   label: string;
+  sub?: ReactNode;
   source: string;
   value: string[];
   onSave: (value: string[]) => void;
@@ -396,23 +463,28 @@ function ListField(props: {
   const [value, setValue] = useState(joinListValue(props.value));
 
   return (
-    <label className="settings-row">
-      <span className="settings-row__label">{props.label}</span>
-      <span className="settings-source">{props.source}</span>
-      <input
-        className="settings-input"
-        disabled={props.disabled}
-        value={value}
-        onBlur={() => props.onSave(parseListValue(value))}
-        onChange={(event) => setValue(event.currentTarget.value)}
-      />
-    </label>
+    <SettingsField
+      label={props.label}
+      sub={props.sub}
+      source={props.source}
+      control={
+        <input
+          aria-label={props.label}
+          className="settings-input"
+          disabled={props.disabled}
+          value={value}
+          onBlur={() => props.onSave(parseListValue(value))}
+          onChange={(event) => setValue(event.currentTarget.value)}
+        />
+      }
+    />
   );
 }
 
 function SecretField(props: {
   disabled?: boolean;
   label: string;
+  sub?: ReactNode;
   secret: DesktopSettingsSecretName;
   state: DesktopSettingsSnapshot["models"]["grok"]["apiKey"];
   onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
@@ -426,48 +498,49 @@ function SecretField(props: {
   const source = formatSourceLabel(props.state.source, props.state.overriddenByEnv);
 
   return (
-    <div className="settings-row">
-      <span className="settings-row__label">{props.label}</span>
-      <span className="settings-source">{status} · {source}</span>
-      <div className="settings-secret">
-        <input
-          aria-label={props.label}
-          className="settings-input"
-          disabled={props.disabled}
-          placeholder="••••••••"
-          type="password"
-          value={value}
-          onChange={(event) => setValue(event.currentTarget.value)}
-        />
-        <button
-          className="button button--secondary"
-          disabled={props.disabled || !value.trim()}
-          type="button"
-          onClick={() => {
-            const nextValue = value.trim();
-            void props.onReplaceSecret(props.secret, nextValue).then((saved) => {
-              if (saved) {
-                setValue("");
-              }
-            });
-          }}
-        >
-          Replace
-        </button>
-        <button
-          className="button button--ghost"
-          disabled={props.disabled || props.state.source === "env"}
-          type="button"
-          onClick={() => {
-            void props.onClearSecret(props.secret);
-          }}
-        >
-          Clear
-        </button>
-      </div>
-      {props.state.unavailableReason ? (
-        <span className="settings-row__error">{props.state.unavailableReason}</span>
-      ) : null}
-    </div>
+    <SettingsField
+      label={props.label}
+      sub={props.sub}
+      source={`${status} · ${source}`}
+      error={props.state.unavailableReason}
+      control={
+        <div className="settings-secret">
+          <input
+            aria-label={props.label}
+            className="settings-input"
+            disabled={props.disabled}
+            placeholder="••••••••"
+            type="password"
+            value={value}
+            onChange={(event) => setValue(event.currentTarget.value)}
+          />
+          <button
+            className="button button--secondary"
+            disabled={props.disabled || !value.trim()}
+            type="button"
+            onClick={() => {
+              const nextValue = value.trim();
+              void props.onReplaceSecret(props.secret, nextValue).then((saved) => {
+                if (saved) {
+                  setValue("");
+                }
+              });
+            }}
+          >
+            Replace
+          </button>
+          <button
+            className="button button--ghost"
+            disabled={props.disabled || props.state.source === "env"}
+            type="button"
+            onClick={() => {
+              void props.onClearSecret(props.secret);
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      }
+    />
   );
 }

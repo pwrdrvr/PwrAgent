@@ -6,6 +6,11 @@ import type {
   GhStatus,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { SettingsPanelHead, SettingsSection } from "./SettingsLayout";
+import {
+  SettingsPathRow,
+  type SettingsPathRowChip,
+} from "./SettingsPathRow";
 
 export function ApplicationsSettings(props: {
   desktopApi?: DesktopApi;
@@ -18,7 +23,13 @@ export function ApplicationsSettings(props: {
 }) {
   return (
     <section className="settings-stack" aria-label="Application settings">
-      <ApplicationPanel
+      <SettingsPanelHead
+        eyebrow="Applications"
+        title="Editor & terminal"
+        help="Choose which apps PwrAgent opens when you click the editor or terminal launcher below the composer. Detected apps are listed below; pick the default for each role."
+      />
+
+      <ApplicationSection
         applications={props.snapshot.applications.editors}
         emptyLabel="No editors found."
         eyebrow="Applications"
@@ -27,7 +38,7 @@ export function ApplicationsSettings(props: {
         title="Editor"
         onPreferredApplicationChange={props.onPreferredApplicationChange}
       />
-      <ApplicationPanel
+      <ApplicationSection
         applications={props.snapshot.applications.terminals}
         emptyLabel="No terminals found."
         eyebrow="Applications"
@@ -98,20 +109,20 @@ function GhStatusPanel(props: { desktopApi?: DesktopApi }) {
           {pill.label}
         </span>
         {status?.account ? (
-          <span className="settings-application__path">
+          <span className="settings-pathrow__path">
             Signed in as <strong>{status.account}</strong>
           </span>
         ) : null}
         {status && status.installed && status.scopes.length > 0 ? (
-          <span className="settings-application__path">
+          <span className="settings-pathrow__path">
             Scopes: {status.scopes.join(", ")}
           </span>
         ) : null}
         {status?.reason ? (
-          <span className="settings-application__path">{status.reason}</span>
+          <span className="settings-pathrow__path">{status.reason}</span>
         ) : null}
         {error ? (
-          <span className="settings-application__path settings-error">{error}</span>
+          <span className="settings-pathrow__path settings-error">{error}</span>
         ) : null}
       </div>
     </section>
@@ -130,7 +141,7 @@ function describeGhStatusPill(status: GhStatus | undefined): {
   return { tone: "ok", label: "Connected" };
 }
 
-function ApplicationPanel(props: {
+function ApplicationSection(props: {
   applications: DesktopApplicationDiscoveryCandidate[];
   emptyLabel: string;
   eyebrow: string;
@@ -148,19 +159,13 @@ function ApplicationPanel(props: {
   const selectedId = props.preferredId || fallbackSelectedId;
 
   return (
-    <section className="settings-panel" aria-labelledby={`settings-${props.title}-title`}>
-      <div className="settings-panel__header">
-        <div>
-          <p className="eyebrow">{props.eyebrow}</p>
-          <h2 id={`settings-${props.title}-title`}>{props.title}</h2>
-        </div>
-      </div>
-      <div className="settings-applications">
+    <SettingsSection eyebrow={props.eyebrow} title={props.title}>
+      <div className="settings-paths">
         {props.applications.length === 0 ? (
           <p className="settings-empty">{props.emptyLabel}</p>
         ) : (
           props.applications.map((application) => (
-            <ApplicationRow
+            <ApplicationPathRow
               key={`${application.kind}:${application.id}`}
               application={application}
               selected={application.id === selectedId}
@@ -170,11 +175,11 @@ function ApplicationPanel(props: {
           ))
         )}
       </div>
-    </section>
+    </SettingsSection>
   );
 }
 
-function ApplicationRow(props: {
+function ApplicationPathRow(props: {
   application: DesktopApplicationDiscoveryCandidate;
   saving: boolean;
   selected: boolean;
@@ -183,37 +188,30 @@ function ApplicationRow(props: {
     preferredId: string,
   ) => Promise<void>;
 }) {
-  const location = props.application.appPath ?? props.application.executablePath;
+  const application = props.application;
+  const location = application.appPath ?? application.executablePath;
+  const chips: SettingsPathRowChip[] = [
+    { label: application.source, tone: "muted" },
+  ];
+  if (application.canOpenWorkspace) {
+    chips.push({ label: "openable", tone: "muted" });
+  }
 
   return (
-    <div className={`settings-application${props.selected ? " is-selected" : ""}`}>
-      <ApplicationIcon application={props.application} />
-      <div className="settings-application__body">
-        <div className="settings-application__header">
-          <span className="settings-application__name">{props.application.name}</span>
-          <span className="settings-source">{props.application.source}</span>
-          {props.application.canOpenWorkspace ? (
-            <span className="settings-source">openable</span>
-          ) : null}
-        </div>
-        {location ? (
-          <span className="settings-application__path">{location}</span>
-        ) : null}
-      </div>
-      <button
-        className="button button--secondary"
-        disabled={props.saving || !props.application.canOpenWorkspace || props.selected}
-        type="button"
-        onClick={() => {
-          void props.onPreferredApplicationChange(
-            props.application.kind,
-            props.application.id,
-          );
-        }}
-      >
-        {props.selected ? "Selected" : "Use"}
-      </button>
-    </div>
+    <SettingsPathRow
+      icon={<ApplicationIcon application={application} />}
+      title={application.name}
+      path={location ?? undefined}
+      chips={chips}
+      selected={props.selected}
+      disabled={props.saving || !application.canOpenWorkspace}
+      onUse={() => {
+        void props.onPreferredApplicationChange(
+          application.kind,
+          application.id,
+        );
+      }}
+    />
   );
 }
 
@@ -224,17 +222,13 @@ function ApplicationIcon(props: {
     return (
       <img
         alt=""
-        className="settings-application__icon"
         src={props.application.iconDataUrl}
       />
     );
   }
 
   return (
-    <span
-      aria-hidden="true"
-      className="settings-application__icon settings-application__icon--fallback"
-    >
+    <span aria-hidden="true">
       {props.application.name.slice(0, 1)}
     </span>
   );
