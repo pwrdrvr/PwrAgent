@@ -290,12 +290,14 @@ describe("SettingsScreen", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("renders the title-bar strip with brand + breadcrumb + MessagingStatusBar", async () => {
-    // Lock the new chrome contract: the overlay's top strip mirrors
-    // the design's title-bar look (brand + breadcrumb + messaging
-    // pills) instead of the previous "duplicate brand + giant
-    // tangerine 'Settings' h1" mini-shell. Stub the platform-status
-    // hook so MessagingStatusBar has at least one platform to render.
+  it("renders the chrome with brand in the nav masthead and breadcrumb + MessagingStatusBar in the right-pane title bar", async () => {
+    // Lock the new chrome contract: brand sits in the LEFT nav's
+    // `__masthead` (mirrors `.sidebar__masthead` on the main app
+    // screen). Right-pane title bar (`.settings-titlebar`) carries
+    // breadcrumb + MessagingStatusBar but NO brand. The previous
+    // "duplicate brand + giant tangerine 'Settings' h1" mini-shell
+    // is gone. Stub the platform-status hook so MessagingStatusBar
+    // has at least one platform to render.
     const desktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => [
         {
@@ -318,19 +320,26 @@ describe("SettingsScreen", () => {
     expect(container.querySelector(".settings-titlebar")).not.toBeNull();
     expect(container.querySelector(".settings-header")).toBeNull();
 
-    // Brand text + accent split inside the strip.
-    expect(
-      container.querySelector(".settings-titlebar__brand-accent"),
-    ).not.toBeNull();
+    // Brand lives in the nav masthead (left column), NOT inside the
+    // title bar. Brand text + accent split.
+    const brandAccent = container.querySelector(
+      ".settings-nav__brand-accent",
+    );
+    expect(brandAccent).not.toBeNull();
+    expect(brandAccent?.closest(".settings-nav__masthead")).not.toBeNull();
+    expect(brandAccent?.closest(".settings-titlebar")).toBeNull();
 
     // The 34px tangerine "Settings" h1 from the old layout is gone —
     // no level-1 heading anywhere in the screen.
     expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
 
-    // MessagingStatusBar is mounted in the strip's actions slot;
-    // wait for the async platform-status hook to resolve.
+    // MessagingStatusBar is mounted in the title-bar strip's actions
+    // slot; wait for the async platform-status hook to resolve.
     await waitFor(() => {
-      expect(container.querySelector(".messaging-status-bar")).not.toBeNull();
+      const bar = container.querySelector(".messaging-status-bar");
+      expect(bar).not.toBeNull();
+      // Specifically inside the title-bar strip, not the nav.
+      expect(bar?.closest(".settings-titlebar")).not.toBeNull();
     });
   });
 

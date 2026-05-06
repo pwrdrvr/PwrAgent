@@ -1685,41 +1685,52 @@ textarea,
 }
 
 .settings-screen {
-  display: flex;
+  /* Two-column flush split — mirrors the main app screen's
+     sidebar | main layout. Left column (`.settings-nav`) extends
+     the full overlay height with the brand at its top; right
+     column (`.settings-main`) holds its own per-pane header
+     (breadcrumb + MessagingStatusBar) above the content. */
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
   flex: 1;
   min-width: 0;
   min-height: 0;
-  flex-direction: column;
-  /* No outer padding or gap — the title-bar strip's bottom border
-     and the nav's right border do the visual separation. Mirrors
-     the main app screen where the sidebar and main pane sit flush
-     against each other with no outer chrome. */
   overflow: hidden;
 }
 
 /* ----------------------------------------------------------------
-   SETTINGS OVERLAY TITLE BAR
-   Lives ONLY inside `.app-shell__settings-layer`. NOT a global app
-   title bar — the main app screen (Sidebar, ThreadView, ThreadHeader)
-   is intentionally untouched. See plan
-   docs/plans/2026-05-05-004-feat-settings-overlay-titlebar-plan.md.
+   SETTINGS OVERLAY — chrome
+   Lives ONLY inside `.app-shell__settings-layer`. The layout mirrors
+   the main app screen's sidebar | main split: a full-height nav on
+   the left (with brand in its `__masthead`, stoplight gutter, and
+   section list) and a `.settings-main` column on the right with its
+   own per-pane title bar above the content area.
 
-   Drag region pattern mirrors `.sidebar__masthead` and `.thread-header`:
-   the strip + descendants get `-webkit-app-region: drag`; interactive
-   elements opt back to `no-drag`. macOS stoplights overlay the left
-   80px gutter via `titleBarStyle: "hiddenInset"`.
+   Drag-region pattern matches `.sidebar__masthead` and `.thread-header`:
+   the masthead + titlebar get `-webkit-app-region: drag`; interactive
+   elements opt back to `no-drag`. macOS stoplights overlay the
+   nav masthead's 80px gutter via `titleBarStyle: "hiddenInset"`.
+   See plan: docs/plans/2026-05-05-004-feat-settings-overlay-titlebar-plan.md
    ---------------------------------------------------------------- */
+
+.settings-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
 
 .settings-titlebar {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 12px;
-  height: 44px;
-  /* 80px left clears macOS stoplights (drawn at x=20, y=18 per
-     window.ts). Same gutter the sidebar masthead uses. */
-  padding: 0 14px 0 80px;
-  background: var(--bg-panel-elevated);
+  /* No 80px stoplight gutter here — the nav masthead on the left
+     handles that. The right pane's title bar starts at x=188 (past
+     the stoplight area) so it doesn't need any clearance. Match
+     `.thread-header`'s 10px top padding for visual rhythm. */
+  padding: 10px 14px;
   border-bottom: 1px solid var(--border-subtle);
   -webkit-app-region: drag;
 }
@@ -1737,23 +1748,6 @@ textarea,
 }
 /* MessagingStatusBar already enforces no-drag on its whole subtree
    via its own CSS (~line 211). No duplication needed here. */
-
-.settings-titlebar__brand {
-  margin: 0;
-  flex: 0 0 auto;
-  color: var(--text-primary);
-  /* Match `.sidebar__brand` exactly so the brand reads identically
-     across the main screen's sidebar masthead and the Settings
-     overlay's title bar. */
-  font-size: 17px;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: -0.01em;
-}
-
-.settings-titlebar__brand-accent {
-  color: var(--accent);
-}
 
 .settings-titlebar__breadcrumb {
   display: flex;
@@ -1795,13 +1789,61 @@ textarea,
 }
 
 /* ----------------------------------------------------------------
-   SETTINGS NAV — header rows (Exit + GENERAL group label)
-   Prepended above the existing section list. Visually distinct from
-   the section buttons so users don't mistake "← Exit Settings" for
-   another section. The existing `.settings-nav__button` rule is
-   unchanged.
+   SETTINGS NAV — full-height left column. Mirrors the main app
+   screen's `.sidebar` pattern: brand at the top in `__masthead`
+   (with 80px stoplight gutter and drag region), then Exit Settings,
+   GENERAL group label, and the section list.
    ---------------------------------------------------------------- */
 
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* No top padding — the masthead handles its own top spacing.
+     16px horizontal mirrors the main `.sidebar`'s padding so the
+     section rows align with where main-screen tabs sit. */
+  padding: 0 16px 12px;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-sidebar);
+  overflow: hidden;
+}
+
+/* Masthead — brand + 80px stoplight gutter. Drag region matches the
+   main `.sidebar__masthead` pattern so the user can grab the brand
+   area to drag the window. */
+.settings-nav__masthead {
+  display: flex;
+  align-items: center;
+  /* 80px left clears macOS stoplights; matches `.sidebar__masthead`
+     exactly. The negative left margin pulls past the nav's own 16px
+     left padding so the gutter aligns with the window edge. */
+  margin: 0 -16px;
+  padding: 10px 0 10px 80px;
+  -webkit-app-region: drag;
+}
+
+.settings-nav__masthead * {
+  -webkit-app-region: drag;
+}
+
+.settings-nav__brand {
+  margin: 0;
+  color: var(--text-primary);
+  /* Match `.sidebar__brand` exactly so the brand reads identically
+     on the main screen and inside the Settings overlay. */
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+.settings-nav__brand-accent {
+  color: var(--accent);
+}
+
+/* Exit Settings — plain text-style link styled like a quiet nav row.
+   No border, no panel background — matches the design's
+   `pa-settings__exit`. Sits above the GENERAL group label. */
 .settings-nav__exit {
   display: inline-flex;
   width: 100%;
@@ -1809,23 +1851,20 @@ textarea,
   appearance: none;
   cursor: pointer;
   gap: 6px;
-  margin-bottom: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--bg-panel);
+  margin: 8px 0 4px;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   text-align: left;
-  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+  transition: color 140ms ease;
 }
 
 .settings-nav__exit:hover,
 .settings-nav__exit:focus-visible {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--text-primary);
+  color: var(--accent);
   outline: none;
 }
 
@@ -1836,30 +1875,6 @@ textarea,
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-.settings-layout {
-  display: grid;
-  grid-template-columns: 188px minmax(0, 1fr);
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  /* No card chrome — the layout is a flush sidebar | content split
-     that matches the main app shell's sidebar | thread-view feel.
-     `.settings-nav` carries the `--bg-sidebar` background +
-     border-right; `.settings-content` carries its own background. */
-}
-
-.settings-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  /* 16px horizontal padding mirrors the main `.sidebar`'s padding;
-     12px vertical gives breathing room above Exit Settings without
-     pushing every row down too far. */
-  padding: 12px 16px;
-  border-right: 1px solid var(--border-subtle);
-  background: var(--bg-sidebar);
 }
 
 .settings-nav__button {
