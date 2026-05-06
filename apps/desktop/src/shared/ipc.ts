@@ -41,6 +41,15 @@ export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =
 export const MESSAGING_UNBIND_THREAD_CHANNEL = "messaging:unbind-thread";
 export const MESSAGING_LIST_ACTIVITY_CHANNEL = "messaging:list-activity";
 /**
+ * Fire-and-forget IPC: opens the dedicated Messaging Activity window
+ * (or focuses it if already open). The activity surface is a separate
+ * BrowserWindow with its own traffic lights and lifecycle, NOT a
+ * settings section. See `showMessagingActivityWindow` in
+ * `apps/desktop/src/main/messaging-activity-window.ts`.
+ */
+export const MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL =
+  "messaging:open-activity-window";
+/**
  * Fired main → renderer whenever the messaging store has had bindings
  * created, revoked, or had their conversation metadata change. The
  * payload is intentionally minimal — receivers should refetch the

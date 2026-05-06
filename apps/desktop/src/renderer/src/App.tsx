@@ -1,6 +1,5 @@
-import { useState, type CSSProperties, type PointerEvent } from "react";
+import { useCallback, useState, type CSSProperties, type PointerEvent } from "react";
 import { Sidebar } from "./features/navigation/Sidebar";
-import { MessagingActivityOverlay } from "./features/messaging-activity/MessagingActivityOverlay";
 import {
   SettingsScreen,
   type SettingsSection,
@@ -51,18 +50,23 @@ function DesktopAppShell(props: {
   settings: DesktopSettingsState;
 }) {
   const [sidebarWidth, setSidebarWidth] = useState(408);
-  const [mainView, setMainView] = useState<
-    "thread" | "settings" | "messaging-activity"
-  >("thread");
+  const [mainView, setMainView] = useState<"thread" | "settings">("thread");
   // Initial section for SettingsScreen — non-undefined when navigation
   // came from a deep-link to a specific section. Resets when the user
   // switches mainView. The Messaging Activity surface is its own
-  // top-level mainView, NOT a settings section, so it's never set
-  // through this slot.
+  // dedicated BrowserWindow, NOT a settings section, so it never
+  // appears through this slot.
   const [settingsInitialSection, setSettingsInitialSection] = useState<
     SettingsSection | undefined
   >(undefined);
   const desktopApi = props.desktopApi;
+  // Spawning / focusing the Messaging Activity window is fire-and-forget
+  // — see `apps/desktop/src/main/messaging-activity-window.ts`. The
+  // main window stays where it was; the activity surface gets its own
+  // OS window with its own lifecycle.
+  const openMessagingActivityWindow = useCallback(() => {
+    void desktopApi?.openMessagingActivityWindow?.();
+  }, [desktopApi]);
   const settings = props.settings;
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
   const backendSummaries = useBackendSummaries(desktopApi);
@@ -203,9 +207,7 @@ function DesktopAppShell(props: {
           onActiveTurnIdChange={session.setActiveTurnId}
           onArchiveWorktree={navigation.archiveWorktree}
           onEnsureSkillsLoaded={skills.ensureLoaded}
-          onOpenMessagingActivity={() => {
-            setMainView("messaging-activity");
-          }}
+          onOpenMessagingActivity={openMessagingActivityWindow}
           onHandoffThreadWorkspace={
             navigation.selectedThread
               ? async (request) =>
@@ -255,16 +257,7 @@ function DesktopAppShell(props: {
             settings={settings}
             initialSection={settingsInitialSection}
             onClose={() => setMainView("thread")}
-            onOpenMessagingActivity={() => setMainView("messaging-activity")}
-          />
-        </div>
-      ) : null}
-
-      {mainView === "messaging-activity" ? (
-        <div className="app-shell__activity-layer">
-          <MessagingActivityOverlay
-            desktopApi={desktopApi}
-            onClose={() => setMainView("thread")}
+            onOpenMessagingActivity={openMessagingActivityWindow}
           />
         </div>
       ) : null}
