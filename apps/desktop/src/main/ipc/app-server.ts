@@ -469,20 +469,10 @@ class DesktopAppServerService {
     if (request.recheck) {
       fetcher.invalidateGhCaches();
     }
-    const { cached, ...status } = await fetcher.getAuthStatus();
-    // Only log on cache miss — repeated calls inside the TTL (e.g.
-    // React StrictMode's dev-mode double-mount of the Applications
-    // pane) would otherwise log identical lines and look like a
-    // duplicate-call bug.
-    if (!cached) {
-      logDebug("getGhStatus", {
-        installed: status.installed,
-        loggedIn: status.loggedIn,
-        hasRepoScope: status.hasRepoScope,
-        scopeCount: status.scopes.length,
-      });
-    }
-    return status;
+    // The fetcher logs once per fresh probe (cache + in-flight dedup
+    // keep StrictMode mount duplicates silent). The IPC layer just
+    // returns the parsed status.
+    return await fetcher.getAuthStatus();
   }
 
   async setThreadReaction(
