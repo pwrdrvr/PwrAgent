@@ -1809,17 +1809,25 @@ textarea,
 }
 
 /* Masthead — brand + 80px stoplight gutter. Borrows the
-   `.sidebar__masthead` pattern verbatim: lives inside the nav's
-   own 16px horizontal padding, with `padding-left: 80px` putting
-   the brand at x≈96 from the window edge (stoplights end at ~x=72
-   with `trafficLightPosition: { x: 20, y: 18 }` from window.ts).
-   Same 24px breathing room between the rightmost stoplight and
-   the brand text that the main screen's sidebar masthead has. */
+   `.sidebar__masthead` pattern verbatim:
+   - Lives inside the nav's own 16px horizontal padding, so
+     `padding-left: 80px` puts the brand at x≈96 from the window
+     edge (stoplights end at ~x=72 with
+     `trafficLightPosition: { x: 20, y: 18 }` from window.ts).
+   - `padding: 10px 0 0 80px` mirrors main exactly.
+   - `min-height: 44px` gives the masthead the same effective
+     height that `.sidebar__masthead` has on the main screen
+     (10px top padding + 34px from the icon buttons it contains).
+     Without this, the masthead would collapse to brand-height +
+     padding, putting the brand ~8.5px higher than main's brand.
+     With it, the brand vertically centers in the same 34px content
+     area that main uses, so the two screens read identically. */
 .settings-nav__masthead {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 10px 0 10px 80px;
+  min-height: 44px;
+  padding: 10px 0 0 80px;
   -webkit-app-region: drag;
 }
 
