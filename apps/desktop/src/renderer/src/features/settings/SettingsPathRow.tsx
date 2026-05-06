@@ -5,6 +5,14 @@ export interface SettingsPathRowChip {
   label: ReactNode;
   /** Visual tone — see `SettingsChipTone` for the shared vocabulary. */
   tone?: SettingsChipTone;
+  /**
+   * Stable key for React reconciliation. If a caller mutates the
+   * chip array between renders (reorder, splice), passing a key keeps
+   * React from mis-attaching state to the wrong chip. Falls back to
+   * `tone-index` when omitted, which is fine for the current usage
+   * (chip arrays built fresh each render).
+   */
+  key?: string;
 }
 
 /**
@@ -61,7 +69,7 @@ export function SettingsPathRow(props: {
                 : "";
             return (
               <span
-                key={index}
+                key={chip.key ?? `${chip.tone ?? "default"}-${index}`}
                 className={`settings-pathrow__chip${toneClass}`}
               >
                 {chip.label}

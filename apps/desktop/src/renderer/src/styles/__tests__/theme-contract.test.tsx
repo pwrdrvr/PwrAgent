@@ -19,6 +19,16 @@ function extractRootTokens(source: string): Record<string, string> {
   );
 }
 
+/**
+ * Pulls the body out of the FIRST CSS rule whose selector matches.
+ *
+ * Caveat: if `app.css` ever wraps a selector in a `@media` (or `@supports`)
+ * block at the top level, this picks the outermost `{ ... \n}` it sees,
+ * which may not be the rule the test intended. Today every selector in
+ * `app.css` is defined exactly once at the top level, so the first match
+ * IS the right one. If that ever changes, scope the regex by the
+ * surrounding `@media` boundary first.
+ */
 function extractRuleBody(source: string, selector: string): string {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const ruleMatch = source.match(new RegExp(`${escapedSelector}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`));
