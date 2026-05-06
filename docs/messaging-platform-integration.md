@@ -443,12 +443,23 @@ PWRAGENT_MESSAGING_MATTERMOST_SERVER_URL=https://chat.example.com
 PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_BASE_URL=https://pwragent.example.com/messaging/mattermost/callback
 PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_PORT=47821    # optional; default 47821
 PWRAGENT_MESSAGING_MATTERMOST_AUTHORIZED_USER_IDS=<mattermost user id>,<another id>
+PWRAGENT_MESSAGING_MATTERMOST_SLASH_COMMAND_PREFIX=pwragent_   # optional; default pwragent_
 ```
 
 Authorize on stable Mattermost user IDs (UUIDs visible via Settings →
 Profile → Account Settings → Display → Username, then
 `/api/v4/users/username/<name>` returns the `id`). Mutable usernames
 are not authorization-safe.
+
+`PWRAGENT_MESSAGING_MATTERMOST_SLASH_COMMAND_PREFIX` controls the
+namespace prepended to every registered slash-command trigger.
+Default: `pwragent_`, which gives `/pwragent_resume`, `/pwragent_status`,
+`/pwragent_detach` — chosen to avoid collisions with built-in
+Mattermost commands (`/status`, `/away`, `/leave`). Set to an empty
+string to register bare triggers and accept the collision risk.
+Allowed chars: `[A-Za-z0-9_./-]`; full trigger length 1–128 chars per
+Mattermost server validation. Invalid prefixes are logged and replaced
+with the default at startup.
 
 `PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_HMAC_SECRET` is **strongly
 recommended** when running with env-var configuration. If unset, the
@@ -495,17 +506,29 @@ should succeed before moving to the next:
 
 **Slash command UX:**
 
-1b. In any channel the bot belongs to, type `/` in the message
-    composer. `resume`, `status`, `detach` should appear in the
-    autocomplete menu with their descriptions and hints.
-1c. Type `/resume` and submit. The bot replies with the navigator
-    (thread picker), same as clicking `Resume` on a binding prompt.
+1b. In any channel the bot belongs to, type `/pwragent` in the
+    message composer (or whatever prefix you've configured). The
+    namespaced commands (`/pwragent_resume`, `/pwragent_status`,
+    `/pwragent_detach` by default) should appear in the autocomplete
+    menu with their descriptions and hints. Note the namespacing —
+    unprefixed `/status` would collide with Mattermost's built-in
+    user-status command, which is why we register under a namespace
+    by default.
+1c. Type `/pwragent_resume` and submit. The bot replies with the
+    navigator (thread picker), same as clicking `Resume` on a
+    binding prompt.
+1c-thread. Send `/pwragent_resume` from inside a channel **thread
+    reply**. The picker should render in the same thread (not in
+    the parent channel), and the resulting binding should be
+    `kind: "thread"` with the channel as `parentTitle` on the chip.
+    Requires Mattermost ≥ v6.1.0 for `root_id` to be sent in the
+    command body.
 1d. From a separate browser/account that is NOT in
-    `PWRAGENT_MESSAGING_MATTERMOST_AUTHORIZED_USER_IDS`, run `/resume`.
-    The command executes (Mattermost has no per-user permission
-    gating on bot commands) but PwrAgent rejects the actor and
-    returns the ephemeral text "You are not authorized to use this
-    command." — visible only to the invoker.
+    `PWRAGENT_MESSAGING_MATTERMOST_AUTHORIZED_USER_IDS`, run
+    `/pwragent_resume`. The command executes (Mattermost has no
+    per-user permission gating on bot commands) but PwrAgent
+    rejects the actor and returns the ephemeral text "You are not
+    authorized to use this command." — visible only to the invoker.
 
 **DM bind flow:**
 

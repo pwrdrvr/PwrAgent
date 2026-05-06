@@ -77,12 +77,20 @@ export type MattermostSlashCommandBody = {
   channel_name?: string;
   user_id: string;
   user_name?: string;
-  /** The full command, e.g. `/resume` (with the leading slash). */
+  /** The full command, e.g. `/pwragent_resume` (with leading slash). */
   command: string;
   /** Args after the trigger, e.g. `--projects`. */
   text: string;
   trigger_id?: string;
   response_url?: string;
+  /**
+   * Set when the command was invoked from inside a thread reply —
+   * the root post id of that thread. Mattermost added this field in
+   * v6.1.0 (Nov 2021); older servers will omit it. We use it to
+   * route the bot's response back into the same thread instead of
+   * the parent channel.
+   */
+  root_id?: string;
 };
 
 /**
@@ -528,6 +536,7 @@ export function parseSlashCommandBody(
     text: get("text") ?? "",
     trigger_id: get("trigger_id"),
     response_url: get("response_url"),
+    root_id: get("root_id"),
   };
 }
 

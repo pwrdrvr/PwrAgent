@@ -38,5 +38,20 @@ export type MattermostMessagingConfig = {
    * this base.
    */
   serverUrl: string;
+  /**
+   * Optional: prefix prepended to every registered slash command's
+   * trigger so we don't collide with built-in Mattermost commands
+   * (`/status`, `/away`, `/leave`, etc.). With the default
+   * `pwragent_`, we register `/pwragent_resume`, `/pwragent_status`,
+   * `/pwragent_detach`. Set to an empty string to register bare
+   * triggers (`/resume`, `/status`, `/detach`) — the operator
+   * accepts collision risk in exchange for shorter invocations.
+   *
+   * Constraints (Mattermost server-enforced): the full trigger
+   * (prefix + base) must match `^[A-Za-z0-9_./-]+$` and be 1–128
+   * chars. Invalid prefixes are rejected at startup with a warning
+   * and the default is used.
+   */
+  slashCommandPrefix?: string;
   streamingResponses?: boolean;
 };

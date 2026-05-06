@@ -18,6 +18,7 @@ import {
   MATTERMOST_CALLBACK_PORT_ENV,
   MATTERMOST_ENABLED_ENV,
   MATTERMOST_SERVER_URL_ENV,
+  MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
   MATTERMOST_STREAMING_RESPONSES_ENV,
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
@@ -45,6 +46,7 @@ export {
   MATTERMOST_CALLBACK_PORT_ENV,
   MATTERMOST_ENABLED_ENV,
   MATTERMOST_SERVER_URL_ENV,
+  MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
   MATTERMOST_STREAMING_RESPONSES_ENV,
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
@@ -91,6 +93,10 @@ export function loadDesktopMessagingConfig(
   const mattermostCallbackHmacSecret = readEnv(
     env,
     MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
+  );
+  const mattermostSlashCommandPrefix = readEnv(
+    env,
+    MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
   );
   const attachmentPolicy = readAttachmentPolicyFromEnv(env);
 
@@ -143,6 +149,9 @@ export function loadDesktopMessagingConfig(
               : {}),
             ...(mattermostCallbackHmacSecret
               ? { callbackHmacSecret: mattermostCallbackHmacSecret }
+              : {}),
+            ...(mattermostSlashCommandPrefix !== undefined
+              ? { slashCommandPrefix: mattermostSlashCommandPrefix }
               : {}),
             streamingResponses: readEnvBoolean(
               env,
@@ -351,6 +360,7 @@ export function redactDesktopMessagingConfig(
           callbackHmacSecret: config.mattermost.callbackHmacSecret
             ? "[REDACTED]"
             : "[GENERATED]",
+          slashCommandPrefix: config.mattermost.slashCommandPrefix ?? "[default]",
           streamingResponses: config.mattermost.streamingResponses ?? false,
           authorizedActorCount: config.mattermost.authorizedActorIds.length,
         }

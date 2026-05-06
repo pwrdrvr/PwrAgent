@@ -16,6 +16,12 @@
  */
 
 export type MattermostCommandSpec = {
+  /**
+   * The full trigger as registered with Mattermost (no leading `/`).
+   * Built by `desiredMattermostCommands(prefix)` from the canonical
+   * base verb plus the operator-configured prefix — e.g. base
+   * `resume` + prefix `pwragent_` → trigger `pwragent_resume`.
+   */
   trigger: string;
   displayName: string;
   description: string;
@@ -25,32 +31,132 @@ export type MattermostCommandSpec = {
   autoCompleteHint?: string;
 };
 
+export const DEFAULT_MATTERMOST_COMMAND_PREFIX = "pwragent_";
+
+/** Mattermost server-enforced trigger char set (`command.go` source). */
+const MATTERMOST_TRIGGER_REGEX = /^[A-Za-z0-9_./-]+$/;
+const MATTERMOST_TRIGGER_MAX_LENGTH = 128;
+
 /**
- * Canonical command set. Match Discord's surface (`resume`, `status`,
- * `detach`) so users on different platforms see the same primitives.
- * Add new commands here; the reconciler picks them up automatically.
+ * Validate and normalize the operator's prefix, falling back to the
+ * default if invalid. Empty string is allowed (bare triggers).
+ *
+ * Server-enforced rules per Mattermost's `Command.IsValid()`:
+ *   - full trigger matches `^[A-Za-z0-9_./-]+$`
+ *   - full trigger length 1..128
+ *   - cannot start with `/`
  */
-export const DESIRED_MATTERMOST_COMMANDS: readonly MattermostCommandSpec[] = [
+export function sanitizeMattermostCommandPrefix(
+  raw: string | undefined,
+  log?: (msg: string, extra?: Record<string, unknown>) => void,
+): string {
+  if (raw === undefined || raw === DEFAULT_MATTERMOST_COMMAND_PREFIX) {
+    return DEFAULT_MATTERMOST_COMMAND_PREFIX;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return "";
+  }
+  if (!MATTERMOST_TRIGGER_REGEX.test(trimmed) || trimmed.startsWith("/")) {
+    log?.("mattermost: slash-command prefix invalid; falling back to default", {
+      provided: raw,
+      defaultPrefix: DEFAULT_MATTERMOST_COMMAND_PREFIX,
+    });
+    return DEFAULT_MATTERMOST_COMMAND_PREFIX;
+  }
+  return trimmed;
+}
+
+type CanonicalCommandBase = {
+  base: string;
+  displayNameSuffix: string;
+  description: string;
+  autoCompleteDesc: string;
+  autoCompleteHint?: string;
+};
+
+/**
+ * Canonical command set as base verbs. Match Discord's surface
+ * (`resume`, `status`, `detach`) so users on different platforms see
+ * the same primitives. Add new entries here; the reconciler picks
+ * them up automatically once the per-prefix trigger is computed.
+ */
+const CANONICAL_COMMAND_BASES: readonly CanonicalCommandBase[] = [
   {
-    trigger: "resume",
-    displayName: "PwrAgent Resume",
+    base: "resume",
+    displayNameSuffix: "Resume",
     description: "Bind this conversation to a PwrAgent thread.",
     autoCompleteDesc: "Choose a PwrAgent thread to control from this conversation.",
     autoCompleteHint: "[--projects | --new | <args>]",
   },
   {
-    trigger: "status",
-    displayName: "PwrAgent Status",
+    base: "status",
+    displayNameSuffix: "Status",
     description: "Show the current PwrAgent thread binding and controls.",
     autoCompleteDesc: "Show the current PwrAgent thread binding and controls.",
   },
   {
-    trigger: "detach",
-    displayName: "PwrAgent Detach",
+    base: "detach",
+    displayNameSuffix: "Detach",
     description: "Detach this conversation from its current PwrAgent thread.",
     autoCompleteDesc: "Detach this conversation from its current PwrAgent thread.",
   },
 ];
+
+/**
+ * Build the desired command set for a given operator-chosen prefix.
+ * Skips any base whose composed trigger doesn't pass Mattermost's
+ * server-side validation (length / char set) — defensive, since the
+ * canonical bases are short and ASCII, but a future addition could
+ * accidentally bust the rules.
+ */
+export function desiredMattermostCommands(
+  prefix: string = DEFAULT_MATTERMOST_COMMAND_PREFIX,
+): readonly MattermostCommandSpec[] {
+  const specs: MattermostCommandSpec[] = [];
+  for (const base of CANONICAL_COMMAND_BASES) {
+    const trigger = `${prefix}${base.base}`;
+    if (
+      trigger.length < 1
+      || trigger.length > MATTERMOST_TRIGGER_MAX_LENGTH
+      || !MATTERMOST_TRIGGER_REGEX.test(trigger)
+    ) {
+      continue;
+    }
+    specs.push({
+      trigger,
+      displayName: `PwrAgent ${base.displayNameSuffix}`,
+      description: base.description,
+      autoCompleteDesc: base.autoCompleteDesc,
+      ...(base.autoCompleteHint ? { autoCompleteHint: base.autoCompleteHint } : {}),
+    });
+  }
+  return specs;
+}
+
+/**
+ * Recover the canonical base verb from a prefixed trigger so the
+ * controller can dispatch on a stable name regardless of how the
+ * operator namespaced it. Returns `undefined` if the trigger doesn't
+ * end with one of the canonical bases.
+ *
+ * Slash-command bodies arrive with the full prefixed trigger (e.g.
+ * `/pwragent_resume`); we strip the leading slash + the configured
+ * prefix to recover `resume`. The text-mention path (`@bot resume`)
+ * already uses base verbs, so dispatching on the same names keeps
+ * the two paths uniform.
+ */
+export function baseTriggerForPrefixed(
+  command: string,
+  prefix: string,
+): string | undefined {
+  const stripped = command.replace(/^\//, "").toLowerCase();
+  const prefixLower = prefix.toLowerCase();
+  const withoutPrefix = stripped.startsWith(prefixLower)
+    ? stripped.slice(prefixLower.length)
+    : stripped;
+  return CANONICAL_COMMAND_BASES.find((b) => b.base === withoutPrefix)?.base;
+}
 
 /**
  * Subset of Mattermost's `Command` type we read at reconcile time.
@@ -148,7 +254,7 @@ export async function reconcileMattermostCommands(params: {
   desired?: readonly MattermostCommandSpec[];
   log?: (msg: string, extra?: Record<string, unknown>) => void;
 }): Promise<MattermostReconcileResult> {
-  const desired = params.desired ?? DESIRED_MATTERMOST_COMMANDS;
+  const desired = params.desired ?? desiredMattermostCommands();
   const created: string[] = [];
   const updated: string[] = [];
   const deleted: string[] = [];

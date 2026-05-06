@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   appendCommandPath,
+  baseTriggerForPrefixed,
   buildMattermostCommandRequest,
-  DESIRED_MATTERMOST_COMMANDS,
+  DEFAULT_MATTERMOST_COMMAND_PREFIX,
+  desiredMattermostCommands,
   reconcileMattermostCommands,
+  sanitizeMattermostCommandPrefix,
   type MattermostCommandRecord,
   type MattermostCommandsApi,
   type MattermostCommandSpec,
@@ -108,10 +111,79 @@ describe("appendCommandPath", () => {
   });
 });
 
-describe("DESIRED_MATTERMOST_COMMANDS", () => {
-  it("includes the canonical Discord-parity surface", () => {
-    const triggers = DESIRED_MATTERMOST_COMMANDS.map((c) => c.trigger);
+describe("desiredMattermostCommands", () => {
+  it("namespaces the canonical Discord-parity surface with the default prefix", () => {
+    const triggers = desiredMattermostCommands().map((c) => c.trigger);
+    expect(triggers).toEqual([
+      "pwragent_resume",
+      "pwragent_status",
+      "pwragent_detach",
+    ]);
+  });
+
+  it("uses bare triggers when prefix is empty", () => {
+    const triggers = desiredMattermostCommands("").map((c) => c.trigger);
     expect(triggers).toEqual(["resume", "status", "detach"]);
+  });
+
+  it("supports custom prefixes", () => {
+    const triggers = desiredMattermostCommands("agent.").map((c) => c.trigger);
+    expect(triggers).toEqual(["agent.resume", "agent.status", "agent.detach"]);
+  });
+});
+
+describe("sanitizeMattermostCommandPrefix", () => {
+  it("returns the default when input is undefined", () => {
+    expect(sanitizeMattermostCommandPrefix(undefined)).toBe(
+      DEFAULT_MATTERMOST_COMMAND_PREFIX,
+    );
+  });
+
+  it("preserves a valid custom prefix", () => {
+    expect(sanitizeMattermostCommandPrefix("agent_")).toBe("agent_");
+    expect(sanitizeMattermostCommandPrefix("PwrAgent-")).toBe("PwrAgent-");
+  });
+
+  it("allows empty string for bare triggers", () => {
+    expect(sanitizeMattermostCommandPrefix("")).toBe("");
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(sanitizeMattermostCommandPrefix("  pwragent_  ")).toBe("pwragent_");
+  });
+
+  it("falls back to default with a warning when chars are invalid", () => {
+    const logged: Array<{ msg: string; extra?: Record<string, unknown> }> = [];
+    const result = sanitizeMattermostCommandPrefix("bad prefix!", (msg, extra) =>
+      logged.push({ msg, extra }),
+    );
+    expect(result).toBe(DEFAULT_MATTERMOST_COMMAND_PREFIX);
+    expect(logged).toHaveLength(1);
+  });
+
+  it("rejects prefixes that would make the trigger start with /", () => {
+    expect(sanitizeMattermostCommandPrefix("/leading-slash")).toBe(
+      DEFAULT_MATTERMOST_COMMAND_PREFIX,
+    );
+  });
+});
+
+describe("baseTriggerForPrefixed", () => {
+  it("recovers the canonical base from a namespaced trigger", () => {
+    expect(baseTriggerForPrefixed("/pwragent_resume", "pwragent_")).toBe("resume");
+    expect(baseTriggerForPrefixed("/pwragent_status", "pwragent_")).toBe("status");
+  });
+
+  it("handles bare triggers when prefix is empty", () => {
+    expect(baseTriggerForPrefixed("/resume", "")).toBe("resume");
+  });
+
+  it("returns undefined for unknown commands", () => {
+    expect(baseTriggerForPrefixed("/pwragent_weather", "pwragent_")).toBeUndefined();
+  });
+
+  it("is case-insensitive for trigger lookup", () => {
+    expect(baseTriggerForPrefixed("/PwrAgent_Resume", "pwragent_")).toBe("resume");
   });
 });
 

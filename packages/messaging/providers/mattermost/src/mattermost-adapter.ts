@@ -40,7 +40,10 @@ import {
   type MattermostSlashCommandResult,
 } from "./mattermost-callback-server.ts";
 import {
+  baseTriggerForPrefixed,
+  desiredMattermostCommands,
   reconcileMattermostCommands,
+  sanitizeMattermostCommandPrefix,
   type MattermostCommandsApi,
   type MattermostReconcileResult,
 } from "./mattermost-commands.ts";
@@ -616,12 +619,27 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         ? contextKind
         : "channel";
     const contextRootId = stringField((body.context ?? {})["rootId"]);
+    // Interactive callback bodies do include `channel_name`, but it's
+    // the slug ("development"), not display name ("Development").
+    // Better than the bare kind label in the binding chip; use it for
+    // `title` (channel) or `parentTitle` (thread). For threads we
+    // also fetch the root-post summary for `title` — same path the
+    // inbound `posted` flow uses, sharing the cache.
+    const isThread = conversationKind === "thread";
+    const rootSummary =
+      isThread && contextRootId
+        ? await this.fetchThreadRootSummary(contextRootId)
+        : undefined;
+    const titleForRef = isThread ? rootSummary : body.channel_name;
+    const parentTitleForRef = isThread ? body.channel_name : undefined;
     const channelRef: MessagingChannelRef = {
       channel: this.channel,
       conversation: {
         id: body.channel_id,
         kind: conversationKind,
         ...(contextRootId ? { parentId: contextRootId } : {}),
+        ...(titleForRef ? { title: titleForRef } : {}),
+        ...(parentTitleForRef ? { parentTitle: parentTitleForRef } : {}),
       },
     };
     let resolvedHandle: MessagingCallbackHandleRecord | undefined;
@@ -750,11 +768,17 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       deleteCommand: (id) => this.client.deleteCommand(id),
     };
 
+    const prefix = sanitizeMattermostCommandPrefix(
+      this.config.slashCommandPrefix,
+      (msg, extra) => this.logger.warn(msg, extra),
+    );
+    const desired = desiredMattermostCommands(prefix);
     for (const team of teams) {
       const result = await reconcileMattermostCommands({
         api,
         teamId: team.id,
         callbackBaseUrl: this.callbackUrl,
+        desired,
         log: (msg, extra) => this.logger.warn(msg, extra),
       });
       this.slashCommandReconciliations.push(result);
@@ -802,36 +826,58 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       });
       return { ephemeralText: "You are not authorized to use this command." };
     }
-    // Slash-command POST bodies don't include a `channel_type` — we
-    // can't tell DM vs channel from the body alone. Mattermost's
-    // command UI only registers the bot's commands per-team, so a
-    // slash command run from a DM still has the team_id of the
-    // owning team. We resolve via the channel id (loose heuristic:
-    // we don't synthesize `kind: "thread"` since slash commands
-    // don't carry a root_id field; thread-context invocations are
-    // out of scope for v1).
+
     const actor: MessagingActorIdentity = {
       platformUserId: body.user_id,
       displayName: body.user_name,
       username: body.user_name,
       isBot: false,
     };
+
+    // Slash commands invoked from a thread reply carry `root_id`
+    // (Mattermost ≥ v6.1.0). Treat that exactly like an inbound
+    // `posted` event from a thread reply so the bot's response
+    // (typically the picker) renders in-thread instead of escaping
+    // to the parent channel.
+    const isThread = Boolean(body.root_id);
+    const rootSummary = isThread && body.root_id
+      ? await this.fetchThreadRootSummary(body.root_id)
+      : undefined;
+    // Slash-command bodies have `channel_name` (slug) but no
+    // `channel_type` field — we can't disambiguate DM vs channel
+    // here without an extra `getChannel` call. Treat non-thread
+    // commands as `kind: "channel"`; DM-from-slash-command is rare
+    // (most users hit DMs by direct messaging the bot, which
+    // arrives via the `posted` WS path that has `channel_type`).
+    const kind: MessagingConversationKind = isThread ? "thread" : "channel";
+    const title = isThread ? rootSummary : body.channel_name;
+    const parentTitle = isThread ? body.channel_name : undefined;
     const channelRef: MessagingChannelRef = {
       channel: this.channel,
       conversation: {
         id: body.channel_id,
-        kind: "channel",
-        ...(body.channel_name ? { title: body.channel_name } : {}),
+        kind,
+        ...(isThread && body.root_id ? { parentId: body.root_id } : {}),
+        ...(title ? { title } : {}),
+        ...(parentTitle ? { parentTitle } : {}),
       },
     };
+
     // Reuse the existing text-prefix command dispatch — it's
     // channel-neutral and already wired to the controller. Build a
     // raw-text payload that matches the shape `@bot <cmd> <args>`
     // would have produced via the inbound `posted` path so the
-    // controller doesn't need a separate code path.
+    // controller doesn't need a separate code path. The prefixed
+    // trigger is collapsed to its base verb here so the controller
+    // sees `resume`/`status`/`detach` regardless of namespace.
+    const baseTrigger = baseTriggerForPrefixed(
+      body.command,
+      sanitizeMattermostCommandPrefix(this.config.slashCommandPrefix),
+    );
+    const cmdToken = baseTrigger ? `/${baseTrigger}` : body.command;
     const rawText = body.text.length > 0
-      ? `${body.command} ${body.text}`
-      : body.command;
+      ? `${cmdToken} ${body.text}`
+      : cmdToken;
     await this.dispatchCommandEvent({
       actor,
       channel: channelRef,
