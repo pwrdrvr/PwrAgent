@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PwrAgent — Threads</title>
+<link rel="stylesheet" href="lib/colors_and_type.css">
+<link rel="stylesheet" href="styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="icons.jsx"></script>
+<script type="text/babel" src="titlebar.jsx"></script>
+<script type="text/babel" src="sidebar.jsx"></script>
+<script type="text/babel" src="threadview.jsx"></script>
+<script type="text/babel" src="rightrail.jsx"></script>
+<script type="text/babel" src="settings.jsx"></script>
+<script type="text/babel" src="activity.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo } = React;
+
+/* -------- seed data -------- */
+const SEED = [
+  {
+    dir: "PwrAgent", branch: "main",
+    threads: [
+      { id: "t1", title: "Add Telegram messaging integration",
+        time: "1m",
+        platforms: [
+          { platform: "Telegram", status: "ok", blink: true },
+          { platform: "Discord", status: "ok" },
+        ],
+        chips: [{ label: "Codex" }, { label: "Full Access", accent: true }],
+        branch: "feat/telegram-integration",
+        prs: [{ num: 247, passing: true }, { num: 251, failing: true, repoPath: "pwragent" }],
+        reactions: [{ emoji: "🚀", count: 2, mine: true }, { emoji: "👀", count: 1 }],
+        working: true,
+      },
+      { id: "t2", title: "Worktree dedupe — fix concurrent thread collision",
+        time: "12m",
+        platforms: [{ platform: "Telegram", status: "ok" }],
+        chips: [{ label: "Codex" }, { label: "Plan", accent: true }],
+        branch: "fix/directory-launchpad-worktree-dedupe",
+        prs: [{ num: 244, merged: true }],
+      },
+      { id: "t3", title: "Sidebar high-contrast pass — boost icon legibility",
+        time: "44m",
+        platforms: [{ platform: "Discord", status: "error" }],
+        chips: [{ label: "Grok" }, { label: "Worktree" }],
+        branch: "ui/sidebar-contrast",
+        reactions: [{ emoji: "🤔", count: 1 }],
+      },
+    ],
+  },
+  {
+    dir: "drvr-billing", branch: "release/2026.05",
+    threads: [
+      { id: "t4", title: "Stripe webhook idempotency keys",
+        time: "2h",
+        platforms: [
+          { platform: "Telegram", status: "ok" },
+          { platform: "Discord", status: "ok" },
+        ],
+        chips: [{ label: "Codex" }, { label: "Read-only" }],
+        branch: "fix/webhook-idempotency",
+        prs: [{ num: 89, passing: true, repoPath: "drvr-billing" }],
+        reactions: [{ emoji: "✅", count: 3 }, { emoji: "🔁", count: 1, mine: true }],
+      },
+      { id: "t5", title: "Decompose invoice rendering monolith",
+        time: "yesterday",
+        platforms: [],
+        chips: [{ label: "Grok" }],
+        branch: "refactor/invoice-render",
+      },
+    ],
+  },
+  {
+    dir: "site-marketing", branch: "main",
+    threads: [
+      { id: "t6", title: "Homepage hero — A/B variant copy",
+        time: "3d",
+        platforms: [{ platform: "Telegram", status: "suspended" }],
+        chips: [{ label: "Codex" }],
+        branch: "feat/hero-ab",
+        reactions: [{ emoji: "📌", count: 1, mine: true }],
+      },
+    ],
+  },
+];
+
+const PLATFORMS = [
+  { platform: "Telegram", status: "ok", threads: 4, lastActivity: "2m ago" },
+  { platform: "Discord", status: "ok", threads: 2, lastActivity: "9m ago" },
+  { platform: "Slack", status: "suspended", threads: 0, lastActivity: "—" },
+];
+
+/* -------- defaults / tweaks -------- */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "lens": "Inbox",
+  "messagingOn": true,
+  "blinkTelegram": false,
+  "showRail": false,
+  "denseRows": false,
+  "showDevContext": false
+}/*EDITMODE-END*/;
+
+function App() {
+  const I = window.PA.Icon;
+  const [tweaks, setTweak] = window.useTweaks(TWEAK_DEFAULTS);
+
+  const [screen, setScreen] = useState("main"); // main | settings | activity
+  const [settingsSection, setSettingsSection] = useState("messaging");
+  const [selectedId, setSelectedId] = useState("t1");
+  const [data, setData] = useState(SEED);
+  const [lens, setLens] = useState(tweaks.lens || "Inbox");
+  const [messagingOn, setMessagingOn] = useState(!!tweaks.messagingOn);
+  const [showRail, setShowRail] = useState(!!tweaks.showRail);
+
+  useEffect(() => setLens(tweaks.lens), [tweaks.lens]);
+  useEffect(() => setMessagingOn(!!tweaks.messagingOn), [tweaks.messagingOn]);
+  useEffect(() => setShowRail(!!tweaks.showRail), [tweaks.showRail]);
+
+  const selected = useMemo(() => {
+    for (const g of data) for (const t of g.threads) if (t.id === selectedId) return { ...t, dir: g.dir };
+    return null;
+  }, [selectedId, data]);
+
+  /* derive blink platforms (Telegram of selected when working) */
+  const blinkPlatforms = (tweaks.blinkTelegram && messagingOn && selected?.working) ? ["Telegram"] : [];
+
+  /* breadcrumb */
+  const breadcrumb = useMemo(() => {
+    if (screen === "settings") {
+      const sec = window.PA.SETTINGS_SECTIONS.find(s => s.id === settingsSection);
+      return [{ label: "Settings", eyebrow: "App" }, { label: sec?.label || "" }];
+    }
+    if (screen === "activity") {
+      return [{ label: "Messaging", eyebrow: "Live" }, { label: "Activity" }];
+    }
+    return [
+      { label: selected?.dir || "—", eyebrow: "Folder" },
+      { label: selected?.title || "—" },
+    ];
+  }, [screen, settingsSection, selected]);
+
+  /* helpers */
+  const addReaction = (threadId, emoji) => {
+    setData((d) => d.map(g => ({
+      ...g,
+      threads: g.threads.map(t => {
+        if (t.id !== threadId) return t;
+        const exists = (t.reactions || []).find(r => r.emoji === emoji);
+        const reactions = exists
+          ? t.reactions.map(r => r.emoji === emoji ? { ...r, count: r.count + 1, mine: true } : r)
+          : [...(t.reactions || []), { emoji, count: 1, mine: true }];
+        return { ...t, reactions };
+      }),
+    })));
+  };
+
+  const unbindPlatform = (threadId, platform) => {
+    setData((d) => d.map(g => ({
+      ...g,
+      threads: g.threads.map(t => t.id !== threadId
+        ? t : { ...t, platforms: (t.platforms || []).filter(p => p.platform !== platform) }),
+    })));
+  };
+
+  const sendMessage = (text) => {
+    if (!selected) return;
+    setData((d) => d.map(g => ({
+      ...g,
+      threads: g.threads.map(t => t.id !== selected.id ? t : ({
+        ...t,
+        turns: [...(t.turns || []), { kind: "user", text }],
+      })),
+    })));
+  };
+
+  /* augment selected with sample turns if missing */
+  const threadForView = useMemo(() => {
+    if (!selected) return null;
+    if (selected.turns) return selected;
+    return {
+      ...selected,
+      headerChips: ["Codex", "Full Access", selected.branch || "main"],
+      turns: [
+        { kind: "user", text: "Wire up Telegram bridge — keep tool-usage notifications at \"some\" by default. Make sure we test getMe before binding the thread." },
+        { kind: "explored", text: "Explored 4 files in src/messaging — telegram.ts, discord.ts, registry.ts, types.ts", time: "0:12" },
+        { kind: "assistant", body: (
+          <>
+            <p>Plan:</p>
+            <ul>
+              <li>Add <code>TelegramAdapter</code> implementing <code>MessagingPlatform</code></li>
+              <li>Validate token on bind via <code>getMe</code> — hard-fail if 401, surface clean error</li>
+              <li>Wire authorized-user filter from settings (comma-separated IDs)</li>
+              <li>Stream assistant tokens via Telegram message edits, debounced 350ms</li>
+            </ul>
+            <p>Ready to apply once you confirm the bot token is in keychain.</p>
+          </>
+        ) },
+        { kind: "explored", text: "Ran tests: 84 passed · 1 skipped · 0 failed", time: "0:54" },
+      ],
+    };
+  }, [selected]);
+
+  /* sidebar context */
+  const ctxDir = selected?.dir || "PwrAgent";
+  const ctxBranch = selected?.branch || "main";
+
+  return (
+    <div className="pa-app">
+      <window.PA.TitleBar
+        screen={screen}
+        breadcrumb={breadcrumb}
+        messagingOn={messagingOn}
+        platforms={PLATFORMS}
+        blinkPlatforms={blinkPlatforms}
+        railOpen={showRail}
+        onToggleMessaging={() => { const v = !messagingOn; setMessagingOn(v); setTweak("messagingOn", v); }}
+        onOpenActivity={() => setScreen("activity")}
+        onOpenSettings={() => setScreen("settings")}
+        onToggleRail={() => { const v = !showRail; setShowRail(v); setTweak("showRail", v); }}
+      />
+
+      {!messagingOn && (
+        <div className="pa-msg-off-banner">
+          <I.AlertTriangle size={14} />
+          Messaging is globally disabled — Telegram &amp; Discord bridges are paused. Bound threads remain queued.
+          <span className="pa-msg-off-banner__spacer" />
+          <button onClick={() => { setMessagingOn(true); setTweak("messagingOn", true); }}>Resume</button>
+          <button onClick={() => setScreen("settings")}>Open settings</button>
+        </div>
+      )}
+
+      {screen === "main" && (
+        <div className={`pa-window ${showRail ? "" : "no-rail"}`}>
+          <window.PA.Sidebar
+            showDevContext={tweaks.showDevContext}
+            data={data}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            lens={lens}
+            setLens={(v) => { setLens(v); setTweak("lens", v); }}
+            contextDir={ctxDir}
+            contextBranch={ctxBranch}
+            onAddReaction={addReaction}
+            onUnbindPlatform={unbindPlatform}
+            onNewThread={() => alert("New thread")}
+          />
+          {threadForView && <window.PA.ThreadView thread={threadForView} onSend={sendMessage} />}
+          {showRail && (
+            <window.PA.RightRail
+              thread={selected}
+              platforms={PLATFORMS}
+              messagingOn={messagingOn}
+              onToggleMessaging={() => { const v = !messagingOn; setMessagingOn(v); setTweak("messagingOn", v); }}
+              onOpenActivity={() => setScreen("activity")}
+              onClose={() => setShowRail(false)}
+            />
+          )}
+        </div>
+      )}
+
+      {screen === "settings" && (
+        <window.PA.Settings
+          section={settingsSection}
+          setSection={setSettingsSection}
+          onExit={() => setScreen("main")}
+          platforms={PLATFORMS}
+        />
+      )}
+
+      {screen === "activity" && (
+        <window.PA.MessagingActivity onClose={() => setScreen("main")} />
+      )}
+
+      <window.TweaksPanel>
+        <window.TweakSection label="Layout" />
+        <window.TweakRadio
+          label="Sidebar lens"
+          value={tweaks.lens}
+          onChange={(v) => setTweak("lens", v)}
+          options={["Inbox", "Recents", "Directories"]}
+        />
+        <window.TweakToggle label="Show context rail" value={tweaks.showRail} onChange={(v) => setTweak("showRail", v)} />
+        <window.TweakToggle label="Show dev folder/branch (debug)" value={tweaks.showDevContext} onChange={(v) => setTweak("showDevContext", v)} />
+        <window.TweakSection label="Messaging" />
+        <window.TweakToggle label="Messaging on" value={tweaks.messagingOn} onChange={(v) => setTweak("messagingOn", v)} />
+        <window.TweakToggle label="Blink Telegram" value={tweaks.blinkTelegram} onChange={(v) => setTweak("blinkTelegram", v)} />
+        <window.TweakSection label="Jump to" />
+        <window.TweakButton label="Main" onClick={() => setScreen("main")} />
+        <window.TweakButton label="Settings · Messaging" onClick={() => { setScreen("settings"); setSettingsSection("messaging"); }} />
+        <window.TweakButton label="Settings · Models" onClick={() => { setScreen("settings"); setSettingsSection("models"); }} />
+        <window.TweakButton label="Settings · Experimental" onClick={() => { setScreen("settings"); setSettingsSection("experimental"); }} />
+        <window.TweakButton label="Settings · Worktrees" onClick={() => { setScreen("settings"); setSettingsSection("worktrees"); }} />
+        <window.TweakButton label="Settings · Applications" onClick={() => { setScreen("settings"); setSettingsSection("applications"); }} />
+        <window.TweakButton label="Messaging Activity" onClick={() => setScreen("activity")} />
+      </window.TweaksPanel>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+</body>
+</html>

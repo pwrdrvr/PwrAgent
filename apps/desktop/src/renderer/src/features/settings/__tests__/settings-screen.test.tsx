@@ -290,6 +290,134 @@ describe("SettingsScreen", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("renders the chrome with brand in the nav masthead and breadcrumb + MessagingStatusBar in the right-pane title bar", async () => {
+    // Lock the new chrome contract: brand sits in the LEFT nav's
+    // `__masthead` (mirrors `.sidebar__masthead` on the main app
+    // screen). Right-pane title bar (`.settings-titlebar`) carries
+    // breadcrumb + MessagingStatusBar but NO brand. The previous
+    // "duplicate brand + giant tangerine 'Settings' h1" mini-shell
+    // is gone. Stub the platform-status hook so MessagingStatusBar
+    // has at least one platform to render.
+    const desktopApi = {
+      getMessagingPlatformStatuses: vi.fn(async () => [
+        {
+          platform: "telegram" as const,
+          health: "enabled" as const,
+          changedAt: 0,
+        },
+      ]),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    const { container } = render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    // Old `.settings-header` is gone; new `.settings-titlebar` is in.
+    expect(container.querySelector(".settings-titlebar")).not.toBeNull();
+    expect(container.querySelector(".settings-header")).toBeNull();
+
+    // Brand lives in the nav masthead (left column), NOT inside the
+    // title bar. Brand text + accent split.
+    const brandAccent = container.querySelector(
+      ".settings-nav__brand-accent",
+    );
+    expect(brandAccent).not.toBeNull();
+    expect(brandAccent?.closest(".settings-nav__masthead")).not.toBeNull();
+    expect(brandAccent?.closest(".settings-titlebar")).toBeNull();
+
+    // The 34px tangerine "Settings" h1 from the old layout is gone —
+    // no level-1 heading anywhere in the screen.
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+
+    // MessagingStatusBar is mounted in the title-bar strip's actions
+    // slot; wait for the async platform-status hook to resolve.
+    await waitFor(() => {
+      const bar = container.querySelector(".messaging-status-bar");
+      expect(bar).not.toBeNull();
+      // Specifically inside the title-bar strip, not the nav.
+      expect(bar?.closest(".settings-titlebar")).not.toBeNull();
+    });
+  });
+
+  it("shows the active section's label in the breadcrumb's current slot", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const current = document.querySelector(".settings-titlebar__current");
+    expect(current).not.toBeNull();
+    expect(current?.textContent).toBe("Messaging");
+  });
+
+  it("switches to the messaging-activity section when a platform chip is clicked", async () => {
+    const desktopApi = {
+      getMessagingPlatformStatuses: vi.fn(async () => [
+        {
+          platform: "telegram" as const,
+          health: "enabled" as const,
+          changedAt: 0,
+        },
+      ]),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const chip = await screen.findByRole("button", { name: /Telegram/i });
+    fireEvent.click(chip);
+
+    // Active section flipped to messaging-activity → the breadcrumb
+    // text follows.
+    await waitFor(() => {
+      const current = document.querySelector(".settings-titlebar__current");
+      expect(current?.textContent).toBe("Messaging activity");
+    });
+  });
+
+  it("places Exit Settings as the first row of the settings nav (NOT in the title bar)", () => {
+    // Regression lock for the design contract: Exit Settings lives
+    // INSIDE `.settings-nav` (left column), not inside the title-bar
+    // strip. Two prior attempts in this branch put it in the strip
+    // and were reset.
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const exit = screen.getByRole("button", { name: /Exit Settings/i });
+    expect(exit.closest(".settings-nav")).not.toBeNull();
+    expect(exit.closest(".settings-titlebar")).toBeNull();
+    expect(exit).toHaveClass("settings-nav__exit");
+  });
+
+  it("renders a 'General' group label between Exit Settings and the section list", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const label = document.querySelector(".settings-nav__group-label");
+    expect(label).not.toBeNull();
+    expect(label?.textContent?.toLowerCase()).toBe("general");
+  });
+
   it("shows when messaging is disabled by a runtime override", () => {
     render(
       <SettingsScreen

@@ -6,6 +6,7 @@
 - Implementation plans live in `docs/plans/`
 - UI theme tokens and visual language live in [docs/UI-THEME.md](docs/UI-THEME.md)
 - Desktop UI direction lives in [docs/design/desktop-style-guide.md](docs/design/desktop-style-guide.md)
+- The PwrAgent v2 design source bundle (HTML/CSS/JSX prototypes + chat transcripts) lives in [docs/design/pwragent-v2/](docs/design/pwragent-v2/) — see [docs/design/pwragent-v2/SOURCE.md](docs/design/pwragent-v2/SOURCE.md) for provenance and the "reference, not copy verbatim" policy
 
 ## Workflow
 

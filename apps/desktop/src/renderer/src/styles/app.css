@@ -180,6 +180,19 @@ textarea,
 }
 
 .thread-header {
+  /* Vertically center the title row + chips + MessagingStatusBar in
+     a 44px box that matches the sidebar masthead's effective height
+     (10px top padding + 34px set by `.sidebar__icon-button`). With
+     `box-sizing: border-box`, `min-height: 44px` + `padding-top: 10px`
+     gives a 34px content area; `align-items: center` puts the
+     compact title's top at y=18.5 — exactly where the brand sits in
+     the sidebar masthead. Result: title, brand, and messaging pills
+     all share the same vertical centerline.
+     The launchpad variant (`.thread-header--launchpad`) overrides
+     align-items back to flex-start since it has its own taller
+     stacked layout. */
+  align-items: center;
+  min-height: 44px;
   padding-top: 10px;
   /* Reserve space for the position:fixed context-rail spine (48px wide,
      pinned top-right). Without this padding, anything we render in the
@@ -1667,7 +1680,11 @@ textarea,
   inset: 0;
   min-width: 0;
   min-height: 0;
-  padding: 42px 24px 24px;
+  /* No padding — the title-bar strip handles its own stoplight
+     clearance via padding-left: 80px (mirrors `.sidebar__masthead`).
+     The body (.settings-layout) carries its own interior layout via
+     the existing 188px nav + content grid; no outer gutter needed. */
+  padding: 0;
   background: var(--bg-app);
 }
 
@@ -1681,95 +1698,205 @@ textarea,
 }
 
 .settings-screen {
-  display: flex;
+  /* Two-column flush split — mirrors the main app screen's
+     sidebar | main layout. Left column (`.settings-nav`) extends
+     the full overlay height with the brand at its top; right
+     column (`.settings-main`) holds its own per-pane header
+     (breadcrumb + MessagingStatusBar) above the content. */
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
   flex: 1;
   min-width: 0;
   min-height: 0;
-  flex-direction: column;
-  gap: 18px;
-  padding-right: 24px;
   overflow: hidden;
 }
 
-.settings-header {
+/* ----------------------------------------------------------------
+   SETTINGS OVERLAY — chrome
+   Lives ONLY inside `.app-shell__settings-layer`. The layout mirrors
+   the main app screen's sidebar | main split: a full-height nav on
+   the left (with brand in its `__masthead`, stoplight gutter, and
+   section list) and a `.settings-main` column on the right with its
+   own per-pane title bar above the content area.
+
+   Drag-region pattern matches `.sidebar__masthead` and `.thread-header`:
+   the masthead + titlebar get `-webkit-app-region: drag`; interactive
+   elements opt back to `no-drag`. macOS stoplights overlay the
+   nav masthead's 80px gutter via `titleBarStyle: "hiddenInset"`.
+   See plan: docs/plans/2026-05-05-004-feat-settings-overlay-titlebar-plan.md
+   ---------------------------------------------------------------- */
+
+.settings-main {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px;
-  padding-right: 8px;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.settings-titlebar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  /* No 80px stoplight gutter here — the nav masthead on the left
+     handles that. The right pane's title bar starts at x=188 (past
+     the stoplight area) so it doesn't need any clearance. Match
+     `.thread-header`'s 10px top padding for visual rhythm. */
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
   -webkit-app-region: drag;
 }
 
-.settings-header__identity {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  -webkit-app-region: no-drag;
+.settings-titlebar * {
+  -webkit-app-region: drag;
 }
 
-.settings-header__brand {
+.settings-titlebar button,
+.settings-titlebar input,
+.settings-titlebar a,
+.settings-titlebar select,
+.settings-titlebar [role="button"] {
+  -webkit-app-region: no-drag;
+}
+/* MessagingStatusBar already enforces no-drag on its whole subtree
+   via its own CSS (~line 211). No duplication needed here. */
+
+.settings-titlebar__breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.settings-titlebar__eyebrow {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-titlebar__separator {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.settings-titlebar__current {
+  min-width: 0;
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.settings-titlebar__spacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ----------------------------------------------------------------
+   SETTINGS NAV — full-height left column. Mirrors the main app
+   screen's `.sidebar` pattern: brand at the top in `__masthead`
+   (with 80px stoplight gutter and drag region), then Exit Settings,
+   GENERAL group label, and the section list.
+   ---------------------------------------------------------------- */
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* No top padding — the masthead handles its own top spacing.
+     16px horizontal mirrors the main `.sidebar`'s padding so the
+     section rows align with where main-screen tabs sit. */
+  padding: 0 16px 12px;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-sidebar);
+  overflow: hidden;
+}
+
+/* Masthead — brand + 80px stoplight gutter. Borrows the
+   `.sidebar__masthead` pattern verbatim:
+   - Lives inside the nav's own 16px horizontal padding, so
+     `padding-left: 80px` puts the brand at x≈96 from the window
+     edge (stoplights end at ~x=72 with
+     `trafficLightPosition: { x: 20, y: 18 }` from window.ts).
+   - `padding: 10px 0 0 80px` mirrors main exactly.
+   - `min-height: 44px` gives the masthead the same effective
+     height that `.sidebar__masthead` has on the main screen
+     (10px top padding + 34px from the icon buttons it contains).
+     Without this, the masthead would collapse to brand-height +
+     padding, putting the brand ~8.5px higher than main's brand.
+     With it, the brand vertically centers in the same 34px content
+     area that main uses, so the two screens read identically. */
+.settings-nav__masthead {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 44px;
+  padding: 10px 0 0 80px;
+  -webkit-app-region: drag;
+}
+
+.settings-nav__masthead * {
+  -webkit-app-region: drag;
+}
+
+.settings-nav__brand {
   margin: 0;
   color: var(--text-primary);
+  /* Match `.sidebar__brand` exactly so the brand reads identically
+     on the main screen and inside the Settings overlay. */
   font-size: 17px;
   font-weight: 700;
   line-height: 1;
   letter-spacing: -0.01em;
 }
 
-.settings-header__exit {
+.settings-nav__brand-accent {
+  color: var(--accent);
+}
+
+/* Exit Settings — plain text-style link styled like a quiet nav row.
+   No border, no panel background — matches the design's
+   `pa-settings__exit`. Sits above the GENERAL group label. */
+.settings-nav__exit {
   display: inline-flex;
+  width: 100%;
   align-items: center;
   appearance: none;
   cursor: pointer;
-  gap: 4px;
-  padding: 0;
+  gap: 6px;
+  margin: 8px 0 4px;
+  padding: 6px 12px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
+  text-align: left;
+  transition: color 140ms ease;
 }
 
-.settings-header__exit:hover,
-.settings-header__exit:focus-visible {
+.settings-nav__exit:hover,
+.settings-nav__exit:focus-visible {
   color: var(--accent);
   outline: none;
 }
 
-.settings-header__exit:focus-visible {
-  text-decoration: underline;
-}
-
-.settings-header__title {
-  text-align: right;
-}
-
-.settings-header h1 {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 34px;
-  line-height: 1;
-}
-
-.settings-layout {
-  display: grid;
-  grid-template-columns: 188px minmax(0, 1fr);
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-panel);
-}
-
-.settings-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px;
-  border-right: 1px solid var(--border-subtle);
-  background: var(--bg-sidebar);
+.settings-nav__group-label {
+  margin: 4px 12px 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .settings-nav__button {
@@ -1801,7 +1928,10 @@ textarea,
 .settings-content {
   min-height: 0;
   overflow: auto;
-  padding: 16px;
+  /* More generous interior padding now that the card chrome around
+     the layout is gone — the panels need breathing room from the
+     window edges and from the nav's right border. */
+  padding: 20px 24px 24px;
 }
 
 .settings-stack {

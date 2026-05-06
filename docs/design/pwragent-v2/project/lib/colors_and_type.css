@@ -1,0 +1,237 @@
+/* ============================================================
+   PwrDrvr Design System — Colors & Type
+   Warm dark, copper accent, geometric mono-leaning.
+   ============================================================ */
+
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800;900&family=Geist+Mono:wght@400;500;600;700&display=swap");
+
+:root {
+  color-scheme: dark;
+
+  /* ---------- TYPE ---------- */
+  --font-sans: "Geist", "SF Pro Text", "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", "SF Mono", "JetBrains Mono", Consolas, monospace;
+  --font-display: "Geist", "SF Pro Display", system-ui, sans-serif;
+
+  /* ---------- COLOR — surfaces (warm off-black system) ---------- */
+  --bg-app:            #0a0908;   /* root, slightly warm */
+  --bg-sidebar:        #0e0d0b;   /* nav rail */
+  --bg-panel:          #13110e;   /* primary cards/content panels */
+  --bg-panel-elevated: #1a1714;   /* nested cards, popovers */
+  --bg-panel-hover:    #1f1a15;   /* hover on panels */
+  --bg-row-active:     #2a1810;   /* deep copper-tinted, selected items */
+  --bg-input:          #0d0c0a;   /* input fields */
+  --bg-overlay:        rgba(10, 9, 8, 0.78);  /* modal scrim */
+
+  /* ---------- COLOR — borders ---------- */
+  --border-subtle: rgba(247, 243, 235, 0.08);
+  --border-default: rgba(247, 243, 235, 0.12);
+  --border-strong: rgba(247, 243, 235, 0.18);
+
+  /* ---------- COLOR — text ---------- */
+  --text-primary:   #f5efe3;   /* warm bone — never pure white */
+  --text-secondary: #b8b0a4;
+  --text-muted:     #8a8275;
+  --text-subtle:    #5a544b;
+
+  /* ---------- COLOR — accent (burnt copper) ---------- */
+  --accent:        #e8743a;
+  --accent-strong: #f48a55;
+  --accent-bright: #fda984;
+  --accent-deep:   #9c4d20;
+  --accent-soft:   rgba(232, 116, 58, 0.14);
+  --accent-tint:   rgba(232, 116, 58, 0.06);
+  --accent-border: rgba(232, 116, 58, 0.38);
+  --accent-shadow: rgba(232, 116, 58, 0.30);
+
+  /* ---------- COLOR — brand blue (logo / parent stamp ONLY) ---------- */
+  /* Reserved for the PwrDrvr brand mark on its navy plate. Do NOT use
+     in product UI — the in-product accent is copper above. */
+  --brand-blue:       #1f7cff;
+  --brand-blue-bright:#4a96ff;
+  --brand-blue-deep:  #0e1a2b;
+
+  /* ---------- COLOR — semantic ---------- */
+  --danger:        #e85a3a;
+  --danger-soft:   rgba(232, 90, 58, 0.16);
+  --danger-border: rgba(232, 90, 58, 0.36);
+  --danger-text:   #ffb0a1;
+
+  --success:       #6dba7e;
+  --success-soft:  rgba(109, 186, 126, 0.14);
+  --success-border:rgba(109, 186, 126, 0.32);
+  --success-text:  #9ce5b3;
+
+  --info:          #6b9ad8;
+  --info-soft:     rgba(107, 154, 216, 0.14);
+  --info-border:   rgba(107, 154, 216, 0.32);
+  --info-text:     #a8c5ee;
+
+  --warn:          #d8a85a;
+  --warn-soft:     rgba(216, 168, 90, 0.14);
+  --warn-border:   rgba(216, 168, 90, 0.32);
+  --warn-text:     #e8c890;
+
+  /* ---------- BUTTON ---------- */
+  --button-text-on-accent: #1a0d05;   /* dark warm-black, used on bright copper fills */
+
+  /* ---------- SHADOWS ---------- */
+  --shadow-xs:     0 1px 2px rgba(0, 0, 0, 0.32);
+  --shadow-sm:     0 4px 10px rgba(0, 0, 0, 0.30);
+  --shadow-md:     0 12px 28px rgba(0, 0, 0, 0.36);
+  --shadow-lg:     0 18px 48px rgba(0, 0, 0, 0.42);
+  --shadow-glow:   0 0 0 1px var(--accent-border), 0 8px 32px var(--accent-shadow);
+  --shadow-inset:  inset 0 1px 0 rgba(255, 255, 255, 0.04);
+
+  /* ---------- RADII ---------- */
+  --radius-xs:   4px;
+  --radius-sm:   6px;   /* buttons, chips */
+  --radius-md:   8px;   /* inputs, small cards */
+  --radius-lg:   12px;  /* large cards, panels */
+  --radius-xl:   16px;  /* hero panels */
+  --radius-2xl:  24px;
+  --radius-pill: 999px;
+
+  /* ---------- SPACING (4-step) ---------- */
+  --space-0:  0px;
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+
+  /* ---------- TYPE SCALE ---------- */
+  --fs-eyebrow: 11px;
+  --fs-meta:    12px;
+  --fs-body:    13px;
+  --fs-body-lg: 14px;
+  --fs-h6:      14px;
+  --fs-h5:      16px;
+  --fs-h4:      20px;
+  --fs-h3:      26px;
+  --fs-h2:      36px;
+  --fs-h1:      48px;
+  --fs-display: 64px;
+
+  --lh-tight:   1.10;
+  --lh-snug:    1.30;
+  --lh-normal:  1.50;
+  --lh-loose:   1.70;
+
+  /* ---------- MOTION ---------- */
+  --ease-out:    cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast:    120ms;
+  --dur-base:    180ms;
+  --dur-slow:    320ms;
+}
+
+/* ============================================================
+   SEMANTIC TYPE STYLES
+   ============================================================ */
+
+.ds-eyebrow {
+  margin: 0 0 var(--space-2);
+  color: var(--accent);
+  font: 600 var(--fs-eyebrow)/1 var(--font-sans);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.ds-display {
+  margin: 0;
+  color: var(--text-primary);
+  font: 800 var(--fs-display)/var(--lh-tight) var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+.ds-h1 {
+  margin: 0;
+  color: var(--text-primary);
+  font: 800 var(--fs-h1)/var(--lh-tight) var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+.ds-h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font: 700 var(--fs-h2)/var(--lh-tight) var(--font-display);
+  letter-spacing: -0.015em;
+}
+
+.ds-h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font: 700 var(--fs-h3)/var(--lh-snug) var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+.ds-h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font: 600 var(--fs-h4)/var(--lh-snug) var(--font-sans);
+  letter-spacing: -0.005em;
+}
+
+.ds-h5 {
+  margin: 0;
+  color: var(--text-primary);
+  font: 600 var(--fs-h5)/var(--lh-snug) var(--font-sans);
+}
+
+.ds-h6 {
+  margin: 0;
+  color: var(--text-primary);
+  font: 600 var(--fs-h6)/1.25 var(--font-sans);
+}
+
+.ds-body {
+  margin: 0;
+  color: var(--text-primary);
+  font: 400 var(--fs-body-lg)/var(--lh-normal) var(--font-sans);
+}
+
+.ds-body-secondary {
+  margin: 0;
+  color: var(--text-secondary);
+  font: 400 var(--fs-body-lg)/var(--lh-normal) var(--font-sans);
+}
+
+.ds-meta {
+  margin: 0;
+  color: var(--text-muted);
+  font: 500 var(--fs-meta)/var(--lh-snug) var(--font-sans);
+}
+
+.ds-mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-feature-settings: "ss01", "ss02";
+  color: var(--text-secondary);
+}
+
+.ds-code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--accent-bright);
+}
+
+/* ============================================================
+   BASE RESET (opt-in)
+   ============================================================ */
+
+.ds-reset, .ds-reset *, .ds-reset *::before, .ds-reset *::after {
+  box-sizing: border-box;
+}
+.ds-reset body {
+  margin: 0;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font: 400 var(--fs-body-lg)/var(--lh-normal) var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

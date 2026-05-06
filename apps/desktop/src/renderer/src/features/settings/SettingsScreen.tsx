@@ -1,6 +1,7 @@
 import type {
   DesktopChatReplyComposer,
   DesktopSettingsSnapshot,
+  MessagingChannelKind,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { DesktopSettingsState } from "./useDesktopSettings";
@@ -10,8 +11,9 @@ import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
 import { MessagingActivityScreen } from "../messaging-activity/MessagingActivityScreen";
+import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { WorktreesSettings } from "./WorktreesSettings";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export type SettingsSection =
   | "experimental"
@@ -48,44 +50,86 @@ export function SettingsScreen(props: {
     if (props.initialSection) setSection(props.initialSection);
   }, [props.initialSection]);
   const snapshot = props.settings.snapshot;
+  const activeSectionLabel =
+    SECTIONS.find((entry) => entry.id === section)?.label ?? "Settings";
+  // Platform-chip clicks in the title-bar strip deep-link to the
+  // messaging-activity tab — same affordance ThreadHeader exposes,
+  // kept symmetrical so muscle memory works on both screens.
+  const onOpenActivity = useCallback(
+    (_platform?: MessagingChannelKind) => {
+      setSection("messaging-activity");
+    },
+    [],
+  );
 
   return (
     <section className="settings-screen" aria-label="Settings">
-      <header className="settings-header">
-        <div className="settings-header__identity">
-          <p className="settings-header__brand">
-            Pwr<span className="sidebar__brand-accent">Agent</span>
+      {/* Left nav — extends full overlay height, mirrors the main
+          screen's `.sidebar` pattern. Brand sits in `__masthead`
+          at the very top with the 80px stoplight gutter (macOS
+          hiddenInset draws stoplights over it). Below: Exit
+          Settings, GENERAL group label, section list.
+          See plan: docs/plans/2026-05-05-004-feat-settings-overlay-titlebar-plan.md */}
+      <nav className="settings-nav" aria-label="Settings sections">
+        <header className="settings-nav__masthead">
+          <p className="settings-nav__brand">
+            Pwr<span className="settings-nav__brand-accent">Agent</span>
           </p>
-          {props.onClose ? (
-            <button
-              className="settings-header__exit"
-              type="button"
-              onClick={props.onClose}
-            >
-              <span aria-hidden="true">←</span> Exit Settings
-            </button>
-          ) : null}
-        </div>
-        <div className="settings-header__title">
-          <p className="eyebrow">Settings</p>
-          <h1>Settings</h1>
-        </div>
-      </header>
+        </header>
 
-      <div className="settings-layout">
-        <nav className="settings-nav" aria-label="Settings sections">
-          {SECTIONS.map((item) => (
-            <button
-              key={item.id}
-              aria-current={section === item.id ? "page" : undefined}
-              className={`settings-nav__button${section === item.id ? " is-active" : ""}`}
-              type="button"
-              onClick={() => setSection(item.id)}
+        {/* Exit Settings — first interactive row of the nav. Plain
+            text-style link (no border) per the design. */}
+        {props.onClose ? (
+          <button
+            className="settings-nav__exit"
+            type="button"
+            onClick={props.onClose}
+          >
+            <span aria-hidden="true">←</span> Exit Settings
+          </button>
+        ) : null}
+
+        {/* Group label between Exit and the section list. */}
+        <p className="settings-nav__group-label">General</p>
+
+        {SECTIONS.map((item) => (
+          <button
+            key={item.id}
+            aria-current={section === item.id ? "page" : undefined}
+            className={`settings-nav__button${section === item.id ? " is-active" : ""}`}
+            type="button"
+            onClick={() => setSection(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      {/* Right pane — its own header (breadcrumb + MessagingStatusBar)
+          above the content. The header sits ONLY above the content
+          area, not full-width across the window — same vertical-split
+          pattern the main screen uses (Sidebar | ThreadView with
+          ThreadHeader). */}
+      <div className="settings-main">
+        <header className="settings-titlebar">
+          <div className="settings-titlebar__breadcrumb">
+            <span className="settings-titlebar__eyebrow">Settings</span>
+            <span aria-hidden="true" className="settings-titlebar__separator">
+              ›
+            </span>
+            <span
+              className="settings-titlebar__current"
+              title={activeSectionLabel}
             >
-              {item.label}
-            </button>
-          ))}
-        </nav>
+              {activeSectionLabel}
+            </span>
+          </div>
+          <div className="settings-titlebar__spacer" />
+          <MessagingStatusBar
+            desktopApi={props.desktopApi}
+            onOpenActivity={onOpenActivity}
+          />
+        </header>
 
         <div className="settings-content">
           {props.settings.loading && !snapshot ? (

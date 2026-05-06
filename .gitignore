@@ -22,3 +22,11 @@ apps/desktop/release-stage/
 .envrc.release
 *.p12
 AuthKey_*.p8
+
+# PwrAgent design bundle — keep source files (HTML/CSS/JSX/SVG) only.
+# Chat transcripts and pasted screenshots can carry private context
+# (internal decisions, paths, account names, identifying details);
+# never commit them. See docs/design/pwragent-v2/SOURCE.md for the
+# re-import procedure.
+docs/design/pwragent-v2/chats/
+docs/design/pwragent-v2/project/uploads/
