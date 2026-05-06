@@ -517,12 +517,23 @@ should succeed before moving to the next:
 1c. Type `/pwragent_resume` and submit. The bot replies with the
     navigator (thread picker), same as clicking `Resume` on a
     binding prompt.
-1c-thread. Send `/pwragent_resume` from inside a channel **thread
-    reply**. The picker should render in the same thread (not in
-    the parent channel), and the resulting binding should be
-    `kind: "thread"` with the channel as `parentTitle` on the chip.
-    Requires Mattermost ≥ v6.1.0 for `root_id` to be sent in the
-    command body.
+1c-thread. **Known limitation — slash commands from threads land in
+    the parent channel.** Mattermost's outgoing webhook body for
+    custom slash commands does NOT include `root_id` in v10.11 or
+    earlier — the field was added on `master` (will ship in a future
+    release) but isn't backported. As a result, `/pwragent_resume`
+    invoked from inside a thread reply pane shows the picker in the
+    parent channel and binds to the channel, not the thread.
+
+    **Workaround until upstream ships**: invoke from threads using
+    text mention — `@pwragent resume`. The WebSocket `posted` event
+    for thread replies includes `root_id`, so the bot detects the
+    thread context correctly and the picker lands in-thread.
+
+    Filed: <https://github.com/pwrdrvr/PwrAgent/issues/212> tracks
+    the in-adapter workaround using `response_url` (Mattermost's
+    delayed-response endpoint preserves thread context server-side
+    even on v10.11).
 1d. From a separate browser/account that is NOT in
     `PWRAGENT_MESSAGING_MATTERMOST_AUTHORIZED_USER_IDS`, run
     `/pwragent_resume`. The command executes (Mattermost has no
