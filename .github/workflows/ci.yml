@@ -37,8 +37,20 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
 
-      - name: Lint
-        run: pnpm run lint
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Dependency boundaries
+        run: |
+          pnpm exec depcruise --config .dependency-cruiser.cjs \
+            --output-type json --output-to cruise-result.json \
+            packages/ apps/desktop/src/
+          pnpm exec depcruise-fmt --exit-code cruise-result.json
+
+      - name: Boundary violation summary
+        if: failure()
+        run: |
+          pnpm exec depcruise-fmt -T markdown cruise-result.json >> "$GITHUB_STEP_SUMMARY"
 
   build:
     name: Build

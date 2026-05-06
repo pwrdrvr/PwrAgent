@@ -14,7 +14,7 @@
     "dev:no-messaging": "PWRAGENT_DISABLE_MESSAGING=1 pnpm --filter @pwragent/desktop dev -- --disable-messaging",
     "dev:op": "node ./scripts/op-run.mjs dev",
     "lint": "pnpm typecheck && pnpm lint:boundaries",
-    "lint:boundaries": "depcruise --config .dependency-cruiser.cjs apps/desktop/src/main/messaging packages/messaging",
+    "lint:boundaries": "depcruise --config .dependency-cruiser.cjs packages/ apps/desktop/src/",
     "release:check": "node ./scripts/check-desktop-release-metadata.mjs",
     "test:desktop-e2e": "pnpm --filter @pwragent/desktop test:e2e",
     "test:desktop-e2e:nice": "node ./scripts/nice-run.mjs pnpm test:desktop-e2e",
