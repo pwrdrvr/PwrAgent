@@ -67,19 +67,28 @@ export type MattermostPostBody = {
 };
 
 /**
- * Sanitize a `MessagingSurfaceAction.id` for Mattermost's alphanumeric-only
- * action-id constraint. Non-alphanumeric characters are replaced with
- * underscores; if the input is all symbols (so the alphanumeric core is
- * empty), the result falls back to a length-derived placeholder so the
- * id stays non-empty and stable across calls. Underscores are widely
- * accepted in practice even though strict reading of the docs says
- * alphanumeric only.
+ * Sanitize a `MessagingSurfaceAction.id` for Mattermost's strictly
+ * alphanumeric action-id route constraint.
+ *
+ * The server registers the action callback route as
+ * `/api/v4/posts/{post_id}/actions/{action_id:[A-Za-z0-9]+}` — the
+ * `[A-Za-z0-9]+` regex on `action_id` rejects EVERYTHING outside ASCII
+ * alphanumerics. Underscores, dashes, dots, colons all cause Go's
+ * router to fall through to the not-found handler, returning a bare
+ * 404 the moment a user clicks the button. (Verified against an
+ * upstream "not found handler triggered" 404 on
+ * `/api/v4/posts/.../actions/command_resume`.)
+ *
+ * Strategy: drop every non-alphanumeric character. If the result is
+ * empty (the input was all symbols), fall back to `act<len>` so the id
+ * stays non-empty and deterministic. Producers should choose ids
+ * unique under this projection — `confirm_yes` and `confirmyes` would
+ * collide here.
  */
 export function sanitizeMattermostActionId(rawId: string): string {
-  const replaced = rawId.replace(/[^A-Za-z0-9]/g, "_");
-  const stripped = replaced.replace(/^_+|_+$/g, "");
-  if (/[A-Za-z0-9]/.test(stripped)) {
-    return replaced;
+  const stripped = rawId.replace(/[^A-Za-z0-9]/g, "");
+  if (stripped.length > 0) {
+    return stripped;
   }
   return `act${rawId.length}`;
 }

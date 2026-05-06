@@ -41,10 +41,13 @@ describe("sanitizeMattermostActionId", () => {
     expect(sanitizeMattermostActionId("statusModel123")).toBe("statusModel123");
   });
 
-  it("replaces non-alphanumeric characters with underscores", () => {
-    expect(sanitizeMattermostActionId("status:detach")).toBe("status_detach");
+  it("strips non-alphanumeric characters (Mattermost route is [A-Za-z0-9]+)", () => {
+    // Underscores, colons, dashes, etc. all fail the action-id route regex
+    // — `command_resume` returns 404 from Mattermost's not-found handler.
+    expect(sanitizeMattermostActionId("command_resume")).toBe("commandresume");
+    expect(sanitizeMattermostActionId("status:detach")).toBe("statusdetach");
     expect(sanitizeMattermostActionId("handoff:cancel-now!")).toBe(
-      "handoff_cancel_now_",
+      "handoffcancelnow",
     );
   });
 
@@ -98,7 +101,7 @@ describe("buildMattermostActions", () => {
     });
     expect(buttons).toHaveLength(3);
     expect(buttons?.[0]).toMatchObject({
-      id: "status_stop",
+      id: "statusstop",
       name: "Stop",
       type: "button",
       style: "danger",

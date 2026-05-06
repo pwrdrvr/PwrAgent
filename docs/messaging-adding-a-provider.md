@@ -501,6 +501,18 @@ The fix is in *your* provider's bundling, not in shared. See Step 8.4.
 ### Test mocks that construct `DesktopMessagingProviderRegistry`
 Adding a new provider id to `DesktopMessagingProviderId` breaks any test that builds a `Partial<DesktopMessagingProviderRegistry>` and casts to the full type — TypeScript flags the new provider as `undefined`. Update the test fixtures (e.g., `apps/desktop/src/main/__tests__/messaging-provider-loader.test.ts`) to include a stub for your provider when you wire the loader entry.
 
+### Outbound delivery target lives on `intent.audit?.channel` (not "requestContext")
+Every adapter's `deliver()` needs to figure out which platform conversation to post into. The canonical source is `intent.audit?.channel` — that's what Telegram (`telegram-adapter.ts:1252`) and Discord (`discord-adapter.ts:886`) both read. The companion source is `intent.targetSurface?.state?.opaque`, used when updating an existing surface.
+
+Naming any other field (e.g. `intent.requestContext.channel`) gets you a silent failure: the resolver returns `undefined`, the adapter returns `outcome: "failed"`, the inbound side keeps logging "ROUTED" so it looks like work is happening, but the user never sees a reply. Add a `logger.warn` at every "no target resolved" branch so future regressions of this shape surface in the dev console immediately.
+
+### Provider-specific URL constraints on action ids (Mattermost)
+Mattermost registers the action callback handler at `/api/v4/posts/{post_id}/actions/{action_id:[A-Za-z0-9]+}` — strictly ASCII alphanumeric, **no underscores, dashes, dots, or colons**. A button id of `command_resume` makes the click route to a path that fails the regex, falls through to Go's not-found handler, and returns a bare 404 with no useful body. The button visibly does nothing.
+
+Sanitize action ids with the platform's actual constraint, not what feels reasonable. For Mattermost: `rawId.replace(/[^A-Za-z0-9]/g, "")`. Drop non-alphanumerics; do not substitute underscores. The HMAC-signed `integration.context` carries the original id so the callback handler still resolves to the right semantic action.
+
+Other platforms have their own quirks — Slack truncates, Discord caps at 100 chars, Telegram limits callback_data to 64 bytes — read the docs.
+
 _(Add new gotchas here as you find them.)_
 
 ## Living examples
