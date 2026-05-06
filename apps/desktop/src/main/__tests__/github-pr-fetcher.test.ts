@@ -438,6 +438,51 @@ describe("GithubPrFetcher", () => {
       expect(second.scopes).toEqual(first.scopes);
     });
 
+    it("dedupes concurrent calls — two parallel callers share one subprocess", async () => {
+      // The bug this is locking in: the StrictMode dev double-mount
+      // fires both IPC calls in parallel. Both miss the resolved-
+      // value cache (which is only populated after the subprocess
+      // returns). Without in-flight dedup, both spawn `gh auth
+      // status` and both log. With it, the second caller awaits the
+      // first's promise.
+      const probeGhAvailable = vi.fn(async () => true);
+      let resolveProbe: (() => void) | undefined;
+      const runGhAuthStatus = vi.fn(async () => {
+        await new Promise<void>((resolve) => {
+          resolveProbe = resolve;
+        });
+        return {
+          stdout:
+            "github.com\n  ✓ Logged in to github.com account huntharo\n  - Token scopes: 'repo'\n",
+          stderr: "",
+          ok: true,
+        };
+      });
+      const fetcher = new GithubPrFetcher({
+        probeGhAvailable,
+        runGhAuthStatus,
+      });
+
+      // Fire two calls before either resolves.
+      const firstPromise = fetcher.getAuthStatus();
+      const secondPromise = fetcher.getAuthStatus();
+
+      // Let the (single) subprocess finish.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      resolveProbe?.();
+
+      const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+      // Only one subprocess invocation across both callers.
+      expect(runGhAuthStatus).toHaveBeenCalledTimes(1);
+      // Both callers see the same parsed value.
+      expect(first.loggedIn).toBe(true);
+      expect(second.loggedIn).toBe(true);
+      // Exactly one caller is the "fresh" one; the other is "cached".
+      const cachedFlags = [first.cached, second.cached].sort();
+      expect(cachedFlags).toEqual([false, true]);
+    });
+
     it("re-runs after invalidateGhCaches() — drives the Re-check button", async () => {
       const { fetcher, probeGhAvailable, runGhAuthStatus } = buildAuthFetcher();
       await fetcher.getAuthStatus();
