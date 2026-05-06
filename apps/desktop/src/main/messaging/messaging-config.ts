@@ -235,12 +235,29 @@ export async function loadDesktopMessagingConfigFromSettings(
       }
     : {};
 
+  // Mattermost is env-only today (no Settings UI yet — tracked in #195).
+  // Pass through whatever loadDesktopMessagingConfig produced from env vars,
+  // and log eligibility consistently with the other channels.
+  const mattermostConfig = envConfig.mattermost
+    ? buildChannelConfig({
+        log,
+        channel: "mattermost",
+        enabled: envConfig.mattermost.enabled !== false,
+        hasToken: Boolean(envConfig.mattermost.botToken),
+        logStartupEligibility: options.logStartupEligibility === true,
+        authorizedActorCount: envConfig.mattermost.authorizedActorIds.length,
+      })
+      ? { mattermost: envConfig.mattermost }
+      : {}
+    : {};
+
   return {
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
     toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
     attachmentPolicy,
     ...telegramConfig,
     ...discordConfig,
+    ...mattermostConfig,
   };
 }
 
