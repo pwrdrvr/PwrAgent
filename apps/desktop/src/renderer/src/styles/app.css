@@ -180,6 +180,19 @@ textarea,
 }
 
 .thread-header {
+  /* Vertically center the title row + chips + MessagingStatusBar in
+     a 44px box that matches the sidebar masthead's effective height
+     (10px top padding + 34px set by `.sidebar__icon-button`). With
+     `box-sizing: border-box`, `min-height: 44px` + `padding-top: 10px`
+     gives a 34px content area; `align-items: center` puts the
+     compact title's top at y=18.5 — exactly where the brand sits in
+     the sidebar masthead. Result: title, brand, and messaging pills
+     all share the same vertical centerline.
+     The launchpad variant (`.thread-header--launchpad`) overrides
+     align-items back to flex-start since it has its own taller
+     stacked layout. */
+  align-items: center;
+  min-height: 44px;
   padding-top: 10px;
   /* Reserve space for the position:fixed context-rail spine (48px wide,
      pinned top-right). Without this padding, anything we render in the
