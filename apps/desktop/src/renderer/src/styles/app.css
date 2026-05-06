@@ -2350,8 +2350,7 @@ textarea,
   min-width: 0;
 }
 
-.settings-row__error,
-.settings-empty {
+.settings-row__error {
   margin: 0;
   color: var(--danger-text);
   font-size: 13px;
@@ -2367,7 +2366,10 @@ textarea,
 }
 
 .settings-empty {
+  margin: 0;
   color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .settings-error-block {

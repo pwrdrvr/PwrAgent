@@ -80,9 +80,10 @@ export function showMessagingActivityWindow(): void {
   });
 
   window.on("closed", () => {
-    if (activityWindow === window) {
-      activityWindow = undefined;
-    }
+    // The top-of-function "already-open" guard prevents two activity
+    // windows from coexisting, so the singleton always points at the
+    // window that just closed. No need to compare references.
+    activityWindow = undefined;
     log.debug("activity window closed");
   });
 
