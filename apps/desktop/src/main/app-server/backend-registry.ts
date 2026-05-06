@@ -2661,11 +2661,15 @@ export class DesktopBackendRegistry {
     operation: (client: BackendClient, mode: ThreadExecutionMode) => Promise<T>,
     requestedMode?: ThreadExecutionMode,
   ): Promise<T> {
+    if (requestedMode) {
+      return await operation(this.getClient("codex", requestedMode), requestedMode);
+    }
+
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: "codex",
       threadId,
     });
-    const preferredMode = requestedMode ?? overlay?.executionMode;
+    const preferredMode = overlay?.executionMode;
     const modes: ThreadExecutionMode[] = preferredMode
       ? [preferredMode, preferredMode === "default" ? "full-access" : "default"]
       : ["default", "full-access"];
