@@ -1,5 +1,6 @@
 import { useState, type CSSProperties, type PointerEvent } from "react";
 import { Sidebar } from "./features/navigation/Sidebar";
+import { MessagingActivityOverlay } from "./features/messaging-activity/MessagingActivityOverlay";
 import {
   SettingsScreen,
   type SettingsSection,
@@ -50,10 +51,14 @@ function DesktopAppShell(props: {
   settings: DesktopSettingsState;
 }) {
   const [sidebarWidth, setSidebarWidth] = useState(408);
-  const [mainView, setMainView] = useState<"thread" | "settings">("thread");
+  const [mainView, setMainView] = useState<
+    "thread" | "settings" | "messaging-activity"
+  >("thread");
   // Initial section for SettingsScreen — non-undefined when navigation
-  // came from a deep-link (e.g. clicking a platform chip jumps directly
-  // to "messaging-activity"). Resets when the user switches mainView.
+  // came from a deep-link to a specific section. Resets when the user
+  // switches mainView. The Messaging Activity surface is its own
+  // top-level mainView, NOT a settings section, so it's never set
+  // through this slot.
   const [settingsInitialSection, setSettingsInitialSection] = useState<
     SettingsSection | undefined
   >(undefined);
@@ -199,8 +204,7 @@ function DesktopAppShell(props: {
           onArchiveWorktree={navigation.archiveWorktree}
           onEnsureSkillsLoaded={skills.ensureLoaded}
           onOpenMessagingActivity={() => {
-            setSettingsInitialSection("messaging-activity");
-            setMainView("settings");
+            setMainView("messaging-activity");
           }}
           onHandoffThreadWorkspace={
             navigation.selectedThread
@@ -250,6 +254,16 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             settings={settings}
             initialSection={settingsInitialSection}
+            onClose={() => setMainView("thread")}
+            onOpenMessagingActivity={() => setMainView("messaging-activity")}
+          />
+        </div>
+      ) : null}
+
+      {mainView === "messaging-activity" ? (
+        <div className="app-shell__activity-layer">
+          <MessagingActivityOverlay
+            desktopApi={desktopApi}
             onClose={() => setMainView("thread")}
           />
         </div>

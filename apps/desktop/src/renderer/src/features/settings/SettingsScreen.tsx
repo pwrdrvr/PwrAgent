@@ -10,7 +10,6 @@ import { ExperimentalSettings } from "./ExperimentalSettings";
 import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
-import { MessagingActivityScreen } from "../messaging-activity/MessagingActivityScreen";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { WorktreesSettings } from "./WorktreesSettings";
 import { useCallback, useEffect, useState } from "react";
@@ -18,7 +17,6 @@ import { useCallback, useEffect, useState } from "react";
 export type SettingsSection =
   | "experimental"
   | "messaging"
-  | "messaging-activity"
   | "models"
   | "applications"
   | "worktrees"
@@ -28,7 +26,6 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "applications", label: "Applications" },
   { id: "worktrees", label: "Worktrees" },
   { id: "messaging", label: "Messaging" },
-  { id: "messaging-activity", label: "Messaging activity" },
   { id: "models", label: "Models" },
   { id: "experimental", label: "Experimental" },
   { id: "about", label: "About" },
@@ -40,26 +37,31 @@ export function SettingsScreen(props: {
   /** Initial section to render. Defaults to Applications. */
   initialSection?: SettingsSection;
   onClose?: () => void;
+  /** Fired when a platform chip in the title-bar strip is clicked.
+   *  The App-level handler closes the Settings overlay and opens the
+   *  Messaging Activity overlay (its own top-level mainView). */
+  onOpenMessagingActivity?: () => void;
 }) {
   const [section, setSection] = useState<SettingsSection>(
     props.initialSection ?? "applications",
   );
   // When the parent re-mounts with a different initialSection (e.g.
-  // user clicked a platform icon → "messaging-activity"), follow it.
+  // a future deep-link), follow it.
   useEffect(() => {
     if (props.initialSection) setSection(props.initialSection);
   }, [props.initialSection]);
   const snapshot = props.settings.snapshot;
   const activeSectionLabel =
     SECTIONS.find((entry) => entry.id === section)?.label ?? "Settings";
-  // Platform-chip clicks in the title-bar strip deep-link to the
-  // messaging-activity tab — same affordance ThreadHeader exposes,
-  // kept symmetrical so muscle memory works on both screens.
+  // Platform-chip clicks in the title-bar strip route to the top-level
+  // Messaging Activity overlay (NOT a settings section). The App-level
+  // handler swaps mainView for us; no internal state change here.
+  const onOpenMessagingActivity = props.onOpenMessagingActivity;
   const onOpenActivity = useCallback(
     (_platform?: MessagingChannelKind) => {
-      setSection("messaging-activity");
+      onOpenMessagingActivity?.();
     },
-    [],
+    [onOpenMessagingActivity],
   );
 
   return (
@@ -302,10 +304,6 @@ function SettingsSectionBody(props: {
         }}
       />
     );
-  }
-
-  if (props.section === "messaging-activity") {
-    return <MessagingActivityScreen desktopApi={props.desktopApi} />;
   }
 
   return (

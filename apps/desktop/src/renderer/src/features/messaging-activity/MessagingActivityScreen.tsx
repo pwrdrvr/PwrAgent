@@ -61,8 +61,12 @@ export function MessagingActivityScreen(props: { desktopApi?: DesktopApi }) {
   const groups = groupByKind(entries);
 
   return (
-    <section className="settings-stack" aria-label="Messaging activity">
-      <section className="settings-panel" aria-labelledby="messaging-activity-title">
+    <section className="messaging-activity" aria-label="Messaging activity">
+      {/* Pinned header card — eyebrow + title + helper paragraph + Refresh. */}
+      <section
+        className="settings-panel messaging-activity__head"
+        aria-labelledby="messaging-activity-title"
+      >
         <div className="settings-panel__header">
           <div>
             <p className="eyebrow">Messaging</p>
@@ -88,13 +92,19 @@ export function MessagingActivityScreen(props: { desktopApi?: DesktopApi }) {
         ) : null}
       </section>
 
+      {/* Primary list — fills available height with internal scroll. */}
       <ActivitySection
+        className="messaging-activity__main"
         title="Currently bound"
         emptyLabel="No bound conversations have sent messages recently."
         kinds={["inbound-routed", "outbound"]}
         groups={groups}
       />
+
+      {/* Secondary list — capped at ~5 rows tall; internal scroll if longer.
+          Stays pinned to the bottom of the pane. */}
       <ActivitySection
+        className="messaging-activity__aside"
         title="Received but ignored"
         emptyLabel="No rejected or ignored inbound messages — your authorization list is doing its job."
         kinds={["inbound-rejected", "inbound-ignored"]}
@@ -105,6 +115,7 @@ export function MessagingActivityScreen(props: { desktopApi?: DesktopApi }) {
 }
 
 function ActivitySection(props: {
+  className?: string;
   title: string;
   emptyLabel: string;
   kinds: MessagingActivityKind[];
@@ -112,8 +123,9 @@ function ActivitySection(props: {
 }) {
   const entries = props.kinds.flatMap((kind) => props.groups[kind] ?? []);
   entries.sort((left, right) => right.createdAt - left.createdAt);
+  const className = `settings-panel${props.className ? ` ${props.className}` : ""}`;
   return (
-    <section className="settings-panel" aria-label={props.title}>
+    <section className={className} aria-label={props.title}>
       <div className="settings-panel__header">
         <div>
           <p className="eyebrow">Messaging</p>
@@ -121,7 +133,7 @@ function ActivitySection(props: {
         </div>
       </div>
       {entries.length === 0 ? (
-        <p className="settings-empty">{props.emptyLabel}</p>
+        <p className="settings-empty messaging-activity-empty">{props.emptyLabel}</p>
       ) : (
         <ul className="messaging-activity-list">
           {entries.map((entry) => (

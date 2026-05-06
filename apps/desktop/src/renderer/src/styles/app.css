@@ -335,6 +335,176 @@ textarea,
   color: var(--text-primary);
 }
 
+/* ============================================================
+   MESSAGING ACTIVITY OVERLAY — its own top-level mainView (not
+   nested in Settings). See:
+   - apps/desktop/src/renderer/src/features/messaging-activity/MessagingActivityOverlay.tsx
+   - docs/design/pwragent-v2/project/PwrAgnt v2.html (screen === "activity")
+   ============================================================ */
+
+.activity-screen {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-app);
+}
+
+/* Title-bar strip — same visual register as `.settings-titlebar`,
+   shifted to a single-row chrome (no left nav). The strip covers the
+   stoplight gutter; macOS hiddenInset draws the stoplights over the
+   left padding. */
+.activity-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 10px 14px 10px 80px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+  -webkit-app-region: drag;
+}
+
+.activity-titlebar button,
+.activity-titlebar [role="button"] {
+  -webkit-app-region: no-drag;
+}
+
+.activity-titlebar__brand {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+
+.activity-titlebar__brand-accent {
+  color: var(--accent-bright);
+}
+
+.activity-titlebar__breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.activity-titlebar__eyebrow {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.activity-titlebar__separator {
+  color: var(--text-subtle);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.activity-titlebar__current {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-titlebar__spacer {
+  flex: 1;
+}
+
+.activity-titlebar__close {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  appearance: none;
+  cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  -webkit-app-region: no-drag;
+}
+
+.activity-titlebar__close:hover,
+.activity-titlebar__close:focus-visible {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+  outline: none;
+}
+
+/* Content region — fills the remaining vertical space; the inner
+   `.messaging-activity` flex column does the pinned/flex/capped
+   work. */
+.activity-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 18px 24px;
+}
+
+/* Pinned head + filling middle + capped footer for the activity body. */
+.messaging-activity {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  width: 100%;
+}
+
+.messaging-activity__head {
+  flex: 0 0 auto;
+}
+
+.messaging-activity__main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.messaging-activity__main .messaging-activity-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 18px 14px;
+}
+
+.messaging-activity__aside {
+  flex: 0 0 auto;
+  /* ~5 rows of meta + summary + 8px gap + 14px head. The list scrolls
+     internally if the cap is exceeded. */
+  max-height: 240px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.messaging-activity__aside .messaging-activity-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 18px 14px;
+}
+
+.messaging-activity-empty {
+  padding: 14px 18px;
+}
+
 .messaging-activity-list {
   list-style: none;
   margin: 0;
@@ -1676,7 +1846,8 @@ textarea,
   overflow: hidden;
 }
 
-.app-shell__settings-layer {
+.app-shell__settings-layer,
+.app-shell__activity-layer {
   display: flex;
   position: absolute;
   z-index: 30;
