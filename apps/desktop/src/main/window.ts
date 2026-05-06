@@ -6,6 +6,15 @@ import { MainProcessHeapMonitor } from "./diagnostics/main-process-heap-monitor"
 import { RendererHeapMonitor } from "./diagnostics/renderer-heap-monitor";
 import { getMainLogger } from "./log";
 import { attachWindowFocusSync } from "./window-focus-sync";
+import {
+  WINDOW_KIND_MAIN,
+  registerWindowChannels,
+} from "./window-channels";
+import {
+  AGENT_EVENT_CHANNEL,
+  MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
+  MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
+} from "../shared/ipc";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
@@ -33,6 +42,68 @@ export function getRendererEntry(): { kind: "url" | "file"; value: string } {
     kind: "file",
     value: join(__dirname, "../renderer/index.html")
   };
+}
+
+/**
+ * Defense-in-depth window guards applied to every BrowserWindow we
+ * create. Both the main window and the Messaging Activity window
+ * route through this helper so the second window can never silently
+ * inherit weaker defaults than the first.
+ *
+ * - `setWindowOpenHandler` denies renderer-driven new-window creation.
+ *   Safelisted external URLs (https / mailto / file / loopback http)
+ *   open in the user's default browser via `shell.openExternal`.
+ * - `will-navigate` prevents the existing window from being navigated
+ *   away — only file:// and the dev server origin are allowed (the
+ *   bundle's own assets / hot-reload), everything else is blocked.
+ */
+export function applyWindowSecurityHardening(window: BrowserWindow): void {
+  const log = getMainLogger("pwragent:window-guards");
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (isSafeExternalOpenUrl(url)) {
+      void shell.openExternal(url);
+    } else {
+      log.warn("blocked renderer external URL open");
+    }
+
+    return { action: "deny" };
+  });
+
+  window.webContents.on("will-navigate", (event, targetUrl) => {
+    if (isSafeRendererNavigation(targetUrl)) {
+      return;
+    }
+    event.preventDefault();
+    log.warn("blocked renderer navigation", { targetUrl });
+  });
+}
+
+/**
+ * Renderer navigations are only allowed back to the loaded entry
+ * (file:// in production, the dev server origin in development).
+ * Hash-only navigation (e.g. `#messaging-activity` set by the spawn
+ * code) is allowed because the URL origin/path matches.
+ */
+function isSafeRendererNavigation(targetUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol === "file:") {
+    return true;
+  }
+  const devUrl = process.env.ELECTRON_RENDERER_URL;
+  if (!devUrl) {
+    return false;
+  }
+  try {
+    const dev = new URL(devUrl);
+    return parsed.origin === dev.origin;
+  } catch {
+    return false;
+  }
 }
 
 export function isSafeExternalOpenUrl(url: string): boolean {
@@ -234,15 +305,16 @@ export function createMainWindow(options?: {
     });
   }
 
-  webContents.setWindowOpenHandler(({ url }) => {
-    if (isSafeExternalOpenUrl(url)) {
-      void shell.openExternal(url);
-    } else {
-      mainLog.warn("blocked renderer external URL open");
-    }
-
-    return { action: "deny" };
-  });
+  applyWindowSecurityHardening(window);
+  // The main window subscribes to every push-event channel — it
+  // hosts the full app shell. Secondary windows register a narrower
+  // set (or none) so broadcasters only deliver to what they actually
+  // consume. See `apps/desktop/src/main/window-channels.ts`.
+  registerWindowChannels(window, WINDOW_KIND_MAIN, [
+    AGENT_EVENT_CHANNEL,
+    MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
+    MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
+  ]);
 
   window.on("closed", () => {
     stopHeapMonitor("window-closed");

@@ -9,22 +9,30 @@ import "./styles/app.css";
 installGlobalRendererErrorHandlers();
 
 /**
- * Pick which root component to mount based on `window.location.hash`.
+ * Routes recognized by `chooseRoot` below. The Messaging Activity
+ * window loads the same renderer bundle as the main shell but with a
+ * URL hash — `main.tsx` reads the hash and mounts a different root
+ * for that window. New secondary windows add an entry here; the
+ * default fallback is the full `<App />` shell.
  *
- * The Messaging Activity surface lives in its own BrowserWindow (see
- * `apps/desktop/src/main/messaging-activity-window.ts`). That window
- * loads the same renderer bundle but with the `#messaging-activity`
- * hash so we mount only the activity surface here — no sidebar, no
- * thread view, no settings shell.
- *
- * The default (no hash, or any unrecognized hash) is the full app.
+ * Each route's `match` runs against the bare hash (no leading `#`).
+ * Use `=== "literal"` for exact matches today; if a future deep-link
+ * uses a path-style hash like `thread/abc123`, adjust the matcher
+ * (e.g. `(h) => h.startsWith("thread/")`) without restructuring.
  */
+const routes: Array<{
+  match: (hash: string) => boolean;
+  render: () => ReactElement;
+}> = [
+  {
+    match: (hash) => hash === "messaging-activity",
+    render: () => <MessagingActivityWindow />,
+  },
+];
+
 function chooseRoot(): ReactElement {
   const hash = window.location.hash.replace(/^#/, "");
-  if (hash === "messaging-activity") {
-    return <MessagingActivityWindow />;
-  }
-  return <App />;
+  return routes.find((route) => route.match(hash))?.render() ?? <App />;
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

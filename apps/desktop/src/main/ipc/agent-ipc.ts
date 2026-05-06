@@ -1,4 +1,5 @@
-import { BrowserWindow, ipcMain } from "electron";
+import { ipcMain } from "electron";
+import { subscribersForChannel } from "../window-channels";
 import type {
   AgentEvent,
   CheckThreadBranchDriftRequest,
@@ -157,16 +158,12 @@ function broadcastAgentEvent(event: AgentEvent): void {
     logDebug("agentEvent", eventSummary);
   }
 
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (typeof window.isDestroyed === "function" && window.isDestroyed()) {
-      continue;
-    }
-
-    if (typeof window.webContents.send !== "function") {
-      continue;
-    }
-
-    window.webContents.send(AGENT_EVENT_CHANNEL, event);
+  // Only deliver to windows that registered for this channel.
+  // Secondary windows (e.g. the Messaging Activity window) opt out by
+  // default — see `apps/desktop/src/main/window-channels.ts`.
+  for (const webContents of subscribersForChannel(AGENT_EVENT_CHANNEL)) {
+    if (typeof webContents.send !== "function") continue;
+    webContents.send(AGENT_EVENT_CHANNEL, event);
   }
 }
 

@@ -1,6 +1,14 @@
 import { BrowserWindow } from "electron";
 import { getMainLogger } from "./log";
-import { getPreloadPath, getRendererEntry } from "./window";
+import {
+  applyWindowSecurityHardening,
+  getPreloadPath,
+  getRendererEntry,
+} from "./window";
+import {
+  WINDOW_KIND_MESSAGING_ACTIVITY,
+  registerWindowChannels,
+} from "./window-channels";
 
 const log = getMainLogger("pwragent:activity-window");
 
@@ -51,6 +59,14 @@ export function showMessagingActivityWindow(): void {
       nodeIntegration: false,
     },
   });
+
+  applyWindowSecurityHardening(window);
+  // The activity window does not subscribe to any push events today
+  // — its `MessagingActivityScreen` polls via `listMessagingActivity`
+  // every 5s. Register the window with no channels so the messaging
+  // broadcasters skip it. If the window starts wanting push updates,
+  // add the channels here.
+  registerWindowChannels(window, WINDOW_KIND_MESSAGING_ACTIVITY, []);
 
   const rendererEntry = getRendererEntry();
   if (rendererEntry.kind === "url") {

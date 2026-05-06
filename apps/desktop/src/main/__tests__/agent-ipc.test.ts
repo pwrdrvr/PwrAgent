@@ -80,6 +80,20 @@ vi.mock("electron", () => ({
   },
 }));
 
+// Stub the per-window channel registry — `broadcastAgentEvent` now
+// fans out via `subscribersForChannel(...)` instead of
+// `BrowserWindow.getAllWindows()`. The test pretends a single
+// subscriber exists for any channel, which routes back to the
+// shared `send` mock above.
+vi.mock("../window-channels", () => ({
+  subscribersForChannel: () => [{ send }],
+  WINDOW_KIND_MAIN: "main",
+  WINDOW_KIND_MESSAGING_ACTIVITY: "messaging-activity",
+  registerWindowChannels: () => undefined,
+  debugListRegisteredWindows: () => [],
+  _resetWindowChannelsForTests: () => undefined,
+}));
+
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => registry,
 }));
