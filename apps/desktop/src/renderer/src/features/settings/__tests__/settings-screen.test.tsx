@@ -243,7 +243,12 @@ describe("SettingsScreen", () => {
       screen.getByRole("radio", { name: "Auto Discovery - Use Newest" }),
     ).toHaveAttribute("aria-checked", "true");
     expect(screen.getByText("0.130.0")).toBeInTheDocument();
-    expect(screen.getByText("Using /usr/local/bin/codex")).toBeInTheDocument();
+    // Source pills on the Codex fields show the effective config
+    // source (the redundant `Using /path/to/binary` label was
+    // dropped — the path is already visible in the pathrow list
+    // via the "Using" chip below). With the seed data
+    // codex.path.source === "default" → label "auto".
+    expect(screen.getAllByText("auto").length).toBeGreaterThanOrEqual(2);
 
     // Codex pathrow only renders a "Use" button on candidates that
     // are NOT currently selected (the selected one shows a "Using"

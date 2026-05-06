@@ -8,7 +8,6 @@ import {
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
-  type SettingsCardChipKind,
 } from "./SettingsLayout";
 import {
   SettingsPathRow,
@@ -39,20 +38,15 @@ export function ModelsSettings(props: {
   const autoCandidates = codex.discovery.candidates.filter(
     (candidate) => candidate.source === "path" || candidate.source === "application",
   );
-  const selectedLabel = codex.discovery.selectedCommand
-    ? `Using ${codex.discovery.selectedCommand}`
-    : "No executable Codex found";
-  const codexChip = codex.path.source === "default" ? "auto" : sourceBadge(codex.path);
-  const codexChipKind: SettingsCardChipKind =
-    codex.path.source === "env" ? "warn" : "default";
+  // Per-field source pill text — shows where the effective value
+  // comes from (config / env override / default). Used on both the
+  // "Codex selection" and "Available paths" rows so the metadata is
+  // visible exactly where it applies. The card header used to carry
+  // a duplicate of this same chip; that's gone now.
+  const codexSource =
+    codex.path.source === "default" ? "auto" : sourceBadge(codex.path);
   const grokConfigured = grok.configured;
   const grokSource = formatSourceLabel(grok.source, grok.overriddenByEnv);
-  const grokChip = grokConfigured ? `Set · ${grokSource}` : "Not set";
-  const grokChipKind: SettingsCardChipKind = grokConfigured
-    ? grok.source === "env"
-      ? "warn"
-      : "ok"
-    : "default";
 
   useEffect(() => {
     setCodexPath(codex.path.value);
@@ -71,17 +65,12 @@ export function ModelsSettings(props: {
         help="PwrAgent drives Codex and Grok. Use Auto Discovery to track the newest binary on disk, or pin a specific path."
       />
 
-      <SettingsSection
-        eyebrow="Models"
-        title="Codex"
-        chip={codexChip}
-        chipKind={codexChipKind}
-      >
+      <SettingsSection eyebrow="Models" title="Codex">
         <div className="settings-fields">
           <SettingsField
             label="Codex selection"
             sub="Pick the Codex binary to invoke for new threads."
-            source={selectedLabel}
+            source={codexSource}
             control={
               <div
                 className="settings-segmented"
@@ -141,6 +130,7 @@ export function ModelsSettings(props: {
           <SettingsField
             label="Available paths"
             sub="Detected on this machine. The first listed will be used."
+            source={codexSource}
             control={
               <div
                 className="settings-paths"
@@ -168,12 +158,7 @@ export function ModelsSettings(props: {
         </div>
       </SettingsSection>
 
-      <SettingsSection
-        eyebrow="Models"
-        title="Grok"
-        chip={grokChip}
-        chipKind={grokChipKind}
-      >
+      <SettingsSection eyebrow="Models" title="Grok">
         <div className="settings-fields">
           <SettingsField
             label="API Key"
