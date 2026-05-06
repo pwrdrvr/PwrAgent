@@ -1201,19 +1201,42 @@ export class MattermostAdapter implements MattermostProviderAdapter {
 
   private channelRefForPost(
     post: { channel_id: string; root_id?: string; id: string },
-    data: { channel_type?: string; team_id?: string },
+    data: {
+      channel_type?: string;
+      team_id?: string;
+      sender_name?: string;
+      channel_display_name?: string;
+    },
   ): MessagingChannelRef {
     const isThread = Boolean(post.root_id && post.root_id !== post.id);
+    const kind: MessagingConversationKind = isThread
+      ? "thread"
+      : data.channel_type === "D" || data.channel_type === "G"
+        ? "dm"
+        : "channel";
+    // Title selection (mirrors Discord's adapter):
+    //   1:1 DM (`channel_type === "D"`)  → the peer's username. Mattermost
+    //     filters out our bot from the inbound stream above, so
+    //     `sender_name` on a `posted` event is always the peer.
+    //   Group DM (`channel_type === "G"`) → server-side
+    //     `channel_display_name` is the comma-separated peer list,
+    //     which is what the user expects to see in the binding chip.
+    //   Public/private channel       → `channel_display_name` is the
+    //     human-readable channel name (e.g., "Town Square").
+    //   Threads                      → no title at this level; the
+    //     parent post would carry it if we ever needed it.
+    const title = isThread
+      ? undefined
+      : data.channel_type === "D"
+        ? data.sender_name
+        : data.channel_display_name;
     return {
       channel: this.channel,
       conversation: {
         id: post.channel_id,
-        kind: isThread
-          ? "thread"
-          : data.channel_type === "D" || data.channel_type === "G"
-          ? "dm"
-          : "channel",
+        kind,
         ...(isThread && post.root_id ? { parentId: post.root_id } : {}),
+        ...(title ? { title } : {}),
       },
     };
   }
