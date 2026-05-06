@@ -2416,6 +2416,12 @@ textarea,
   padding: 0;
 }
 
+/* When a paths list is the body of a settings card (not nested inside
+   a SettingsField), give it the design's standard card-body padding. */
+.settings-section__body > .settings-paths {
+  padding: 14px 18px;
+}
+
 .settings-pathrow {
   display: flex;
   align-items: center;
@@ -2526,6 +2532,13 @@ textarea,
   flex-direction: column;
   gap: 6px;
   width: 100%;
+}
+
+/* When a comp-opts list is the body of a settings card (not nested
+   inside a SettingsField), give it the design's standard card-body
+   padding. */
+.settings-section__body > .settings-comp-opts {
+  padding: 14px 18px;
 }
 
 .settings-comp-opt {
