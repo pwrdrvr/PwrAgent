@@ -101,7 +101,7 @@ describe("buildMattermostActions", () => {
     });
     expect(buttons).toHaveLength(3);
     expect(buttons?.[0]).toMatchObject({
-      id: "statusstop",
+      id: "statusstop0",
       name: "Stop",
       type: "button",
       style: "danger",
@@ -109,6 +109,43 @@ describe("buildMattermostActions", () => {
         url: "https://callback.example.com/cb",
         context: { handle: "h-status:stop" },
       },
+    });
+  });
+
+  it("appends slot index to URL ids so chips with duplicate action.id route distinctly", () => {
+    // Regression: thread_picker / project_picker / many other producers
+    // emit chips that share `action.id` (e.g. "browse:select-thread")
+    // and differentiate via `action.value`. Mattermost's URL routing
+    // (`/api/v4/posts/{post_id}/actions/{action_id:[A-Za-z0-9]+}`)
+    // matches on the URL `id` only — duplicate ids meant every click
+    // resolved to the first chip's integration.context, silently
+    // binding the wrong thread.
+    const buttons = buildMattermostActions({
+      actions: [
+        { id: "browse:select-thread", label: "1. Knock Knock Rock", value: { threadId: "thread-1" } },
+        { id: "browse:select-thread", label: "2. Wood chuck joke", value: { threadId: "thread-2" } },
+        { id: "browse:select-thread", label: "3. Codex App Server", value: { threadId: "thread-3" } },
+      ],
+      buildCallbackContext: (action) => ({
+        actionId: action.id,
+        threadId: (action.value as { threadId?: string } | undefined)?.threadId,
+      }),
+      callbackUrl: "https://callback.example.com/cb",
+      capabilityProfile: PROFILE,
+    });
+    expect(buttons).toHaveLength(3);
+    const ids = buttons!.map((b) => b.id);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids).toEqual([
+      "browseselectthread0",
+      "browseselectthread1",
+      "browseselectthread2",
+    ]);
+    // The integration.context still carries the original action.id and
+    // the per-chip value — handle/HMAC resolution unchanged.
+    expect(buttons![1].integration.context).toEqual({
+      actionId: "browse:select-thread",
+      threadId: "thread-2",
     });
   });
 

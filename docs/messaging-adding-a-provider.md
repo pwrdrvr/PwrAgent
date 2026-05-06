@@ -520,6 +520,13 @@ Sanitize action ids with the platform's actual constraint, not what feels reason
 
 Other platforms have their own quirks — Slack truncates, Discord caps at 100 chars, Telegram limits callback_data to 64 bytes — read the docs.
 
+### URL-routed callback ids must be unique within a post (Mattermost)
+Producers commonly emit many chips with the **same** `action.id` and differentiate via `action.value` (e.g. `thread_picker`, `project_picker`). Telegram (`callback_data`) and Discord (`custom_id`) both carry the per-chip payload directly on the wire, so duplicates don't matter — each chip's distinct payload routes correctly.
+
+Mattermost is different: it routes interactive callbacks by URL path and **matches the FIRST action in `props.attachments[].actions[]` whose `id` matches the URL**. Duplicate ids silently route every click to the first chip's `integration.context`. Diagnostic shape: user clicks chip #2 in a picker, ends up bound/routed to chip #1's payload. Especially confusing because the first chip is often the most-recently-active item, so the wrong-but-plausible result looks like opaque-state corruption rather than a routing-id collision.
+
+If your provider routes callbacks by URL or any other id-only mechanism, append the chip's slot index to the rendered id (Mattermost: `${sanitize(action.id)}${index}`) so each rendered button has a URL-unique id. Keep the original `action.id` in your callback context (HMAC payload, handle lookup, etc.) so resolution and authentication still work — only the URL-visible id changes.
+
 _(Add new gotchas here as you find them.)_
 
 ## Living examples

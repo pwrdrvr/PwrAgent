@@ -176,10 +176,23 @@ export function buildMattermostActions(params: {
   const items = params.actions
     .filter((action) => !action.disabled)
     .slice(0, maxActions)
-    .map((action) => ({
+    .map((action, index) => ({
       action,
       component: {
-        id: sanitizeMattermostActionId(action.id),
+        // Mattermost routes interactive callbacks by URL path
+        // (`/api/v4/posts/{post_id}/actions/{action_id:[A-Za-z0-9]+}`)
+        // and matches the FIRST action in `props.attachments[].actions[]`
+        // whose `id` matches that path. Producers commonly reuse the
+        // same `action.id` across many chips and differentiate via
+        // `action.value` (Telegram's `callback_data` and Discord's
+        // `custom_id` carry per-chip payloads directly, so they don't
+        // care). For Mattermost we MUST give each chip a unique URL id
+        // — otherwise every click on the picker resolves to the first
+        // chip's `integration.context`, silently binding the wrong
+        // thread/project/etc. The slot index suffix is enough; the
+        // original raw `action.id` stays in `integration.context.actionId`,
+        // so HMAC and handle resolution are unaffected.
+        id: `${sanitizeMattermostActionId(action.id)}${index}`,
         name:
           action.label.length > maxLabelLength
             ? action.label.slice(0, maxLabelLength)
