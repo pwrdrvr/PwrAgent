@@ -897,9 +897,19 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         outcome: "discarded",
       };
     }
-    const channelRef = (intent.targetSurface as MessagingSurfaceRef | undefined)
-      ?.state?.opaque as { channelId?: string } | undefined;
-    const channelId = channelRef?.channelId;
+    // Resolve channel the same way `resolveTarget` does for posts:
+    // `intent.audit?.channel` is what the controller populates for
+    // producer-issued typing (`signalTurnActivity` doesn't set
+    // `targetSurface`); the opaque slot is the fallback for typing on
+    // an existing surface. Reading only the opaque slot was a silent
+    // no-op (mirrors regression f0974752 on the post path).
+    const auditChannelId = (intent as { audit?: { channel?: MessagingChannelRef } })
+      .audit?.channel?.conversation.id;
+    const opaqueChannelId =
+      ((intent.targetSurface as MessagingSurfaceRef | undefined)?.state?.opaque as
+        | { channelId?: string }
+        | undefined)?.channelId;
+    const channelId = auditChannelId ?? opaqueChannelId;
     if (intent.state === "active" && channelId) {
       try {
         this.websocketClient.userTyping(channelId, "");
@@ -910,7 +920,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         });
       }
     }
-    // Mattermost has no "typing stopped" signal; idle is implicit (lease).
+    // Mattermost has no "typing stopped" RPC; the typing indicator
+    // expires server-side via implicit lease (~3-5s).
     return {
       channel: this.channel,
       deliveredAt: this.now(),

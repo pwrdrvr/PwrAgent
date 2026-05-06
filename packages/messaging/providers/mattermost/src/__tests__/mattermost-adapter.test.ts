@@ -34,14 +34,16 @@ const baseConfig = {
  * touches at construction + delivery time. Cast through `unknown` because
  * the real classes have ~hundreds of methods and we only need a handful.
  */
-function fakeWebSocketClient(): WebSocketClient {
+function fakeWebSocketClient(spies?: { userTyping: string[] }): WebSocketClient {
   return {
     addMessageListener: () => {},
     addCloseListener: () => {},
     addErrorListener: () => {},
     initialize: () => {},
     close: () => {},
-    userTyping: () => {},
+    userTyping: (channelId: string) => {
+      spies?.userTyping.push(channelId);
+    },
   } as unknown as WebSocketClient;
 }
 
@@ -257,6 +259,60 @@ describe("MattermostAdapter — outbound deliver", () => {
     expect(spies.patchedPosts).toHaveLength(1);
     expect(spies.patchedPosts[0].props).toBeDefined();
     expect(spies.patchedPosts[0].props?.attachments).toEqual([]);
+  });
+});
+
+describe("MattermostAdapter — typing indicator", () => {
+  it("emits userTyping using audit.channel when the producer omits targetSurface", async () => {
+    const wsSpies = { userTyping: [] as string[] };
+    const adapter = new MattermostAdapter({
+      callbackHandleStore: fakeStore,
+      client: fakeClient4({ createdPosts: [], patchedPosts: [] }),
+      config: baseConfig,
+      logger: silentLogger,
+      websocketClient: fakeWebSocketClient(wsSpies),
+      now: () => 1_700_000_000_000,
+    });
+
+    const result = await adapter.deliver({
+      id: "intent-typing-1",
+      kind: "activity",
+      activity: "typing",
+      state: "active",
+      createdAt: 1_700_000_000_000,
+      audit: {
+        channel: { channel: "mattermost", conversation: { id: "dm-typing", kind: "dm" } },
+      },
+    } as unknown as MessagingSurfaceIntent);
+
+    expect(result.outcome).toBe("signaled");
+    expect(wsSpies.userTyping).toEqual(["dm-typing"]);
+  });
+
+  it("does not call userTyping when state is idle (Mattermost has no stop-typing RPC)", async () => {
+    const wsSpies = { userTyping: [] as string[] };
+    const adapter = new MattermostAdapter({
+      callbackHandleStore: fakeStore,
+      client: fakeClient4({ createdPosts: [], patchedPosts: [] }),
+      config: baseConfig,
+      logger: silentLogger,
+      websocketClient: fakeWebSocketClient(wsSpies),
+      now: () => 1_700_000_000_000,
+    });
+
+    const result = await adapter.deliver({
+      id: "intent-typing-idle",
+      kind: "activity",
+      activity: "typing",
+      state: "idle",
+      createdAt: 1_700_000_000_000,
+      audit: {
+        channel: { channel: "mattermost", conversation: { id: "dm-typing", kind: "dm" } },
+      },
+    } as unknown as MessagingSurfaceIntent);
+
+    expect(result.outcome).toBe("signaled");
+    expect(wsSpies.userTyping).toEqual([]);
   });
 });
 
