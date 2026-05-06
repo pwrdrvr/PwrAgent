@@ -290,6 +290,40 @@ When `intent.parts` contains a `MessagingFilePart`, render it as a platform atta
 
 The forthcoming Plan/Review attachment delivery work ([issue #193](https://github.com/pwrdrvr/PwrAgent/issues/193) / [plan 2026-05-05-002](plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md)) is the first producer that emits `MessagingFilePart` — wire the path now even if no producer is shipping one yet, so the adapter is feature-complete.
 
+## Step 7.5 — Slash commands (when the platform supports them)
+
+If the platform has native slash commands with autocomplete UX (Discord, Mattermost, Slack), **register the canonical command set on adapter start**. Skip this step only when the platform genuinely has no slash-command surface (Telegram's `/cmd` syntax counts; SMS does not).
+
+The canonical set today mirrors what Discord and Mattermost both register:
+
+| trigger | description |
+|---|---|
+| `resume` | Bind this conversation to a PwrAgent thread |
+| `status` | Show the current binding's controls |
+| `detach` | Detach this conversation from its current thread |
+
+Reference implementations:
+
+- Discord: [`packages/messaging/providers/discord/src/discord-commands.ts`](../packages/messaging/providers/discord/src/discord-commands.ts) — application commands API, registered globally on the bot at startup
+- Mattermost: [`packages/messaging/providers/mattermost/src/mattermost-commands.ts`](../packages/messaging/providers/mattermost/src/mattermost-commands.ts) — team-scoped, registered per team the bot belongs to
+
+### What you must do
+
+1. **Reconciler.** On `adapter.start()`, list the bot's existing commands, diff against the desired set, create missing / update mismatched / leave orphans untouched. Mirror the Discord pattern's idempotent reconcile — running it twice should be a no-op the second time.
+2. **Token / auth.** Most platforms hand back a per-command token at registration that they include on every subsequent invocation; persist or cache it and constant-time-compare on inbound. Mattermost uses string-equal of the registered token; Discord uses Discord's interaction signature; Slack uses signed request bodies. Read your platform's docs and **don't invent your own auth** when the platform provides one — Mattermost's command token, Slack's request signature, etc., are first-class authentication mechanisms scoped to that surface.
+3. **Listener routing.** If the platform's slash-command POSTs share the same callback URL as interactive callbacks (Mattermost does), route by Content-Type at the listener: `application/x-www-form-urlencoded` → command branch; `application/json` → interactive callback branch. This keeps the operator's tunnel mapping single-path simple.
+4. **Authorization.** Apply the same `authorizedActorIds` allowlist to slash commands as to inbound text events — an unauthorized user typing `/resume` shouldn't bind anything. Return an ephemeral "not authorized" reply if your platform supports it; otherwise silently drop with a log.
+5. **Dispatch.** Translate the platform's command body into a `MessagingInboundCommandEvent` (`kind: "command"`) and call `listener(event)`. Reuse the same dispatch path as inbound `/cmd` text-mention parsing — the controller handles both identically.
+6. **Defensive failure.** Slash-command registration is autocomplete UX, not correctness. If reconciliation fails (no permission, network blip, platform outage), log and continue starting the adapter. Text-mention invocations (`@<bot> resume`) cover parity if the user knows the names.
+
+### What you do NOT need to do
+
+- Persist tokens to disk if the platform issues new ones on each successful registration. List + cache in memory at every adapter start; the platform side is the source of truth.
+- Delete commands you didn't create. Filter your reconciler to triggers in the desired set; leave third-party commands on the same team/server alone.
+- Build a separate auth surface. Use the platform's command-issued token / signature, not your own HMAC.
+
+If you skip slash commands, mention it in the provider's package README and file a follow-up issue tagged `enhancement` so it's tracked. The framework doesn't currently capture "slash commands supported but unimplemented" as a capability flag — see if a future iteration of `MessagingCapabilityProfile` should add one.
+
 ## Step 8 — Register with the desktop runtime
 
 Three edits:

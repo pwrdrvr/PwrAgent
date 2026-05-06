@@ -36,7 +36,14 @@ import {
   type MattermostCallbackHandlerResult,
   type MattermostCallbackServer,
   type MattermostInteractiveCallbackBody,
+  type MattermostSlashCommandBody,
+  type MattermostSlashCommandResult,
 } from "./mattermost-callback-server.ts";
+import {
+  reconcileMattermostCommands,
+  type MattermostCommandsApi,
+  type MattermostReconcileResult,
+} from "./mattermost-commands.ts";
 import {
   actionsForMattermostIntent,
   buildMattermostActions,
@@ -176,6 +183,18 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private listener: MattermostInboundListener | undefined;
   private botUserId: string | undefined;
   private started = false;
+  /**
+   * Live token set, owned by the adapter and shared by reference with
+   * the callback server. The reconciler mutates this on every
+   * `start()` (and any future re-reconcile tick) — the server reads
+   * fresh state on each command POST.
+   */
+  private readonly slashCommandTokens = new Set<string>();
+  /**
+   * Last reconciliation result per team, kept for diagnostics + future
+   * re-reconcile passes (e.g. on team-membership change).
+   */
+  private slashCommandReconciliations: MattermostReconcileResult[] = [];
 
   constructor(options: MattermostAdapterOptions) {
     this.config = options.config;
@@ -204,6 +223,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
           options.config.callbackHmacSecret ?? generateMattermostHmacSecret(),
         handler: (body, rawBody) =>
           this.handleInteractiveCallback(body, rawBody),
+        slashCommandHandler: (body, rawBody) =>
+          this.handleSlashCommand(body, rawBody),
+        validSlashCommandTokens: this.slashCommandTokens,
         logger: this.logger,
       });
   }
@@ -245,11 +267,27 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     });
     this.websocketClient.initialize(wsUrl, this.config.botToken);
 
+    // Reconcile slash commands against every team the bot is a member
+    // of. Mattermost commands are team-scoped — `addCommand` requires
+    // a `team_id`, and the Mattermost UI's autocomplete is per-team.
+    // We list teams once at start and reconcile each; if the bot is
+    // added to a new team mid-session, the user can restart the
+    // adapter to pick it up. (A team-membership webhook listener is
+    // a future improvement.)
+    //
+    // Defensive: any failure here doesn't fail adapter start — slash
+    // commands are an autocomplete UX nicety, not a correctness
+    // requirement. `@<bot> resume` text-mentions still work without
+    // them.
+    await this.reconcileSlashCommandsAcrossTeams();
+
     this.started = true;
     this.logger.info("mattermost adapter started", {
       serverUrl: this.config.serverUrl,
       botUserId: this.botUserId,
       authorizedActorCount: this.authorizedActorIds.length,
+      slashCommandTeams: this.slashCommandReconciliations.length,
+      slashCommandTokens: this.slashCommandTokens.size,
     });
   }
 
@@ -650,6 +688,145 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       channel: params.channel,
       text: params.text,
     });
+  }
+
+  // -------------------------------------------------------------
+  // Slash commands
+  // -------------------------------------------------------------
+
+  /**
+   * List teams the bot belongs to, then reconcile our canonical
+   * command set against each team. Any per-team failure (no
+   * permission, network blip) is logged and skipped — slash commands
+   * are an autocomplete UX nicety, not a correctness requirement.
+   *
+   * The reconciler returns the post-reconcile token map per team; we
+   * union them into `this.slashCommandTokens` so the callback server
+   * accepts any of the issued tokens. The set is shared by reference
+   * with the server, so writes here take effect immediately.
+   */
+  private async reconcileSlashCommandsAcrossTeams(): Promise<void> {
+    let teams: Array<{ id: string; name?: string }> = [];
+    try {
+      teams = (await this.client.getMyTeams()) as Array<{ id: string; name?: string }>;
+    } catch (error) {
+      this.logger.warn("mattermost commands: getMyTeams failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    this.slashCommandTokens.clear();
+    this.slashCommandReconciliations = [];
+
+    const api: MattermostCommandsApi = {
+      getCustomTeamCommands: (teamId) =>
+        // Cast through unknown — @mattermost/types' Command shape has
+        // optional fields ours doesn't enumerate; we read only the
+        // fields declared in `MattermostCommandRecord`.
+        this.client.getCustomTeamCommands(teamId) as unknown as Promise<
+          import("./mattermost-commands.ts").MattermostCommandRecord[]
+        >,
+      addCommand: (cmd) =>
+        this.client.addCommand(cmd as never) as unknown as Promise<
+          import("./mattermost-commands.ts").MattermostCommandRecord
+        >,
+      editCommand: (cmd) =>
+        this.client.editCommand(cmd as never) as unknown as Promise<
+          import("./mattermost-commands.ts").MattermostCommandRecord
+        >,
+      deleteCommand: (id) => this.client.deleteCommand(id),
+    };
+
+    for (const team of teams) {
+      const result = await reconcileMattermostCommands({
+        api,
+        teamId: team.id,
+        callbackBaseUrl: this.callbackUrl,
+        log: (msg, extra) => this.logger.warn(msg, extra),
+      });
+      this.slashCommandReconciliations.push(result);
+      for (const token of result.tokensByTrigger.values()) {
+        this.slashCommandTokens.add(token);
+      }
+      if (
+        result.created.length > 0
+        || result.updated.length > 0
+        || result.deleted.length > 0
+        || result.tokensByTrigger.size > 0
+      ) {
+        this.logger.info("mattermost slash commands reconciled", {
+          teamId: team.id,
+          teamName: team.name,
+          created: result.created,
+          updated: result.updated,
+          deleted: result.deleted,
+          tokenCount: result.tokensByTrigger.size,
+        });
+      }
+    }
+  }
+
+  /**
+   * Translate a Mattermost slash-command POST into our
+   * channel-neutral `MessagingInboundCommandEvent`. The token has
+   * already been verified by the callback server before this is
+   * called; we just need to enforce actor authorization, build the
+   * event, and dispatch.
+   */
+  private async handleSlashCommand(
+    body: MattermostSlashCommandBody,
+    rawBody: string,
+  ): Promise<MattermostSlashCommandResult | void> {
+    void rawBody;
+    if (!this.listener) {
+      return;
+    }
+    if (!this.authorizedActorIds.includes(body.user_id)) {
+      this.logger.warn("mattermost ignored unauthorized slash-command actor", {
+        actorId: body.user_id,
+        command: body.command,
+        channelId: body.channel_id,
+      });
+      return { ephemeralText: "You are not authorized to use this command." };
+    }
+    // Slash-command POST bodies don't include a `channel_type` — we
+    // can't tell DM vs channel from the body alone. Mattermost's
+    // command UI only registers the bot's commands per-team, so a
+    // slash command run from a DM still has the team_id of the
+    // owning team. We resolve via the channel id (loose heuristic:
+    // we don't synthesize `kind: "thread"` since slash commands
+    // don't carry a root_id field; thread-context invocations are
+    // out of scope for v1).
+    const actor: MessagingActorIdentity = {
+      platformUserId: body.user_id,
+      displayName: body.user_name,
+      username: body.user_name,
+      isBot: false,
+    };
+    const channelRef: MessagingChannelRef = {
+      channel: this.channel,
+      conversation: {
+        id: body.channel_id,
+        kind: "channel",
+        ...(body.channel_name ? { title: body.channel_name } : {}),
+      },
+    };
+    // Reuse the existing text-prefix command dispatch — it's
+    // channel-neutral and already wired to the controller. Build a
+    // raw-text payload that matches the shape `@bot <cmd> <args>`
+    // would have produced via the inbound `posted` path so the
+    // controller doesn't need a separate code path.
+    const rawText = body.text.length > 0
+      ? `${body.command} ${body.text}`
+      : body.command;
+    await this.dispatchCommandEvent({
+      actor,
+      channel: channelRef,
+      eventId: this.newEventId("slashcmd"),
+      rawText,
+    });
+    return undefined;
   }
 
   private async dispatchCommandEvent(params: {

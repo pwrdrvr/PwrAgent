@@ -59,6 +59,51 @@ export type MattermostCallbackHandler = (
   rawBody: string,
 ) => Promise<MattermostCallbackHandlerResult | void> | MattermostCallbackHandlerResult | void;
 
+/**
+ * Slash-command POST body, form-decoded. Mattermost sends commands as
+ * `application/x-www-form-urlencoded`; the listener routes them here
+ * after parsing. The `token` field is the per-command token issued by
+ * Mattermost at registration time — verified by string-equal against
+ * the cached value before the handler is called.
+ *
+ * See <https://developers.mattermost.com/integrate/slash-commands/custom/>
+ * for the body field documentation.
+ */
+export type MattermostSlashCommandBody = {
+  token: string;
+  team_id: string;
+  team_domain?: string;
+  channel_id: string;
+  channel_name?: string;
+  user_id: string;
+  user_name?: string;
+  /** The full command, e.g. `/resume` (with the leading slash). */
+  command: string;
+  /** Args after the trigger, e.g. `--projects`. */
+  text: string;
+  trigger_id?: string;
+  response_url?: string;
+};
+
+/**
+ * Result a slash-command handler may return. Same response envelope as
+ * interactive callbacks (`update` for post mutation, `ephemeral_text`
+ * for a one-off message visible only to the invoker).
+ *
+ * Slash commands additionally support `response_type` to control
+ * whether the bot's reply is in-channel or ephemeral; we don't surface
+ * that today (the controller renders its own surfaces via the normal
+ * intent flow).
+ */
+export type MattermostSlashCommandResult = {
+  ephemeralText?: string;
+};
+
+export type MattermostSlashCommandHandler = (
+  body: MattermostSlashCommandBody,
+  rawBody: string,
+) => Promise<MattermostSlashCommandResult | void> | MattermostSlashCommandResult | void;
+
 export type MattermostCallbackServerConfig = {
   /**
    * Localhost port to bind. Production deployments terminate TLS at the
@@ -72,6 +117,21 @@ export type MattermostCallbackServerConfig = {
    */
   hmacSecret: string;
   handler: MattermostCallbackHandler;
+  /**
+   * Optional slash-command handler. When set, POSTs whose Content-Type
+   * is `application/x-www-form-urlencoded` are routed here after the
+   * `token` field is verified against `validSlashCommandTokens`. When
+   * unset (or no command tokens are registered), command POSTs are
+   * silently ack'd with a 200 — same hardening posture as a bad-HMAC
+   * interactive callback.
+   */
+  slashCommandHandler?: MattermostSlashCommandHandler;
+  /**
+   * Set of currently-valid command tokens. The adapter populates this
+   * from the reconciler's per-team token map; updated on adapter start
+   * and on subsequent reconcile passes.
+   */
+  validSlashCommandTokens?: Set<string>;
   logger: {
     debug?: (msg: string, data?: Record<string, unknown>) => void;
     info?: (msg: string, data?: Record<string, unknown>) => void;
@@ -142,7 +202,7 @@ export function createMattermostCallbackServer(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> => {
-    const respondAck = (
+    const respondInteractiveAck = (
       result?: MattermostCallbackHandlerResult,
     ): void => {
       response.statusCode = 200;
@@ -165,6 +225,22 @@ export function createMattermostCallbackServer(
       response.end(JSON.stringify(payload));
     };
 
+    const respondCommandAck = (
+      result?: MattermostSlashCommandResult,
+    ): void => {
+      response.statusCode = 200;
+      response.setHeader("Content-Type", "application/json");
+      const payload: Record<string, unknown> = {};
+      if (result?.ephemeralText) {
+        payload.text = result.ephemeralText;
+        // Mattermost's command response shape: `response_type: "ephemeral"`
+        // shows the text only to the invoker. The default
+        // (`in_channel`) would be visible to everyone in the channel.
+        payload.response_type = "ephemeral";
+      }
+      response.end(JSON.stringify(payload));
+    };
+
     if (request.method !== "POST") {
       response.statusCode = 405;
       response.setHeader("Allow", "POST");
@@ -182,7 +258,7 @@ export function createMattermostCallbackServer(
           // listener from accidental abuse without rejecting legitimate
           // attachment-heavy posts.
           config.logger.warn("mattermost callback body exceeded 1 MB; dropping", {});
-          respondAck();
+          respondInteractiveAck();
           return;
         }
       }
@@ -190,7 +266,28 @@ export function createMattermostCallbackServer(
       config.logger.error("mattermost callback body read failed", {
         error: error instanceof Error ? error.message : String(error),
       });
-      respondAck();
+      respondInteractiveAck();
+      return;
+    }
+
+    // Route by Content-Type:
+    //   application/x-www-form-urlencoded → slash command
+    //   anything else (default JSON)      → interactive callback
+    //
+    // Both surfaces share the listener / port / tunnel — Mattermost
+    // sends commands as form-encoded bodies and interactive callbacks
+    // as JSON, so the type alone is enough to disambiguate. Same path
+    // works for both, which matters because the operator's tunnel may
+    // map the public URL to ANY localhost path.
+    const contentType = (request.headers["content-type"] ?? "").toLowerCase();
+    const isFormEncoded = contentType.includes("application/x-www-form-urlencoded");
+
+    if (isFormEncoded) {
+      await handleSlashCommand({
+        rawBody,
+        config,
+        respond: respondCommandAck,
+      });
       return;
     }
 
@@ -202,7 +299,7 @@ export function createMattermostCallbackServer(
         error: error instanceof Error ? error.message : String(error),
         bytes: rawBody.length,
       });
-      respondAck();
+      respondInteractiveAck();
       return;
     }
 
@@ -219,7 +316,7 @@ export function createMattermostCallbackServer(
         hasIssuedAt: issuedAtRaw !== undefined,
         hasHmac: Boolean(providedHmac),
       });
-      respondAck();
+      respondInteractiveAck();
       return;
     }
 
@@ -237,7 +334,7 @@ export function createMattermostCallbackServer(
         actionId,
         issuedAt: issuedAtRaw,
       });
-      respondAck();
+      respondInteractiveAck();
       return;
     }
 
@@ -252,7 +349,63 @@ export function createMattermostCallbackServer(
       });
     }
 
-    respondAck(handlerResult ?? undefined);
+    respondInteractiveAck(handlerResult ?? undefined);
+  };
+
+  /**
+   * Slash-command branch. Form-decode the body, validate the `token`
+   * against the registered token set (constant-time), and delegate to
+   * the configured `slashCommandHandler` if present. Same hardening
+   * posture as bad-HMAC interactive callbacks: always respond 200,
+   * never reveal verification status.
+   */
+  const handleSlashCommand = async (params: {
+    rawBody: string;
+    config: MattermostCallbackServerConfig;
+    respond: (result?: MattermostSlashCommandResult) => void;
+  }): Promise<void> => {
+    const { rawBody, config: cfg, respond } = params;
+    const body = parseSlashCommandBody(rawBody);
+    if (!body) {
+      cfg.logger.warn("mattermost slash command body unparseable; dropping", {
+        bytes: rawBody.length,
+      });
+      respond();
+      return;
+    }
+    if (!cfg.slashCommandHandler) {
+      cfg.logger.warn("mattermost slash command received but no handler registered", {
+        command: body.command,
+      });
+      respond();
+      return;
+    }
+    const validTokens = cfg.validSlashCommandTokens;
+    if (!validTokens || validTokens.size === 0) {
+      cfg.logger.warn("mattermost slash command rejected — no tokens registered", {
+        command: body.command,
+      });
+      respond();
+      return;
+    }
+    if (!isAcceptedSlashCommandToken(body.token, validTokens)) {
+      cfg.logger.warn("mattermost slash command token verification failed", {
+        command: body.command,
+        teamId: body.team_id,
+      });
+      respond();
+      return;
+    }
+    let result: MattermostSlashCommandResult | void = undefined;
+    try {
+      result = await cfg.slashCommandHandler(body, rawBody);
+    } catch (error) {
+      cfg.logger.error("mattermost slash command handler threw", {
+        error: error instanceof Error ? error.message : String(error),
+        command: body.command,
+      });
+    }
+    respond(result ?? undefined);
   };
 
   return {
@@ -338,4 +491,63 @@ function safeEqual(left: string, right: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Parse a Mattermost slash-command form-encoded body into our typed
+ * shape. Returns undefined when required fields are missing — same
+ * "always 200, log + drop" hardening posture as bad-HMAC interactive
+ * callbacks. Multiple values for the same key (rare but legal in
+ * `application/x-www-form-urlencoded`) take the first.
+ */
+export function parseSlashCommandBody(
+  rawBody: string,
+): MattermostSlashCommandBody | undefined {
+  const params = new URLSearchParams(rawBody);
+  const get = (key: string): string | undefined => {
+    const value = params.get(key);
+    return value !== null && value.length > 0 ? value : undefined;
+  };
+  const token = get("token");
+  const teamId = get("team_id");
+  const channelId = get("channel_id");
+  const userId = get("user_id");
+  const command = get("command");
+  if (!token || !teamId || !channelId || !userId || !command) {
+    return undefined;
+  }
+  return {
+    token,
+    team_id: teamId,
+    team_domain: get("team_domain"),
+    channel_id: channelId,
+    channel_name: get("channel_name"),
+    user_id: userId,
+    user_name: get("user_name"),
+    command,
+    text: get("text") ?? "",
+    trigger_id: get("trigger_id"),
+    response_url: get("response_url"),
+  };
+}
+
+/**
+ * Constant-time check that the provided token matches at least one
+ * of the registered tokens. Iterates in O(N) over the set; N is the
+ * count of registered slash commands across all teams the bot
+ * belongs to (typically <20). The constant-time check fires per
+ * candidate, so a forged token can't time-discriminate which slot
+ * it almost-matched.
+ */
+export function isAcceptedSlashCommandToken(
+  provided: string,
+  validTokens: ReadonlySet<string>,
+): boolean {
+  let accepted = false;
+  for (const candidate of validTokens) {
+    if (safeEqual(provided, candidate)) {
+      accepted = true;
+    }
+  }
+  return accepted;
 }

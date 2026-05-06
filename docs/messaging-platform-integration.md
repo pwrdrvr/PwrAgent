@@ -351,7 +351,11 @@ In Mattermost: System Console → Integrations → Bot Accounts → Add Bot Acco
 - Display name: anything (e.g., `PwrAgent`).
 - Permissions: needs to post in target channels, read posts, upload/download
   files, edit its own posts, and update channel headers if you want
-  conversation-title updates.
+  conversation-title updates. **Also grant `manage_slash_commands`** if you
+  want PwrAgent to register `/resume`, `/status`, `/detach` as native
+  Mattermost slash commands with autocomplete (recommended). Without it,
+  the adapter will log a permission warning at startup and fall back to
+  text-mention parsing (`@pwragent resume`).
 - Copy the access token. Store as `PWRAGENT_MESSAGING_MATTERMOST_BOT_TOKEN`
   or via the desktop Settings UI when that's wired (issue #195 tracks the
   per-platform Settings UI).
@@ -359,6 +363,14 @@ In Mattermost: System Console → Integrations → Bot Accounts → Add Bot Acco
 Add the bot to the channels where you want PwrAgent to be addressable.
 Without explicit channel membership, Mattermost does not deliver `posted`
 events to the bot — outgoing posts will fail with `403`.
+
+Slash commands are scoped per-team in Mattermost. PwrAgent reconciles its
+canonical command set (`/resume`, `/status`, `/detach`) against every team
+the bot is a member of on adapter startup — newly-joined teams are picked
+up by restarting the adapter (a team-membership webhook listener that
+re-reconciles mid-session is a future improvement). Reconciliation is
+idempotent and uses the same callback URL as interactive buttons (the
+listener routes by Content-Type, so a single tunnel mapping covers both).
 
 ### 2. Choose a tunnel for the callback URL
 
@@ -474,6 +486,26 @@ should succeed before moving to the next:
 1. Launch PwrAgent. Look for `mattermost: adapter started successfully`
    and `mattermost callback listener bound port=47821 host=127.0.0.1`
    in the dev console. No `failed to start adapter` warnings.
+1a. Confirm slash-command reconciliation: a `mattermost slash commands
+   reconciled` log line per team the bot is in, with `tokenCount=3`
+   (or however many entries are in `DESIRED_MATTERMOST_COMMANDS`). If
+   you see `getMyTeams failed` or per-command `create failed`, the bot
+   lacks `manage_slash_commands` — text-mention invocation still works
+   but the `/` autocomplete won't appear.
+
+**Slash command UX:**
+
+1b. In any channel the bot belongs to, type `/` in the message
+    composer. `resume`, `status`, `detach` should appear in the
+    autocomplete menu with their descriptions and hints.
+1c. Type `/resume` and submit. The bot replies with the navigator
+    (thread picker), same as clicking `Resume` on a binding prompt.
+1d. From a separate browser/account that is NOT in
+    `PWRAGENT_MESSAGING_MATTERMOST_AUTHORIZED_USER_IDS`, run `/resume`.
+    The command executes (Mattermost has no per-user permission
+    gating on bot commands) but PwrAgent rejects the actor and
+    returns the ephemeral text "You are not authorized to use this
+    command." — visible only to the invoker.
 
 **DM bind flow:**
 
