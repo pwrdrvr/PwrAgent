@@ -135,6 +135,14 @@ type MattermostSurfaceOpaqueState = {
   channelId?: string;
   rootId?: string;
   responseUrl?: string;
+  /**
+   * Mattermost's response_url handler stamps the resulting post with
+   * `args.UserId` (the invoking user) rather than the bot's user_id.
+   * We need this id to recover the just-created post in
+   * `getPostsSince` (filtered by user_id) and to correlate the WS
+   * `posted` echo back to our delivery for dedup.
+   */
+  responseUrlInvokerUserId?: string;
 };
 
 export class MattermostAdapter implements MattermostProviderAdapter {
@@ -205,6 +213,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private readonly now: () => number;
   private listener: MattermostInboundListener | undefined;
   private botUserId: string | undefined;
+  private botUsername: string | undefined;
   private started = false;
   /**
    * Live token set, owned by the adapter and shared by reference with
@@ -221,6 +230,21 @@ export class MattermostAdapter implements MattermostProviderAdapter {
    * reply per root.
    */
   private readonly threadRootMessageCache = new Map<string, string>();
+  /**
+   * Post ids we created via `response_url` (the slash-command delayed
+   * response endpoint). Mattermost's response_url handler stamps the
+   * resulting post with the **invoking user's** `user_id` (with a
+   * `[BOT]` UI tag) instead of the bot's user_id — so when Mattermost
+   * broadcasts the post via the `posted` WS event, our normal
+   * `post.user_id === this.botUserId` filter misses it. Without this
+   * dedup, the bot's own status surface echoes back as inbound user
+   * text, gets routed to a bound thread, and Codex starts a turn
+   * "responding" to the bot's own status block.
+   *
+   * Entries are removed lazily by `setTimeout`; 60s is generous
+   * compared to typical WS round-trip but avoids unbounded growth.
+   */
+  private readonly responseUrlPostIds = new Set<string>();
   /**
    * Last reconciliation result per team, kept for diagnostics + future
    * re-reconcile passes (e.g. on team-membership change).
@@ -269,8 +293,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     await this.callbackServer.start();
 
     try {
-      const me = await this.client.getMe();
+      const me = (await this.client.getMe()) as { id: string; username?: string };
       this.botUserId = me.id;
+      this.botUsername = me.username;
     } catch (error) {
       this.logger.error("mattermost client getMe failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -505,6 +530,35 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     }
     if (this.botUserId && post.user_id === this.botUserId) {
       // Don't react to our own posts.
+      return;
+    }
+    // Defense against the response_url echo loop: posts we just
+    // created via Mattermost's slash-command delayed response endpoint
+    // come back to us via the WS broadcast with the **invoking user's**
+    // user_id (Mattermost's response_url handler attributes the post
+    // to the invoker, not the bot, even when the bot owns the
+    // command). The user_id-based filter above misses them. Without
+    // this dedup, our own status surface echoes back as inbound user
+    // text and Codex starts a turn responding to the bot's own block.
+    if (this.responseUrlPostIds.has(post.id)) {
+      this.logger.debug?.(
+        "mattermost: ignoring posted echo of our own response_url delivery",
+        { postId: post.id },
+      );
+      return;
+    }
+    // Defense-in-depth (catches response_url echoes whose post.id we
+    // didn't track for any reason, plus any other bot-attributed
+    // webhook integrations on the same channel): Mattermost stamps
+    // posts originating from `username`-overriding integrations with
+    // `props.from_webhook = "true"`. Treat those as bot-authored
+    // regardless of post.user_id.
+    const fromWebhook = (post.props ?? {})["from_webhook"];
+    if (fromWebhook === "true" || fromWebhook === true) {
+      this.logger.debug?.("mattermost: ignoring webhook-attributed posted event", {
+        postId: post.id,
+        userId: post.user_id,
+      });
       return;
     }
     if (!this.authorizedActorIds.includes(post.user_id)) {
@@ -932,6 +986,11 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       ? {
           opaque: {
             responseUrl: body.response_url,
+            // Mattermost stamps the response_url post with the
+            // invoker's user_id (not the bot's). Needed for the
+            // recovery filter in `deliverViaResponseUrl` and for the
+            // echo-dedup check in `handlePostedEvent`.
+            responseUrlInvokerUserId: body.user_id,
           } satisfies MattermostSurfaceOpaqueState as MessagingJsonValue,
         }
       : undefined;
@@ -1169,6 +1228,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         message: post.message,
         attachment,
         responseUrl: target.responseUrl,
+        invokerUserId: target.responseUrlInvokerUserId,
       });
       if (!recovered) {
         // response_url POST or post_id recovery failed — fall through
@@ -1269,6 +1329,14 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     message: string;
     attachment: MattermostMessageAttachment | undefined;
     responseUrl: string;
+    /**
+     * Mattermost's response_url handler stamps the resulting post
+     * with this user_id (the slash-command invoker) instead of the
+     * bot's. We use it as the recovery filter and to dedup the WS
+     * echo. Falls back to bot-user_id matching if undefined (legacy
+     * call path; shouldn't fire in production).
+     */
+    invokerUserId?: string;
   }): Promise<{ postId: string; channelId: string; rootId?: string } | undefined> {
     const payload: Record<string, unknown> = {
       // `in_channel` makes the response visible to everyone (vs.
@@ -1276,6 +1344,13 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       // are channel-scoped by design — same as createPost behavior.
       response_type: "in_channel",
       text: params.message,
+      // Setting `username` triggers Mattermost's "isBotPost" branch
+      // server-side, which adds `props.from_webhook = "true"` to the
+      // resulting post. Two benefits: (1) the post displays as the
+      // bot in the UI instead of "<invoker> [BOT]"; (2) the
+      // from_webhook prop gives us a defensive filter in
+      // `handlePostedEvent` even if the post-id dedup misses.
+      ...(this.botUsername ? { username: this.botUsername } : {}),
       ...(params.attachment ? { attachments: [params.attachment] } : {}),
     };
     const before = this.now();
@@ -1301,23 +1376,39 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     // Recover the post we just created. response_url POSTs don't
     // echo the resulting post object, so we query for posts in the
     // channel since slightly before our request and pick the most
-    // recent one authored by our bot.
+    // recent one matching the invoker (Mattermost stamps response_url
+    // posts with `args.UserId`, not the bot's user_id).
     try {
       const since = before - 2_000; // 2s of slop for clock skew + mid-flight latency
       const list = (await this.client.getPostsSince(
         params.channelId,
         since,
-      )) as { posts?: Record<string, { id: string; user_id: string; root_id?: string; create_at: number }> };
-      const ours = Object.values(list.posts ?? {})
-        .filter((p) => p.user_id === this.botUserId)
-        .sort((a, b) => b.create_at - a.create_at)[0];
+      )) as { posts?: Record<string, { id: string; user_id: string; root_id?: string; create_at: number; props?: Record<string, unknown> }> };
+      const expectedUserId = params.invokerUserId ?? this.botUserId;
+      const candidates = Object.values(list.posts ?? {})
+        .filter((p) => p.user_id === expectedUserId)
+        // Tighten the match: response_url posts always have
+        // `from_webhook = "true"` because we override username above.
+        // Filtering on this avoids picking up an unrelated post the
+        // invoker happened to type within the 2s window.
+        .filter((p) => (p.props ?? {})["from_webhook"] === "true");
+      const ours = candidates.sort((a, b) => b.create_at - a.create_at)[0];
       if (!ours) {
         this.logger.warn("mattermost response_url getPostsSince found no matching post", {
           channelId: params.channelId,
           since,
+          expectedUserId,
+          candidateCount: Object.keys(list.posts ?? {}).length,
         });
         return undefined;
       }
+      // Track the post id for the WS echo dedup. Lazy eviction
+      // (60s TTL) keeps the set bounded.
+      this.responseUrlPostIds.add(ours.id);
+      const postId = ours.id;
+      setTimeout(() => {
+        this.responseUrlPostIds.delete(postId);
+      }, 60_000).unref?.();
       return {
         postId: ours.id,
         channelId: params.channelId,
@@ -1479,6 +1570,13 @@ export class MattermostAdapter implements MattermostProviderAdapter {
          * outgoing slash-command webhook bodies.
          */
         responseUrl?: string;
+        /**
+         * Invoking user's user_id from the slash command body.
+         * Mattermost stamps the response_url post with this id (not
+         * the bot's), so we use it to recover the post and to dedup
+         * the WS echo.
+         */
+        responseUrlInvokerUserId?: string;
       }
   > {
     // Three sources of truth, in priority order:
@@ -1520,6 +1618,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         channelRef: channelRefFromAudit,
         canUpdate: false,
         responseUrl: targetOpaque.responseUrl,
+        responseUrlInvokerUserId: targetOpaque.responseUrlInvokerUserId,
       };
     }
 

@@ -34,9 +34,24 @@ const baseConfig = {
  * touches at construction + delivery time. Cast through `unknown` because
  * the real classes have ~hundreds of methods and we only need a handful.
  */
-function fakeWebSocketClient(spies?: { userTyping: string[] }): WebSocketClient {
+type WebSocketHooks = {
+  fireMessage(message: { event: string; data?: Record<string, unknown> }): void;
+};
+
+function fakeWebSocketClient(
+  spies?: { userTyping: string[] },
+  hooks?: WebSocketHooks,
+): WebSocketClient {
+  let messageListener: ((m: { event: string; data?: Record<string, unknown> }) => void) | undefined;
+  if (hooks) {
+    hooks.fireMessage = (m) => {
+      messageListener?.(m);
+    };
+  }
   return {
-    addMessageListener: () => {},
+    addMessageListener: (listener: typeof messageListener) => {
+      messageListener = listener;
+    },
     addCloseListener: () => {},
     addErrorListener: () => {},
     initialize: () => {},
@@ -424,20 +439,24 @@ describe("MattermostAdapter — slash command response_url", () => {
         createdPosts: [] as CreatedPost[],
         patchedPosts: [] as PatchedPost[],
         // Simulate Mattermost having posted our payload server-side
-        // to a thread reply: the resulting post has root_id set.
+        // to a thread reply. Mattermost stamps the post with
+        // `args.UserId` (invoker = harold), not the bot, and adds
+        // `from_webhook = "true"` because we override `username` in
+        // the response_url payload.
         postsSinceResults: [
           {
             id: "picker-post-1",
-            user_id: "bot-user-id",
+            user_id: "harold-user-id",
             root_id: "thread-root-1",
             create_at: 1_700_000_000_500,
+            props: { from_webhook: "true" },
           },
         ],
       };
       const adapter = new MattermostAdapter({
         callbackHandleStore: fakeStore,
         client: fakeClient4(spies),
-        config: baseConfig,
+        config: { ...baseConfig, authorizedActorIds: ["harold-user-id"] },
         logger: silentLogger,
         websocketClient: fakeWebSocketClient(),
         callbackServer: { start: async () => {}, stop: async () => {}, signContext: () => ({ hmac: "x", issuedAt: 0 }) } as never,
@@ -459,7 +478,7 @@ describe("MattermostAdapter — slash command response_url", () => {
         page: { actions: [], items: [], pageIndex: 0, pageSize: 10, totalItems: 0 },
         audit: {
           channel: { channel: "mattermost", conversation: { id: "channel-1", kind: "channel" } },
-          actor: { platformUserId: "user-1" },
+          actor: { platformUserId: "harold-user-id" },
         },
         targetSurface: {
           channel: "mattermost",
@@ -467,6 +486,7 @@ describe("MattermostAdapter — slash command response_url", () => {
           state: {
             opaque: {
               responseUrl: "https://mattermost.example.com/hooks/commands/abc123",
+              responseUrlInvokerUserId: "harold-user-id",
             },
           },
         },
@@ -571,5 +591,118 @@ describe("summarizeThreadRoot", () => {
   it("returns empty string for empty / whitespace-only input", () => {
     expect(summarizeThreadRoot("")).toBe("");
     expect(summarizeThreadRoot("   \n\n\t  ")).toBe("");
+  });
+});
+
+/**
+ * Regression coverage for the response_url echo loop. Mattermost's
+ * server-side response_url handler stamps the resulting post with
+ * the **invoking user's** user_id (not the bot's). When that post
+ * broadcasts back via the WebSocket `posted` event, the standard
+ * `post.user_id === botUserId` filter misses it — without additional
+ * dedup, the bot's own status surface gets routed back into the
+ * bound thread as inbound user text and the agent starts a turn
+ * responding to its own status block.
+ *
+ * Verified against Mattermost release-10.11 source
+ * (server/channels/app/command.go):
+ *   post.UserId = args.UserId   // invoker, not bot
+ *   if isBotPost { post.AddProp(PostPropsFromWebhook, "true") }
+ */
+describe("MattermostAdapter — response_url echo dedup", () => {
+  it("does not dispatch a text event for posts we created via response_url", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({ ok: true, status: 200 } as Response)) as typeof fetch;
+
+    try {
+      const spies = {
+        createdPosts: [] as CreatedPost[],
+        patchedPosts: [] as PatchedPost[],
+        // Mattermost's response_url posts have user_id = invoker
+        // (harold), not the bot. Recovery filter must accommodate.
+        postsSinceResults: [
+          {
+            id: "echoed-post-1",
+            user_id: "harold-user-id",
+            root_id: "thread-root-1",
+            create_at: 1_700_000_000_500,
+          },
+        ],
+      };
+      const wsHooks: WebSocketHooks = { fireMessage: () => {} };
+      const inboundEvents: Array<{ kind: string }> = [];
+      const adapter = new MattermostAdapter({
+        callbackHandleStore: fakeStore,
+        client: fakeClient4(spies),
+        config: { ...baseConfig, authorizedActorIds: ["harold-user-id"] },
+        logger: silentLogger,
+        websocketClient: fakeWebSocketClient(undefined, wsHooks),
+        callbackServer: {
+          start: async () => {},
+          stop: async () => {},
+          signContext: () => ({ hmac: "x", issuedAt: 0 }),
+        } as never,
+        now: () => 1_700_000_000_000,
+      });
+      await adapter.start(async (event) => {
+        inboundEvents.push({ kind: event.kind });
+      });
+
+      // Step 1: deliver a status surface via response_url.
+      // Mattermost creates a post server-side with
+      // UserId = invoker (harold).
+      const intent: MessagingSurfaceIntent = {
+        id: "intent-status-1",
+        kind: "status",
+        createdAt: 1_700_000_000_000,
+        capabilityProfile: { text: { maxLength: 16_383, encoding: "characters" } },
+        text: "Binding: Wood chuck joke (codex)",
+        audit: {
+          channel: { channel: "mattermost", conversation: { id: "channel-1", kind: "channel" } },
+          actor: { platformUserId: "harold-user-id" },
+        },
+        targetSurface: {
+          channel: "mattermost",
+          id: "slashcmd-event-1",
+          state: {
+            opaque: {
+              responseUrl: "https://mattermost.example.com/hooks/commands/abc123",
+              responseUrlInvokerUserId: "harold-user-id",
+            },
+          },
+        },
+      } as unknown as MessagingSurfaceIntent;
+      await adapter.deliver(intent);
+
+      // Step 2: Mattermost broadcasts the post via WS posted. The
+      // post is attributed to harold (not the bot). props.from_webhook
+      // is "true" because the response_url payload set the username
+      // override (which Mattermost recognizes as a bot post).
+      wsHooks.fireMessage({
+        event: "posted",
+        data: {
+          channel_type: "O",
+          channel_display_name: "Development",
+          sender_name: "harold",
+          post: JSON.stringify({
+            id: "echoed-post-1",
+            channel_id: "channel-1",
+            user_id: "harold-user-id",
+            message: "Binding: Wood chuck joke (codex)",
+            root_id: "thread-root-1",
+            props: { from_webhook: "true" },
+          }),
+        },
+      });
+      // Allow the async listener path to settle.
+      await new Promise((r) => setTimeout(r, 5));
+
+      // Step 3: we should NOT have dispatched a text event for the
+      // echoed post — it's our own response, not user input.
+      const textEvents = inboundEvents.filter((e) => e.kind === "text");
+      expect(textEvents).toHaveLength(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
