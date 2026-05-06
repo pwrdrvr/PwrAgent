@@ -22,23 +22,23 @@ const GH_FIELDS = [
 
 /** Default per-call subprocess timeout. */
 const DEFAULT_TIMEOUT_MS = 5_000;
-/** Re-probe `gh --version` no more than this often. */
-const GH_AVAILABLE_CACHE_TTL_MS = 60_000;
+/** Default re-probe cadence for `gh --version`. */
+const DEFAULT_GH_AVAILABLE_CACHE_TTL_MS = 60_000;
 /**
- * Re-probe `gh auth status` no more than this often. The auth-status
- * call spawns a subprocess and parses its output; the Applications
- * settings panel mounts every time the user opens that section (and
- * twice in development under React StrictMode). Without this cache
- * each panel open ran `gh auth status` twice. The cached value is
- * still considered fresh enough that switching between panels shows
- * an instant pill instead of a "Checking…" flash.
+ * Default re-probe cadence for `gh auth status`. The auth-status call
+ * spawns a subprocess and parses its output; the Applications settings
+ * panel mounts every time the user opens that section (and twice in
+ * development under React StrictMode). Without this cache each panel
+ * open ran `gh auth status` twice. The cached value is still considered
+ * fresh enough that switching between panels shows an instant pill
+ * instead of a "Checking…" flash.
  *
  * Five minutes matches the ballpark of how often gh's session token
  * could change in practice (login, scope grant, sign-out). Users who
  * just changed their gh login can click "Re-check" — that bypasses
  * the cache via `invalidateGhCaches()`.
  */
-const GH_AUTH_STATUS_CACHE_TTL_MS = 5 * 60_000;
+const DEFAULT_GH_AUTH_STATUS_CACHE_TTL_MS = 5 * 60_000;
 
 /** Subset of fields returned by `gh pr list --json …` that we actually read. */
 type GhPrPayload = {
@@ -77,6 +77,18 @@ export type GithubPrFetcherOptions = {
   probeGhAvailable?: () => Promise<boolean>;
   /** Override `gh auth status` runner — used by tests. */
   runGhAuthStatus?: () => Promise<{ stdout: string; stderr: string; ok: boolean }>;
+  /**
+   * How long the parsed `gh auth status` value stays fresh. Defaults
+   * to `DEFAULT_GH_AUTH_STATUS_CACHE_TTL_MS` (5 min). Tests use a
+   * smaller value (or zero) to verify cache eviction without timer
+   * mocks.
+   */
+  authStatusCacheTtlMs?: number;
+  /**
+   * How long the `gh --version` availability probe stays fresh.
+   * Defaults to `DEFAULT_GH_AVAILABLE_CACHE_TTL_MS` (60s).
+   */
+  ghAvailableCacheTtlMs?: number;
 };
 
 export class GithubPrFetcher {
@@ -88,6 +100,8 @@ export class GithubPrFetcher {
   private readonly runGhAuthStatus: NonNullable<
     GithubPrFetcherOptions["runGhAuthStatus"]
   >;
+  private readonly authStatusCacheTtlMs: number;
+  private readonly ghAvailableCacheTtlMs: number;
   private ghAvailableCache: { value: boolean; fetchedAt: number } | undefined;
   private authStatusCache:
     | { value: GhAuthStatus; fetchedAt: number }
@@ -105,12 +119,16 @@ export class GithubPrFetcher {
     this.exec = options.exec ?? defaultExec(this.timeoutMs);
     this.probeGhAvailable = options.probeGhAvailable ?? defaultProbeGhAvailable;
     this.runGhAuthStatus = options.runGhAuthStatus ?? defaultRunGhAuthStatus;
+    this.authStatusCacheTtlMs =
+      options.authStatusCacheTtlMs ?? DEFAULT_GH_AUTH_STATUS_CACHE_TTL_MS;
+    this.ghAvailableCacheTtlMs =
+      options.ghAvailableCacheTtlMs ?? DEFAULT_GH_AVAILABLE_CACHE_TTL_MS;
   }
 
   async isGhAvailable(): Promise<boolean> {
     if (
       this.ghAvailableCache
-      && Date.now() - this.ghAvailableCache.fetchedAt < GH_AVAILABLE_CACHE_TTL_MS
+      && Date.now() - this.ghAvailableCache.fetchedAt < this.ghAvailableCacheTtlMs
     ) {
       return this.ghAvailableCache.value;
     }
@@ -210,10 +228,10 @@ export class GithubPrFetcher {
   /**
    * Probe `gh auth status` and return parsed installed / logged-in /
    * scopes info for the Applications settings panel. Result is cached
-   * for `GH_AUTH_STATUS_CACHE_TTL_MS` so reopening the Applications
-   * pane (or React StrictMode's intentional double-mount in dev) does
-   * not re-spawn the subprocess. Use `invalidateGhCaches()` (which
-   * the Re-check button drives via `recheck: true`) to force a
+   * for `authStatusCacheTtlMs` (default 5 min) so reopening the
+   * Applications pane (or React StrictMode's intentional double-mount
+   * in dev) does not re-spawn the subprocess. Use `invalidateGhCaches()`
+   * (which the Re-check button drives via `recheck: true`) to force a
    * fresh probe.
    *
    * Concurrent callers share the same in-flight promise — without
@@ -223,23 +241,20 @@ export class GithubPrFetcher {
    * `gh auth status`. The promise-level dedup ensures the second
    * caller waits on the first instead.
    *
-   * Returns `{ cached }` so callers can decide whether to log — the
-   * value is otherwise identical regardless of cache state. Only the
-   * caller that actually drives the probe gets `cached: false`;
-   * everyone else (in-flight share OR resolved-cache hit) gets
-   * `cached: true`.
+   * The fetcher logs at debug level on each fresh probe (cached
+   * returns + in-flight sharers stay silent) — keeps the log signal
+   * one-line-per-real-fetch instead of N-lines-per-mount.
    */
-  async getAuthStatus(): Promise<GhAuthStatus & { cached: boolean }> {
+  async getAuthStatus(): Promise<GhAuthStatus> {
     if (
       this.authStatusCache
-      && Date.now() - this.authStatusCache.fetchedAt < GH_AUTH_STATUS_CACHE_TTL_MS
+      && Date.now() - this.authStatusCache.fetchedAt < this.authStatusCacheTtlMs
     ) {
-      return { ...this.authStatusCache.value, cached: true };
+      return this.authStatusCache.value;
     }
 
     if (this.authStatusPending) {
-      const value = await this.authStatusPending;
-      return { ...value, cached: true };
+      return await this.authStatusPending;
     }
 
     const pending = (async (): Promise<GhAuthStatus> => {
@@ -257,13 +272,18 @@ export class GithubPrFetcher {
         value = parseGhAuthStatus(result);
       }
       this.authStatusCache = { value, fetchedAt: Date.now() };
+      fetcherLog.debug("gh auth status", {
+        installed: value.installed,
+        loggedIn: value.loggedIn,
+        hasRepoScope: value.hasRepoScope,
+        scopeCount: value.scopes.length,
+      });
       return value;
     })();
 
     this.authStatusPending = pending;
     try {
-      const value = await pending;
-      return { ...value, cached: false };
+      return await pending;
     } finally {
       // Only the original initiator clears the pending slot. By the
       // time we reach this finally, all in-flight sharers have
