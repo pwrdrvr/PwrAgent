@@ -22,6 +22,7 @@ import type {
   MessagingCallbackHandleStore,
   MessagingCapabilityProfile,
   MessagingChannelRef,
+  MessagingConversationKind,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   MessagingSurfaceAction,
@@ -542,11 +543,34 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       });
       return;
     }
+    // Mattermost interactive callbacks tell us the channel_id but not its
+    // type — and we can't infer it from the id (DM channel ids look like
+    // any other 26-char base32 id; `__` only appears in DM channel
+    // *names*, not ids). The handle store keys on
+    // `channel:kind:parentId:id`, so guessing wrong here causes a silent
+    // resolve miss.
+    //
+    // We sign `(intentId, actionId, issuedAt)` in the HMAC; everything
+    // else in `integration.context` is opaque routing metadata that
+    // travels back to us untouched. Stash the conversation kind there at
+    // delivery time and read it back here. Tampering can't change the
+    // stored kind on the handle, so a forged value just makes the
+    // resolve fail — same as no tampering.
+    const contextKind = stringField((body.context ?? {})["channelKind"]);
+    const conversationKind: MessagingConversationKind =
+      contextKind === "dm"
+        || contextKind === "channel"
+        || contextKind === "thread"
+        || contextKind === "topic"
+        ? contextKind
+        : "channel";
+    const contextRootId = stringField((body.context ?? {})["rootId"]);
     const channelRef: MessagingChannelRef = {
       channel: this.channel,
       conversation: {
         id: body.channel_id,
-        kind: body.channel_id.includes("__") ? "dm" : "channel",
+        kind: conversationKind,
+        ...(contextRootId ? { parentId: contextRootId } : {}),
       },
     };
     let resolvedHandle: MessagingCallbackHandleRecord | undefined;
@@ -565,7 +589,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       return;
     }
     if (!resolvedHandle) {
-      this.logger.debug?.("mattermost callback handle unknown or expired", {
+      this.logger.warn("mattermost callback handle unknown or expired", {
         handle,
         actorId: body.user_id,
       });
@@ -1062,12 +1086,21 @@ export class MattermostAdapter implements MattermostProviderAdapter {
             handle,
           });
         });
+      // `channelKind` and `rootId` are not part of the HMAC — they're
+      // routing breadcrumbs the callback handler needs because Mattermost
+      // doesn't echo conversation-type or thread-root in the callback
+      // body, and the handle store keys on `channel:kind:parentId:id`.
+      // See `handleInteractiveCallback` for the consumer side.
       return {
         handle,
         intentId: params.intent.id,
         actionId: action.id,
         issuedAt,
         hmac,
+        channelKind: params.channelRef.conversation.kind,
+        ...(params.channelRef.conversation.parentId
+          ? { rootId: params.channelRef.conversation.parentId }
+          : {}),
       };
     };
   }

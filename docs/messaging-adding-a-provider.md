@@ -506,6 +506,13 @@ Every adapter's `deliver()` needs to figure out which platform conversation to p
 
 Naming any other field (e.g. `intent.requestContext.channel`) gets you a silent failure: the resolver returns `undefined`, the adapter returns `outcome: "failed"`, the inbound side keeps logging "ROUTED" so it looks like work is happening, but the user never sees a reply. Add a `logger.warn` at every "no target resolved" branch so future regressions of this shape surface in the dev console immediately.
 
+### Conversation kind must round-trip through callbacks
+`MessagingCallbackHandleStore.resolveCallbackHandle` keys on `channel:kind:parentId:id` (see `buildMessagingConversationKey`). If your callback path can't recover the conversation kind (`dm` / `channel` / `thread` / `topic`) from what the platform sends back, the lookup silently misses with no useful error.
+
+Mattermost is the cautionary tale: the interactive callback body has `channel_id` but no channel type, and the id alone doesn't disambiguate (DM ids look like any other 26-char base32). Solution: stash the kind on `integration.context` at delivery time and read it back at callback time. The HMAC only needs to cover authenticity-critical fields; routing breadcrumbs can ride along unsigned because manipulation makes the lookup fail closed (same outcome as no tampering).
+
+Same pattern applies to thread roots, topic ids, or any platform-specific routing context the callback body strips. If in doubt, embed it in `integration.context` (or the equivalent opaque round-trip slot for your platform) and parse it back at callback time.
+
 ### Provider-specific URL constraints on action ids (Mattermost)
 Mattermost registers the action callback handler at `/api/v4/posts/{post_id}/actions/{action_id:[A-Za-z0-9]+}` — strictly ASCII alphanumeric, **no underscores, dashes, dots, or colons**. A button id of `command_resume` makes the click route to a path that fails the regex, falls through to Go's not-found handler, and returns a bare 404 with no useful body. The button visibly does nothing.
 
