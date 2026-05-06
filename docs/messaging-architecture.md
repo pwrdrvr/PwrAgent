@@ -244,6 +244,49 @@ const items = actions
 
 If the producer respected the profile, the slices are no-ops. If the producer somehow emitted too much, the adapter clips it rather than letting the platform reject the request. The numbers come from the same profile the adapter declared, so producer and adapter caps stay in sync.
 
+## Architectural principles
+
+These rules exist to make adding the next ten messaging platforms a quiet, mechanical exercise. Every line of platform-branching code in the desktop or interface layer is a future bug; every direct DB import inside a provider is a future migration mess. Treat them as non-negotiable.
+
+### Single platform-agnostic detach pipeline
+
+The detach flow — retire the channel's status surface, revoke the binding in the store, deliver a "Thread detached" confirmation — has exactly one implementation: `MessagingController.runDetachPipeline`. Every detach origin (Discord `/detach`, Telegram `/detach`, the desktop right-click "Unbind" chip, future archive-on-delete flows, future "Unbind all") routes through it.
+
+The pipeline is platform-agnostic because the only platform-shaped seam is `adapter.deliver(intent)`, which every adapter already implements as part of the inbound-message contract. **A new platform inherits detach for free** by registering as an adapter — no detach-specific code is required in any provider, controller, IPC handler, or runtime call site.
+
+If you find yourself writing `if (binding.channel.channel === "discord") …` or wiring up a per-platform "tell platform X about detach" method, stop: the pipeline already does this through the generic adapter dispatch. Add the missing capability to the adapter contract instead.
+
+### Bus-driven cross-layer coordination
+
+Layers above the controller (Electron IPC handlers, desktop windowing code, future CLI / scheduled-task entry points) **must not import controller classes or call controller methods directly**. They emit events on the runtime bus; the runtime fans them out to whichever controller's adapter scopes the affected binding's channel.
+
+Two reasons: it prevents circular references between IPC and controller modules (IPC imports runtime, runtime imports controller; controller never sees IPC), and it stops every new caller from learning the per-platform layout. The right-click "Unbind" handler does not look up `DiscordMessagingController`; it calls `runtime.requestBindingRevoke({ bindingId, origin: "ui" })` and the runtime routes by binding metadata.
+
+Available command-bus entry points today, all on `DesktopMessagingRuntime`:
+
+| Method | Origin examples | Direction |
+|---|---|---|
+| `requestBindingRevoke(req)` | UI context-menu unbind, future archive flow on a single binding | caller → controllers |
+| `requestBindingRevokeAllForThread(req)` | Future "Unbind all" context-menu item, implicit unbind on thread archive | caller → controllers |
+| `notifyBindingsChanged()` | Controller mutations after bind/sync/detach | controllers → renderer |
+
+**Direction-typed events.** Each topic flows in one direction only. `notifyBindingsChanged` is mutation-broadcast (controllers and the runtime fallback emit; renderer subscribes). The two `request*` methods are commands (callers emit; controllers handle). Do not invert either — a command that broadcasts to the renderer becomes a state-mutation race; a mutation event that controllers subscribe to becomes a re-entrancy footgun.
+
+If no controller's scope matches a `request*` event (messaging is disabled, or the platform's adapter failed to start), the runtime falls back to a store-only revoke so the renderer chip clears regardless. Best-effort platform notification, guaranteed local cleanup.
+
+### Providers never touch persistence directly
+
+Provider packages under `packages/messaging/providers/*` **must not** import any of:
+
+- `apps/desktop/**` (any path)
+- `better-sqlite3`, `drizzle`, or any DB driver
+- The desktop store implementation (`apps/desktop/src/main/state/messaging-store-sqlite.ts`)
+- Any module that exposes raw SQL or schema definitions
+
+Providers receive persistent state only through opaque interfaces declared in `@pwragent/messaging-interface` — today that's `MessagingCallbackHandleStore` (`resolveCallbackHandle` / `upsertCallbackHandle`), and `MessagingAdapterState.opaque` for routing/surface state that the workflow layer echoes but never parses. New persistence needs become new interface methods, not new tables.
+
+This is enforced by package boundaries (`pnpm lint:boundaries`) and reinforced in [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md). The reason matters as much as the rule: providers come and go, the schema is shared, and a provider that owns its own table effectively owns a piece of the desktop migration plan it has no business owning. Keep the seam at the interface, not the database.
+
 ## How to add a provider
 
 The full procedure is in [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md). At a high level:

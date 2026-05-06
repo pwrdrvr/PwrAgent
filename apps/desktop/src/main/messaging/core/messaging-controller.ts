@@ -2850,7 +2850,25 @@ export class MessagingController {
       );
       return;
     }
+    await this.runDetachPipeline(binding, event);
+  }
 
+  /**
+   * Platform-agnostic detach pipeline. Called by both the inbound
+   * `/detach` slash-command path and the bus-driven UI / archive
+   * paths. The only seam for platform-specific behavior is
+   * `this.options.adapter.deliver`, which the registered adapter
+   * implements per the messaging contract — adding a new platform
+   * requires zero changes to this method. `event` is supplied only
+   * when the detach was initiated by an inbound command (used for
+   * audit context and reply targeting); for non-inbound origins
+   * (`requestBindingRevoke` from IPC, archive flows) the binding's
+   * own channel is the routing source.
+   */
+  private async runDetachPipeline(
+    binding: MessagingBindingRecord,
+    event?: MessagingInboundEvent,
+  ): Promise<void> {
     const activeTurn = this.getActiveTurn(binding);
     if (activeTurn) {
       await this.signalTurnActivity(
@@ -2883,9 +2901,27 @@ export class MessagingController {
         title: "Thread detached",
         body: "Messages in this conversation will no longer route to PwrAgent.",
       }),
-      undefined,
+      binding,
       event,
     );
+  }
+
+  /**
+   * Bus-driven entry point used by the runtime when an UI / archive
+   * caller emits `requestBindingRevoke`. Returns true if this
+   * controller's adapter owns the binding's channel and therefore
+   * handled the revoke; false otherwise so the runtime can try the
+   * next controller (or fall back to a direct store revoke if no
+   * controller matches — e.g., messaging is currently disabled).
+   */
+  async handleBindingRevokeRequest(
+    binding: MessagingBindingRecord,
+  ): Promise<boolean> {
+    if (!this.isChannelInScope(binding.channel)) {
+      return false;
+    }
+    await this.runDetachPipeline(binding, undefined);
+    return true;
   }
 
   private async recreateBindingStatus(
@@ -2917,7 +2953,7 @@ export class MessagingController {
 
   private async retireBindingStatus(
     binding: MessagingBindingRecord,
-    event: MessagingInboundEvent,
+    event: MessagingInboundEvent | undefined,
     navigation: NavigationSnapshot,
   ): Promise<MessagingBindingRecord> {
     const statusSurface = binding.statusSurface ?? binding.pinnedStatusSurface;

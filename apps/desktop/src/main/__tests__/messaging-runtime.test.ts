@@ -719,6 +719,152 @@ describe("DesktopMessagingRuntime", () => {
     ]);
   });
 
+  it("requestBindingRevoke routes through the controller so the platform adapter receives a Thread-detached confirmation", async () => {
+    const { runtime, adapter } = await createRuntimeHarness();
+    await runtime.start();
+    await adapter.listener?.(
+      buildCallbackEvent("bind:codex:thread-1", {
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    );
+
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    const store = getDesktopMessagingStore();
+    const binding = await store.findActiveBindingForChannel({
+      channel: "telegram",
+      conversation: { id: "chat-1", kind: "dm" },
+    });
+    expect(binding).toBeDefined();
+
+    adapter.delivered.length = 0;
+
+    const result = await runtime.requestBindingRevoke({
+      bindingId: binding!.id,
+      origin: "ui",
+    });
+
+    expect(result).toEqual({ revoked: true, notifiedPlatform: true });
+    expect(adapter.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Thread detached",
+    });
+    await expect(store.getBinding(binding!.id)).resolves.toMatchObject({
+      revokedAt: expect.any(Number),
+    });
+  });
+
+  it("requestBindingRevoke falls back to a store-only revoke when no controller scopes the binding's channel", async () => {
+    const { runtime, adapter } = await createRuntimeHarness();
+    await runtime.start();
+    await adapter.listener?.(
+      buildCallbackEvent("bind:codex:thread-1", {
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    );
+
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    const store = getDesktopMessagingStore();
+    const binding = await store.findActiveBindingForChannel({
+      channel: "telegram",
+      conversation: { id: "chat-1", kind: "dm" },
+    });
+    expect(binding).toBeDefined();
+
+    await runtime.stop();
+    adapter.delivered.length = 0;
+
+    const result = await runtime.requestBindingRevoke({
+      bindingId: binding!.id,
+      origin: "ui",
+    });
+
+    expect(result).toEqual({ revoked: true, notifiedPlatform: false });
+    expect(adapter.delivered).toHaveLength(0);
+    await expect(store.getBinding(binding!.id)).resolves.toMatchObject({
+      revokedAt: expect.any(Number),
+    });
+  });
+
+  it("requestBindingRevoke is a no-op for unknown or already-revoked bindings", async () => {
+    const { runtime } = await createRuntimeHarness();
+    await runtime.start();
+
+    const result = await runtime.requestBindingRevoke({
+      bindingId: "binding:does-not-exist",
+      origin: "ui",
+    });
+    expect(result).toEqual({ revoked: false, notifiedPlatform: false });
+  });
+
+  it("requestBindingRevokeAllForThread fans out to every binding on the thread, regardless of platform", async () => {
+    await prepareRuntimeStore();
+    const telegramAdapter = createAdapter("telegram");
+    const discordAdapter = createAdapter("discord");
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: () => [telegramAdapter, discordAdapter],
+      backendBridge: bridge,
+      config: {
+        inputDebounceMs: 0,
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: ["user-1"],
+        },
+        discord: {
+          channel: "discord",
+          botToken: "discord-token",
+          applicationId: "app-1",
+          authorizedActorIds: ["user-1"],
+        },
+      },
+    });
+    await runtime.start();
+
+    await telegramAdapter.listener?.(
+      buildCallbackEvent(
+        "bind:codex:thread-1",
+        { backend: "codex", threadId: "thread-1" },
+        "telegram",
+      ),
+    );
+    await discordAdapter.listener?.(
+      buildCallbackEvent(
+        "bind:codex:thread-1",
+        { backend: "codex", threadId: "thread-1" },
+        "discord",
+      ),
+    );
+
+    telegramAdapter.delivered.length = 0;
+    discordAdapter.delivered.length = 0;
+
+    const result = await runtime.requestBindingRevokeAllForThread({
+      backend: "codex",
+      threadId: "thread-1",
+      origin: "thread-archive",
+    });
+
+    expect(result).toEqual({ revokedCount: 2, notifiedCount: 2 });
+    expect(telegramAdapter.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Thread detached",
+    });
+    expect(discordAdapter.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Thread detached",
+    });
+  });
+
   it("stops the started adapter instances without rebuilding the factory", async () => {
     await prepareRuntimeStore();
     const adapter = createAdapter("telegram");

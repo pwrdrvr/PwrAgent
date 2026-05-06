@@ -14,6 +14,7 @@ import type {
   MessagingPlatformStatusEvent,
 } from "@pwragent/shared";
 import type {
+  MessagingBindingRecord,
   MessagingCapabilityProfile,
   MessagingChannelKind,
   MessagingDeliveryResult,
@@ -57,6 +58,49 @@ export type DesktopMessagingConfigLoader = (
   | Promise<DesktopMessagingConfig>;
 
 const messagingLog = getMainLogger("pwragent:messaging");
+
+/**
+ * Origin tag carried on `requestBindingRevoke` /
+ * `requestBindingRevokeAllForThread` so subscribers and observability
+ * can distinguish UI-initiated detaches from archive flows or
+ * platform-side commands. Adding a new origin must NOT introduce a
+ * platform branch — origins are routing-neutral metadata.
+ */
+export type BindingRevokeOrigin =
+  | "ui"
+  | "platform-command"
+  | "thread-archive"
+  | "permanent-failure";
+
+export type BindingRevokeRequest = {
+  bindingId: string;
+  origin: BindingRevokeOrigin;
+};
+
+export type BindingRevokeAllForThreadRequest = {
+  backend: MessagingBindingRecord["backend"];
+  threadId: MessagingBindingRecord["threadId"];
+  origin: BindingRevokeOrigin;
+};
+
+export type BindingRevokeResult = {
+  /** True if the binding existed and was either retired by a
+   * controller or removed via the runtime fallback. */
+  revoked: boolean;
+  /** True if a controller's adapter scoped the binding's channel and
+   * delivered the platform-side retirement + confirmation. False
+   * means the binding was removed from the store but no platform
+   * notification was sent (e.g., messaging is currently disabled). */
+  notifiedPlatform: boolean;
+};
+
+export type BindingRevokeAllForThreadResult = {
+  /** Number of bindings revoked in total. */
+  revokedCount: number;
+  /** Number that were retired through a controller's platform
+   * notification flow. The remainder were store-only fallbacks. */
+  notifiedCount: number;
+};
 
 export class DesktopMessagingRuntime {
   private adapters: DesktopMessagingAdapter[] = [];
@@ -287,6 +331,123 @@ export class DesktopMessagingRuntime {
    */
   notifyBindingsChanged(): void {
     this.broadcastBindingsChanged();
+  }
+
+  /**
+   * Bus entry point for "the user wants this binding revoked,
+   * source-of-request agnostic." Used by the desktop unbind IPC
+   * handler today; future archive flows and CLI tools route through
+   * the same call.
+   *
+   * The runtime fans the request out to every running controller.
+   * The controller whose adapter owns the binding's channel runs the
+   * platform-agnostic detach pipeline (retire status surface →
+   * revoke in store → "Thread detached" confirmation). This keeps
+   * the IPC layer free of any per-platform knowledge — adding Slack
+   * / Mattermost requires zero changes here.
+   *
+   * If no controller's scope matches (e.g., messaging is currently
+   * disabled, or the platform's adapter failed to start), the
+   * runtime still revokes the binding in the store so the renderer
+   * chip clears. Best-effort platform notification, guaranteed local
+   * state cleanup.
+   */
+  async requestBindingRevoke(
+    request: BindingRevokeRequest,
+  ): Promise<BindingRevokeResult> {
+    const store = getDesktopMessagingStore();
+    const binding = await store.getBinding(request.bindingId);
+    if (!binding || binding.revokedAt) {
+      return { revoked: false, notifiedPlatform: false };
+    }
+
+    const notifiedPlatform = await this.dispatchRevokeToControllers(binding);
+    if (!notifiedPlatform) {
+      await store.revokeBinding({ bindingId: binding.id });
+      this.broadcastBindingsChanged();
+    }
+
+    messagingLog.info("messaging binding revoke handled", {
+      bindingId: binding.id,
+      origin: request.origin,
+      backend: binding.backend,
+      platform: binding.channel.channel,
+      threadId: binding.threadId,
+      notifiedPlatform,
+    });
+
+    return { revoked: true, notifiedPlatform };
+  }
+
+  /**
+   * Bus entry point for "revoke every binding on this thread." Used
+   * for the upcoming "Unbind all" context-menu item and for implicit
+   * unbind-on-archive. Mirrors `requestBindingRevoke` semantics: per
+   * binding, in-scope controller handles platform notification; any
+   * unmatched binding falls back to store-only revoke.
+   */
+  async requestBindingRevokeAllForThread(
+    request: BindingRevokeAllForThreadRequest,
+  ): Promise<BindingRevokeAllForThreadResult> {
+    const store = getDesktopMessagingStore();
+    const bindings = await store.findActiveBindingsForThread({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
+    if (bindings.length === 0) {
+      return { revokedCount: 0, notifiedCount: 0 };
+    }
+
+    let notifiedCount = 0;
+    const fallbackBindings: MessagingBindingRecord[] = [];
+    for (const binding of bindings) {
+      const notified = await this.dispatchRevokeToControllers(binding);
+      if (notified) {
+        notifiedCount++;
+      } else {
+        fallbackBindings.push(binding);
+      }
+    }
+
+    for (const binding of fallbackBindings) {
+      await store.revokeBinding({ bindingId: binding.id });
+    }
+    if (fallbackBindings.length > 0) {
+      this.broadcastBindingsChanged();
+    }
+
+    messagingLog.info("messaging binding revoke-all handled", {
+      backend: request.backend,
+      threadId: request.threadId,
+      origin: request.origin,
+      revokedCount: bindings.length,
+      notifiedCount,
+    });
+
+    return { revokedCount: bindings.length, notifiedCount };
+  }
+
+  private async dispatchRevokeToControllers(
+    binding: MessagingBindingRecord,
+  ): Promise<boolean> {
+    for (const controller of this.controllers) {
+      try {
+        if (await controller.handleBindingRevokeRequest(binding)) {
+          return true;
+        }
+      } catch (error) {
+        messagingLog.error("messaging controller revoke handler threw", {
+          bindingId: binding.id,
+          platform: binding.channel.channel,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // Swallow — try the next controller; if none handle, the
+        // runtime fallback revokes from the store. We never want a
+        // platform-side failure to leave the binding visibly attached
+        // in the renderer.
+      }
+    }
+    return false;
   }
 
   private broadcastBindingsChanged(): void {
