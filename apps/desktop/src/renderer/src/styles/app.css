@@ -1690,12 +1690,10 @@ textarea,
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  /* Body breathing room below the title-bar strip + interior padding
-     for the .settings-layout grid. Dropping the prior 24px right
-     padding (overlay-era) — the strip and layout carry their own
-     spacing now. */
-  gap: 18px;
-  padding: 0 24px 24px;
+  /* No outer padding or gap — the title-bar strip's bottom border
+     and the nav's right border do the visual separation. Mirrors
+     the main app screen where the sidebar and main pane sit flush
+     against each other with no outer chrome. */
   overflow: hidden;
 }
 
@@ -1744,10 +1742,13 @@ textarea,
   margin: 0;
   flex: 0 0 auto;
   color: var(--text-primary);
-  font-size: 14px;
+  /* Match `.sidebar__brand` exactly so the brand reads identically
+     across the main screen's sidebar masthead and the Settings
+     overlay's title bar. */
+  font-size: 17px;
   font-weight: 700;
   line-height: 1;
-  letter-spacing: -0.005em;
+  letter-spacing: -0.01em;
 }
 
 .settings-titlebar__brand-accent {
@@ -1843,16 +1844,20 @@ textarea,
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-panel);
+  /* No card chrome — the layout is a flush sidebar | content split
+     that matches the main app shell's sidebar | thread-view feel.
+     `.settings-nav` carries the `--bg-sidebar` background +
+     border-right; `.settings-content` carries its own background. */
 }
 
 .settings-nav {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 12px;
+  /* 16px horizontal padding mirrors the main `.sidebar`'s padding;
+     12px vertical gives breathing room above Exit Settings without
+     pushing every row down too far. */
+  padding: 12px 16px;
   border-right: 1px solid var(--border-subtle);
   background: var(--bg-sidebar);
 }
@@ -1886,7 +1891,10 @@ textarea,
 .settings-content {
   min-height: 0;
   overflow: auto;
-  padding: 16px;
+  /* More generous interior padding now that the card chrome around
+     the layout is gone — the panels need breathing room from the
+     window edges and from the nav's right border. */
+  padding: 20px 24px 24px;
 }
 
 .settings-stack {
