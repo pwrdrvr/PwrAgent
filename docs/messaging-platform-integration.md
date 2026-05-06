@@ -438,24 +438,111 @@ Profile → Account Settings → Display → Username, then
 `/api/v4/users/username/<name>` returns the `id`). Mutable usernames
 are not authorization-safe.
 
-`PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_HMAC_SECRET` is optional. By
-default the adapter generates a fresh secret per process start, which
-acts as automatic TTL on outstanding callback URLs. Override only for
-deterministic test runs.
+`PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_HMAC_SECRET` is **strongly
+recommended** when running with env-var configuration. If unset, the
+adapter mints a fresh random secret each time the process starts —
+every interactive button rendered in a previous session immediately
+fails HMAC verification and silently no-ops on click. Setting an
+explicit value pins the keyring across restarts, so existing buttons
+continue to work.
 
-### 4. Validate
+Generate a 32-byte random hex string and store it however you store
+other secrets (1Password, env file, etc.):
 
-1. Send `@<bot> hello` in a channel where the bot is a member. The bot
-   posts a thread-picker.
-2. Tap a thread; verify the channel header / status card updates.
-3. Click any interactive button; verify the action fires (HTTP POST
-   round-trips through the tunnel, HMAC verifies, controller dispatches).
-4. Restart PwrAgent. Verify pre-existing pickers' buttons no longer
-   work (HMAC secret regenerated — outstanding handles fail
-   verification cleanly).
-5. Tear down the tunnel temporarily and click a button; verify the
-   click silently fails (no client-visible error, but the controller
-   never sees the dispatch). Restore the tunnel.
+```bash
+openssl rand -hex 32
+```
+
+Pin the same value across desktop instances if you ever run multiple
+clients pointed at the same Mattermost workspace; otherwise each
+client's buttons only validate against its own keyring.
+
+> **Note for future-you:** When the Settings UI lands, the desktop
+> will mint and persist the HMAC in macOS Keychain on first run.
+> Until then, env-var pinning is the only stable path. Without it,
+> "buttons stop working after restart" is the most common confused
+> bug report against this adapter.
+
+### 4. Validate (smoke test checklist)
+
+After the bot is bound, the tunnel is up, and the env vars (including
+the pinned HMAC) are loaded, walk this checklist in order. Each step
+should succeed before moving to the next:
+
+**Cold-start sanity:**
+
+1. Launch PwrAgent. Look for `mattermost: adapter started successfully`
+   and `mattermost callback listener bound port=47821 host=127.0.0.1`
+   in the dev console. No `failed to start adapter` warnings.
+
+**DM bind flow:**
+
+2. Open a Direct Message to the bot in Mattermost. Send a naked
+   message: `You there?`
+3. The bot replies with a `Choose a thread` post containing a `Resume`
+   button.
+4. Click `Resume`. The bot replies with the navigator: a thread picker
+   with `Next`, `Projects`, `New`, `Cancel` buttons. The console shows
+   `mattermost callback HMAC verification failed` only if the env-var
+   HMAC isn't set; if it is, the click round-trips cleanly.
+5. Click each navigator button in turn — `Next` advances the page,
+   `Projects` switches to projects, `New` starts a fresh thread, and
+   `Cancel` dismisses without binding.
+
+**Bind to a thread:**
+
+6. From the picker, select an existing thread. The status card
+   appears, pinned to the channel header.
+7. The status card shows binding details (model, reasoning, branch,
+   directory) and the standard buttons (`Model`, `Reasoning`,
+   `Tools`, `Permissions`, `Stop`, `Refresh`, `Detach`).
+8. The desktop app's binding chip for that thread now shows the
+   Mattermost icon and the DM peer's username (e.g. `harold`).
+
+**Round-trip a turn:**
+
+9. In the same DM, send `Who are you?`
+10. The bot enters typing state; the desktop app shows the message
+    arriving in the bound thread.
+11. The agent responds. The response appears in both the Mattermost
+    DM and the desktop app.
+12. The status card updates to reflect the completed turn.
+
+**Status surface buttons:**
+
+13. Click `Refresh` on the status card. The card re-renders with
+    fresh values; no buttons are stripped.
+14. Click `Tools`, then `Permissions`. Each click cycles the value
+    and the card updates inline. The desktop app's UI mirrors the
+    change (cross-surface state bus).
+
+**Detach:**
+
+15. Click `Detach` on the status card. The bot posts `Thread detached`
+    and removes the status card's buttons. The desktop app's binding
+    chip disappears for that thread.
+16. Send another message in the DM. The bot does not respond
+    (binding gone), but the offered `Resume` button on the
+    `Choose a thread` reply still works to re-bind.
+
+**Cross-restart persistence (with env-var HMAC pinned):**
+
+17. Quit and relaunch PwrAgent.
+18. Click a button on a status card from a still-bound thread that
+    was rendered before the restart. The click round-trips and the
+    status updates. Without the env-var HMAC pinned, this step fails
+    silently — the canary that says "you forgot to set the HMAC env
+    var."
+
+**Failure modes (don't block on these — verify they fail cleanly):**
+
+19. Tear down the tunnel temporarily and click a button. The click
+    silently fails (no client-visible error in Mattermost; no
+    dispatch in PwrAgent). Restore the tunnel.
+20. With dev-tools open, send a button click with a tampered
+    `integration.context.hmac` value. PwrAgent logs
+    `mattermost callback HMAC verification failed` and responds 200
+    (no info leak). No dispatch happens.
 
 ## Chat SDK Decision
 
