@@ -92,6 +92,13 @@ export class GithubPrFetcher {
   private authStatusCache:
     | { value: GhAuthStatus; fetchedAt: number }
     | undefined;
+  /**
+   * Pending probe promise. While a real probe is in flight, parallel
+   * callers (e.g. React StrictMode firing the Applications panel
+   * mount twice in dev) share the same promise instead of each
+   * starting their own subprocess. Cleared when the probe resolves.
+   */
+  private authStatusPending: Promise<GhAuthStatus> | undefined;
 
   constructor(options: GithubPrFetcherOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -209,8 +216,18 @@ export class GithubPrFetcher {
    * the Re-check button drives via `recheck: true`) to force a
    * fresh probe.
    *
+   * Concurrent callers share the same in-flight promise — without
+   * this, the StrictMode dev double-mount issued two parallel IPC
+   * calls that BOTH missed the resolved-value cache (which is only
+   * populated after the subprocess returns) and both spawned
+   * `gh auth status`. The promise-level dedup ensures the second
+   * caller waits on the first instead.
+   *
    * Returns `{ cached }` so callers can decide whether to log — the
-   * value is otherwise identical regardless of cache state.
+   * value is otherwise identical regardless of cache state. Only the
+   * caller that actually drives the probe gets `cached: false`;
+   * everyone else (in-flight share OR resolved-cache hit) gets
+   * `cached: true`.
    */
   async getAuthStatus(): Promise<GhAuthStatus & { cached: boolean }> {
     if (
@@ -220,22 +237,42 @@ export class GithubPrFetcher {
       return { ...this.authStatusCache.value, cached: true };
     }
 
-    let value: GhAuthStatus;
-    if (!(await this.isGhAvailable())) {
-      value = {
-        installed: false,
-        loggedIn: false,
-        scopes: [],
-        hasRepoScope: false,
-        reason: "gh CLI is not installed",
-      };
-    } else {
-      const result = await this.runGhAuthStatus();
-      value = parseGhAuthStatus(result);
+    if (this.authStatusPending) {
+      const value = await this.authStatusPending;
+      return { ...value, cached: true };
     }
 
-    this.authStatusCache = { value, fetchedAt: Date.now() };
-    return { ...value, cached: false };
+    const pending = (async (): Promise<GhAuthStatus> => {
+      let value: GhAuthStatus;
+      if (!(await this.isGhAvailable())) {
+        value = {
+          installed: false,
+          loggedIn: false,
+          scopes: [],
+          hasRepoScope: false,
+          reason: "gh CLI is not installed",
+        };
+      } else {
+        const result = await this.runGhAuthStatus();
+        value = parseGhAuthStatus(result);
+      }
+      this.authStatusCache = { value, fetchedAt: Date.now() };
+      return value;
+    })();
+
+    this.authStatusPending = pending;
+    try {
+      const value = await pending;
+      return { ...value, cached: false };
+    } finally {
+      // Only the original initiator clears the pending slot. By the
+      // time we reach this finally, all in-flight sharers have
+      // already resolved against the same promise — clearing here
+      // doesn't race them.
+      if (this.authStatusPending === pending) {
+        this.authStatusPending = undefined;
+      }
+    }
   }
 
   /** Force the next `isGhAvailable` call to re-probe — used by Re-check. */
@@ -245,12 +282,14 @@ export class GithubPrFetcher {
 
   /**
    * Clear both the gh-availability cache AND the parsed-auth-status
-   * cache. The IPC handler for `getGhStatus({ recheck: true })`
-   * routes here so the Re-check button starts from a clean slate.
+   * cache (resolved value + any in-flight pending promise). The IPC
+   * handler for `getGhStatus({ recheck: true })` routes here so the
+   * Re-check button starts from a clean slate.
    */
   invalidateGhCaches(): void {
     this.ghAvailableCache = undefined;
     this.authStatusCache = undefined;
+    this.authStatusPending = undefined;
   }
 }
 
