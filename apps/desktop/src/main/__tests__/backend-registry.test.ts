@@ -375,6 +375,7 @@ class MockBackendClient {
       modelListErrors?: Error[];
       account?: BackendAccountSummary;
       rateLimits?: BackendRateLimitSummary[];
+      startTurnError?: Error;
       steerTurnError?: Error;
       setThreadPermissionsError?: Error;
     }
@@ -512,6 +513,9 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
   }): Promise<{ threadId: string; turnId: string }> {
+    if (this.options.startTurnError) {
+      throw this.options.startTurnError;
+    }
     this.lastStartTurnParams = params;
     return { threadId: params.threadId, turnId: "turn-1" };
   }
@@ -3145,6 +3149,140 @@ describe("DesktopBackendRegistry", () => {
       threadId: "thread-2",
       name: "Renamed Grok thread",
     });
+
+    await registry.close();
+  });
+
+  it("does not fall back to full-access client when default mode is explicitly requested", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnError: new Error("thread not loaded on default instance"),
+    });
+    const codexFullAccessClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+
+    await expect(
+      registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "default",
+        input: [{ type: "text", text: "This must not silently escalate" }],
+      }),
+    ).rejects.toThrow("thread not loaded on default instance");
+
+    expect(codexFullAccessClient.lastStartTurnParams).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("does not fall back to default client when full-access mode is explicitly requested", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const codexFullAccessClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnError: new Error("thread not loaded on full-access instance"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock({ executionMode: "full-access" }),
+    });
+
+    await expect(
+      registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+        input: [{ type: "text", text: "This must not silently downgrade" }],
+      }),
+    ).rejects.toThrow("thread not loaded on full-access instance");
+
+    expect(codexClient.lastStartTurnParams).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("routes turn to the correct client after execution mode is toggled", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/list"] },
+      threads: [
+        {
+          id: "thread-toggle",
+          title: "Toggle test",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const codexFullAccessClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-toggle": {
+          backend: "codex",
+          threadId: "thread-toggle",
+          executionMode: "full-access",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-toggle",
+      executionMode: "full-access",
+      input: [{ type: "text", text: "First turn on full-access" }],
+    });
+    expect(codexFullAccessClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-toggle",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    expect(codexClient.lastStartTurnParams).toBeUndefined();
+
+    await registry.setThreadExecutionMode({
+      backend: "codex",
+      threadId: "thread-toggle",
+      executionMode: "default",
+    });
+
+    codexFullAccessClient.lastStartTurnParams = undefined;
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-toggle",
+      executionMode: "default",
+      input: [{ type: "text", text: "Second turn must route to default" }],
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-toggle",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    expect(codexFullAccessClient.lastStartTurnParams).toBeUndefined();
 
     await registry.close();
   });

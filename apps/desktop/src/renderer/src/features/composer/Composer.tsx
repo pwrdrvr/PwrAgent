@@ -1672,6 +1672,7 @@ export function Composer(props: ComposerProps) {
         backend: props.thread.source,
         threadId: props.thread.id,
         input: payload.input,
+        executionMode: props.thread.executionMode,
         collaborationMode,
         model: selectedModelOption?.id,
         reasoningEffort: supportsReasoning ? selectedReasoningEffort : undefined,
