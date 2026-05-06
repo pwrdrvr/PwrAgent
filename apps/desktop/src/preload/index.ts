@@ -73,6 +73,9 @@ import type {
   ReadDesktopSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
+  SettingsCredentialTestKind,
+  SettingsCredentialTestRequest,
+  SettingsCredentialTestResult,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
   UpdateThreadExpectedBranchRequest,
@@ -134,9 +137,11 @@ import {
   RENDERER_ERROR_REPORT_CHANNEL,
   RUNTIME_IDENTITY_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
+  SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
+  SETTINGS_TEST_CREDENTIALS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
 } from "../shared/ipc";
@@ -210,6 +215,14 @@ const desktopApi = Object.freeze({
     request?: RefreshDesktopCodexDiscoveryRequest,
   ): Promise<ReadDesktopSettingsResponse> =>
     await ipcRenderer.invoke(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL, request),
+  testSettingsCredentials: async (
+    request: SettingsCredentialTestRequest,
+  ): Promise<SettingsCredentialTestResult> =>
+    await ipcRenderer.invoke(SETTINGS_TEST_CREDENTIALS_CHANNEL, request),
+  readLastSettingsCredentialTest: async (
+    request: { kind: SettingsCredentialTestKind },
+  ): Promise<SettingsCredentialTestResult | undefined> =>
+    await ipcRenderer.invoke(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL, request),
   openApplication: async (
     request: OpenDesktopApplicationRequest,
   ): Promise<OpenDesktopApplicationResponse> =>

@@ -238,7 +238,11 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(within(sections).getByRole("button", { name: "Models" }));
     expect(screen.getByRole("heading", { name: "Codex" })).toBeInTheDocument();
-    expect(screen.getByText("/usr/local/bin/codex")).toBeInTheDocument();
+    // The selected command appears in two places now: the pathrow
+    // list (Codex discovery candidates) AND the SettingsTestBlock's
+    // default name (it shows the path the Test button would invoke).
+    // Both are correct.
+    expect(screen.getAllByText("/usr/local/bin/codex").length).toBeGreaterThanOrEqual(2);
     expect(
       screen.getByRole("radio", { name: "Auto Discovery - Use Newest" }),
     ).toHaveAttribute("aria-checked", "true");

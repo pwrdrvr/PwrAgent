@@ -4,6 +4,7 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
 } from "@pwragent/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -13,11 +14,13 @@ import {
   SettingsPathRow,
   type SettingsPathRowChip,
 } from "./SettingsPathRow";
+import { SettingsTestBlock } from "./SettingsTestBlock";
 import { formatSourceLabel, sourceBadge } from "./settings-fields";
 
 type CodexPathMode = "auto" | "specified";
 
 export function ModelsSettings(props: {
+  desktopApi?: DesktopApi;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
@@ -155,6 +158,25 @@ export function ModelsSettings(props: {
               </div>
             }
           />
+          <SettingsField
+            label="Connection test"
+            sub="Spawns the selected Codex binary with --version and validates the version banner."
+            control={
+              <SettingsTestBlock
+                kind="codex"
+                desktopApi={props.desktopApi}
+                icon={<span aria-hidden="true">C</span>}
+                defaultName={
+                  codex.discovery.selectedCommand ?? "codex --version"
+                }
+                defaultSub={
+                  codex.discovery.selectedCommand
+                    ? "spawn --version"
+                    : "no executable Codex selected"
+                }
+              />
+            }
+          />
         </div>
       </SettingsSection>
 
@@ -204,6 +226,19 @@ export function ModelsSettings(props: {
                   Clear
                 </button>
               </div>
+            }
+          />
+          <SettingsField
+            label="Connection test"
+            sub="Calls GET /v1/models on the xAI API and reports the available models."
+            control={
+              <SettingsTestBlock
+                kind="grok"
+                desktopApi={props.desktopApi}
+                icon={<span aria-hidden="true">x</span>}
+                defaultName="api.x.ai/v1/models"
+                defaultSub="GET /v1/models"
+              />
             }
           />
         </div>

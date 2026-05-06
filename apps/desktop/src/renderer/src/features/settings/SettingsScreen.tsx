@@ -227,6 +227,7 @@ function SettingsSectionBody(props: {
   if (props.section === "messaging") {
     return (
       <MessagingSettings
+        desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}
         onClearSecret={props.settings.clearSecret}
@@ -308,6 +309,7 @@ function SettingsSectionBody(props: {
 
   return (
     <ModelsSettings
+      desktopApi={props.desktopApi}
       saving={props.settings.saving}
       snapshot={props.snapshot}
       onClearSecret={props.settings.clearSecret}
