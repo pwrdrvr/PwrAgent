@@ -1808,16 +1808,17 @@ textarea,
   overflow: hidden;
 }
 
-/* Masthead — brand + 80px stoplight gutter. Drag region matches the
-   main `.sidebar__masthead` pattern so the user can grab the brand
-   area to drag the window. */
+/* Masthead — brand + 80px stoplight gutter. Borrows the
+   `.sidebar__masthead` pattern verbatim: lives inside the nav's
+   own 16px horizontal padding, with `padding-left: 80px` putting
+   the brand at x≈96 from the window edge (stoplights end at ~x=72
+   with `trafficLightPosition: { x: 20, y: 18 }` from window.ts).
+   Same 24px breathing room between the rightmost stoplight and
+   the brand text that the main screen's sidebar masthead has. */
 .settings-nav__masthead {
   display: flex;
   align-items: center;
-  /* 80px left clears macOS stoplights; matches `.sidebar__masthead`
-     exactly. The negative left margin pulls past the nav's own 16px
-     left padding so the gutter aligns with the window edge. */
-  margin: 0 -16px;
+  gap: 16px;
   padding: 10px 0 10px 80px;
   -webkit-app-region: drag;
 }
