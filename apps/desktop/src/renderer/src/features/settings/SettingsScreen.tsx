@@ -1,6 +1,7 @@
 import type {
   DesktopChatReplyComposer,
   DesktopSettingsSnapshot,
+  MessagingChannelKind,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { DesktopSettingsState } from "./useDesktopSettings";
@@ -10,8 +11,9 @@ import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
 import { MessagingActivityScreen } from "../messaging-activity/MessagingActivityScreen";
+import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { WorktreesSettings } from "./WorktreesSettings";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export type SettingsSection =
   | "experimental"
@@ -48,32 +50,63 @@ export function SettingsScreen(props: {
     if (props.initialSection) setSection(props.initialSection);
   }, [props.initialSection]);
   const snapshot = props.settings.snapshot;
+  const activeSectionLabel =
+    SECTIONS.find((entry) => entry.id === section)?.label ?? "Settings";
+  // Platform-chip clicks in the title-bar strip deep-link to the
+  // messaging-activity tab — same affordance ThreadHeader exposes,
+  // kept symmetrical so muscle memory works on both screens.
+  const onOpenActivity = useCallback(
+    (_platform?: MessagingChannelKind) => {
+      setSection("messaging-activity");
+    },
+    [],
+  );
 
   return (
     <section className="settings-screen" aria-label="Settings">
-      <header className="settings-header">
-        <div className="settings-header__identity">
-          <p className="settings-header__brand">
-            Pwr<span className="sidebar__brand-accent">Agent</span>
-          </p>
+      {/* Title-bar strip — brand mark + breadcrumb + MessagingStatusBar.
+          NOT a global app title bar; lives only inside the Settings
+          overlay. Exit Settings is intentionally NOT here — it's the
+          first row of the nav below. See plan
+          docs/plans/2026-05-05-004-feat-settings-overlay-titlebar-plan.md */}
+      <header className="settings-titlebar">
+        <p className="settings-titlebar__brand">
+          Pwr<span className="settings-titlebar__brand-accent">Agent</span>
+        </p>
+        <div className="settings-titlebar__breadcrumb">
+          <span className="settings-titlebar__eyebrow">Settings</span>
+          <span aria-hidden="true" className="settings-titlebar__separator">
+            ›
+          </span>
+          <span
+            className="settings-titlebar__current"
+            title={activeSectionLabel}
+          >
+            {activeSectionLabel}
+          </span>
+        </div>
+        <div className="settings-titlebar__spacer" />
+        <MessagingStatusBar
+          desktopApi={props.desktopApi}
+          onOpenActivity={onOpenActivity}
+        />
+      </header>
+
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="Settings sections">
+          {/* Exit Settings — first row of the nav (matches design).
+              Distinct from the section buttons via its own class. */}
           {props.onClose ? (
             <button
-              className="settings-header__exit"
+              className="settings-nav__exit"
               type="button"
               onClick={props.onClose}
             >
               <span aria-hidden="true">←</span> Exit Settings
             </button>
           ) : null}
-        </div>
-        <div className="settings-header__title">
-          <p className="eyebrow">Settings</p>
-          <h1>Settings</h1>
-        </div>
-      </header>
-
-      <div className="settings-layout">
-        <nav className="settings-nav" aria-label="Settings sections">
+          {/* Group label between Exit and the section list. */}
+          <p className="settings-nav__group-label">General</p>
           {SECTIONS.map((item) => (
             <button
               key={item.id}

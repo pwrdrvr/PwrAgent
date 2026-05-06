@@ -1667,7 +1667,11 @@ textarea,
   inset: 0;
   min-width: 0;
   min-height: 0;
-  padding: 42px 24px 24px;
+  /* No padding — the title-bar strip handles its own stoplight
+     clearance via padding-left: 80px (mirrors `.sidebar__masthead`).
+     The body (.settings-layout) carries its own interior layout via
+     the existing 188px nav + content grid; no outer gutter needed. */
+  padding: 0;
   background: var(--bg-app);
 }
 
@@ -1686,70 +1690,151 @@ textarea,
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+  /* Body breathing room below the title-bar strip + interior padding
+     for the .settings-layout grid. Dropping the prior 24px right
+     padding (overlay-era) — the strip and layout carry their own
+     spacing now. */
   gap: 18px;
-  padding-right: 24px;
+  padding: 0 24px 24px;
   overflow: hidden;
 }
 
-.settings-header {
+/* ----------------------------------------------------------------
+   SETTINGS OVERLAY TITLE BAR
+   Lives ONLY inside `.app-shell__settings-layer`. NOT a global app
+   title bar — the main app screen (Sidebar, ThreadView, ThreadHeader)
+   is intentionally untouched. See plan
+   docs/plans/2026-05-05-004-feat-settings-overlay-titlebar-plan.md.
+
+   Drag region pattern mirrors `.sidebar__masthead` and `.thread-header`:
+   the strip + descendants get `-webkit-app-region: drag`; interactive
+   elements opt back to `no-drag`. macOS stoplights overlay the left
+   80px gutter via `titleBarStyle: "hiddenInset"`.
+   ---------------------------------------------------------------- */
+
+.settings-titlebar {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px;
-  padding-right: 8px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  height: 44px;
+  /* 80px left clears macOS stoplights (drawn at x=20, y=18 per
+     window.ts). Same gutter the sidebar masthead uses. */
+  padding: 0 14px 0 80px;
+  background: var(--bg-panel-elevated);
+  border-bottom: 1px solid var(--border-subtle);
   -webkit-app-region: drag;
 }
 
-.settings-header__identity {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
+.settings-titlebar * {
+  -webkit-app-region: drag;
+}
+
+.settings-titlebar button,
+.settings-titlebar input,
+.settings-titlebar a,
+.settings-titlebar select,
+.settings-titlebar [role="button"] {
   -webkit-app-region: no-drag;
 }
+/* MessagingStatusBar already enforces no-drag on its whole subtree
+   via its own CSS (~line 211). No duplication needed here. */
 
-.settings-header__brand {
+.settings-titlebar__brand {
   margin: 0;
+  flex: 0 0 auto;
   color: var(--text-primary);
-  font-size: 17px;
+  font-size: 14px;
   font-weight: 700;
   line-height: 1;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.005em;
 }
 
-.settings-header__exit {
-  display: inline-flex;
+.settings-titlebar__brand-accent {
+  color: var(--accent);
+}
+
+.settings-titlebar__breadcrumb {
+  display: flex;
   align-items: center;
-  appearance: none;
-  cursor: pointer;
-  gap: 4px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
+  gap: 6px;
+  min-width: 0;
   font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.settings-titlebar__eyebrow {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-titlebar__separator {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.settings-titlebar__current {
+  min-width: 0;
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
   font-weight: 600;
 }
 
-.settings-header__exit:hover,
-.settings-header__exit:focus-visible {
-  color: var(--accent);
+.settings-titlebar__spacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ----------------------------------------------------------------
+   SETTINGS NAV — header rows (Exit + GENERAL group label)
+   Prepended above the existing section list. Visually distinct from
+   the section buttons so users don't mistake "← Exit Settings" for
+   another section. The existing `.settings-nav__button` rule is
+   unchanged.
+   ---------------------------------------------------------------- */
+
+.settings-nav__exit {
+  display: inline-flex;
+  width: 100%;
+  align-items: center;
+  appearance: none;
+  cursor: pointer;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+
+.settings-nav__exit:hover,
+.settings-nav__exit:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
   outline: none;
 }
 
-.settings-header__exit:focus-visible {
-  text-decoration: underline;
-}
-
-.settings-header__title {
-  text-align: right;
-}
-
-.settings-header h1 {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 34px;
-  line-height: 1;
+.settings-nav__group-label {
+  margin: 4px 12px 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .settings-layout {
