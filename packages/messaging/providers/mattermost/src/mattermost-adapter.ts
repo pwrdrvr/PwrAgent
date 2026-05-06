@@ -191,6 +191,14 @@ export class MattermostAdapter implements MattermostProviderAdapter {
    */
   private readonly slashCommandTokens = new Set<string>();
   /**
+   * Cache of `rootId → truncated root message`, used to populate
+   * `MessagingConversationRef.title` for thread-bound conversations
+   * so the binding chip shows the thread's actual subject instead of
+   * a bare "Thread" label. Populated lazily on first inbound thread
+   * reply per root.
+   */
+  private readonly threadRootMessageCache = new Map<string, string>();
+  /**
    * Last reconciliation result per team, kept for diagnostics + future
    * re-reconcile passes (e.g. on team-membership change).
    */
@@ -485,7 +493,11 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       return;
     }
 
-    const channelRef = this.channelRefForPost(post, data);
+    const rootSummary =
+      post.root_id && post.root_id !== post.id
+        ? await this.fetchThreadRootSummary(post.root_id)
+        : undefined;
+    const channelRef = this.channelRefForPost(post, data, rootSummary);
     const actor: MessagingActorIdentity = {
       platformUserId: post.user_id,
       displayName: data.sender_name,
@@ -1395,6 +1407,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       sender_name?: string;
       channel_display_name?: string;
     },
+    threadRootSummary?: string,
   ): MessagingChannelRef {
     const isThread = Boolean(post.root_id && post.root_id !== post.id);
     const kind: MessagingConversationKind = isThread
@@ -1411,13 +1424,19 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     //     which is what the user expects to see in the binding chip.
     //   Public/private channel       → `channel_display_name` is the
     //     human-readable channel name (e.g., "Town Square").
-    //   Threads                      → no title at this level; the
-    //     parent post would carry it if we ever needed it.
+    //   Thread reply                 → truncated root-post message
+    //     (fetched + cached via `fetchThreadRootSummary`). Falls back
+    //     to undefined when the API lookup failed; the chip then
+    //     shows just the kind label, same as before.
     const title = isThread
-      ? undefined
+      ? threadRootSummary
       : data.channel_type === "D"
         ? data.sender_name
         : data.channel_display_name;
+    // For thread refs, surface the channel name as `parentTitle` so
+    // breadcrumb-style chip displays read "Channel › Thread title".
+    // Discord's adapter does the same with guild→channel.
+    const parentTitle = isThread ? data.channel_display_name : undefined;
     return {
       channel: this.channel,
       conversation: {
@@ -1425,8 +1444,50 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         kind,
         ...(isThread && post.root_id ? { parentId: post.root_id } : {}),
         ...(title ? { title } : {}),
+        ...(parentTitle ? { parentTitle } : {}),
       },
     };
+  }
+
+  /**
+   * Resolve a stable display string for a thread's root post.
+   *
+   * Mattermost's WS `posted` event for a thread reply doesn't echo the
+   * root post's content — only its id (`root_id`). To populate the
+   * binding chip with something more meaningful than "Thread", fetch
+   * the root once via `Client4.getPost` and cache the truncated
+   * summary by root id for the adapter's lifetime.
+   *
+   * Cache lifetime: process scope. Bounded by the number of distinct
+   * threads the bot is bound to / interacting with — typically small.
+   * On adapter restart we re-fetch on first reply. Cost per thread:
+   * one `getPost` call.
+   *
+   * Failure mode: a permission error or network blip returns
+   * `undefined`. The chip falls back to no title (kind label only),
+   * matching pre-thread-binding behavior. Not a correctness concern.
+   */
+  private async fetchThreadRootSummary(
+    rootId: string,
+  ): Promise<string | undefined> {
+    const cached = this.threadRootMessageCache.get(rootId);
+    if (cached !== undefined) {
+      return cached.length > 0 ? cached : undefined;
+    }
+    try {
+      const root = (await this.client.getPost(rootId)) as { message?: string };
+      const summary = summarizeThreadRoot(root.message ?? "");
+      // Cache empty strings too so we don't keep retrying a root
+      // whose body was deleted or unavailable.
+      this.threadRootMessageCache.set(rootId, summary);
+      return summary.length > 0 ? summary : undefined;
+    } catch (error) {
+      this.logger.debug?.("mattermost: getPost(root) failed", {
+        rootId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   private newEventId(prefix: string): string {
@@ -1454,6 +1515,27 @@ function clampHeader(text: string): string {
   return text.length > MATTERMOST_CHANNEL_HEADER_LIMIT
     ? text.slice(0, MATTERMOST_CHANNEL_HEADER_LIMIT)
     : text;
+}
+
+/**
+ * Render a thread's root-post message as a short, single-line title
+ * for use in `MessagingConversationRef.title`. Collapses any embedded
+ * whitespace (Mattermost markdown allows multi-line root posts), then
+ * truncates to ~50 chars with a trailing ellipsis when the message is
+ * longer. Empty input yields an empty string — the caller treats that
+ * as "no title available."
+ */
+export function summarizeThreadRoot(text: string): string {
+  const single = text.replace(/\s+/g, " ").trim();
+  if (single.length === 0) {
+    return "";
+  }
+  const max = 50;
+  if (single.length <= max) {
+    return single;
+  }
+  // -1 to leave room for the ellipsis without overshooting `max`.
+  return `${single.slice(0, max - 1)}…`;
 }
 
 function parseEmbeddedPost(

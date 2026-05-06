@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MattermostAdapter } from "../mattermost-adapter.ts";
+import { MattermostAdapter, summarizeThreadRoot } from "../mattermost-adapter.ts";
 import type {
   MessagingCallbackHandleRecord,
   MessagingCallbackHandleStore,
@@ -372,5 +372,33 @@ describe("MattermostAdapter — conversation kind round-trip", () => {
     expect(persisted[0].channel.conversation.kind).toBe("dm");
     expect(persisted[0].channel.conversation.id).toBe("dm-id");
     expect(persisted[0].actionId).toBe("action-resume");
+  });
+});
+
+describe("summarizeThreadRoot", () => {
+  it("returns short messages unchanged", () => {
+    expect(summarizeThreadRoot("Wood chuck joke")).toBe("Wood chuck joke");
+  });
+
+  it("collapses internal whitespace and newlines to single spaces", () => {
+    expect(summarizeThreadRoot("Wood chuck\n\njoke   how much")).toBe(
+      "Wood chuck joke how much",
+    );
+  });
+
+  it("trims leading and trailing whitespace", () => {
+    expect(summarizeThreadRoot("   spaced   ")).toBe("spaced");
+  });
+
+  it("truncates messages over 50 chars with an ellipsis", () => {
+    const long = "How much wood would a woodchuck chuck if a woodchuck could chuck wood?";
+    const result = summarizeThreadRoot(long);
+    expect(result.endsWith("…")).toBe(true);
+    expect(result.length).toBeLessThanOrEqual(50);
+  });
+
+  it("returns empty string for empty / whitespace-only input", () => {
+    expect(summarizeThreadRoot("")).toBe("");
+    expect(summarizeThreadRoot("   \n\n\t  ")).toBe("");
   });
 });
