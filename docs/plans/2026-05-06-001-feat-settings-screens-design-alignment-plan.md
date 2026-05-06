@@ -1,7 +1,7 @@
 ---
 title: Settings screens — align with PwrAgent v2 design
 type: feat
-status: active
+status: completed
 date: 2026-05-06
 origin: docs/design/pwragent-v2/project/PwrAgnt v2.html  # design source bundle, with sibling settings.jsx + styles.css
 ---
