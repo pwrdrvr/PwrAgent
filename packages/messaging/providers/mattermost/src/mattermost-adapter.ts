@@ -1102,7 +1102,15 @@ export class MattermostAdapter implements MattermostProviderAdapter {
           channel: params.channelRef,
           createdAt: now,
           updatedAt: now,
-          expiresAt: now + 15 * 60 * 1000,
+          // 30-day handle TTL: Mattermost posts and their buttons live
+          // indefinitely server-side, so the handle store needs to match
+          // user expectations (click a button from days ago, it works).
+          // Old short TTLs were copy-pasted from Telegram/Discord
+          // patterns where the *platform* enforces short token lifetimes;
+          // Mattermost has no such constraint. DB growth at this TTL is
+          // bounded at single-digit MB for typical use; the existing
+          // `cleanupExpiredCallbackHandles` reaper trims older entries.
+          expiresAt: now + 30 * 24 * 60 * 60 * 1000,
           handle,
           pendingIntentId: params.intent.id,
           ...(action.value !== undefined ? { value: action.value } : {}),
