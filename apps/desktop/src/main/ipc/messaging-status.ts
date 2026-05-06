@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from "electron";
+import { ipcMain } from "electron";
 import type {
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
@@ -11,6 +11,7 @@ import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
 import { getDesktopMessagingActivityLog } from "../messaging/desktop-messaging-activity-log";
 import { getMainLogger } from "../log";
 import { showMessagingActivityWindow } from "../messaging-activity-window";
+import { subscribersForChannel } from "../window-channels";
 import {
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
@@ -25,30 +26,26 @@ const log = getMainLogger("pwragent:messaging-ipc");
 let unsubscribePlatformStatus: (() => void) | undefined;
 let unsubscribeBindingsChanged: (() => void) | undefined;
 
-function broadcastPlatformStatusEvent(event: MessagingPlatformStatusEvent): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (typeof window.isDestroyed === "function" && window.isDestroyed()) {
-      continue;
-    }
-    if (typeof window.webContents.send !== "function") {
-      continue;
-    }
-    window.webContents.send(MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL, event);
+/**
+ * Send a payload to every window that has subscribed to `channel`
+ * via `registerWindowChannels`. Skips windows that opted out (e.g.
+ * the Messaging Activity window, which polls instead). Replaces
+ * the previous `BrowserWindow.getAllWindows()` fan-out so additional
+ * secondary windows pay zero IPC cost for events they don't consume.
+ */
+function fanOut(channel: string, payload: unknown): void {
+  for (const webContents of subscribersForChannel(channel)) {
+    if (typeof webContents.send !== "function") continue;
+    webContents.send(channel, payload);
   }
 }
 
+function broadcastPlatformStatusEvent(event: MessagingPlatformStatusEvent): void {
+  fanOut(MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL, event);
+}
+
 function broadcastBindingsChanged(): void {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (typeof window.isDestroyed === "function" && window.isDestroyed()) {
-      continue;
-    }
-    if (typeof window.webContents.send !== "function") {
-      continue;
-    }
-    window.webContents.send(MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL, {
-      at: Date.now(),
-    });
-  }
+  fanOut(MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL, { at: Date.now() });
 }
 
 export function registerMessagingStatusIpcHandlers(): void {
