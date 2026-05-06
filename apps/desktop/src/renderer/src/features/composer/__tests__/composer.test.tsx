@@ -3853,6 +3853,7 @@ describe("Composer", () => {
       backend: "codex",
       threadId: "thread-1",
       input: [{ type: "text", text: "Plan this change" }],
+      executionMode: "default",
       collaborationMode: {
         mode: "plan",
         settings: {
