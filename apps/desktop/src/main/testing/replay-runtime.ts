@@ -180,8 +180,7 @@ declare global {
 
 export function createReplayClientsFromEnv():
   | {
-      codexDefaultClient: ReplayRuntimeClient;
-      codexFullAccessClient: ReplayRuntimeClient;
+      codexClient: ReplayRuntimeClient;
       grokClient: ReplayRuntimeClient;
       defaultBackend: AppServerBackendKind;
     }
@@ -194,11 +193,14 @@ export function createReplayClientsFromEnv():
   const fixture = loadReplayFixture(fixturePath);
   const clients = createReplayClients(fixture);
 
+  // Note: the driver API still accepts `executionMode` on every method
+  // for E2E backward-compat with existing replay specs. After the
+  // single-instance collapse the param is ignored — there is only one
+  // codex replay client serving both modes.
   globalThis.__PWRAGENT_REPLAY_DRIVER__ = {
     advance: async (params) => {
       const client = getReplayClient(clients, {
         backend: params?.backend,
-        executionMode: params?.executionMode,
       });
       await client.advance?.({
         stepId: params?.stepId,
@@ -208,42 +210,36 @@ export function createReplayClientsFromEnv():
     getPendingRequest: (params) => {
       const client = getReplayClient(clients, {
         backend: params?.backend,
-        executionMode: params?.executionMode,
       });
       return client.getPendingRequest?.();
     },
     getLastStartTurn: (params) => {
       const client = getReplayClient(clients, {
         backend: params?.backend,
-        executionMode: params?.executionMode,
       });
       return client.getLastStartTurnParams?.();
     },
     getLastStartReview: (params) => {
       const client = getReplayClient(clients, {
         backend: params?.backend,
-        executionMode: params?.executionMode,
       });
       return client.getLastStartReviewParams?.();
     },
     getLastRenameThread: (params) => {
       const client = getReplayClient(clients, {
         backend: params?.backend,
-        executionMode: params?.executionMode,
       });
       return client.getLastRenameThreadParams?.();
     },
     getInterruptTurnCalls: (params) => {
       const client = getReplayClient(clients, {
         backend: params?.backend,
-        executionMode: params?.executionMode,
       });
       return client.getInterruptTurnCalls?.() ?? [];
     },
     respondToPendingRequest: async (params) => {
       const client = getReplayClient(clients, {
         backend: params.backend,
-        executionMode: params.executionMode,
       });
       await client.respondToPendingRequest?.(params.requestId);
     }
@@ -253,8 +249,7 @@ export function createReplayClientsFromEnv():
 }
 
 function createReplayClients(fixture: ReplayFixture): {
-  codexDefaultClient: ReplayRuntimeClient;
-  codexFullAccessClient: ReplayRuntimeClient;
+  codexClient: ReplayRuntimeClient;
   grokClient: ReplayRuntimeClient;
   defaultBackend: AppServerBackendKind;
 } {
@@ -262,16 +257,14 @@ function createReplayClients(fixture: ReplayFixture): {
     const grokClient = ReplayClient.fromFixture(fixture);
 
     return {
-      codexDefaultClient: createUnavailableReplayClient("codex", "grok"),
-      codexFullAccessClient: createUnavailableReplayClient("codex", "grok"),
+      codexClient: createUnavailableReplayClient("codex", "grok"),
       grokClient,
       defaultBackend: "grok",
     };
   }
 
   return {
-    codexDefaultClient: ReplayClient.fromFixture(fixture),
-    codexFullAccessClient: ReplayClient.fromFixture(fixture),
+    codexClient: ReplayClient.fromFixture(fixture),
     grokClient: createUnavailableReplayClient("grok", "codex"),
     defaultBackend: "codex",
   };
@@ -279,14 +272,12 @@ function createReplayClients(fixture: ReplayFixture): {
 
 function getReplayClient(
   clients: {
-    codexDefaultClient: ReplayRuntimeClient;
-    codexFullAccessClient: ReplayRuntimeClient;
+    codexClient: ReplayRuntimeClient;
     grokClient: ReplayRuntimeClient;
     defaultBackend: AppServerBackendKind;
   },
   params: {
     backend?: AppServerBackendKind;
-    executionMode?: ThreadExecutionMode;
   }
 ): ReplayRuntimeClient {
   const backend = params.backend ?? clients.defaultBackend;
@@ -294,9 +285,7 @@ function getReplayClient(
     return clients.grokClient;
   }
 
-  return params.executionMode === "full-access"
-    ? clients.codexFullAccessClient
-    : clients.codexDefaultClient;
+  return clients.codexClient;
 }
 
 function loadReplayFixture(filePath: string): ReplayFixture {

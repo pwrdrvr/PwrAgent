@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("replay-runtime", () => {
-  it("routes driver interactions to the requested execution mode", async () => {
+  it("routes driver interactions through the single codex replay client (executionMode param accepted but ignored)", async () => {
     const fixturePath = writeFixture({
       metadata: {
         backend: "codex",
@@ -72,9 +72,9 @@ describe("replay-runtime", () => {
     const clients = createReplayClientsFromEnv();
     expect(clients).toBeDefined();
 
-    await clients!.codexFullAccessClient.getInitializeResult();
-    await clients!.codexFullAccessClient.listThreads();
-    await clients!.codexFullAccessClient.startTurn({
+    await clients!.codexClient.getInitializeResult();
+    await clients!.codexClient.listThreads();
+    await clients!.codexClient.startTurn({
       threadId: "thread-full-access",
       input: [{ type: "text", text: "Check payload capture" }]
     });
@@ -104,7 +104,15 @@ describe("replay-runtime", () => {
       }
     });
 
-    expect(globalThis.__PWRAGENT_REPLAY_DRIVER__?.getPendingRequest()).toBeUndefined();
+    // The driver's executionMode param is now ignored — both modes share
+    // the single codex replay client, so the same pending request is
+    // visible whether called with or without an explicit executionMode.
+    expect(globalThis.__PWRAGENT_REPLAY_DRIVER__?.getPendingRequest()).toMatchObject({
+      method: "turn/requestApproval",
+      params: {
+        requestId: "approval-1"
+      }
+    });
 
     await globalThis.__PWRAGENT_REPLAY_DRIVER__?.respondToPendingRequest({
       executionMode: "full-access",
@@ -165,7 +173,7 @@ describe("replay-runtime", () => {
     await globalThis.__PWRAGENT_REPLAY_DRIVER__?.advance({ stepId: "notif-1" });
 
     expect(notifications).toEqual(["thread/status/changed"]);
-    await expect(clients!.codexDefaultClient.getInitializeResult()).rejects.toThrow(
+    await expect(clients!.codexClient.getInitializeResult()).rejects.toThrow(
       "Replay fixture backend is grok; codex is unavailable in replay mode."
     );
   });

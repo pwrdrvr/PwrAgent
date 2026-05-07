@@ -696,15 +696,8 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const codexFullAccessClient = new MockBackendClient({
-      initializeResult: {
-        serverInfo: { name: "Codex App Server", version: "1.0.0" },
-        methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
-      },
-    });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -714,7 +707,6 @@ describe("DesktopBackendRegistry", () => {
     const response = await registry.listBackends({ includeUnavailable: true });
 
     expect(codexClient.listModelsCallCount).toBe(1);
-    expect(codexFullAccessClient.listModelsCallCount).toBe(0);
 
     expect(response.backends).toMatchObject([
       {
@@ -853,21 +845,8 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const codexFullAccessClient = new MockBackendClient({
-      initializeResult: {
-        serverInfo: { name: "Codex App Server", version: "1.0.0" },
-        methods: ["thread/start", "turn/start"],
-      },
-      models: [
-        {
-          id: "gpt-full-access-only",
-          label: "Full Access Only",
-        },
-      ],
-    });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -880,7 +859,6 @@ describe("DesktopBackendRegistry", () => {
     await registry.startThread({ backend: "codex" });
 
     expect(codexClient.listModelsCallCount).toBe(1);
-    expect(codexFullAccessClient.listModelsCallCount).toBe(0);
     expect(codexClient.lastListModelsDiagnostics).toMatchObject({
       callerReason: "backend-summary",
     });
@@ -926,12 +904,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: {
-          serverInfo: { name: "Codex App Server", version: "1.0.0" },
-          methods: ["thread/start", "turn/start"],
-        },
-      }),
       grokClient,
       overlayStore: createOverlayStoreMock({
         launchpadDefaults: {
@@ -985,12 +957,6 @@ describe("DesktopBackendRegistry", () => {
         methods: ["thread/start", "turn/start"],
       },
     });
-    const codexFullAccessClient = new MockBackendClient({
-      initializeResult: {
-        serverInfo: { name: "Codex App Server", version: "1.0.0" },
-        methods: ["thread/start", "turn/start"],
-      },
-    });
     const grokClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Grok App Server", version: "1.0.0" },
@@ -1000,19 +966,16 @@ describe("DesktopBackendRegistry", () => {
 
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient,
       grokClient,
       overlayStore: createOverlayStoreMock(),
     });
 
     expect(codexClient.listModelsCallCount).toBe(0);
-    expect(codexFullAccessClient.listModelsCallCount).toBe(0);
     expect(grokClient.listModelsCallCount).toBe(0);
 
     await registry.startThread({ backend: "grok" });
 
     expect(codexClient.listModelsCallCount).toBe(0);
-    expect(codexFullAccessClient.listModelsCallCount).toBe(0);
     expect(grokClient.listModelsCallCount).toBe(1);
     expect(grokClient.lastListModelsDiagnostics).toMatchObject({
       callerReason: "thread-start-defaults",
@@ -1040,7 +1003,6 @@ describe("DesktopBackendRegistry", () => {
     const codexClient = new MockBackendClient({});
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({}),
       grokClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -1074,7 +1036,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
-      codexFullAccessClient: new MockBackendClient({}),
       grokClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -1103,15 +1064,8 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const codexFullAccessClient = new MockBackendClient({
-      initializeResult: {
-        serverInfo: { name: "Codex App Server", version: "1.0.0" },
-        methods: ["thread/start", "turn/start"],
-      },
-    });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -1123,7 +1077,6 @@ describe("DesktopBackendRegistry", () => {
     await registry.startThread({ backend: "codex" });
 
     expect(codexClient.listModelsCallCount).toBe(2);
-    expect(codexFullAccessClient.listModelsCallCount).toBe(0);
     expect(response.backends[0]?.launchpadOptions?.models?.[0]).toMatchObject({
       id: "gpt-5.5",
       label: "GPT-5.5",
@@ -1136,11 +1089,6 @@ describe("DesktopBackendRegistry", () => {
   it("assumes Codex can create threads when initialize omits methods", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
-        initializeResult: {
-          serverInfo: { name: "Codex App Server", version: "0.120.0" },
-        },
-      }),
-      codexFullAccessClient: new MockBackendClient({
         initializeResult: {
           serverInfo: { name: "Codex App Server", version: "0.120.0" },
         },
@@ -1170,9 +1118,6 @@ describe("DesktopBackendRegistry", () => {
   it("remembers launchpad work mode for future directory drafts", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-      }),
-      codexFullAccessClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
       grokClient: new MockBackendClient({
@@ -1208,9 +1153,6 @@ describe("DesktopBackendRegistry", () => {
   it("refreshes empty saved directory drafts from current launchpad work mode defaults", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-      }),
-      codexFullAccessClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
       grokClient: new MockBackendClient({
@@ -1252,9 +1194,6 @@ describe("DesktopBackendRegistry", () => {
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -1287,9 +1226,6 @@ describe("DesktopBackendRegistry", () => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-      }),
-      codexFullAccessClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
       grokClient: new MockBackendClient({
@@ -1325,9 +1261,6 @@ describe("DesktopBackendRegistry", () => {
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -1358,9 +1291,6 @@ describe("DesktopBackendRegistry", () => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-      }),
-      codexFullAccessClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
       grokClient: new MockBackendClient({
@@ -1404,9 +1334,6 @@ describe("DesktopBackendRegistry", () => {
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -1444,9 +1371,6 @@ describe("DesktopBackendRegistry", () => {
             supportsReasoning: true,
           },
         ],
-      }),
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
       }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
@@ -1491,9 +1415,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -1530,9 +1451,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -1570,9 +1488,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -1612,9 +1527,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -1661,10 +1573,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/list", "thread/start"] },
-        threads: [],
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -1723,9 +1631,6 @@ describe("DesktopBackendRegistry", () => {
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/start"] },
       }),
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-      }),
       grokClient,
       overlayStore: createOverlayStoreMock(),
       createScratchProjectDirectory: async () => "/Users/test/.pwragent/projects/2026-05-02-d4e5f6",
@@ -1761,9 +1666,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["turn/start"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -1836,9 +1738,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["turn/start"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -1876,11 +1775,8 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("applies requested full-access execution settings when starting Codex turns", async () => {
+  it("applies requested full-access execution settings on the single Codex client when starting turns", async () => {
     const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["turn/start"] },
-    });
-    const codexFullAccessClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
     });
     const overlayStore = createOverlayStoreMock({
@@ -1888,7 +1784,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -1902,8 +1797,7 @@ describe("DesktopBackendRegistry", () => {
       input: [{ type: "text", text: "Run npm view dive" }],
     });
 
-    expect(codexClient.lastStartTurnParams).toBeUndefined();
-    expect(codexFullAccessClient.lastStartTurnParams).toEqual({
+    expect(codexClient.lastStartTurnParams).toEqual({
       threadId: "thread-1",
       input: [{ type: "text", text: "Run npm view dive" }],
       approvalPolicy: "never",
@@ -1943,9 +1837,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["turn/start", "thread/name/set"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok unavailable"),
       }),
@@ -1980,12 +1871,8 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("steers Codex turns through the active execution mode for the thread", async () => {
+  it("steers Codex turns through the single client and surfaces its error", async () => {
     const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["turn/start", "turn/steer"] },
-      steerTurnError: new Error("json-rpc error (-32600): no active turn to steer"),
-    });
-    const codexFullAccessClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/steer"] },
       steerTurnError: new Error(
         "json-rpc error (-32600): expected active turn id `turn-0` but found `turn-1`",
@@ -1993,7 +1880,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok unavailable"),
       }),
@@ -2015,8 +1901,7 @@ describe("DesktopBackendRegistry", () => {
       }),
     ).rejects.toThrow("expected active turn id `turn-0` but found `turn-1`");
 
-    expect(codexFullAccessClient.steerTurnCallCount).toBe(1);
-    expect(codexClient.steerTurnCallCount).toBe(0);
+    expect(codexClient.steerTurnCallCount).toBe(1);
 
     await registry.close();
   });
@@ -2042,9 +1927,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["turn/start", "thread/name/set"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok unavailable"),
       }),
@@ -2095,9 +1977,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["turn/start", "thread/name/set"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok unavailable"),
       }),
@@ -2148,9 +2027,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["turn/start", "thread/name/set"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok unavailable"),
       }),
@@ -2200,9 +2076,6 @@ describe("DesktopBackendRegistry", () => {
       codexClient: new MockBackendClient({
         initializeError: new Error("codex unavailable"),
       }),
-      codexFullAccessClient: new MockBackendClient({
-        initializeError: new Error("codex unavailable"),
-      }),
       grokClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: titleService,
@@ -2248,9 +2121,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["turn/start", "thread/name/set"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok unavailable"),
       }),
@@ -2284,9 +2154,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["turn/start", "thread/name/set"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok unavailable"),
       }),
@@ -2312,9 +2179,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
-        initializeError: new Error("codex unavailable"),
-      }),
-      codexFullAccessClient: new MockBackendClient({
         initializeError: new Error("codex unavailable"),
       }),
       grokClient,
@@ -2349,9 +2213,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/list"] },
-      }),
-      codexFullAccessClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
       }),
       grokClient,
@@ -2403,9 +2264,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["turn/start"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -2463,9 +2321,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/read"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -2503,9 +2358,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/read"] },
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -2527,17 +2379,12 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("updates execution mode through the current Codex thread owner", async () => {
+  it("updates execution mode through the single Codex client", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read", "thread/resume"] },
     });
-    const codexFullAccessClient = new MockBackendClient({
-      initializeResult: { methods: ["thread/read", "thread/resume"] },
-      setThreadPermissionsError: new Error("thread not found on full-access client"),
-    });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -2560,21 +2407,16 @@ describe("DesktopBackendRegistry", () => {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
-    expect(codexFullAccessClient.lastSetThreadPermissionsParams).toBeUndefined();
 
     await registry.close();
   });
 
-  it("starts compaction through the current Codex thread owner", async () => {
+  it("starts compaction through the single Codex client", async () => {
     const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["thread/read", "thread/resume", "thread/compact/start"] },
-    });
-    const codexFullAccessClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read", "thread/resume", "thread/compact/start"] },
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -2595,12 +2437,11 @@ describe("DesktopBackendRegistry", () => {
     expect(codexClient.lastCompactThreadParams).toEqual({
       threadId: "thread-1",
     });
-    expect(codexFullAccessClient.lastCompactThreadParams).toBeUndefined();
 
     await registry.close();
   });
 
-  it("lists Codex threads only through the default client and reapplies overlay execution mode", async () => {
+  it("lists Codex threads through the single client and reapplies overlay execution mode", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
       threads: [
@@ -2622,22 +2463,8 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
-    const codexFullAccessClient = new MockBackendClient({
-      initializeResult: { methods: ["thread/list"] },
-      threads: [
-        {
-          id: "thread-3",
-          title: "Should not appear",
-          titleSource: "explicit",
-          linkedDirectories: [],
-          source: "codex",
-          updatedAt: 3,
-        },
-      ],
-    });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -2658,7 +2485,6 @@ describe("DesktopBackendRegistry", () => {
     ]);
     expect(codexClient.listThreadsCallCount).toBe(1);
     expect(codexClient.lastListThreadsParams).toEqual({ filter: "thread" });
-    expect(codexFullAccessClient.listThreadsCallCount).toBe(0);
 
     await registry.close();
   });
@@ -2702,10 +2528,6 @@ describe("DesktopBackendRegistry", () => {
     }));
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/list", "thread/archive"] },
-        threads: [],
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -2788,10 +2610,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/list"] },
-        threads: [],
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -2899,10 +2717,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/list"] },
-        threads: [],
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -2989,10 +2803,6 @@ describe("DesktopBackendRegistry", () => {
         initializeResult: { methods: ["thread/list"] },
         threads: [thread],
       }),
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/list"] },
-        threads: [],
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -3026,9 +2836,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/list"] },
-      }),
-      codexFullAccessClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
       }),
       grokClient: new MockBackendClient({
@@ -3104,10 +2911,6 @@ describe("DesktopBackendRegistry", () => {
         initializeResult: { methods: ["thread/list"] },
         threads: [thread],
       }),
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/list"] },
-        threads: [],
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
@@ -3136,9 +2939,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/unarchive"] },
-      }),
       grokClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -3180,9 +2980,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/name/set"] },
-      }),
       grokClient,
       overlayStore: createOverlayStoreMock(),
     });
@@ -3223,17 +3020,13 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("does not fall back to full-access client when default mode is explicitly requested", async () => {
+  it("surfaces the single-client startTurn error directly when default mode is explicitly requested", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
       startTurnError: new Error("thread not loaded on default instance"),
     });
-    const codexFullAccessClient = new MockBackendClient({
-      initializeResult: { methods: ["turn/start"] },
-    });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok unavailable"),
       }),
@@ -3249,22 +3042,16 @@ describe("DesktopBackendRegistry", () => {
       }),
     ).rejects.toThrow("thread not loaded on default instance");
 
-    expect(codexFullAccessClient.lastStartTurnParams).toBeUndefined();
-
     await registry.close();
   });
 
-  it("does not fall back to default client when full-access mode is explicitly requested", async () => {
+  it("surfaces the single-client startTurn error directly when full-access mode is explicitly requested", async () => {
     const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["turn/start"] },
-    });
-    const codexFullAccessClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
       startTurnError: new Error("thread not loaded on full-access instance"),
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok unavailable"),
       }),
@@ -3280,12 +3067,10 @@ describe("DesktopBackendRegistry", () => {
       }),
     ).rejects.toThrow("thread not loaded on full-access instance");
 
-    expect(codexClient.lastStartTurnParams).toBeUndefined();
-
     await registry.close();
   });
 
-  it("routes turn to the correct client after execution mode is toggled", async () => {
+  it("forwards per-turn override on the single client when execution mode is toggled", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/list"] },
       threads: [
@@ -3297,9 +3082,6 @@ describe("DesktopBackendRegistry", () => {
           source: "codex",
         },
       ],
-    });
-    const codexFullAccessClient = new MockBackendClient({
-      initializeResult: { methods: ["turn/start"] },
     });
     const overlayStore = createOverlayStoreMock({
       overlays: {
@@ -3313,7 +3095,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok unavailable"),
       }),
@@ -3326,12 +3107,11 @@ describe("DesktopBackendRegistry", () => {
       executionMode: "full-access",
       input: [{ type: "text", text: "First turn on full-access" }],
     });
-    expect(codexFullAccessClient.lastStartTurnParams).toMatchObject({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-toggle",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
-    expect(codexClient.lastStartTurnParams).toBeUndefined();
 
     await registry.setThreadExecutionMode({
       backend: "codex",
@@ -3339,20 +3119,19 @@ describe("DesktopBackendRegistry", () => {
       executionMode: "default",
     });
 
-    codexFullAccessClient.lastStartTurnParams = undefined;
+    codexClient.lastStartTurnParams = undefined;
 
     await registry.startTurn({
       backend: "codex",
       threadId: "thread-toggle",
       executionMode: "default",
-      input: [{ type: "text", text: "Second turn must route to default" }],
+      input: [{ type: "text", text: "Second turn forwards default policy on the same client" }],
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-toggle",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
-    expect(codexFullAccessClient.lastStartTurnParams).toBeUndefined();
 
     await registry.close();
   });
@@ -3374,10 +3153,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/resume"] },
-        probedExecutionMode: "full-access",
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok unavailable"),
       }),
@@ -3427,10 +3202,6 @@ describe("DesktopBackendRegistry", () => {
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      codexFullAccessClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/resume"] },
-        probedExecutionMode: "default",
-      }),
       grokClient: new MockBackendClient({
         initializeError: new Error("grok unavailable"),
       }),
@@ -3451,9 +3222,6 @@ describe("DesktopBackendRegistry", () => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/resume"] },
-      }),
-      codexFullAccessClient: new MockBackendClient({
         initializeResult: { methods: ["thread/resume"] },
       }),
       grokClient: new MockBackendClient({
