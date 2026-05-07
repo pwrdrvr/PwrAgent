@@ -5369,6 +5369,15 @@ textarea,
   background: color-mix(in srgb, var(--accent-soft) 48%, var(--bg-panel-elevated));
 }
 
+.composer__queued--permissions {
+  border-color: color-mix(in srgb, var(--status-warning) 60%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent-soft) 36%, var(--bg-panel-elevated));
+}
+
+.composer__queued--permissions .composer__queued-label {
+  color: var(--status-warning);
+}
+
 .composer__queued-copy {
   display: flex;
   min-width: 0;

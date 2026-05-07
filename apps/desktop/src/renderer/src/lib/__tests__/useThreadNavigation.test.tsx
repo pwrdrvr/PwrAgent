@@ -1383,8 +1383,103 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.selectedThread?.executionMode).toBe("full-access");
     });
-    // Push-driven patch — no full snapshot re-fetch.
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    // Push-driven patch is immediate; an additional snapshot refresh
+    // follows so the persisted permissionTransitionLog (which the
+    // registry just appended an `applied` entry to) reaches the
+    // renderer for transcript rendering.
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("patches the snapshot for thread/executionMode/queued and queueCleared", async () => {
+    const listeners = new Set<(event: any) => void>();
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "Queued thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          executionMode: "default" as const,
+          inbox: { inInbox: true, reason: "new-thread" as const },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.executionMode).toBe("default");
+    });
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/executionMode/queued",
+            params: {
+              threadId: "thread-1",
+              queuedExecutionMode: "full-access",
+              queuedAt: 5_000,
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.queuedExecutionMode).toBe(
+        "full-access",
+      );
+      expect(result.current.selectedThread?.queuedExecutionModeAt).toBe(5_000);
+      // Applied mode is unchanged while queued.
+      expect(result.current.selectedThread?.executionMode).toBe("default");
+    });
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/executionMode/queueCleared",
+            params: {
+              threadId: "thread-1",
+              reason: "cancelled",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.queuedExecutionMode).toBeUndefined();
+      expect(
+        result.current.selectedThread?.queuedExecutionModeAt,
+      ).toBeUndefined();
+    });
   });
 
   it("patches the snapshot for thread/modelSettings/updated without refetching", async () => {

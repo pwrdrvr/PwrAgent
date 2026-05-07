@@ -40,6 +40,17 @@ export class SqliteOverlayStore {
       string,
       MessagingThreadBindingSummary[] | undefined
     >;
+    /**
+     * In-memory permission-mode queue map keyed by `threadId`. The queue
+     * lives on the registry (not in sqlite) but must be merged onto the
+     * snapshot so renderers connecting after the queued bus event still
+     * see the queued state. Also feeds the snapshot hash so changes
+     * invalidate the cache.
+     */
+    queuedExecutionModesByThreadId?: Record<
+      string,
+      { mode: ThreadExecutionMode; queuedAt: number } | undefined
+    >;
     threads: AppServerThreadSummary[];
   }): Promise<NavigationSnapshot> {
     const backendState = this.getBackend(params.backend);
@@ -71,7 +82,29 @@ export class SqliteOverlayStore {
     const overlayByThreadKey = Object.fromEntries(
       params.threads.map((thread) => {
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-        return [threadKey, this.getThread(threadKey)];
+        const overlay = this.getThread(threadKey);
+        const queue = params.queuedExecutionModesByThreadId?.[thread.id];
+        if (queue) {
+          // Merge the in-memory queue onto the persisted overlay so
+          // mid-restart / mid-connect renderers see the queued state
+          // without needing a follow-up bus event.
+          const merged: ThreadOverlayState = overlay
+            ? {
+                ...overlay,
+                queuedExecutionMode: queue.mode,
+                queuedExecutionModeAt: queue.queuedAt,
+              }
+            : {
+                backend: thread.source,
+                threadId: thread.id,
+                executionMode: thread.executionMode ?? "default",
+                extraLinkedDirectories: [],
+                queuedExecutionMode: queue.mode,
+                queuedExecutionModeAt: queue.queuedAt,
+              };
+          return [threadKey, merged];
+        }
+        return [threadKey, overlay];
       }),
     );
 

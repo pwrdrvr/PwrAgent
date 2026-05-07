@@ -117,6 +117,7 @@ type ComposerProps = {
   thread?: NavigationThreadSummary;
   updatingExecutionMode?: ThreadExecutionMode;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onCancelExecutionModeQueue?: () => Promise<void>;
   onHandoffThreadWorkspace?: (
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
   ) => Promise<void>;
@@ -3095,6 +3096,35 @@ export function Composer(props: ComposerProps) {
                 </button>
               </>
             ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {props.thread?.queuedExecutionMode &&
+      props.thread.queuedExecutionMode !== props.thread.executionMode ? (
+        <div
+          className="composer__queued composer__queued--permissions"
+          aria-label="Queued permissions change"
+        >
+          <div className="composer__queued-copy">
+            <span className="composer__queued-label">Permissions queued</span>
+            <span className="composer__queued-text">
+              Will switch to{" "}
+              {formatExecutionModeLabel(props.thread.queuedExecutionMode)} when
+              the current turn ends
+            </span>
+          </div>
+          <div className="composer__queued-actions">
+            <button
+              className="composer__secondary-action"
+              type="button"
+              disabled={!props.onCancelExecutionModeQueue}
+              onClick={() => {
+                void props.onCancelExecutionModeQueue?.();
+              }}
+            >
+              Cancel
+            </button>
           </div>
         </div>
       ) : null}

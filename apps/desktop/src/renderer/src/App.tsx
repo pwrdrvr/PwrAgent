@@ -231,6 +231,14 @@ function DesktopAppShell(props: {
                   )
               : undefined
           }
+          onCancelExecutionModeQueue={
+            navigation.selectedThread
+              ? async () =>
+                  await navigation.cancelThreadExecutionModeQueue(
+                    navigation.selectedThread!
+                  )
+              : undefined
+          }
           onSetThreadModelSettings={
             navigation.selectedThread
               ? async (patch) =>

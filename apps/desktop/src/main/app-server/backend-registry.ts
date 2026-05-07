@@ -1914,6 +1914,31 @@ export class DesktopBackendRegistry {
     return await this.applyThreadExecutionMode(params);
   }
 
+  /**
+   * Snapshot of in-memory queued execution modes keyed by `threadId`.
+   * Consumed by the navigation snapshot path so the renderer sees
+   * queued state on the very first snapshot after restart, without
+   * waiting for a follow-up bus event. The queue map itself is not
+   * persisted — but the audit log entries are, so historical context
+   * survives restarts.
+   */
+  getQueuedExecutionModesSnapshot(): Record<
+    string,
+    { mode: ThreadExecutionMode; queuedAt: number } | undefined
+  > {
+    const snapshot: Record<
+      string,
+      { mode: ThreadExecutionMode; queuedAt: number }
+    > = {};
+    for (const [threadId, entry] of this.queuedExecutionModes) {
+      snapshot[threadId] = {
+        mode: entry.mode,
+        queuedAt: entry.queuedAt,
+      };
+    }
+    return snapshot;
+  }
+
   async queueThreadExecutionMode(
     params: QueueThreadExecutionModeRequest,
   ): Promise<QueueThreadExecutionModeResponse> {

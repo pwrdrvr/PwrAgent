@@ -46,10 +46,13 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       filter: request.filter,
     });
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
+    const queuedExecutionModesByThreadId =
+      this.registry.getQueuedExecutionModesSnapshot();
     const snapshot = await getDesktopOverlayStore().reconcileNavigationSnapshot({
       backend,
       fetchedAt: Date.now(),
       messagingBindingsByThreadKey,
+      queuedExecutionModesByThreadId,
       threads,
     });
     const directoryStatuses = await this.registry.readDirectoryStatuses(
