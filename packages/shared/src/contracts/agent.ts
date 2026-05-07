@@ -198,32 +198,6 @@ export type RetainThreadBranchDriftResponse = RetainThreadBranchDriftRequest & {
   retainedAt: number;
 };
 
-export type CheckThreadExecutionModeDriftRequest = {
-  backend: AppServerBackendKind;
-  threadId: ThreadIdentifier;
-};
-
-export type CheckThreadExecutionModeDriftResponse = {
-  backend: AppServerBackendKind;
-  threadId: ThreadIdentifier;
-  expectedExecutionMode?: ThreadExecutionMode;
-  observedExecutionMode?: ThreadExecutionMode;
-  drifted: boolean;
-  checkedAt: number;
-};
-
-export type RetainThreadExecutionModeDriftRequest = {
-  backend: AppServerBackendKind;
-  threadId: ThreadIdentifier;
-  expectedExecutionMode: ThreadExecutionMode;
-  observedExecutionMode: ThreadExecutionMode;
-};
-
-export type RetainThreadExecutionModeDriftResponse =
-  RetainThreadExecutionModeDriftRequest & {
-    retainedAt: number;
-  };
-
 export type SubmitServerRequestRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

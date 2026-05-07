@@ -102,8 +102,6 @@ export function materializeNavigationThreads(params: {
       gitBranch: overlayGitBranch ?? thread.gitBranch,
       observedGitBranch: overlay?.observedGitBranch ?? thread.observedGitBranch,
       retainedBranchDriftPairs: overlay?.retainedBranchDriftPairs,
-      observedExecutionMode: overlay?.observedExecutionMode,
-      retainedExecutionModeDriftPairs: overlay?.retainedExecutionModeDriftPairs,
       executionMode: overlay?.executionMode ?? thread.executionMode ?? "default",
       queuedExecutionMode: overlay?.queuedExecutionMode,
       queuedExecutionModeAt: overlay?.queuedExecutionModeAt,
@@ -192,14 +190,6 @@ export function buildNavigationSnapshotHash(params: {
       retainedBranchDriftPairs: (thread.retainedBranchDriftPairs ?? []).map((pair) => ({
         expectedBranch: pair.expectedBranch,
         observedBranch: pair.observedBranch,
-        retainedAt: pair.retainedAt,
-      })),
-      observedExecutionMode: thread.observedExecutionMode ?? null,
-      retainedExecutionModeDriftPairs: (
-        thread.retainedExecutionModeDriftPairs ?? []
-      ).map((pair) => ({
-        expectedExecutionMode: pair.expectedExecutionMode,
-        observedExecutionMode: pair.observedExecutionMode,
         retainedAt: pair.retainedAt,
       })),
       executionMode: thread.executionMode ?? "default",

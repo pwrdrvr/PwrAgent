@@ -16,8 +16,6 @@ import type {
   AppServerListSkillsResponse,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
-  CheckThreadExecutionModeDriftRequest,
-  CheckThreadExecutionModeDriftResponse,
   AppServerListThreadsRequest,
   AppServerListThreadsResponse,
   FocusedDiffAnalysisRequest,
@@ -53,8 +51,6 @@ import type {
   ResetDirectoryLaunchpadResponse,
   RetainThreadBranchDriftRequest,
   RetainThreadBranchDriftResponse,
-  RetainThreadExecutionModeDriftRequest,
-  RetainThreadExecutionModeDriftResponse,
   RenameThreadRequest,
   RenameThreadResponse,
   RestoreWorktreeRequest,
@@ -163,12 +159,6 @@ export type DesktopApi = {
   retainThreadBranchDrift?: (
     request: RetainThreadBranchDriftRequest
   ) => Promise<RetainThreadBranchDriftResponse>;
-  checkThreadExecutionModeDrift?: (
-    request: CheckThreadExecutionModeDriftRequest
-  ) => Promise<CheckThreadExecutionModeDriftResponse>;
-  retainThreadExecutionModeDrift?: (
-    request: RetainThreadExecutionModeDriftRequest
-  ) => Promise<RetainThreadExecutionModeDriftResponse>;
   materializeDirectoryLaunchpad?: (
     request: MaterializeDirectoryLaunchpadRequest
   ) => Promise<MaterializeDirectoryLaunchpadResponse>;

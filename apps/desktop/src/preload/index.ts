@@ -33,8 +33,6 @@ import type {
   AppServerReadThreadResponse,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
-  CheckThreadExecutionModeDriftRequest,
-  CheckThreadExecutionModeDriftResponse,
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
@@ -57,8 +55,6 @@ import type {
   ResetDirectoryLaunchpadResponse,
   RetainThreadBranchDriftRequest,
   RetainThreadBranchDriftResponse,
-  RetainThreadExecutionModeDriftRequest,
-  RetainThreadExecutionModeDriftResponse,
   RenameThreadRequest,
   RenameThreadResponse,
   RestoreWorktreeRequest,
@@ -101,12 +97,10 @@ import {
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
-  AGENT_CHECK_THREAD_EXECUTION_MODE_DRIFT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
-  AGENT_RETAIN_THREAD_EXECUTION_MODE_DRIFT_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
@@ -325,20 +319,6 @@ const desktopApi = Object.freeze({
     request: RetainThreadBranchDriftRequest
   ): Promise<RetainThreadBranchDriftResponse> =>
     await ipcRenderer.invoke(AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL, request),
-  checkThreadExecutionModeDrift: async (
-    request: CheckThreadExecutionModeDriftRequest
-  ): Promise<CheckThreadExecutionModeDriftResponse> =>
-    await ipcRenderer.invoke(
-      AGENT_CHECK_THREAD_EXECUTION_MODE_DRIFT_CHANNEL,
-      request,
-    ),
-  retainThreadExecutionModeDrift: async (
-    request: RetainThreadExecutionModeDriftRequest
-  ): Promise<RetainThreadExecutionModeDriftResponse> =>
-    await ipcRenderer.invoke(
-      AGENT_RETAIN_THREAD_EXECUTION_MODE_DRIFT_CHANNEL,
-      request,
-    ),
   materializeDirectoryLaunchpad: async (
     request: MaterializeDirectoryLaunchpadRequest
   ): Promise<MaterializeDirectoryLaunchpadResponse> =>

@@ -797,13 +797,6 @@ export type AppServerNotification =
       };
     }
   | {
-      method: "thread/observedExecutionMode/updated";
-      params: {
-        threadId: string;
-        observedExecutionMode: ThreadExecutionMode;
-      };
-    }
-  | {
       method: "thread/executionMode/queued";
       params: {
         threadId: string;
