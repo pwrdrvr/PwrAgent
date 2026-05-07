@@ -4,7 +4,7 @@ import type {
   DesktopSettingsSnapshot,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
-import { DiscordIcon, TelegramIcon } from "../../icons";
+import { DiscordIcon, MattermostIcon, TelegramIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsField,
@@ -40,9 +40,13 @@ export function MessagingSettings(props: {
   onSaveTelegram: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["telegram"]>,
   ) => Promise<void>;
+  onSaveMattermost: (
+    patch: NonNullable<DesktopSettingsSnapshot["messaging"]["mattermost"]>,
+  ) => Promise<void>;
 }) {
   const telegram = props.snapshot.messaging.telegram;
   const discord = props.snapshot.messaging.discord;
+  const mattermost = props.snapshot.messaging.mattermost;
   const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
   const inputDebounceMs = props.snapshot.messaging.inputDebounceMs;
   const runtimeMessaging = props.snapshot.runtime.messaging;
@@ -293,6 +297,168 @@ export function MessagingSettings(props: {
                 authorizedGuilds: {
                   ...discord.authorizedGuilds,
                   value: authorizedGuilds,
+                },
+              });
+            }}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Messaging"
+        title="Mattermost"
+        chip={chipLabelForBotToken(mattermost.botToken)}
+        chipKind={chipKindForBotToken(mattermost.botToken)}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={mattermost.enabled.value}
+            disabled={props.saving}
+            label="Enabled"
+            sub="Turn the Mattermost adapter on or off independently of the global messaging switch."
+            source={sourceBadge(mattermost.enabled)}
+            onChange={(enabled) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                enabled: { ...mattermost.enabled, value: enabled },
+              });
+            }}
+          />
+          <SecretField
+            disabled={props.saving || !mattermost.botToken.writable}
+            label="Bot Token"
+            sub="Stored in the system keychain. Generate from System Console → Integrations → Bot Accounts."
+            secret="mattermostBotToken"
+            state={mattermost.botToken}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <TextField
+            disabled={props.saving}
+            label="Server URL"
+            sub="Mattermost server base URL, e.g. https://chat.example.com."
+            source={optionalStringSourceBadge(mattermost.serverUrl)}
+            value={mattermost.serverUrl.value}
+            onSave={(serverUrl) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                serverUrl: { ...mattermost.serverUrl, value: serverUrl },
+              });
+            }}
+          />
+          <SettingsField
+            label="Connection test"
+            sub="Validates the bot token via /api/v4/users/me on your Mattermost server."
+            control={
+              <SettingsTestBlock
+                kind="mattermost"
+                desktopApi={props.desktopApi}
+                icon={<MattermostIcon size={14} />}
+                defaultName="Your bot"
+                defaultSub="api/v4/users/me"
+              />
+            }
+          />
+          <ToggleField
+            checked={mattermost.streamingResponses.value}
+            disabled={props.saving}
+            label="Streaming Responses"
+            sub="Send partial assistant tokens as Mattermost message edits."
+            source={sourceBadge(mattermost.streamingResponses)}
+            onChange={(streamingResponses) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                streamingResponses: {
+                  ...mattermost.streamingResponses,
+                  value: streamingResponses,
+                },
+              });
+            }}
+          />
+          <TextField
+            disabled={props.saving}
+            label="Callback Base URL"
+            sub="Public URL Mattermost POSTs button clicks to (Cloudflare Tunnel / Tailscale Funnel / ngrok)."
+            source={optionalStringSourceBadge(mattermost.callbackBaseUrl)}
+            value={mattermost.callbackBaseUrl.value}
+            onSave={(callbackBaseUrl) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                callbackBaseUrl: {
+                  ...mattermost.callbackBaseUrl,
+                  value: callbackBaseUrl,
+                },
+              });
+            }}
+          />
+          <NumberField
+            disabled={props.saving}
+            label="Callback Port"
+            sub="Localhost port the HTTP listener binds to. Use 0 to pick a free port automatically."
+            min={0}
+            max={65535}
+            source={sourceBadge(mattermost.callbackPort)}
+            value={mattermost.callbackPort.value}
+            onSave={(callbackPort) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                callbackPort: { ...mattermost.callbackPort, value: callbackPort },
+              });
+            }}
+          />
+          <SecretField
+            disabled={props.saving || !mattermost.hmacSecret.writable}
+            label="Callback HMAC Secret"
+            sub="Optional. Stored in the system keychain. Leave unset to regenerate per restart (acts as automatic TTL on outstanding callback URLs)."
+            secret="mattermostHmacSecret"
+            state={mattermost.hmacSecret}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
+          <ToggleField
+            checked={mattermost.registerSlashCommands.value}
+            disabled={props.saving}
+            label="Register slash commands"
+            sub="Off by default. Mattermost 10.x slash-command bodies omit thread context, so responses land in the channel — use @bot help mentions instead. Mattermost 11.0+ supports threaded slash replies."
+            source={sourceBadge(mattermost.registerSlashCommands)}
+            onChange={(registerSlashCommands) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                registerSlashCommands: {
+                  ...mattermost.registerSlashCommands,
+                  value: registerSlashCommands,
+                },
+              });
+            }}
+          />
+          <TextField
+            disabled={props.saving || !mattermost.registerSlashCommands.value}
+            label="Slash command prefix"
+            sub="Prefix prepended to every registered command (default pwragent_ → /pwragent_help). Set blank to register bare triggers and accept collision risk with built-in Mattermost commands."
+            source={optionalStringSourceBadge(mattermost.slashCommandPrefix)}
+            value={mattermost.slashCommandPrefix.value}
+            onSave={(slashCommandPrefix) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                slashCommandPrefix: {
+                  ...mattermost.slashCommandPrefix,
+                  value: slashCommandPrefix,
+                },
+              });
+            }}
+          />
+          <ListField
+            disabled={props.saving}
+            label="Authorized User IDs"
+            sub="Comma-separated Mattermost user IDs that can DM the bot."
+            source={optionalListSourceBadge(mattermost.authorizedUserIds)}
+            value={mattermost.authorizedUserIds.value}
+            onSave={(authorizedUserIds) => {
+              void props.onSaveMattermost({
+                ...mattermost,
+                authorizedUserIds: {
+                  ...mattermost.authorizedUserIds,
+                  value: authorizedUserIds,
                 },
               });
             }}

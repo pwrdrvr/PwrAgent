@@ -38,6 +38,10 @@ const ERROR_MESSAGE_LIMIT = 240;
 export interface CredentialTesterDependencies {
   resolveTelegramBotToken: () => string | undefined;
   resolveDiscordBotToken: () => string | undefined;
+  resolveMattermostBotToken: () => string | undefined;
+  /** Returns the configured Mattermost server URL (settings/env merged).
+   *  Used together with the bot token to target the `users/me` probe. */
+  resolveMattermostServerUrl: () => string | undefined;
   resolveGrokApiKey: () => Promise<string | undefined>;
   resolveCodexCommand: () => Promise<string | undefined>;
   /**
@@ -122,6 +126,8 @@ export class CredentialTester {
     this.deps = {
       resolveTelegramBotToken: dependencies.resolveTelegramBotToken,
       resolveDiscordBotToken: dependencies.resolveDiscordBotToken,
+      resolveMattermostBotToken: dependencies.resolveMattermostBotToken,
+      resolveMattermostServerUrl: dependencies.resolveMattermostServerUrl,
       resolveGrokApiKey: dependencies.resolveGrokApiKey,
       resolveCodexCommand: dependencies.resolveCodexCommand,
       validateMessagingCredentials: dependencies.validateMessagingCredentials,
@@ -183,6 +189,8 @@ export class CredentialTester {
         return await this.testGrok(startedAt);
       case "codex":
         return await this.testCodex(startedAt);
+      case "mattermost":
+        return await this.testMattermost(startedAt);
       default: {
         const exhaustive: never = kind;
         throw new Error(`unknown credential test kind: ${exhaustive as string}`);
@@ -216,6 +224,21 @@ export class CredentialTester {
       credential: { botToken },
     });
     return liftMessagingResult("discord", result);
+  }
+
+  private async testMattermost(
+    startedAt: number,
+  ): Promise<SettingsCredentialTestResult> {
+    const botToken = this.deps.resolveMattermostBotToken();
+    const serverUrl = this.deps.resolveMattermostServerUrl();
+    if (!botToken || !serverUrl) {
+      return unset("mattermost", startedAt);
+    }
+    const result = await this.deps.validateMessagingCredentials({
+      channel: "mattermost",
+      credential: { botToken, serverUrl },
+    });
+    return liftMessagingResult("mattermost", result);
   }
 
   private async testGrok(
@@ -354,7 +377,7 @@ export class CredentialTester {
  * differ only in the `kind` field; everything else is preserved.
  */
 function liftMessagingResult(
-  kind: "telegram" | "discord",
+  kind: "telegram" | "discord" | "mattermost",
   result: MessagingCredentialValidationResult,
 ): SettingsCredentialTestResult {
   return {

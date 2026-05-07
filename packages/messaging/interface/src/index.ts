@@ -1041,6 +1041,14 @@ export type DiscordCredentialValidationConfig = {
   botToken: string;
 };
 
+/** Mattermost-shaped probe input — bot token plus the server URL the
+ *  probe should target. The provider hits `<serverUrl>/api/v4/users/me`
+ *  with the bot token to confirm both the URL and the token. */
+export type MattermostCredentialValidationConfig = {
+  botToken: string;
+  serverUrl: string;
+};
+
 /**
  * Helper providers can use to clip an error message to the contract
  * limit. Trims whitespace, replaces a tail with an ellipsis when over

@@ -356,9 +356,12 @@ In Mattermost: System Console → Integrations → Bot Accounts → Add Bot Acco
   Mattermost slash commands with autocomplete (recommended). Without it,
   the adapter will log a permission warning at startup and fall back to
   text-mention parsing (`@pwragent resume`).
-- Copy the access token. Store as `PWRAGENT_MESSAGING_MATTERMOST_BOT_TOKEN`
-  or via the desktop Settings UI when that's wired (issue #195 tracks the
-  per-platform Settings UI).
+- Copy the access token. Either paste it into the desktop Settings UI
+  (Settings → Messaging → Mattermost → Bot Token — stored in the system
+  keychain via Electron `safeStorage`) or set
+  `PWRAGENT_MESSAGING_MATTERMOST_BOT_TOKEN` in the environment. Env vars
+  override Settings UI values when both are set; the snapshot flags
+  `overriddenByEnv` so the UI surfaces this.
 
 Add the bot to the channels where you want PwrAgent to be addressable.
 Without explicit channel membership, Mattermost does not deliver `posted`
@@ -434,7 +437,11 @@ smoke test in development.
 
 ### 3. Configure PwrAgent
 
-Set environment variables before launching:
+Two paths — pick whichever fits your deployment. The settings landed in [PR #199](https://github.com/pwrdrvr/PwrAgent/pull/199); see that PR for the full integration if you're adding a new provider.
+
+**Path A — Desktop Settings UI (recommended for desktop users).** Open Settings → Messaging → Mattermost. Fill in the bot token (Keychain), server URL, callback base URL, callback port, authorized user IDs, and the optional slash-command toggles. The `Test` button on the Bot Token row hits `<serverUrl>/api/v4/users/me` with the token to confirm both pieces. Slash commands are off by default — see "Slash command registration" below.
+
+**Path B — Environment variables (headless / CI / Docker).** Set the variables before launching. Env vars override Settings UI values when both are present; the UI surfaces this with a `overriddenByEnv` badge per field.
 
 ```bash
 PWRAGENT_MESSAGING_MATTERMOST_ENABLED=true
@@ -443,8 +450,16 @@ PWRAGENT_MESSAGING_MATTERMOST_SERVER_URL=https://chat.example.com
 PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_BASE_URL=https://pwragent.example.com/messaging/mattermost/callback
 PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_PORT=47821    # optional; default 47821
 PWRAGENT_MESSAGING_MATTERMOST_AUTHORIZED_USER_IDS=<mattermost user id>,<another id>
-PWRAGENT_MESSAGING_MATTERMOST_SLASH_COMMAND_PREFIX=pwragent_   # optional; default pwragent_
+PWRAGENT_MESSAGING_MATTERMOST_REGISTER_SLASH_COMMANDS=true       # optional; default false
+PWRAGENT_MESSAGING_MATTERMOST_SLASH_COMMAND_PREFIX=pwragent_     # optional; default pwragent_
+PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_HMAC_SECRET=<hex secret>  # optional; regenerated per-restart if unset
 ```
+
+### 3a. Slash command registration
+
+`registerSlashCommands` is **off by default**. Mattermost 10.x and earlier omit `root_id` from the slash-command request body, so a slash response cannot be threaded — it lands in the parent channel even when the user invoked the command from inside a thread. The recommended primary entry point is `@<bot> help` text-mention parsing, which works on every Mattermost version and preserves thread context.
+
+If you operate Mattermost 11.0+ (which adds `root_id` to slash-command bodies) or you accept the v10.x channel-reply tradeoff, opt in via the Settings UI toggle or `PWRAGENT_MESSAGING_MATTERMOST_REGISTER_SLASH_COMMANDS=true`. With the toggle on, PwrAgent reconciles its canonical command set against every team the bot is a member of on adapter startup. The `slashCommandPrefix` field controls the namespace (default `pwragent_` → `/pwragent_help`, `/pwragent_status`, `/pwragent_resume`, `/pwragent_detach`); set it blank to register bare triggers and accept the collision risk with built-in commands like `/status`, `/away`, `/leave`.
 
 Authorize on stable Mattermost user IDs (UUIDs visible via Settings →
 Profile → Account Settings → Display → Username, then

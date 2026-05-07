@@ -53,5 +53,18 @@ export type MattermostMessagingConfig = {
    * and the default is used.
    */
   slashCommandPrefix?: string;
+  /**
+   * Whether to register Mattermost slash commands (`/pwragent_help`,
+   * `/pwragent_status`, etc.) with the server on adapter start.
+   *
+   * Default: `false`. Mattermost 10.x slash-command bodies omit
+   * `root_id`, so a slash response can't be threaded — it lands in the
+   * channel. The `@<bot>` text-mention path works on every version
+   * and preserves thread context, so it is the recommended primary
+   * entry point. Operators who accept the v10.x channel-reply tradeoff
+   * can opt in by setting this true (and on Mattermost 11.0+ slash
+   * commands DO include `root_id`, so threading works).
+   */
+  registerSlashCommands?: boolean;
   streamingResponses?: boolean;
 };

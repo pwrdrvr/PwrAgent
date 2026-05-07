@@ -17,6 +17,7 @@ import {
   MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
   MATTERMOST_CALLBACK_PORT_ENV,
   MATTERMOST_ENABLED_ENV,
+  MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
   MATTERMOST_SERVER_URL_ENV,
   MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
   MATTERMOST_STREAMING_RESPONSES_ENV,
@@ -45,6 +46,7 @@ export {
   MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
   MATTERMOST_CALLBACK_PORT_ENV,
   MATTERMOST_ENABLED_ENV,
+  MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
   MATTERMOST_SERVER_URL_ENV,
   MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
   MATTERMOST_STREAMING_RESPONSES_ENV,
@@ -69,7 +71,11 @@ export type DesktopMessagingConfig = {
 
 export type DesktopMessagingSettingsSource = Pick<
   DesktopSettingsService,
-  "readSettings" | "resolveDiscordBotTokenSync" | "resolveTelegramBotTokenSync"
+  | "readSettings"
+  | "resolveDiscordBotTokenSync"
+  | "resolveTelegramBotTokenSync"
+  | "resolveMattermostBotTokenSync"
+  | "resolveMattermostHmacSecretSync"
 >;
 
 export type DesktopMessagingConfigLoadOptions = {
@@ -98,6 +104,10 @@ export function loadDesktopMessagingConfig(
     env,
     MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
   );
+  const mattermostRegisterSlashCommandsEnv = readEnvBoolean(
+    env,
+    MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
+  ).value;
   const attachmentPolicy = readAttachmentPolicyFromEnv(env);
 
   return {
@@ -153,6 +163,9 @@ export function loadDesktopMessagingConfig(
             ...(mattermostSlashCommandPrefix !== undefined
               ? { slashCommandPrefix: mattermostSlashCommandPrefix }
               : {}),
+            ...(mattermostRegisterSlashCommandsEnv !== undefined
+              ? { registerSlashCommands: mattermostRegisterSlashCommandsEnv }
+              : {}),
             streamingResponses: readEnvBoolean(
               env,
               MATTERMOST_STREAMING_RESPONSES_ENV,
@@ -176,12 +189,39 @@ export async function loadDesktopMessagingConfigFromSettings(
     envConfig.telegram?.botToken ?? settings.resolveTelegramBotTokenSync();
   const discordBotToken =
     envConfig.discord?.botToken ?? settings.resolveDiscordBotTokenSync();
+  const mattermostBotToken =
+    envConfig.mattermost?.botToken ?? settings.resolveMattermostBotTokenSync();
+  const mattermostHmacSecret =
+    envConfig.mattermost?.callbackHmacSecret
+    ?? settings.resolveMattermostHmacSecretSync();
   const telegramAuthorizedActorIds =
     envConfig.telegram?.authorizedActorIds
     ?? snapshot.messaging.telegram.authorizedUserIds.value;
   const discordAuthorizedActorIds =
     envConfig.discord?.authorizedActorIds
     ?? snapshot.messaging.discord.authorizedUserIds.value;
+  const mattermostAuthorizedActorIds =
+    envConfig.mattermost?.authorizedActorIds
+    ?? snapshot.messaging.mattermost.authorizedUserIds.value;
+  const mattermostServerUrl =
+    envConfig.mattermost?.serverUrl
+    || snapshot.messaging.mattermost.serverUrl.value
+    || undefined;
+  const mattermostCallbackBaseUrl =
+    envConfig.mattermost?.callbackBaseUrl
+    || snapshot.messaging.mattermost.callbackBaseUrl.value
+    || undefined;
+  const mattermostCallbackPort =
+    envConfig.mattermost?.callbackPort
+    ?? (snapshot.messaging.mattermost.callbackPort.value > 0
+      ? snapshot.messaging.mattermost.callbackPort.value
+      : undefined);
+  const mattermostSlashCommandPrefix =
+    envConfig.mattermost?.slashCommandPrefix
+    ?? snapshot.messaging.mattermost.slashCommandPrefix.value;
+  const mattermostRegisterSlashCommands =
+    envConfig.mattermost?.registerSlashCommands
+    ?? snapshot.messaging.mattermost.registerSlashCommands.value;
   const attachmentPolicy: Partial<MessagingAttachmentPolicy> = {
     imageProfile: snapshot.messaging.attachments.imageProfile.value,
     maxAttachmentBytes: snapshot.messaging.attachments.maxAttachmentBytes.value,
@@ -200,6 +240,12 @@ export async function loadDesktopMessagingConfigFromSettings(
     envConfig.discord,
     env,
     DISCORD_ENABLED_ENV,
+  );
+  const mattermostEnabled = shouldEnableSettingsChannel(
+    snapshot.messaging.mattermost.enabled.value,
+    envConfig.mattermost,
+    env,
+    MATTERMOST_ENABLED_ENV,
   );
 
   const telegramConfig = buildChannelConfig({
@@ -244,21 +290,40 @@ export async function loadDesktopMessagingConfigFromSettings(
       }
     : {};
 
-  // Mattermost is env-only today (no Settings UI yet — tracked in #195).
-  // Pass through whatever loadDesktopMessagingConfig produced from env vars,
-  // and log eligibility consistently with the other channels.
-  const mattermostConfig = envConfig.mattermost
-    ? buildChannelConfig({
-        log,
-        channel: "mattermost",
-        enabled: envConfig.mattermost.enabled !== false,
-        hasToken: Boolean(envConfig.mattermost.botToken),
-        logStartupEligibility: options.logStartupEligibility === true,
-        authorizedActorCount: envConfig.mattermost.authorizedActorIds.length,
-      })
-      ? { mattermost: envConfig.mattermost }
-      : {}
-    : {};
+  const mattermostConfig =
+    buildChannelConfig({
+      log,
+      channel: "mattermost",
+      enabled: mattermostEnabled,
+      hasToken: Boolean(mattermostBotToken),
+      logStartupEligibility: options.logStartupEligibility === true,
+      authorizedActorCount: mattermostAuthorizedActorIds.length,
+    })
+    && mattermostServerUrl
+    && mattermostCallbackBaseUrl
+      ? {
+          mattermost: {
+            channel: "mattermost" as const,
+            enabled: true,
+            botToken: mattermostBotToken!,
+            serverUrl: mattermostServerUrl,
+            callbackBaseUrl: mattermostCallbackBaseUrl,
+            ...(mattermostCallbackPort !== undefined
+              ? { callbackPort: mattermostCallbackPort }
+              : {}),
+            ...(mattermostHmacSecret
+              ? { callbackHmacSecret: mattermostHmacSecret }
+              : {}),
+            ...(mattermostSlashCommandPrefix !== undefined
+              ? { slashCommandPrefix: mattermostSlashCommandPrefix }
+              : {}),
+            registerSlashCommands: mattermostRegisterSlashCommands,
+            streamingResponses:
+              snapshot.messaging.mattermost.streamingResponses.value,
+            authorizedActorIds: mattermostAuthorizedActorIds,
+          },
+        }
+      : {};
 
   return {
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
@@ -361,6 +426,8 @@ export function redactDesktopMessagingConfig(
             ? "[REDACTED]"
             : "[GENERATED]",
           slashCommandPrefix: config.mattermost.slashCommandPrefix ?? "[default]",
+          registerSlashCommands:
+            config.mattermost.registerSlashCommands ?? false,
           streamingResponses: config.mattermost.streamingResponses ?? false,
           authorizedActorCount: config.mattermost.authorizedActorIds.length,
         }

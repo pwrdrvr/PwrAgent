@@ -414,9 +414,26 @@ This list looks duplicative with the workspace dependency declaration in
 package importable; the `electron.vite.config.ts` `exclude` makes it
 get bundled. Both are required.
 
-### 8.5 — Settings UI (optional, can ship in a follow-up)
+### 8.5 — Settings UI (recommended for parity with the existing providers)
 
-The desktop app has a Settings UI for messaging providers that flows through `apps/desktop/src/main/settings/desktop-settings-service.ts`. Adding your provider there gives users a non-env-var way to configure it. This is non-trivial UI plumbing — env-var setup is sufficient for v1. Track in a follow-up issue ([#195 — per-platform messaging settings](https://github.com/pwrdrvr/PwrAgent/issues/195) is the umbrella).
+The desktop app has a Settings UI for messaging providers that flows through `apps/desktop/src/main/settings/desktop-settings-service.ts`. Adding your provider there gives users a non-env-var way to configure it: secrets land in the system keychain via `safeStorage`, non-secret values land in the per-profile TOML config, and env vars (when set) override both with `overriddenByEnv: true` flagged on the snapshot.
+
+The Mattermost addition in [PR #199](https://github.com/pwrdrvr/PwrAgent/pull/199) is the canonical example for a provider with both a bot token and a second secret (the callback HMAC) plus provider-specific UX toggles. Use it as a reference; the integration points you have to touch are:
+
+| File | What to add |
+|---|---|
+| `packages/shared/src/contracts/settings.ts` | Extend `DesktopSettingsSecretName` for each Keychain-stored secret. Add a per-platform block to `DesktopSettingsSnapshot.messaging`. Add a corresponding patch shape to `DesktopSettingsConfigPatch`. Add the platform to `SETTINGS_CREDENTIAL_TEST_KINDS` so the renderer's "Test" button has a kind to send. |
+| `apps/desktop/src/main/settings/desktop-config.ts` | Extend `DesktopSettingsConfig.messaging` with a per-platform block. Add TOML emit/parse for that block, the patch-merge case, and the prune branch. |
+| `apps/desktop/src/main/settings/desktop-settings-env.ts` | Declare every `PWRAGENT_MESSAGING_<PLATFORM>_*` env constant the runtime resolves. |
+| `apps/desktop/src/main/settings/desktop-settings-service.ts` | Read each secret in `readSettings()` via `readSecretState`. Resolve every non-secret with the appropriate `resolveBoolean` / `resolveString` / `resolveList` / `resolveNumber` helper — they auto-emit `source: "env"` with `overriddenByEnv: true` when an env var is set. Add `resolve<Platform><Secret>Sync()` for every secret the runtime needs to pass to the provider at adapter start. |
+| `apps/desktop/src/main/messaging/messaging-config.ts` | Extend the `DesktopMessagingSettingsSource` `Pick` to include the new sync resolvers. Replace the env-only branch (if any) with a settings + env merge that mirrors the Telegram/Discord pattern: env wins on each leaf via `envConfig.<platform>?.<field> ?? settings.<field>`. Update `redactDesktopMessagingConfig` to emit a redacted view of every secret (`"[REDACTED]"`) and surface non-secret toggles in the audit log. |
+| `apps/desktop/src/main/credential-tester/credential-tester.ts` | Add a `test<Platform>` case + `resolve<Platform>BotToken` / `resolve<Platform><ExtraField>` deps if the probe needs more than a token (Mattermost needs the server URL). Extend `liftMessagingResult`'s union and the runtime's `CredentialValidationRequest` type. |
+| `packages/messaging/providers/<platform>/src/validate-credentials.ts` | Implement the smoke probe — see Mattermost (raw fetch against `<serverUrl>/api/v4/users/me`) or Discord (`discord.js` `REST` GET `/users/@me`) depending on whether the SDK exposes a non-disruptive method. |
+| `apps/desktop/src/renderer/src/features/settings/MessagingSettings.tsx` | Add a `<SettingsSection>` for the platform, mirroring the Telegram/Discord blocks. The same `SecretField` / `TextField` / `ListField` / `ToggleField` / `NumberField` primitives cover everything. Wire the section's `onSave<Platform>` from `SettingsScreen.tsx`. |
+
+The `apps/desktop/src/renderer/src/features/settings/__tests__/settings-screen.test.tsx` Mattermost block in PR #199 is also worth copying as a renderer-integration test template — it asserts the section renders, that fields disable correctly when their parent toggle is off, and that edits flow through `writeConfig` with the right patch shape.
+
+Env vars remain the source of truth when present (they shadow the Settings UI), so the operator-runbook headless deployment path keeps working unchanged. Settings UI is the nominal-case path for desktop users.
 
 ## Step 9 — Tests
 

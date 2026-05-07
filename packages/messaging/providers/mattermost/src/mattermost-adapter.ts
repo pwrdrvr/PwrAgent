@@ -335,7 +335,19 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     // commands are an autocomplete UX nicety, not a correctness
     // requirement. `@<bot> resume` text-mentions still work without
     // them.
-    await this.reconcileSlashCommandsAcrossTeams();
+    //
+    // Off by default. Mattermost 10.x slash-command bodies omit
+    // `root_id`, so the response can't thread — the recommended path
+    // is `@<bot> help` text-mentions. Operators can opt in via the
+    // settings toggle when they accept the v10.x channel-reply
+    // tradeoff.
+    if (this.config.registerSlashCommands === true) {
+      await this.reconcileSlashCommandsAcrossTeams();
+    } else {
+      this.logger.info(
+        "mattermost adapter: slash-command registration disabled (registerSlashCommands=false)",
+      );
+    }
 
     this.started = true;
     this.logger.info("mattermost adapter started", {

@@ -2,6 +2,7 @@ export { BranchIcon } from "./BranchIcon";
 export { DiscordIcon } from "./DiscordIcon";
 export { EditorIcon } from "./EditorIcon";
 export { FolderIcon } from "./FolderIcon";
+export { MattermostIcon } from "./MattermostIcon";
 export { NewThreadIcon } from "./NewThreadIcon";
 export { SettingsIcon } from "./SettingsIcon";
 export { SmileyIcon } from "./SmileyIcon";

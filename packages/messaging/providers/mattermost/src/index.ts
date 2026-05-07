@@ -1,4 +1,5 @@
 export type { MattermostMessagingConfig } from "./mattermost-config.ts";
+export { validateCredentials } from "./validate-credentials.ts";
 export type {
   MattermostProviderAdapter,
   MattermostProviderLogger,
