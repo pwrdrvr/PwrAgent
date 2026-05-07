@@ -2,6 +2,8 @@ import type {
   AgentEvent,
   AppServerBackendKind,
   AppServerThreadStatus,
+  CancelThreadExecutionModeQueueRequest,
+  CancelThreadExecutionModeQueueResponse,
   CompactThreadRequest,
   CompactThreadResponse,
   GetNavigationSnapshotRequest,
@@ -114,6 +116,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     request: SetThreadExecutionModeRequest,
   ): Promise<SetThreadExecutionModeResponse> {
     return await this.registry.setThreadExecutionMode(request);
+  }
+
+  async cancelThreadExecutionModeQueue(
+    request: CancelThreadExecutionModeQueueRequest,
+  ): Promise<CancelThreadExecutionModeQueueResponse> {
+    return await this.registry.cancelThreadExecutionModeQueue(request);
   }
 
   async setThreadModelSettings(

@@ -22,6 +22,7 @@ import type {
   MessagingBrowseSessionRecord,
   MessagingActiveTurnSummary,
   MessagingChannelKind,
+  MessagingConfirmationIntent,
   MessagingDeliveryResult,
   MessagingInboundCallbackEvent,
   MessagingInboundCommandEvent,
@@ -32,6 +33,7 @@ import type {
   MessagingMessageIntent,
   MessagingPendingIntentRecord,
   MessagingStreamUpdateIntent,
+  MessagingSurfaceAction,
   MessagingSurfaceRef,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
@@ -75,6 +77,7 @@ import {
   buildHandoffOverviewIntent,
   buildStatusModelPickerIntent,
   buildStatusReasoningPickerIntent,
+  formatExecutionModeLabel,
   handoffRequestFromValue,
   nextMessagingToolUpdateMode,
   resolveMessagingToolUpdateMode,
@@ -207,6 +210,27 @@ type QueuedTurnAction = {
   kind: "cancel" | "steer";
 };
 
+/**
+ * Per-binding tracking of a posted "permissions queued" audit message so
+ * we can edit it in place when the queue resolves (cancelled / applied).
+ * One controller-side map keyed by `${backend}:${threadId}` is enough —
+ * only one queued mode change can exist per thread at a time, and the
+ * registry's queueCleared notification is per-thread.
+ */
+type PendingQueueAuditMessage = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** ULID-shaped queueId from the registry, used for the cancel button action id. */
+  queueId: string;
+  fromExecutionMode: ThreadExecutionMode;
+  toExecutionMode: ThreadExecutionMode;
+  queuedAt: number;
+  /** Surface refs for every binding we successfully posted to. */
+  surfaces: Map<string, MessagingSurfaceRef>;
+};
+
+const PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX = "permissions:queue:cancel:";
+
 export type MessagingControllerOptions = {
   adapter: MessagingAdapter;
   authorizedActorIds: string[];
@@ -246,6 +270,16 @@ export class MessagingController {
   private readonly logger: MessagingControllerLogger;
   private readonly toolUpdatePolicy: MessagingToolUpdatePolicy;
   private readonly turnAdmission: MessagingTurnAdmission;
+  /**
+   * Per-thread map of the most-recent "permissions queued" audit message
+   * we posted to each bound conversation. Cleared when the queue resolves
+   * (cancelled or applied) and we successfully edit the messages in
+   * place. Keyed by `${backend}:${threadId}`.
+   */
+  private readonly pendingQueueAuditMessages = new Map<
+    string,
+    PendingQueueAuditMessage
+  >();
 
   constructor(private readonly options: MessagingControllerOptions) {
     this.authorizedActorIds = new Set(options.authorizedActorIds);
@@ -332,6 +366,26 @@ export class MessagingController {
     }
     if (event.notification.method === "serverRequest/resolved") {
       await this.handleBackendRequestResolved(event);
+      return;
+    }
+    const queuedParams = readExecutionModeQueuedParams(event.notification);
+    if (queuedParams) {
+      await this.handleExecutionModeQueued(event.backend, queuedParams);
+      await this.refreshStatusSurfacesForThread(
+        event.backend,
+        threadId,
+        event.notification.method,
+      );
+      return;
+    }
+    const queueClearedParams = readExecutionModeQueueClearedParams(event.notification);
+    if (queueClearedParams) {
+      await this.handleExecutionModeQueueCleared(event.backend, queueClearedParams);
+      await this.refreshStatusSurfacesForThread(
+        event.backend,
+        threadId,
+        event.notification.method,
+      );
       return;
     }
     if (
@@ -1251,6 +1305,12 @@ export class MessagingController {
       return;
     }
 
+    const permissionsQueueCancelAction = readPermissionsQueueCancelAction(event);
+    if (permissionsQueueCancelAction) {
+      await this.handlePermissionsQueueCancelCallback(event);
+      return;
+    }
+
     const statusAction = readStatusAction(event);
     if (statusAction) {
       await this.handleStatusCallback(event, statusAction);
@@ -1408,6 +1468,182 @@ export class MessagingController {
         });
       }
     }
+  }
+
+  /**
+   * Post a "Permissions queued" audit message in every active binding for
+   * the thread, mirroring the desktop transcript audit entry. The
+   * registry's `thread/executionMode/queued` notification is the trigger;
+   * we resolve from/to mode labels off the navigation snapshot at the
+   * time the notification fires.
+   */
+  private async handleExecutionModeQueued(
+    backend: AppServerBackendKind,
+    params: {
+      threadId: ThreadIdentifier;
+      queuedExecutionMode: ThreadExecutionMode;
+      queuedAt: number;
+    },
+  ): Promise<void> {
+    const bindings = this.filterBindingsForChannel(
+      await this.options.store.findActiveBindingsForThread({
+        backend,
+        threadId: params.threadId,
+      }),
+    );
+    if (bindings.length === 0) {
+      return;
+    }
+
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const thread = navigation.threads.find(
+      (candidate) =>
+        candidate.source === backend && candidate.id === params.threadId,
+    );
+    const fromExecutionMode = thread?.executionMode ?? "default";
+    const toExecutionMode = params.queuedExecutionMode;
+
+    // The registry's queueCleared notification doesn't carry the queueId
+    // back, so we generate the cancel-action id here from the bus event.
+    // The registry's cancelThreadExecutionModeQueue is idempotent — extra
+    // clicks (or stale buttons) cancel the *current* queue or no-op if
+    // nothing is pending. The id encoded here is for human/log
+    // observability and to namespace per-queue cancel taps.
+    const queueKey = this.queueAuditKey(backend, params.threadId);
+    const queueId = `${params.threadId}:${params.queuedAt}`;
+
+    const intent: MessagingConfirmationIntent = buildConfirmationIntent({
+      id: this.newIntentId("permissions-queue"),
+      capabilityProfile: this.capabilityProfile,
+      createdAt: this.now(),
+      title: "⏳ Permissions queue",
+      body: [
+        `${formatExecutionModeLabel(fromExecutionMode)} → ${formatExecutionModeLabel(toExecutionMode)}`,
+        "Will apply at end of current turn.",
+      ].join("\n"),
+      fallbackText: "Reply Cancel to drop the queued change.",
+      actions: [
+        {
+          id: `${PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX}${queueId}`,
+          label: "Cancel",
+          fallbackText: "cancel",
+          style: "danger",
+          priority: 1,
+        },
+      ],
+    });
+
+    const tracking: PendingQueueAuditMessage = {
+      backend,
+      threadId: params.threadId,
+      queueId,
+      fromExecutionMode,
+      toExecutionMode,
+      queuedAt: params.queuedAt,
+      surfaces: new Map(),
+    };
+
+    for (const binding of bindings) {
+      try {
+        const result = await this.deliver({ ...intent }, binding);
+        if (result.surface && result.outcome !== "failed") {
+          tracking.surfaces.set(binding.id, result.surface);
+        }
+      } catch (error) {
+        this.logger.debug?.("messaging permissions-queue audit deliver failed", {
+          bindingId: binding.id,
+          threadId: params.threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (tracking.surfaces.size > 0) {
+      this.pendingQueueAuditMessages.set(queueKey, tracking);
+    }
+  }
+
+  /**
+   * Edit (or, on edit failure, repost) the previously-stored "queued"
+   * audit message to reflect the new state — `cancelled` or
+   * `applied`. Idempotent on missing tracking state (a queue cleared
+   * before we ever managed to post the message has nothing to update).
+   */
+  private async handleExecutionModeQueueCleared(
+    backend: AppServerBackendKind,
+    params: {
+      threadId: ThreadIdentifier;
+      reason: "applied" | "cancelled";
+    },
+  ): Promise<void> {
+    const queueKey = this.queueAuditKey(backend, params.threadId);
+    const tracking = this.pendingQueueAuditMessages.get(queueKey);
+    if (!tracking) {
+      return;
+    }
+
+    const fromLabel = formatExecutionModeLabel(tracking.fromExecutionMode);
+    const toLabel = formatExecutionModeLabel(tracking.toExecutionMode);
+    const body =
+      params.reason === "cancelled"
+        ? `✕ Cancelled queued permissions change (${fromLabel} → ${toLabel})`
+        : `🔓 Permissions changed: ${fromLabel} → ${toLabel} at ${formatTimeOfDay(this.now())} (submitted)`;
+    const title =
+      params.reason === "cancelled"
+        ? "Permissions queue cancelled"
+        : "Permissions changed";
+
+    for (const [bindingId, surface] of tracking.surfaces) {
+      const binding = await this.options.store.getBinding(bindingId);
+      if (!binding || binding.revokedAt) {
+        continue;
+      }
+      const intent: MessagingConfirmationIntent = buildConfirmationIntent({
+        id: this.newIntentId("permissions-queue-cleared"),
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        title,
+        body,
+        // Edit the existing queued message in place; on edit failure
+        // (message gone, too old, edit not supported) the adapter's
+        // `present_new` fallback posts a fresh message instead. This
+        // mirrors the 2026-04-30-002 messaging-command-surfaces edit
+        // failure pattern.
+        delivery: {
+          mode: "update",
+          replaceMarkup: true,
+          fallback: "present_new",
+        },
+        targetSurface: surface,
+        // Empty actions array — buttons removed on resolve.
+        actions: [],
+        fallbackText: body,
+      });
+      try {
+        await this.deliver(intent, binding);
+      } catch (error) {
+        this.logger.debug?.(
+          "messaging permissions-queue audit edit failed",
+          {
+            bindingId: binding.id,
+            threadId: params.threadId,
+            reason: params.reason,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+      }
+    }
+
+    this.pendingQueueAuditMessages.delete(queueKey);
+  }
+
+  private queueAuditKey(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+  ): string {
+    return `${backend}:${threadId}`;
   }
 
   private async handleBackendRequestResolved(event: AgentEvent): Promise<void> {
@@ -2754,12 +2990,26 @@ export class MessagingController {
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
-    const currentMode = executionModeForBinding(binding, navigation) ?? "default";
+    const thread = findThreadForBinding(navigation, binding);
+    // When a queued change is already pending we toggle from the
+    // *queued* target (so a second click reverses the queue), not from
+    // the currently-applied mode. The registry's setThreadExecutionMode
+    // handles "toggle back to currently-applied during queue → cancel".
+    const currentMode =
+      thread?.queuedExecutionMode ??
+      executionModeForBinding(binding, navigation) ??
+      "default";
     const nextMode = currentMode === "full-access" ? "default" : "full-access";
     const executionMode = nextMode;
     // Update local binding prefs first so the bus-path render — which
     // fetches the binding fresh from the store — sees the new values
-    // even if navigation snapshot hasn't reloaded yet.
+    // even if navigation snapshot hasn't reloaded yet. The registry
+    // decides queue-vs-apply; on the queue path the bus emits
+    // `thread/executionMode/queued` (not `updated`), and the prefs we
+    // wrote here will get unwound naturally if the queue is cancelled
+    // before applying — the pre-flip here matches the optimistic-UI
+    // behavior the desktop renderer uses, and the bus refresh pulls
+    // canonical state on the apply or cancel transition.
     await this.updateBindingPreferences(binding, {
       executionMode,
       permissionsMode: nextMode,
@@ -2771,6 +3021,42 @@ export class MessagingController {
     });
     // Refresh handled by the thread-state update bus on
     // thread/executionMode/updated — see refreshStatusSurfacesForThread.
+  }
+
+  /**
+   * Handle a tap on the Cancel button of a queued-permissions audit
+   * message. The actionId is `permissions:queue:cancel:${queueId}`; we
+   * route through the bridge's `cancelThreadExecutionModeQueue`. The
+   * registry's `queueCleared(reason: "cancelled")` notification then
+   * fires and the existing `handleExecutionModeQueueCleared` branch
+   * edits the original message in place.
+   *
+   * Idempotent: if the queue was already cancelled (or applied) before
+   * this click landed, the registry no-ops and emits nothing — nothing
+   * to edit and nothing to do.
+   */
+  private async handlePermissionsQueueCancelCallback(
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    if (!this.options.backend.cancelThreadExecutionModeQueue) {
+      return;
+    }
+    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    if (!binding) {
+      return;
+    }
+    try {
+      await this.options.backend.cancelThreadExecutionModeQueue({
+        backend: binding.backend,
+        threadId: binding.threadId,
+      });
+    } catch (error) {
+      this.logger.debug?.("messaging permissions-queue cancel failed", {
+        bindingId: binding.id,
+        threadId: binding.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async stopActiveTurn(
@@ -3703,6 +3989,72 @@ function readCommandAction(event: MessagingInboundCallbackEvent): string | undef
   return match?.[1]?.toLowerCase();
 }
 
+/**
+ * Narrow an `AppServerNotification` to the `thread/executionMode/queued`
+ * variant and return its strongly-typed params. The shared union is
+ * tricky to narrow because `AppServerPendingRequestNotification` widens
+ * `method: string`, so we look at the params shape too.
+ */
+function readExecutionModeQueuedParams(
+  notification: AgentEvent["notification"],
+):
+  | { threadId: ThreadIdentifier; queuedExecutionMode: ThreadExecutionMode; queuedAt: number }
+  | undefined {
+  if (notification.method !== "thread/executionMode/queued") {
+    return undefined;
+  }
+  const params = notification.params as {
+    threadId?: unknown;
+    queuedExecutionMode?: unknown;
+    queuedAt?: unknown;
+  };
+  if (
+    typeof params.threadId === "string" &&
+    (params.queuedExecutionMode === "default" || params.queuedExecutionMode === "full-access") &&
+    typeof params.queuedAt === "number"
+  ) {
+    return {
+      threadId: params.threadId,
+      queuedExecutionMode: params.queuedExecutionMode,
+      queuedAt: params.queuedAt,
+    };
+  }
+  return undefined;
+}
+
+function readExecutionModeQueueClearedParams(
+  notification: AgentEvent["notification"],
+): { threadId: ThreadIdentifier; reason: "applied" | "cancelled" } | undefined {
+  if (notification.method !== "thread/executionMode/queueCleared") {
+    return undefined;
+  }
+  const params = notification.params as {
+    threadId?: unknown;
+    reason?: unknown;
+  };
+  if (
+    typeof params.threadId === "string" &&
+    (params.reason === "applied" || params.reason === "cancelled")
+  ) {
+    return { threadId: params.threadId, reason: params.reason };
+  }
+  return undefined;
+}
+
+/**
+ * Format a wall-clock timestamp as `HH:MM AM/PM` for messaging audit
+ * messages. Mirrors the format the user sees in the desktop transcript.
+ */
+function formatTimeOfDay(epochMs: number): string {
+  const date = new Date(epochMs);
+  const hours = date.getHours();
+  const minutes = date.getMinutes();
+  const period = hours >= 12 ? "PM" : "AM";
+  const displayHours = hours % 12 === 0 ? 12 : hours % 12;
+  const paddedMinutes = minutes < 10 ? `0${minutes}` : String(minutes);
+  return `${displayHours}:${paddedMinutes} ${period}`;
+}
+
 function readBrowseAction(event: MessagingInboundCallbackEvent): string | undefined {
   const actionId = event.actionId ?? event.interaction.id;
   return actionId.startsWith("browse:") ? actionId : undefined;
@@ -3741,6 +4093,21 @@ function readHelpPageIndex(event: MessagingInboundCallbackEvent): number {
 function readStatusAction(event: MessagingInboundCallbackEvent): string | undefined {
   const actionId = event.actionId ?? event.interaction.id;
   return actionId.startsWith("status:") || actionId.startsWith("handoff:")
+    ? actionId
+    : undefined;
+}
+
+/**
+ * Match the cancel button on a "Permissions queued" audit message. The
+ * action id is `permissions:queue:cancel:${queueId}`; the queueId is
+ * encoded so multiple queue posts in the same conversation can't
+ * collide. Returns undefined when the callback isn't ours.
+ */
+function readPermissionsQueueCancelAction(
+  event: MessagingInboundCallbackEvent,
+): string | undefined {
+  const actionId = event.actionId ?? event.interaction.id;
+  return actionId.startsWith(PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX)
     ? actionId
     : undefined;
 }

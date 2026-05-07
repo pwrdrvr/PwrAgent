@@ -2,6 +2,8 @@ import type {
   AgentEvent,
   AppServerBackendKind,
   AppServerThreadStatus,
+  CancelThreadExecutionModeQueueRequest,
+  CancelThreadExecutionModeQueueResponse,
   CompactThreadRequest,
   CompactThreadResponse,
   HandoffThreadWorkspaceRequest,
@@ -85,6 +87,9 @@ export type MessagingBackendBridge = {
   setThreadExecutionMode?(
     request: SetThreadExecutionModeRequest,
   ): Promise<SetThreadExecutionModeResponse>;
+  cancelThreadExecutionModeQueue?(
+    request: CancelThreadExecutionModeQueueRequest,
+  ): Promise<CancelThreadExecutionModeQueueResponse>;
   setThreadModelSettings?(
     request: SetThreadModelSettingsRequest,
   ): Promise<SetThreadModelSettingsResponse>;

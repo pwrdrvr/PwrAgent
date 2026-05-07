@@ -2,6 +2,7 @@ import type {
   AppServerBackendKind,
   HandoffThreadWorkspaceRequest,
   MessagingToolUpdateMode,
+  ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragent/shared";
 import type {
@@ -73,6 +74,11 @@ export function buildBindingStatusIntent(params: {
     (preferences?.executionMode === "full-access" ? "full-access" : undefined) ??
     defaults?.executionMode ??
     "default";
+  const queuedExecutionMode =
+    params.threadState.queuedExecutionMode &&
+    params.threadState.queuedExecutionMode !== permissionsMode
+      ? params.threadState.queuedExecutionMode
+      : undefined;
   const activeTurn = params.threadState.activeTurn;
   const branch = formatBranch(params.threadState);
   const bindingTitle = formatStatusBindingTitle(params.threadState, params.binding.threadId);
@@ -104,7 +110,7 @@ export function buildBindingStatusIntent(params: {
       `Reasoning: ${reasoning}`,
       `Fast mode: ${fastMode === undefined ? unavailable() : fastMode ? "on" : "off"}`,
       "Plan mode: unavailable",
-      `Permissions: ${permissionsMode === "full-access" ? "Full Access" : "Default Access"}`,
+      `Permissions: ${formatPermissionsLineLabel(permissionsMode, queuedExecutionMode)}`,
       `Tool updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
       "Context usage: unavailable",
       "Account: unavailable",
@@ -119,6 +125,7 @@ export function buildBindingStatusIntent(params: {
       fastMode,
       handoff: params.handoff,
       permissionsMode,
+      queuedExecutionMode,
       reasoning,
       toolUpdateMode,
     }),
@@ -130,6 +137,7 @@ function buildStatusActions(params: {
   fastMode: boolean | undefined;
   handoff?: MessagingWorkspaceHandoffContext;
   permissionsMode: string;
+  queuedExecutionMode?: ThreadExecutionMode;
   reasoning: string;
   toolUpdateMode: MessagingToolUpdateMode;
 }): MessagingSurfaceAction[] {
@@ -162,10 +170,10 @@ function buildStatusActions(params: {
     },
     {
       id: "status:permissions",
-      label:
-        params.permissionsMode === "full-access"
-          ? "Permissions: Full Access"
-          : "Permissions: Default",
+      label: formatPermissionsActionLabel(
+        params.permissionsMode,
+        params.queuedExecutionMode,
+      ),
       style: "secondary",
       fallbackText: "permissions",
       priority: 7,
@@ -802,4 +810,48 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function unavailable(): string {
   return "unavailable";
+}
+
+/**
+ * Human-readable label for an execution mode in messaging surfaces.
+ * Mirrors the desktop transcript copy: "Default Access" / "Full Access".
+ */
+export function formatExecutionModeLabel(mode: ThreadExecutionMode): string {
+  return mode === "full-access" ? "Full Access" : "Default Access";
+}
+
+/**
+ * Short label for the permissions action button. When a queued mode
+ * change is pending this becomes
+ *   "Permissions: <current> → <queued> (queued)"
+ * so the user sees the pending target without needing to open the card.
+ */
+export function formatPermissionsActionLabel(
+  current: string,
+  queued?: ThreadExecutionMode,
+): string {
+  const currentLabel = current === "full-access" ? "Full Access" : "Default";
+  if (!queued) {
+    return `Permissions: ${currentLabel}`;
+  }
+  const queuedLabel = queued === "full-access" ? "Full Access" : "Default";
+  return `Permissions: ${currentLabel} → ${queuedLabel} (queued)`;
+}
+
+/**
+ * Long label used in the multi-line status card body. Same shape as the
+ * action button but always uses the "Default Access" / "Full Access"
+ * spellings for the current mode (action button uses "Default" alone for
+ * width).
+ */
+function formatPermissionsLineLabel(
+  current: string,
+  queued?: ThreadExecutionMode,
+): string {
+  const currentLabel = current === "full-access" ? "Full Access" : "Default Access";
+  if (!queued) {
+    return currentLabel;
+  }
+  const queuedLabel = formatExecutionModeLabel(queued);
+  return `${currentLabel} → ${queuedLabel} (queued)`;
 }
