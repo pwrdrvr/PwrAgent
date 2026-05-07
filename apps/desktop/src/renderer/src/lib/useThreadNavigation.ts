@@ -2227,26 +2227,28 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
 
       setUpdatingThreadExecutionMode(executionMode);
       setSetThreadExecutionModeError(undefined);
-      setOptimisticThread((current) =>
-        current && current.id === thread.id && current.source === thread.source
-          ? { ...current, executionMode }
-          : current
-      );
-      setState((current) =>
-        current.response
-          ? {
-              ...current,
-              response: {
-                ...current.response,
-                threads: current.response.threads.map((candidate) =>
-                  candidate.id === thread.id && candidate.source === thread.source
-                    ? { ...candidate, executionMode }
-                    : candidate
-                ),
-              },
-            }
-          : current
-      );
+      // No optimistic flip of `executionMode` here. Two cases:
+      //
+      // 1. Thread is idle → registry applies immediately. The
+      //    `thread/executionMode/updated` bus event arrives within a
+      //    network round-trip (~50ms locally) and drives the visible
+      //    state via `applyThreadExecutionModeUpdate`.
+      //
+      // 2. Thread has an active turn → registry queues the change.
+      //    The `thread/executionMode/queued` bus event arrives and
+      //    sets `queuedExecutionMode` on the snapshot, leaving
+      //    `executionMode` at its applied value. The Composer
+      //    queue-indicator block renders because
+      //    `queuedExecutionMode !== executionMode`.
+      //
+      // An optimistic flip of `executionMode` here would break case
+      // (2): the queue would arrive with `queuedExecutionMode` equal
+      // to the optimistic value (and equal to `executionMode`), so
+      // the indicator would never render — the user would see the
+      // chip flip and assume the change took effect immediately.
+      // The `setUpdatingThreadExecutionMode(executionMode)` indicator
+      // above gives users a "click registered" signal during the
+      // round-trip without lying about applied state.
 
       try {
         await setThreadExecutionMode({
