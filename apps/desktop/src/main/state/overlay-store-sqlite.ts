@@ -350,67 +350,6 @@ export class SqliteOverlayStore {
     const nextState: ThreadOverlayState = {
       ...current,
       executionMode: params.executionMode,
-      retainedExecutionModeDriftPairs: (
-        current.retainedExecutionModeDriftPairs ?? []
-      ).filter(
-        (pair) =>
-          pair.expectedExecutionMode !== params.executionMode &&
-          pair.observedExecutionMode !== params.executionMode,
-      ),
-    };
-    this.putThread(threadKey, nextState);
-    return nextState;
-  }
-
-  async setThreadObservedExecutionMode(params: {
-    backend: ThreadOverlayState["backend"];
-    threadId: string;
-    observedExecutionMode?: ThreadExecutionMode;
-  }): Promise<ThreadOverlayState> {
-    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
-      backend: params.backend,
-      threadId: params.threadId,
-      executionMode: "default" as const,
-      extraLinkedDirectories: [],
-    };
-    const nextState: ThreadOverlayState = {
-      ...current,
-      observedExecutionMode: params.observedExecutionMode,
-    };
-    this.putThread(threadKey, nextState);
-    return nextState;
-  }
-
-  async retainThreadExecutionModeDrift(params: {
-    backend: ThreadOverlayState["backend"];
-    expectedExecutionMode: ThreadExecutionMode;
-    observedExecutionMode: ThreadExecutionMode;
-    retainedAt?: number;
-    threadId: string;
-  }): Promise<ThreadOverlayState> {
-    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
-      backend: params.backend,
-      threadId: params.threadId,
-      executionMode: "default" as const,
-      extraLinkedDirectories: [],
-    };
-    const retainedExecutionModeDriftPairs = [
-      ...(current.retainedExecutionModeDriftPairs ?? []).filter(
-        (pair) =>
-          pair.expectedExecutionMode !== params.expectedExecutionMode ||
-          pair.observedExecutionMode !== params.observedExecutionMode,
-      ),
-      {
-        expectedExecutionMode: params.expectedExecutionMode,
-        observedExecutionMode: params.observedExecutionMode,
-        retainedAt: params.retainedAt ?? Date.now(),
-      },
-    ];
-    const nextState: ThreadOverlayState = {
-      ...current,
-      retainedExecutionModeDriftPairs,
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -740,8 +679,6 @@ export type OverlayStoreLike = Pick<
   | "setThreadExpectedBranch"
   | "setThreadObservedBranch"
   | "retainThreadBranchDrift"
-  | "setThreadObservedExecutionMode"
-  | "retainThreadExecutionModeDrift"
   | "appendPermissionTransition"
   | "getLaunchpadDefaults"
   | "setLaunchpadDefaults"

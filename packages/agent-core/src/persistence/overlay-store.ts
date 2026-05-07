@@ -60,10 +60,7 @@ export class OverlayStore {
             fastMode: data.threads[threadKey]?.fastMode ?? thread.fastMode,
             gitBranch: data.threads[threadKey]?.gitBranch,
             observedGitBranch: data.threads[threadKey]?.observedGitBranch,
-            observedExecutionMode: data.threads[threadKey]?.observedExecutionMode,
             retainedBranchDriftPairs: data.threads[threadKey]?.retainedBranchDriftPairs,
-            retainedExecutionModeDriftPairs:
-              data.threads[threadKey]?.retainedExecutionModeDriftPairs,
             lastSeenAt: params.fetchedAt,
             lastSeenUpdatedAt: thread.updatedAt,
             extraLinkedDirectories:
@@ -136,11 +133,9 @@ export class OverlayStore {
         fastMode: current?.fastMode,
         gitBranch: current?.gitBranch,
         observedGitBranch: current?.observedGitBranch,
-        observedExecutionMode: current?.observedExecutionMode,
         dismissedAt: current?.dismissedAt,
         snoozedUntil: current?.snoozedUntil,
         retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
-        retainedExecutionModeDriftPairs: current?.retainedExecutionModeDriftPairs,
         lastSeenAt: seenAt,
         lastSeenUpdatedAt: params.seenUpdatedAt ?? current?.lastSeenUpdatedAt,
         extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
@@ -309,74 +304,6 @@ export class OverlayStore {
       const nextState: ThreadOverlayState = {
         ...current,
         executionMode: params.executionMode,
-        // The user has explicitly set the expected mode — drop any
-        // retained drift pairs that referenced the OLD value, so a future
-        // observation that disagrees with the NEW value can prompt again.
-        retainedExecutionModeDriftPairs: (
-          current.retainedExecutionModeDriftPairs ?? []
-        ).filter(
-          (pair) =>
-            pair.expectedExecutionMode !== params.executionMode &&
-            pair.observedExecutionMode !== params.executionMode,
-        ),
-      };
-      data.threads[threadKey] = nextState;
-      return nextState;
-    });
-  }
-
-  async setThreadObservedExecutionMode(params: {
-    backend: ThreadOverlayState["backend"];
-    threadId: string;
-    observedExecutionMode?: ThreadExecutionMode;
-  }): Promise<ThreadOverlayState> {
-    return await this.withData(async (data) => {
-      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-      const current = data.threads[threadKey] ?? {
-        backend: params.backend,
-        threadId: params.threadId,
-        executionMode: "default",
-        extraLinkedDirectories: [],
-      };
-      const nextState: ThreadOverlayState = {
-        ...current,
-        observedExecutionMode: params.observedExecutionMode,
-      };
-      data.threads[threadKey] = nextState;
-      return nextState;
-    });
-  }
-
-  async retainThreadExecutionModeDrift(params: {
-    backend: ThreadOverlayState["backend"];
-    expectedExecutionMode: ThreadExecutionMode;
-    observedExecutionMode: ThreadExecutionMode;
-    retainedAt?: number;
-    threadId: string;
-  }): Promise<ThreadOverlayState> {
-    return await this.withData(async (data) => {
-      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-      const current = data.threads[threadKey] ?? {
-        backend: params.backend,
-        threadId: params.threadId,
-        executionMode: "default",
-        extraLinkedDirectories: [],
-      };
-      const retainedExecutionModeDriftPairs = [
-        ...(current.retainedExecutionModeDriftPairs ?? []).filter(
-          (pair) =>
-            pair.expectedExecutionMode !== params.expectedExecutionMode ||
-            pair.observedExecutionMode !== params.observedExecutionMode,
-        ),
-        {
-          expectedExecutionMode: params.expectedExecutionMode,
-          observedExecutionMode: params.observedExecutionMode,
-          retainedAt: params.retainedAt ?? Date.now(),
-        },
-      ];
-      const nextState: ThreadOverlayState = {
-        ...current,
-        retainedExecutionModeDriftPairs,
       };
       data.threads[threadKey] = nextState;
       return nextState;
