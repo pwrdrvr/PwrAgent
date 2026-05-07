@@ -111,7 +111,6 @@ describe("DesktopBackendRegistry replay integration", () => {
 
     const registry = new DesktopBackendRegistry({
       codexClient: replayClient,
-      codexFullAccessClient: createPassiveClient() as any,
       grokClient: createPassiveClient() as any,
       overlayStore: createOverlayStoreMock(),
     });
@@ -226,7 +225,6 @@ describe("DesktopBackendRegistry replay integration", () => {
 
     const registry = new DesktopBackendRegistry({
       codexClient: replayClient,
-      codexFullAccessClient: createPassiveClient() as any,
       grokClient: createPassiveClient() as any,
       overlayStore: createOverlayStoreMock(),
     });
@@ -351,7 +349,6 @@ describe("DesktopBackendRegistry replay integration", () => {
 
     const registry = new DesktopBackendRegistry({
       codexClient: replayClient,
-      codexFullAccessClient: createPassiveClient() as any,
       grokClient: createPassiveClient() as any,
       overlayStore: createOverlayStoreMock(),
     });

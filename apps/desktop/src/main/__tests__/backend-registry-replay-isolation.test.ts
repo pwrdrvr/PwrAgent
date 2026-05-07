@@ -247,24 +247,18 @@ describe("DesktopBackendRegistry replay isolation", () => {
     await registry.close();
   });
 
-  it("spawns both codex clients with explicit sandbox args so neither inherits permissive upstream defaults", async () => {
+  it("spawns exactly one codex child process with workspace-write defaults so newly created threads inherit Default Access", async () => {
     const registry = new DesktopBackendRegistry({
       overlayStore: createOverlayStoreMock(),
     });
 
-    expect(constructorState.codexCount).toBe(2);
+    expect(constructorState.codexCount).toBe(1);
     expect(constructorState.codexArgs).toEqual([
       [
         "-c",
         'approval_policy="on-request"',
         "-c",
         'sandbox_mode="workspace-write"',
-      ],
-      [
-        "-c",
-        'approval_policy="never"',
-        "-c",
-        'sandbox_mode="danger-full-access"',
       ],
     ]);
 

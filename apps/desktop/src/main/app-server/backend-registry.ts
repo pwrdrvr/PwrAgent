@@ -526,16 +526,7 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
   };
 }
 
-function buildCodexClientArgs(mode: ThreadExecutionMode): string[] {
-  if (mode === "full-access") {
-    return [
-      "-c",
-      'approval_policy="never"',
-      "-c",
-      'sandbox_mode="danger-full-access"',
-    ];
-  }
-
+function buildCodexClientArgs(): string[] {
   return [
     "-c",
     'approval_policy="on-request"',
@@ -998,8 +989,7 @@ function resolveGrokApiKeyForLiveClient(): string | undefined {
 }
 
 export class DesktopBackendRegistry {
-  private readonly codexDefaultClient: BackendClient;
-  private readonly codexFullAccessClient: BackendClient;
+  private readonly codexClient: BackendClient;
   private readonly grokClient: BackendClient;
   private readonly overlayStore: OverlayStoreLike;
   private readonly gitDirectoryService: GitDirectoryService;
@@ -1031,7 +1021,6 @@ export class DesktopBackendRegistry {
 
   constructor(options?: {
     codexClient?: BackendClient;
-    codexFullAccessClient?: BackendClient;
     grokClient?: BackendClient;
     overlayStore?: OverlayStoreLike;
     gitDirectoryService?: GitDirectoryService;
@@ -1042,34 +1031,18 @@ export class DesktopBackendRegistry {
     threadTitleGenerationService?: ThreadTitleService | null;
   }) {
     const replayClients = createReplayClientsFromEnv();
-    const codexDefaultCapture = options?.codexClient
+    const codexCapture = options?.codexClient
       || replayClients
       ? undefined
       : createProtocolCaptureFromEnv({
           backend: "codex",
           backendInstance: "default",
         });
-    if (codexDefaultCapture) {
-      this.captureStores.push(codexDefaultCapture.store);
+    if (codexCapture) {
+      this.captureStores.push(codexCapture.store);
     }
-    const codexDefaultObserver = createCompositeJsonRpcObserver([
-      codexDefaultCapture?.observer,
-      createProtocolLogObserverFromEnv({
-        backend: "codex",
-      }),
-    ]);
-    const codexFullAccessCapture = options?.codexFullAccessClient
-      || replayClients
-      ? undefined
-      : createProtocolCaptureFromEnv({
-          backend: "codex",
-          backendInstance: "full-access",
-        });
-    if (codexFullAccessCapture) {
-      this.captureStores.push(codexFullAccessCapture.store);
-    }
-    const codexFullAccessObserver = createCompositeJsonRpcObserver([
-      codexFullAccessCapture?.observer,
+    const codexObserver = createCompositeJsonRpcObserver([
+      codexCapture?.observer,
       createProtocolLogObserverFromEnv({
         backend: "codex",
       }),
@@ -1090,14 +1063,11 @@ export class DesktopBackendRegistry {
         backend: "grok",
       }),
     ]);
-    const createsLiveCodexDefaultClient =
-      !options?.codexClient && !replayClients?.codexDefaultClient;
-    const createsLiveCodexFullAccessClient =
-      !options?.codexFullAccessClient && !replayClients?.codexFullAccessClient;
-    const codexCommand =
-      createsLiveCodexDefaultClient || createsLiveCodexFullAccessClient
-        ? getDesktopSettingsService().resolveCodexCommandPreference()
-        : undefined;
+    const createsLiveCodexClient =
+      !options?.codexClient && !replayClients?.codexClient;
+    const codexCommand = createsLiveCodexClient
+      ? getDesktopSettingsService().resolveCodexCommandPreference()
+      : undefined;
     const createsLiveGrokClient = !options?.grokClient && !replayClients?.grokClient;
     const grokApiKey = createsLiveGrokClient
       ? resolveGrokApiKeyForLiveClient()
@@ -1105,22 +1075,13 @@ export class DesktopBackendRegistry {
 
     const clientVersion =
       typeof app?.getVersion === "function" ? app.getVersion() : "0.0.0";
-    this.codexDefaultClient =
+    this.codexClient =
       options?.codexClient ??
-      replayClients?.codexDefaultClient ??
+      replayClients?.codexClient ??
       new CodexAppServerClient({
-        args: buildCodexClientArgs("default"),
+        args: buildCodexClientArgs(),
         command: codexCommand,
-        connectionObserver: codexDefaultObserver,
-        clientVersion,
-      });
-    this.codexFullAccessClient =
-      options?.codexFullAccessClient ??
-      replayClients?.codexFullAccessClient ??
-      new CodexAppServerClient({
-        args: buildCodexClientArgs("full-access"),
-        command: codexCommand,
-        connectionObserver: codexFullAccessObserver,
+        connectionObserver: codexObserver,
         clientVersion,
       });
     this.grokClient =
@@ -1158,10 +1119,10 @@ export class DesktopBackendRegistry {
             ? createReplayThreadTitleService()
             : new ThreadTitleGenerationService({
                 generators: {
-                  codex: this.codexDefaultClient.generateTitle
+                  codex: this.codexClient.generateTitle
                     ? {
                         generateTitle: (params) =>
-                          this.codexDefaultClient.generateTitle!(params),
+                          this.codexClient.generateTitle!(params),
                       }
                     : undefined,
                   grok: createsLiveGrokClient
@@ -1172,12 +1133,11 @@ export class DesktopBackendRegistry {
                 },
               }));
     this.modelCatalog = new BackendModelCatalog({
-      codex: this.codexDefaultClient,
+      codex: this.codexClient,
       grok: this.grokClient,
     });
 
-    this.subscribeClient("codex", this.codexDefaultClient);
-    this.subscribeClient("codex", this.codexFullAccessClient);
+    this.subscribeClient("codex", this.codexClient);
     this.subscribeClient("grok", this.grokClient);
   }
 
@@ -2462,8 +2422,7 @@ export class DesktopBackendRegistry {
       this.pendingServerRequests.delete(key);
     }
 
-    await this.codexDefaultClient.close();
-    await this.codexFullAccessClient.close();
+    await this.codexClient.close();
     await this.grokClient.close();
     await Promise.all(this.captureStores.splice(0).map(async (store) => await store.close()));
   }
@@ -2586,15 +2545,17 @@ export class DesktopBackendRegistry {
 
   private getClient(
     backend: AppServerBackendKind,
+    // executionMode is retained for documentation symmetry with callers
+    // that pass per-turn approvalPolicy/sandboxPolicy overrides; it no
+    // longer routes since the dual-client architecture collapsed to one.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     executionMode: ThreadExecutionMode = "default",
   ): BackendClient {
     if (backend === "grok") {
       return this.grokClient;
     }
 
-    return executionMode === "full-access"
-      ? this.codexFullAccessClient
-      : this.codexDefaultClient;
+    return this.codexClient;
   }
 
   private buildThreadListCacheKey(params: {
@@ -2640,7 +2601,7 @@ export class DesktopBackendRegistry {
     callerReason?: string;
     ownerId?: string;
   }): Promise<AppServerThreadSummary[]> {
-    const defaultThreads = await this.codexDefaultClient
+    const defaultThreads = await this.codexClient
       .listThreads(params, diagnostics)
       .catch(() => []);
     const allThreads = defaultThreads.map((thread) => ({
@@ -2699,46 +2660,42 @@ export class DesktopBackendRegistry {
 
   private async describeCodexBackend(): Promise<BackendSummary> {
     const [
-      defaultResult,
-      fullAccessResult,
+      initializeResult,
       defaultModelsResult,
-      defaultAccountResult,
-      defaultRateLimitsResult,
+      accountResult,
+      rateLimitsResult,
     ] = await Promise.allSettled([
-      this.codexDefaultClient.getInitializeResult(),
-      this.codexFullAccessClient.getInitializeResult(),
+      this.codexClient.getInitializeResult(),
       this.readCodexDefaultModelsOnce("backend-summary"),
-      readClientAccount(this.codexDefaultClient),
-      readClientRateLimits(this.codexDefaultClient),
+      readClientAccount(this.codexClient),
+      readClientRateLimits(this.codexClient),
     ]);
-    const successful = [defaultResult, fullAccessResult].flatMap((result) =>
-      result.status === "fulfilled" ? [result.value] : [],
-    );
+    const successful =
+      initializeResult.status === "fulfilled" ? [initializeResult.value] : [];
     const methods = mergeMethods(successful);
     const available = successful.length > 0;
     const discoveredModels = [defaultModelsResult].flatMap((result) =>
       result.status === "fulfilled" ? result.value : [],
     );
-    const unavailableReason = [defaultResult, fullAccessResult]
-      .flatMap((result) =>
-        result.status === "rejected"
-          ? [result.reason instanceof Error ? result.reason.message : String(result.reason)]
-          : [],
-      )
-      .join(" ");
+    const unavailableReason =
+      initializeResult.status === "rejected"
+        ? initializeResult.reason instanceof Error
+          ? initializeResult.reason.message
+          : String(initializeResult.reason)
+        : "";
 
     return {
       kind: "codex",
       label: BACKEND_LABELS.codex,
       available,
       account:
-        defaultAccountResult.status === "fulfilled" &&
-        isMeaningfulAccountSummary(defaultAccountResult.value)
-          ? defaultAccountResult.value
+        accountResult.status === "fulfilled" &&
+        isMeaningfulAccountSummary(accountResult.value)
+          ? accountResult.value
           : undefined,
       rateLimits:
-        defaultRateLimitsResult.status === "fulfilled"
-          ? defaultRateLimitsResult.value
+        rateLimitsResult.status === "fulfilled"
+          ? rateLimitsResult.value
           : undefined,
       serverName: successful[0]?.serverInfo?.name,
       serverVersion: successful[0]?.serverInfo?.version,
@@ -2752,24 +2709,24 @@ export class DesktopBackendRegistry {
         {
           mode: "default",
           label: EXECUTION_MODE_SUMMARIES.default.label,
-          available: defaultResult.status === "fulfilled",
+          available,
           isDefault: true,
           unavailableReason:
-            defaultResult.status === "rejected"
-              ? defaultResult.reason instanceof Error
-                ? defaultResult.reason.message
-                : String(defaultResult.reason)
+            initializeResult.status === "rejected"
+              ? initializeResult.reason instanceof Error
+                ? initializeResult.reason.message
+                : String(initializeResult.reason)
               : undefined,
         },
         {
           mode: "full-access",
           label: EXECUTION_MODE_SUMMARIES["full-access"].label,
-          available: fullAccessResult.status === "fulfilled",
+          available,
           unavailableReason:
-            fullAccessResult.status === "rejected"
-              ? fullAccessResult.reason instanceof Error
-                ? fullAccessResult.reason.message
-                : String(fullAccessResult.reason)
+            initializeResult.status === "rejected"
+              ? initializeResult.reason instanceof Error
+                ? initializeResult.reason.message
+                : String(initializeResult.reason)
               : undefined,
         },
       ],
@@ -2835,48 +2792,36 @@ export class DesktopBackendRegistry {
     operation: (client: BackendClient, mode: ThreadExecutionMode) => Promise<T>,
     requestedMode?: ThreadExecutionMode,
   ): Promise<T> {
+    // Single-client passthrough. The mode passed to the operation is no
+    // longer a routing decision — it's documentation for callers that
+    // want to forward it to codex's per-turn approvalPolicy/sandboxPolicy
+    // override on turn/start (PR #213). The cross-mode try/fallback
+    // logic is gone because there is no second process to fall back to.
+    let mode: ThreadExecutionMode;
+    let source: "explicit" | "overlay" | "default-fallback";
     if (requestedMode) {
-      // Diagnostic for #203-class regressions: any silent escalation
-      // from Default → Full Access (or vice versa) is the load-bearing
-      // security property of execution-mode routing. Log the
-      // requestedMode and the client we resolved to so post-mortem
-      // log review can prove which Codex sandbox actually ran a turn.
-      backendRegistryLog.info("codex thread client routing", {
+      mode = requestedMode;
+      source = "explicit";
+    } else {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: "codex",
         threadId,
-        requestedMode,
-        resolvedMode: requestedMode,
-        source: "explicit",
       });
-      return await operation(this.getClient("codex", requestedMode), requestedMode);
-    }
-
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: "codex",
-      threadId,
-    });
-    const preferredMode = overlay?.executionMode;
-    const modes: ThreadExecutionMode[] = preferredMode
-      ? [preferredMode, preferredMode === "default" ? "full-access" : "default"]
-      : ["default", "full-access"];
-
-    let lastError: unknown;
-    for (const mode of modes) {
-      try {
-        const result = await operation(this.getClient("codex", mode), mode);
-        backendRegistryLog.info("codex thread client routing", {
-          threadId,
-          requestedMode: undefined,
-          resolvedMode: mode,
-          source: preferredMode === mode ? "overlay" : "fallback",
-          overlayMode: preferredMode,
-        });
-        return result;
-      } catch (error) {
-        lastError = error;
+      if (overlay?.executionMode) {
+        mode = overlay.executionMode;
+        source = "overlay";
+      } else {
+        mode = "default";
+        source = "default-fallback";
       }
     }
-
-    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    backendRegistryLog.info("codex thread client routing", {
+      threadId,
+      requestedMode,
+      resolvedMode: mode,
+      source,
+    });
+    return await operation(this.codexClient, mode);
   }
 
   private async withActiveCodexThreadClient<T>(
