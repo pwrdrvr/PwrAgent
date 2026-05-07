@@ -184,6 +184,61 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    setThreadObservedExecutionMode: async ({
+      backend,
+      threadId,
+      observedExecutionMode,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      observedExecutionMode?: "default" | "full-access";
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        observedExecutionMode,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    retainThreadExecutionModeDrift: async ({
+      backend,
+      threadId,
+      expectedExecutionMode,
+      observedExecutionMode,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      expectedExecutionMode: "default" | "full-access";
+      observedExecutionMode: "default" | "full-access";
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        retainedExecutionModeDriftPairs: [
+          ...(current.retainedExecutionModeDriftPairs ?? []),
+          {
+            expectedExecutionMode,
+            observedExecutionMode,
+            retainedAt: Date.now(),
+          },
+        ],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     getLaunchpadDefaults: async () => launchpadDefaults,
     setLaunchpadDefaults: async (patch: Partial<NavigationLaunchpadDefaults>) => {
       launchpadDefaults = {
@@ -340,6 +395,7 @@ class MockBackendClient {
   listThreadsCallCount = 0;
   listModelsCallCount = 0;
   steerTurnCallCount = 0;
+  probeThreadPermissionsCallCount = 0;
   lastListModelsDiagnostics?: {
     callerReason?: string;
     ownerId?: string;
@@ -378,6 +434,7 @@ class MockBackendClient {
       startTurnError?: Error;
       steerTurnError?: Error;
       setThreadPermissionsError?: Error;
+      probedExecutionMode?: "default" | "full-access";
     }
   ) {}
 
@@ -541,13 +598,26 @@ class MockBackendClient {
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
-  }): Promise<{ threadId: string }> {
+  }): Promise<{ threadId: string; observedExecutionMode?: "default" | "full-access" }> {
     this.lastSetThreadPermissionsParams = params;
     if (this.options.setThreadPermissionsError) {
       throw this.options.setThreadPermissionsError;
     }
 
-    return { threadId: params.threadId };
+    return {
+      threadId: params.threadId,
+      observedExecutionMode: this.options.probedExecutionMode,
+    };
+  }
+
+  async probeThreadPermissions(params: {
+    threadId: string;
+  }): Promise<{ threadId: string; observedExecutionMode?: "default" | "full-access" }> {
+    this.probeThreadPermissionsCallCount += 1;
+    return {
+      threadId: params.threadId,
+      observedExecutionMode: this.options.probedExecutionMode,
+    };
   }
 
   async interruptTurn(): Promise<{ threadId: string; turnId: string }> {
@@ -3283,6 +3353,135 @@ describe("DesktopBackendRegistry", () => {
       sandbox: "workspace-write",
     });
     expect(codexFullAccessClient.lastStartTurnParams).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("checkThreadExecutionModeDrift reports drift when codex's probe disagrees with the overlay", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/resume"] },
+      probedExecutionMode: "full-access",
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-drift": {
+          backend: "codex",
+          threadId: "thread-drift",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/resume"] },
+        probedExecutionMode: "full-access",
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+    });
+
+    const drift = await registry.checkThreadExecutionModeDrift({
+      backend: "codex",
+      threadId: "thread-drift",
+    });
+
+    expect(drift).toMatchObject({
+      backend: "codex",
+      threadId: "thread-drift",
+      expectedExecutionMode: "default",
+      observedExecutionMode: "full-access",
+      drifted: true,
+    });
+    // Probe persists the observed value back to the overlay so subsequent
+    // navigation snapshots reflect codex's view without re-probing.
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-drift",
+      }),
+    ).resolves.toMatchObject({
+      observedExecutionMode: "full-access",
+    });
+
+    await registry.close();
+  });
+
+  it("checkThreadExecutionModeDrift reports no drift when overlay agrees with codex's probe", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/resume"] },
+      probedExecutionMode: "default",
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-aligned": {
+          backend: "codex",
+          threadId: "thread-aligned",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/resume"] },
+        probedExecutionMode: "default",
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+    });
+
+    const drift = await registry.checkThreadExecutionModeDrift({
+      backend: "codex",
+      threadId: "thread-aligned",
+    });
+
+    expect(drift.drifted).toBe(false);
+
+    await registry.close();
+  });
+
+  it("retainThreadExecutionModeDrift persists the dismissed pair on the overlay", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/resume"] },
+      }),
+      codexFullAccessClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/resume"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+    });
+
+    await registry.retainThreadExecutionModeDrift({
+      backend: "codex",
+      threadId: "thread-retain",
+      expectedExecutionMode: "default",
+      observedExecutionMode: "full-access",
+    });
+
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-retain",
+      }),
+    ).resolves.toMatchObject({
+      retainedExecutionModeDriftPairs: [
+        expect.objectContaining({
+          expectedExecutionMode: "default",
+          observedExecutionMode: "full-access",
+        }),
+      ],
+    });
 
     await registry.close();
   });

@@ -4,6 +4,8 @@ import type {
   AgentEvent,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
+  CheckThreadExecutionModeDriftRequest,
+  CheckThreadExecutionModeDriftResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   InterruptTurnRequest,
@@ -12,6 +14,8 @@ import type {
   ListBackendsResponse,
   RetainThreadBranchDriftRequest,
   RetainThreadBranchDriftResponse,
+  RetainThreadExecutionModeDriftRequest,
+  RetainThreadExecutionModeDriftResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -33,9 +37,11 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
   AGENT_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
+  AGENT_CHECK_THREAD_EXECUTION_MODE_DRIFT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
+  AGENT_RETAIN_THREAD_EXECUTION_MODE_DRIFT_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
@@ -377,6 +383,28 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_CHECK_THREAD_EXECUTION_MODE_DRIFT_CHANNEL);
+  ipcMain.handle(
+    AGENT_CHECK_THREAD_EXECUTION_MODE_DRIFT_CHANNEL,
+    async (
+      _event,
+      request: CheckThreadExecutionModeDriftRequest,
+    ): Promise<CheckThreadExecutionModeDriftResponse> => {
+      return await registry.checkThreadExecutionModeDrift(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_RETAIN_THREAD_EXECUTION_MODE_DRIFT_CHANNEL);
+  ipcMain.handle(
+    AGENT_RETAIN_THREAD_EXECUTION_MODE_DRIFT_CHANNEL,
+    async (
+      _event,
+      request: RetainThreadExecutionModeDriftRequest,
+    ): Promise<RetainThreadExecutionModeDriftResponse> => {
+      return await registry.retainThreadExecutionModeDrift(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.handle(
     AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -414,6 +442,8 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL);
   ipcMain.removeHandler(AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL);
   ipcMain.removeHandler(AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL);
+  ipcMain.removeHandler(AGENT_CHECK_THREAD_EXECUTION_MODE_DRIFT_CHANNEL);
+  ipcMain.removeHandler(AGENT_RETAIN_THREAD_EXECUTION_MODE_DRIFT_CHANNEL);
   ipcMain.removeHandler(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL);
 }

@@ -3855,4 +3855,125 @@ describe("CodexAppServerClient", () => {
 
     await client.close();
   });
+
+  it("captures observedExecutionMode=default from a thread/resume legacy sandbox + approvalPolicy pair", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    MockTransport.threadResumeResult = {
+      threadId: "thread-mode",
+      threadName: "Mode capture",
+      cwd: "/repo/app",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const result = await client.startTurn({
+      threadId: "thread-mode",
+      input: [{ type: "text", text: "Capture observed mode from resume" }],
+    });
+
+    expect(result.observedExecutionMode).toBe("default");
+
+    await client.close();
+  });
+
+  it("maps the dangerFullAccess SandboxPolicy variant to observedExecutionMode=full-access", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    MockTransport.threadResumeResult = {
+      threadId: "thread-full",
+      threadName: "Full access",
+      cwd: "/repo/app",
+      approvalPolicy: "never",
+      sandbox: { type: "dangerFullAccess" },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const result = await client.startTurn({
+      threadId: "thread-full",
+      input: [{ type: "text", text: "Capture observed mode from resume" }],
+    });
+
+    expect(result.observedExecutionMode).toBe("full-access");
+
+    await client.close();
+  });
+
+  it("returns observedExecutionMode=undefined when codex reports a permission combination PwrAgent does not surface", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    // Granular approval policy is not one of the two combinations PwrAgent
+    // exposes — capture should refuse to guess.
+    MockTransport.threadResumeResult = {
+      threadId: "thread-granular",
+      threadName: "Granular",
+      cwd: "/repo/app",
+      approvalPolicy: {
+        granular: {
+          sandbox_approval: false,
+          rules: false,
+          skill_approval: false,
+          request_permissions: false,
+          mcp_elicitations: false,
+        },
+      },
+      sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const result = await client.startTurn({
+      threadId: "thread-granular",
+      input: [{ type: "text", text: "Granular approvals" }],
+    });
+
+    expect(result.observedExecutionMode).toBeUndefined();
+
+    await client.close();
+  });
+
+  it("probeThreadPermissions calls thread/resume without policy overrides and captures observedExecutionMode", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    MockTransport.threadResumeResult = {
+      threadId: "thread-probe",
+      threadName: "Probe",
+      cwd: "/repo/app",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const result = await client.probeThreadPermissions({
+      threadId: "thread-probe",
+    });
+
+    expect(result.observedExecutionMode).toBe("full-access");
+
+    const transport = MockTransport.instances.at(-1);
+    const resumePayload = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+      .find((payload) => payload.method === "thread/resume");
+    // The probe must NOT push our policy/sandbox at codex — it's a read.
+    expect(resumePayload?.params).not.toHaveProperty("approvalPolicy");
+    expect(resumePayload?.params).not.toHaveProperty("sandbox");
+
+    await client.close();
+  });
 });

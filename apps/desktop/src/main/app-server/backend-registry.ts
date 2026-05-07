@@ -28,7 +28,10 @@ import {
   type BackendSummary,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
+  type CheckThreadExecutionModeDriftRequest,
+  type CheckThreadExecutionModeDriftResponse,
   isBranchDrifted,
+  isExecutionModeDrifted,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
   type ListBackendsRequest,
@@ -44,6 +47,8 @@ import {
   type ResetDirectoryLaunchpadResponse,
   type RetainThreadBranchDriftRequest,
   type RetainThreadBranchDriftResponse,
+  type RetainThreadExecutionModeDriftRequest,
+  type RetainThreadExecutionModeDriftResponse,
   type RenameThreadRequest,
   type RenameThreadResponse,
   type RestoreWorktreeRequest,
@@ -164,7 +169,7 @@ type BackendClient = {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ threadId: string }>;
+  }): Promise<{ threadId: string; observedExecutionMode?: ThreadExecutionMode }>;
   startTurn(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
@@ -176,7 +181,11 @@ type BackendClient = {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ threadId: string; turnId: string }>;
+  }): Promise<{
+    threadId: string;
+    turnId: string;
+    observedExecutionMode?: ThreadExecutionMode;
+  }>;
   startReview?(params: {
     threadId: string;
     target: StartReviewRequest["target"];
@@ -209,7 +218,10 @@ type BackendClient = {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ threadId: string }>;
+  }): Promise<{ threadId: string; observedExecutionMode?: ThreadExecutionMode }>;
+  probeThreadPermissions?(params: {
+    threadId: string;
+  }): Promise<{ threadId: string; observedExecutionMode?: ThreadExecutionMode }>;
 };
 
 function resolveThreadGitSourcePath(
@@ -1568,6 +1580,11 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         executionMode,
       });
+      await this.recordObservedExecutionMode({
+        backend,
+        threadId: result.threadId,
+        observedExecutionMode: result.observedExecutionMode ?? executionMode,
+      });
     }
     if (
       modelSettings.model !== undefined ||
@@ -1668,6 +1685,13 @@ export class DesktopBackendRegistry {
         buildActiveTurnModeKey(result.threadId, result.turnId),
         activeTurnMode,
       );
+    }
+    if (params.backend === "codex" && result.observedExecutionMode) {
+      await this.recordObservedExecutionMode({
+        backend: params.backend,
+        threadId: result.threadId,
+        observedExecutionMode: result.observedExecutionMode,
+      });
     }
 
     const response = {
@@ -1829,6 +1853,16 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         executionMode: params.executionMode,
       });
+      // Codex confirms the new permission profile in the response — record
+      // it so the drift detector compares against the canonical value
+      // rather than the value we asked for.
+      const observed =
+        result.observedExecutionMode ?? params.executionMode;
+      await this.recordObservedExecutionMode({
+        backend: "codex",
+        threadId: result.threadId,
+        observedExecutionMode: observed,
+      });
     }
     // Non-codex backends (e.g. Grok) currently no-op on execution mode —
     // no overlay write, no backend change. We still emit on the bus so all
@@ -1969,6 +2003,140 @@ export class DesktopBackendRegistry {
       branch,
       updatedAt: Date.now(),
     };
+  }
+
+  /**
+   * Compare PwrAgent's expected per-thread execution mode against codex's
+   * latest reported value, probing codex via `thread/resume` if no
+   * observation has been captured yet. Mirrors `checkThreadBranchDrift`
+   * for branches.
+   *
+   * Drift can appear when the user toggles the same thread in the codex
+   * desktop app (which shares thread storage with PwrAgent), or when an
+   * older PwrAgent build wrote one mode but the running codex
+   * `PermissionProfile` reports another.
+   */
+  async checkThreadExecutionModeDrift(
+    params: CheckThreadExecutionModeDriftRequest,
+  ): Promise<CheckThreadExecutionModeDriftResponse> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const expectedExecutionMode = overlay?.executionMode;
+
+    let observedExecutionMode: ThreadExecutionMode | undefined =
+      overlay?.observedExecutionMode;
+
+    if (params.backend === "codex") {
+      // Probe codex for the canonical per-thread permission profile. We
+      // try the thread's preferred client first (via withCodexThreadClient
+      // overlay-based fallback) and silently swallow failures: a probe
+      // shouldn't break thread loading.
+      try {
+        const probeResult = await this.withCodexThreadClient(
+          params.threadId,
+          async (client) => {
+            if (!client.probeThreadPermissions) {
+              return { threadId: params.threadId, observedExecutionMode };
+            }
+            return await client.probeThreadPermissions({
+              threadId: params.threadId,
+            });
+          },
+        );
+        if (probeResult?.observedExecutionMode) {
+          observedExecutionMode = probeResult.observedExecutionMode;
+          await this.recordObservedExecutionMode({
+            backend: params.backend,
+            threadId: params.threadId,
+            observedExecutionMode,
+          });
+        }
+      } catch (error) {
+        backendRegistryLog.debug("thread permission probe failed", {
+          backend: params.backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: params.threadId,
+        });
+      }
+    }
+
+    const drifted = isExecutionModeDrifted(
+      expectedExecutionMode,
+      observedExecutionMode,
+    );
+
+    backendRegistryLog.debug("checked thread execution mode drift", {
+      backend: params.backend,
+      drifted,
+      expectedExecutionMode,
+      observedExecutionMode,
+      threadId: params.threadId,
+    });
+
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      expectedExecutionMode,
+      observedExecutionMode,
+      drifted,
+      checkedAt: Date.now(),
+    };
+  }
+
+  async retainThreadExecutionModeDrift(
+    params: RetainThreadExecutionModeDriftRequest,
+  ): Promise<RetainThreadExecutionModeDriftResponse> {
+    const retainedAt = Date.now();
+    await this.overlayStore.retainThreadExecutionModeDrift({
+      backend: params.backend,
+      threadId: params.threadId,
+      expectedExecutionMode: params.expectedExecutionMode,
+      observedExecutionMode: params.observedExecutionMode,
+      retainedAt,
+    });
+
+    return {
+      ...params,
+      retainedAt,
+    };
+  }
+
+  /**
+   * Persist the most recent observed permission mode reported by codex.
+   * Called after every codex `thread/start`, `thread/resume`, and
+   * `thread/permissions` call. Triggers a `thread/observedExecutionMode/updated`
+   * notification so the renderer can re-render the drift banner without
+   * polling.
+   */
+  private async recordObservedExecutionMode(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    observedExecutionMode: ThreadExecutionMode;
+  }): Promise<void> {
+    const previous = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    if (previous?.observedExecutionMode === params.observedExecutionMode) {
+      return;
+    }
+    await this.overlayStore.setThreadObservedExecutionMode({
+      backend: params.backend,
+      threadId: params.threadId,
+      observedExecutionMode: params.observedExecutionMode,
+    });
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/observedExecutionMode/updated",
+        params: {
+          threadId: params.threadId,
+          observedExecutionMode: params.observedExecutionMode,
+        },
+      },
+    });
   }
 
   async retainThreadBranchDrift(

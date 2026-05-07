@@ -797,6 +797,13 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/observedExecutionMode/updated";
+      params: {
+        threadId: string;
+        observedExecutionMode: ThreadExecutionMode;
+      };
+    }
+  | {
       method: "thread/modelSettings/updated";
       params: {
         threadId: string;

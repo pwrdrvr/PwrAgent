@@ -25,6 +25,15 @@ export type ThreadInboxState = {
 export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
   retainedBranchDriftPairs?: ThreadBranchDriftPair[];
+  /**
+   * Permission mode codex's app-server is currently reporting for this
+   * thread. Captured opportunistically from `thread/start` / `thread/resume`
+   * / `thread/fork` responses. May lag overlay's `executionMode` when the
+   * user has just toggled — see `retainedExecutionModeDriftPairs` for the
+   * "ignore this drift" pairs the user has already dismissed.
+   */
+  observedExecutionMode?: ThreadExecutionMode;
+  retainedExecutionModeDriftPairs?: ThreadExecutionModeDriftPair[];
   optimisticUserMessage?: {
     text: string;
     imageParts?: AppServerThreadImagePart[];
@@ -290,11 +299,22 @@ export type ThreadOverlayState = {
   fastMode?: boolean;
   gitBranch?: string;
   observedGitBranch?: string;
+  /**
+   * Latest execution mode reported by codex's app-server for this thread,
+   * captured from `thread/start` / `thread/resume` / `thread/fork`
+   * responses. Compared against `executionMode` (the user's expected
+   * value) to detect drift introduced by external mutation (e.g. the
+   * user toggling permissions in the codex desktop app, which shares
+   * thread storage with PwrAgent).
+   */
+  observedExecutionMode?: ThreadExecutionMode;
   lastSeenAt?: number;
   lastSeenUpdatedAt?: number;
   dismissedAt?: number;
   snoozedUntil?: number;
   retainedBranchDriftPairs?: ThreadBranchDriftPair[];
+  /** "Ignore for now" pairs the user has dismissed via the drift dialog. */
+  retainedExecutionModeDriftPairs?: ThreadExecutionModeDriftPair[];
   extraLinkedDirectories: LinkedDirectorySummary[];
   worktreeSnapshots?: WorktreeSnapshotSummary[];
   /**
@@ -317,6 +337,12 @@ export type ThreadOverlayState = {
 export type ThreadBranchDriftPair = {
   expectedBranch: string;
   observedBranch: string;
+  retainedAt: number;
+};
+
+export type ThreadExecutionModeDriftPair = {
+  expectedExecutionMode: ThreadExecutionMode;
+  observedExecutionMode: ThreadExecutionMode;
   retainedAt: number;
 };
 
