@@ -197,6 +197,7 @@ vi.mock("../app-server/backend-registry", () => ({
     listThreads,
     readThread,
     readDirectoryStatuses,
+    getQueuedExecutionModesSnapshot: () => ({}),
   }),
 }));
 
@@ -235,6 +236,7 @@ describe("app server ipc", () => {
     expect(reconcileNavigationSnapshot).toHaveBeenCalledWith({
       backend: "all",
       fetchedAt: expect.any(Number),
+      queuedExecutionModesByThreadId: {},
       threads: [
         expect.objectContaining({ source: "codex", id: "thread-1" }),
         expect.objectContaining({ source: "grok", id: "thread-1" }),

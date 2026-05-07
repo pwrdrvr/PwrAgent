@@ -3866,4 +3866,113 @@ describe("Composer", () => {
       expect(screen.getByLabelText("Plan mode")).not.toBeChecked();
     });
   });
+
+  describe("permission-mode queue indicator", () => {
+    function baseQueuedThread(overrides: {
+      executionMode?: "default" | "full-access";
+      queuedExecutionMode?: "default" | "full-access";
+    }) {
+      return {
+        id: "thread-1",
+        title: "Permission queue thread",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: overrides.executionMode ?? ("default" as const),
+        queuedExecutionMode: overrides.queuedExecutionMode,
+        queuedExecutionModeAt: overrides.queuedExecutionMode
+          ? Date.now()
+          : undefined,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      };
+    }
+
+    it("renders the permission queue indicator when a queued mode differs from current", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[backendSummary("codex")]}
+          desktopApi={{ onAgentEvent: () => () => undefined }}
+          disabled={false}
+          skills={[]}
+          thread={baseQueuedThread({
+            executionMode: "default",
+            queuedExecutionMode: "full-access",
+          })}
+        />,
+      );
+
+      const indicator = screen.getByLabelText("Queued permissions change");
+      expect(indicator).toBeInTheDocument();
+      expect(indicator.className).toMatch(/composer__queued--permissions/);
+      expect(within(indicator).getByText("Permissions queued")).toBeInTheDocument();
+      expect(
+        within(indicator).getByText(/will switch to full access/i),
+      ).toBeInTheDocument();
+    });
+
+    it("invokes onCancelExecutionModeQueue when the Cancel button is clicked", async () => {
+      const onCancel = vi.fn(async () => undefined);
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[backendSummary("codex")]}
+          desktopApi={{ onAgentEvent: () => () => undefined }}
+          disabled={false}
+          skills={[]}
+          thread={baseQueuedThread({
+            executionMode: "default",
+            queuedExecutionMode: "full-access",
+          })}
+          onCancelExecutionModeQueue={onCancel}
+        />,
+      );
+
+      const indicator = screen.getByLabelText("Queued permissions change");
+      fireEvent.click(within(indicator).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => {
+        expect(onCancel).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("does not render the indicator when queuedExecutionMode is undefined", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[backendSummary("codex")]}
+          desktopApi={{ onAgentEvent: () => () => undefined }}
+          disabled={false}
+          skills={[]}
+          thread={baseQueuedThread({
+            executionMode: "default",
+            queuedExecutionMode: undefined,
+          })}
+        />,
+      );
+
+      expect(
+        screen.queryByLabelText("Queued permissions change"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("does not render the indicator when queuedExecutionMode equals the current mode", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[backendSummary("codex")]}
+          desktopApi={{ onAgentEvent: () => () => undefined }}
+          disabled={false}
+          skills={[]}
+          thread={baseQueuedThread({
+            executionMode: "full-access",
+            queuedExecutionMode: "full-access",
+          })}
+        />,
+      );
+
+      expect(
+        screen.queryByLabelText("Queued permissions change"),
+      ).not.toBeInTheDocument();
+    });
+  });
 });

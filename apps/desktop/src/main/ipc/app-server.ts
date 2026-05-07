@@ -329,10 +329,13 @@ class DesktopAppServerService {
       filter: request.filter,
     });
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
+    const queuedExecutionModesByThreadId = getDesktopBackendRegistry()
+      .getQueuedExecutionModesSnapshot();
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
       backend,
       fetchedAt: Date.now(),
       messagingBindingsByThreadKey,
+      queuedExecutionModesByThreadId,
       threads,
     });
     const directoryStatuses =

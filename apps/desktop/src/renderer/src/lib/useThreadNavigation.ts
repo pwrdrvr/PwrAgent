@@ -551,6 +551,84 @@ function applyThreadExecutionModeUpdate(
     : snapshot;
 }
 
+function applyThreadExecutionModeQueued(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    queuedExecutionMode: "default" | "full-access";
+    queuedAt: number;
+  }
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+    if (
+      thread.queuedExecutionMode === params.queuedExecutionMode &&
+      thread.queuedExecutionModeAt === params.queuedAt
+    ) {
+      return thread;
+    }
+    changed = true;
+    return {
+      ...thread,
+      queuedExecutionMode: params.queuedExecutionMode,
+      queuedExecutionModeAt: params.queuedAt,
+    };
+  });
+
+  return changed
+    ? {
+        ...snapshot,
+        threads,
+      }
+    : snapshot;
+}
+
+function applyThreadExecutionModeQueueCleared(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+    if (
+      thread.queuedExecutionMode === undefined &&
+      thread.queuedExecutionModeAt === undefined
+    ) {
+      return thread;
+    }
+    changed = true;
+    return {
+      ...thread,
+      queuedExecutionMode: undefined,
+      queuedExecutionModeAt: undefined,
+    };
+  });
+
+  return changed
+    ? {
+        ...snapshot,
+        threads,
+      }
+    : snapshot;
+}
+
 function applyLaunchpadUpdate(
   snapshot: NavigationSnapshot | undefined,
   launchpad: NavigationLaunchpadDraft,
@@ -881,6 +959,9 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     executionMode: ThreadExecutionMode
   ) => Promise<void>;
   setThreadExecutionModeError?: string;
+  cancelThreadExecutionModeQueue: (
+    thread: NavigationThreadSummary
+  ) => Promise<void>;
   setThreadModelSettings: (
     thread: NavigationThreadSummary,
     patch: Partial<
@@ -929,6 +1010,8 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
   const handoffThreadWorkspaceRequest = desktopApi?.handoffThreadWorkspace;
   const renameThreadRequest = desktopApi?.renameThread;
   const setThreadExecutionMode = desktopApi?.setThreadExecutionMode;
+  const cancelThreadExecutionModeQueueRequest =
+    desktopApi?.cancelThreadExecutionModeQueue;
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
   const [browseMode, setBrowseMode] = useState<BrowseMode>("recents");
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
@@ -1277,6 +1360,68 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
             ? { ...current, executionMode }
             : current
         );
+        // Refresh so the persisted permissionTransitionLog (which the
+        // registry just appended an `applied` entry to) flows back into
+        // the snapshot for transcript rendering.
+        scheduleRefresh();
+        return;
+      }
+
+      if (method === "thread/executionMode/queued") {
+        const { threadId, queuedExecutionMode, queuedAt } = event.notification
+          .params as {
+          threadId: string;
+          queuedExecutionMode: "default" | "full-access";
+          queuedAt: number;
+        };
+        setState((current) => ({
+          ...current,
+          response: applyThreadExecutionModeQueued(current.response, {
+            backend: event.backend,
+            threadId,
+            queuedExecutionMode,
+            queuedAt,
+          }),
+        }));
+        setOptimisticThread((current) =>
+          current?.source === event.backend && current.id === threadId
+            ? {
+                ...current,
+                queuedExecutionMode,
+                queuedExecutionModeAt: queuedAt,
+              }
+            : current
+        );
+        // The registry already persisted a `queued` audit entry; pull
+        // the snapshot so the transcript renders it.
+        scheduleRefresh();
+        return;
+      }
+
+      if (method === "thread/executionMode/queueCleared") {
+        const { threadId } = event.notification.params as {
+          threadId: string;
+          reason: "applied" | "cancelled";
+        };
+        setState((current) => ({
+          ...current,
+          response: applyThreadExecutionModeQueueCleared(current.response, {
+            backend: event.backend,
+            threadId,
+          }),
+        }));
+        setOptimisticThread((current) =>
+          current?.source === event.backend && current.id === threadId
+            ? {
+                ...current,
+                queuedExecutionMode: undefined,
+                queuedExecutionModeAt: undefined,
+              }
+            : current
+        );
+        // Pull the snapshot so the matching `applied` / `cancelled`
+        // transition entry shows up in the transcript.
+        scheduleRefresh();
         return;
       }
 
@@ -2120,6 +2265,31 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     [refresh, setThreadExecutionMode]
   );
 
+  const cancelThreadExecutionModeQueue = useCallback(
+    async (thread: NavigationThreadSummary): Promise<void> => {
+      if (!cancelThreadExecutionModeQueueRequest) {
+        setSetThreadExecutionModeError(
+          "Desktop bridge is missing cancelThreadExecutionModeQueue()."
+        );
+        return;
+      }
+      setSetThreadExecutionModeError(undefined);
+      try {
+        await cancelThreadExecutionModeQueueRequest({
+          backend: thread.source,
+          threadId: thread.id,
+        });
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      } catch (error) {
+        setSetThreadExecutionModeError(
+          error instanceof Error ? error.message : String(error)
+        );
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      }
+    },
+    [cancelThreadExecutionModeQueueRequest, refresh]
+  );
+
   const updateThreadModelSettings = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -2208,6 +2378,7 @@ export function useThreadNavigation(desktopApi?: DesktopApi): {
     selectedThreadKey,
     setThreadExecutionMode: updateThreadExecutionMode,
     setThreadExecutionModeError,
+    cancelThreadExecutionModeQueue,
     setThreadModelSettings: updateThreadModelSettings,
     setThreadModelSettingsError,
     updatingThreadExecutionMode,

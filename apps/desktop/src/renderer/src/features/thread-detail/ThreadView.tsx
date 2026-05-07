@@ -636,6 +636,7 @@ type ThreadViewProps = {
     updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
   ) => void;
   onSetExecutionMode?: (executionMode: ThreadExecutionMode) => Promise<void>;
+  onCancelExecutionModeQueue?: () => Promise<void>;
   onHandoffThreadWorkspace?: (
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
   ) => Promise<void>;
@@ -1631,6 +1632,7 @@ export function ThreadView(props: ThreadViewProps) {
           <section className="transcript-panel" aria-label="Transcript">
             <TranscriptList
               entries={props.transcriptEntries}
+              permissionTransitions={selectedThread!.permissionTransitionLog}
               activeTurnId={props.activeTurnId}
               activeTurnStartedAt={props.activeTurnStartedAt}
               applications={props.applications}
@@ -1695,6 +1697,7 @@ export function ThreadView(props: ThreadViewProps) {
               setTranscriptReglueRequestKey((current) => current + 1);
             }}
             onSetExecutionMode={props.onSetExecutionMode}
+            onCancelExecutionModeQueue={props.onCancelExecutionModeQueue}
             onSetThreadModelSettings={props.onSetThreadModelSettings}
             pendingRequestActive={Boolean(props.pendingRequest)}
             pendingUserInputActive={Boolean(
