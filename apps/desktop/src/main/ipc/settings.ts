@@ -46,19 +46,31 @@ async function refreshModelBackendsIfNeeded(params: {
  * IPC handler re-registration (e.g. test-suite reloads), but resets
  * on full process restart — that's the right granularity for a
  * "manually run" diagnostic.
+ *
+ * All resolvers (settings + messaging-runtime) are GETTERS, not
+ * captured references. The tester is constructed once per process
+ * but the underlying singletons can be replaced (profile switch,
+ * hot-reload during dev, test-suite re-init); resolving lazily on
+ * each call ensures the tester always talks to the live instance.
+ * Capturing `service` directly at construction would silently call
+ * into a stale settings service after a swap.
  */
 let credentialTesterInstance: CredentialTester | undefined;
 
 function getCredentialTester(
-  service: DesktopSettingsService,
+  service?: DesktopSettingsService,
 ): CredentialTester {
   if (!credentialTesterInstance) {
+    const resolveService = (): DesktopSettingsService =>
+      service ?? getDesktopSettingsService();
     credentialTesterInstance = new CredentialTester({
-      resolveTelegramBotToken: () => service.resolveTelegramBotTokenSync(),
-      resolveDiscordBotToken: () => service.resolveDiscordBotTokenSync(),
-      resolveGrokApiKey: () => service.resolveGrokApiKey(),
+      resolveTelegramBotToken: () =>
+        resolveService().resolveTelegramBotTokenSync(),
+      resolveDiscordBotToken: () =>
+        resolveService().resolveDiscordBotTokenSync(),
+      resolveGrokApiKey: () => resolveService().resolveGrokApiKey(),
       resolveCodexCommand: async () => {
-        const snapshot = await service.readSettings();
+        const snapshot = await resolveService().readSettings();
         return (
           snapshot.models.codex.discovery.selectedCommand
           ?? snapshot.models.codex.path.value
@@ -151,7 +163,7 @@ export function registerSettingsIpcHandlers(
       _event,
       request: SettingsCredentialTestRequest,
     ): Promise<SettingsCredentialTestResult> => {
-      const tester = getCredentialTester(getService(service));
+      const tester = getCredentialTester(service);
       return await tester.test(request.kind);
     },
   );
@@ -163,7 +175,7 @@ export function registerSettingsIpcHandlers(
       _event,
       request: { kind: SettingsCredentialTestKind },
     ): Promise<SettingsCredentialTestResult | undefined> => {
-      const tester = getCredentialTester(getService(service));
+      const tester = getCredentialTester(service);
       return tester.lastResult(request.kind);
     },
   );

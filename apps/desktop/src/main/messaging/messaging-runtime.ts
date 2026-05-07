@@ -468,22 +468,26 @@ export class DesktopMessagingRuntime {
   async requestCredentialValidation(
     request: CredentialValidationRequest,
   ): Promise<MessagingCredentialValidationResult> {
-    if (request.channel === "telegram") {
-      const telegramProvider = await import(
-        "@pwragent/messaging-provider-telegram"
-      );
-      return await telegramProvider.validateCredentials(request.credential);
+    switch (request.channel) {
+      case "telegram": {
+        const telegramProvider = await import(
+          "@pwragent/messaging-provider-telegram"
+        );
+        return await telegramProvider.validateCredentials(request.credential);
+      }
+      case "discord": {
+        const discordProvider = await import(
+          "@pwragent/messaging-provider-discord"
+        );
+        return await discordProvider.validateCredentials(request.credential);
+      }
+      default: {
+        const exhaustive: never = request;
+        throw new Error(
+          `unknown credential validation channel: ${(exhaustive as { channel: string }).channel}`,
+        );
+      }
     }
-    if (request.channel === "discord") {
-      const discordProvider = await import(
-        "@pwragent/messaging-provider-discord"
-      );
-      return await discordProvider.validateCredentials(request.credential);
-    }
-    const exhaustive: never = request;
-    throw new Error(
-      `unknown credential validation channel: ${(exhaustive as { channel: string }).channel}`,
-    );
   }
 
   private async dispatchRevokeToControllers(

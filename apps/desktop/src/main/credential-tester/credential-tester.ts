@@ -7,6 +7,7 @@ import type {
   SettingsCredentialTestStatus,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
+import type { CredentialValidationRequest } from "../messaging/messaging-runtime";
 
 const execFileAsync = promisify(execFile);
 
@@ -44,10 +45,13 @@ export interface CredentialTesterDependencies {
    * channel-neutral messaging runtime, which dynamically imports the
    * matching provider package and calls its `validateCredentials`.
    * Tests stub this to avoid loading the provider packages.
+   *
+   * Request shape is owned by the runtime
+   * (`CredentialValidationRequest` in `messaging-runtime.ts`) so a
+   * future platform addition is one type extension instead of two.
    */
-  validateMessagingCredentials: (request:
-    | { channel: "telegram"; credential: { botToken: string } }
-    | { channel: "discord"; credential: { botToken: string } }
+  validateMessagingCredentials: (
+    request: CredentialValidationRequest,
   ) => Promise<MessagingCredentialValidationResult>;
   /** Override `fetch` for testing. Defaults to `globalThis.fetch`.
    *  Only used by the Grok probe — there is no `@ai-sdk/xai` smoke

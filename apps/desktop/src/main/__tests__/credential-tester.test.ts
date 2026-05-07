@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MessagingCredentialValidationResult } from "@pwragent/messaging-interface";
 import { CredentialTester } from "../credential-tester/credential-tester";
+import type { CredentialValidationRequest } from "../messaging/messaging-runtime";
 
 function buildFetcher(overrides: {
   status?: number;
@@ -25,19 +26,16 @@ type TesterOptions = {
     command: string,
   ) => Promise<{ stdout: string; stderr: string }>;
   validateMessagingCredentials?: (
-    request:
-      | { channel: "telegram"; credential: { botToken: string } }
-      | { channel: "discord"; credential: { botToken: string } },
+    request: CredentialValidationRequest,
   ) => Promise<MessagingCredentialValidationResult>;
 };
 
 function buildTester(options: TesterOptions = {}) {
   const validateMessagingCredentials =
     options.validateMessagingCredentials
-    ?? vi.fn(async (request: {
-      channel: "telegram" | "discord";
-      credential: { botToken: string };
-    }): Promise<MessagingCredentialValidationResult> => ({
+    ?? vi.fn(async (
+      request: CredentialValidationRequest,
+    ): Promise<MessagingCredentialValidationResult> => ({
       status: "ok" as const,
       durationMs: 1,
       testedAt: Date.now(),

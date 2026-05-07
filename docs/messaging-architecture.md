@@ -329,6 +329,7 @@ The full procedure is in [`docs/messaging-adapter-contract.md`](messaging-adapte
 | `packages/messaging/interface/AGENTS.md` | Package guidance |
 | `packages/messaging/providers/<channel>/src/<channel>-adapter.ts` | The adapter class, capability profile declaration, inbound event translation, outbound intent rendering |
 | `packages/messaging/providers/<channel>/src/<channel>-formatting.ts` | Pure formatters that turn intents into platform-native components/text. Reads the profile for layout caps. |
+| `packages/messaging/providers/<channel>/src/validate-credentials.ts` | Top-level `validateCredentials(config)` exported from the package barrel. Stateless smoke check using the platform's real SDK (`grammy.Bot.api.getMe()`, `discord.js.REST.get(Routes.user("@me"))`, …). Driven by Settings → Connection-test via `DesktopMessagingRuntime.requestCredentialValidation`. Contract: [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md) § "Credential Validation". |
 | `apps/desktop/src/main/messaging/messaging-runtime.ts` | Constructs one controller per adapter, wires backend events |
 | `apps/desktop/src/main/messaging/core/messaging-controller.ts` | Workflow logic — turn admission, picker state, status card, handoff flow, audit |
 | `apps/desktop/src/main/messaging/core/messaging-command-catalog.ts` | Canonical command catalog (verb + description), `matchMessagingCommandVerb` for dispatch lookup, `formatMessagingCommandHelpBody` for `/help` body generation, `paginateHelpCatalog` + `buildHelpActions` for the paginated command-button row |
