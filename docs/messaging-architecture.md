@@ -291,11 +291,12 @@ This is enforced by package boundaries (`pnpm lint:boundaries`) and reinforced i
 
 The slash-command surface every messaging provider exposes — `resume`, `status`, `detach`, `help` — is defined in a single channel-neutral catalog at [`apps/desktop/src/main/messaging/core/messaging-command-catalog.ts`](../apps/desktop/src/main/messaging/core/messaging-command-catalog.ts).
 
-Three things consume the catalog:
+Four things consume the catalog:
 
 1. **The controller's `handleCommand` dispatch.** `matchMessagingCommandVerb` resolves an inbound `MessagingInboundCommandEvent.command` to a known verb (or `undefined` for unrecognized commands). Verbs in the catalog dispatch to typed handlers; everything else falls through to the help surface.
-2. **The user-facing `/help` body.** `formatMessagingCommandHelpBody` derives the bullet list from the catalog so adding or renaming a verb in one place updates the help text everywhere it's rendered.
-3. **Provider adapters that register native slash commands.** Today each adapter maintains its own list (`packages/messaging/providers/discord/src/discord-commands.ts`, `packages/messaging/providers/mattermost/src/mattermost-commands.ts`). A future refactor can collapse those onto the shared catalog so a new verb only requires touching one file. Until then, adapter-side lists must stay in sync with the catalog by convention.
+2. **The user-facing `/help` body.** `formatMessagingCommandHelpBody` derives the prose bullet list from the catalog so adding or renaming a verb in one place updates the help text everywhere it's rendered.
+3. **The `/help` action row.** `paginateHelpCatalog` + `buildHelpActions` render one `command:<verb>` button per catalog entry on the current page. Pages overflow with capability-aware Prev/Next/Cancel navigation when the catalog grows past the profile's action budget; for today's small catalog every button fits on one page and no nav row is rendered. The `Resume` button is styled primary to match the previous single-button shape; everything else is neutral. Pagination is **stateless** — the next/previous page index travels in `action.value.pageIndex` and comes back through `MessagingInboundCallbackEvent.value`, so the controller can re-render without persistent session state (unlike the resume browser which uses a `MessagingBrowseSessionRecord`).
+4. **Provider adapters that register native slash commands.** Today each adapter maintains its own list (`packages/messaging/providers/discord/src/discord-commands.ts`, `packages/messaging/providers/mattermost/src/mattermost-commands.ts`). A future refactor can collapse those onto the shared catalog so a new verb only requires touching one file. Until then, adapter-side lists must stay in sync with the catalog by convention.
 
 To add a new canonical verb:
 
@@ -329,7 +330,7 @@ The full procedure is in [`docs/messaging-adapter-contract.md`](messaging-adapte
 | `packages/messaging/providers/<channel>/src/<channel>-formatting.ts` | Pure formatters that turn intents into platform-native components/text. Reads the profile for layout caps. |
 | `apps/desktop/src/main/messaging/messaging-runtime.ts` | Constructs one controller per adapter, wires backend events |
 | `apps/desktop/src/main/messaging/core/messaging-controller.ts` | Workflow logic — turn admission, picker state, status card, handoff flow, audit |
-| `apps/desktop/src/main/messaging/core/messaging-command-catalog.ts` | Canonical command catalog (verb + description), `matchMessagingCommandVerb` for dispatch lookup, `formatMessagingCommandHelpBody` for `/help` body generation |
+| `apps/desktop/src/main/messaging/core/messaging-command-catalog.ts` | Canonical command catalog (verb + description), `matchMessagingCommandVerb` for dispatch lookup, `formatMessagingCommandHelpBody` for `/help` body generation, `paginateHelpCatalog` + `buildHelpActions` for the paginated command-button row |
 | `apps/desktop/src/main/messaging/core/messaging-renderer.ts` | Producers for thread picker, confirmation, questionnaire, error |
 | `apps/desktop/src/main/messaging/core/messaging-status-card.ts` | Producers for status card, model picker, reasoning picker, handoff overview/branch-picker/confirmation |
 | `apps/desktop/src/main/messaging/core/messaging-resume-browser.ts` | Producer for resume browser (`/resume`) — picker pagination, project/thread filtering |
