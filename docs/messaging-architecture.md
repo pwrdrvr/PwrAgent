@@ -274,6 +274,35 @@ Available command-bus entry points today, all on `DesktopMessagingRuntime`:
 
 If no controller's scope matches a `request*` event (messaging is disabled, or the platform's adapter failed to start), the runtime falls back to a store-only revoke so the renderer chip clears regardless. Best-effort platform notification, guaranteed local cleanup.
 
+### Permission-mode queue audit messages
+
+When a user toggles a thread's permission mode (Default Access ↔ Full Access) while a turn is running, the registry queues the change at the resume boundary instead of applying it immediately. The messaging controller surfaces this lifecycle in the bound conversation as audit chat messages, so users on Telegram and Discord see the same story the desktop transcript tells:
+
+```
+⏳ Permissions queue: Default Access → Full Access.
+   Will apply at end of current turn.   [Cancel]
+
+(turn ends)
+
+🔓 Permissions changed: Default Access → Full Access at 2:19 PM (submitted)
+```
+
+If the user clicks Cancel before the turn ends, the controller edits the queued message in place to:
+
+```
+✕ Cancelled queued permissions change (Default Access → Full Access)
+```
+
+The lifecycle uses three bus events from the registry:
+
+- `thread/executionMode/queued` — controller posts a fresh audit message with a Cancel button. The button's `actionId` is `permissions:queue:cancel:${queueId}` so subsequent clicks route deterministically to `cancelThreadExecutionModeQueue` on the registry.
+- `thread/executionMode/queueCleared { reason: "cancelled" | "applied" }` — controller edits the previously-posted message to the cancelled-or-submitted state. The `MessagingController.pendingQueueAuditMessages` map keyed by `${backend}:${threadId}` holds the message reference between post and edit.
+- `thread/executionMode/updated` — fires immediately before `queueCleared { reason: "applied" }`. The controller's existing `refreshStatusSurfacesForThread` handler picks this up and re-renders the status card, which now shows the new applied mode (the queue is gone).
+
+Edit-failure on Telegram/Discord falls back to posting a fresh message via the existing `delivery.fallback: "present_new"` policy on the `MessagingDeliveryIntent` shape — same pattern as approval surfaces and status cards.
+
+The status card label adapts when a queue is pending: `Permissions: Default Access → Full Access (queued)` instead of just `Permissions: Default`. The label is computed from `MessagingResolvedThreadState.queuedExecutionMode`, which in turn is sourced from `NavigationThreadSummary.queuedExecutionMode` on the snapshot.
+
 ### Providers never touch persistence directly
 
 Provider packages under `packages/messaging/providers/*` **must not** import any of:

@@ -87,6 +87,34 @@ For binding-local mutations that do NOT flow through the registry
 (e.g. `cycleToolUpdateMode`, `syncConversationName`), keep the inline
 `renderBindingStatus` call — there's no bus event for those.
 
+### Permission-mode queue events
+
+A toggle of `executionMode` while a turn is active produces additional
+notifications beyond `thread/executionMode/updated`:
+
+- `thread/executionMode/queued` — fired when the registry queues a
+  pending mode change instead of applying it immediately. Params:
+  `{ threadId, queuedExecutionMode, queuedAt }`. Renderer patches
+  `NavigationThreadSummary.queuedExecutionMode` and shows the queue
+  indicator in the composer; messaging posts an audit message in every
+  bound conversation with a Cancel button.
+- `thread/executionMode/queueCleared` — fired on either `cancelled`
+  (user clicked Cancel) or `applied` (turn ended and the queue
+  flushed). Params: `{ threadId, reason: "applied" | "cancelled" }`.
+  Renderer clears the queue indicator; messaging edits the previously
+  posted audit message in place (or falls back to a fresh message if
+  edit fails). On `applied`, this fires AFTER `thread/executionMode/updated`
+  — clients should see the apply before the queue-clear so the UI
+  transitions cleanly through "queued → applying → applied".
+
+The persistent `permissionTransitionLog` on `ThreadOverlayState` (capped
+at 100 entries, sqlite-backed) is the audit trail. Renderer materializes
+log entries into the transcript as synthetic activity entries with id
+prefix `permission-transition-`. The queue itself (`queuedExecutionMode`,
+`queuedExecutionModeAt`) lives in registry memory only and is cleared on
+app restart — that's intentional, since the active turn would have been
+interrupted on shutdown.
+
 ## Dependency Boundary Enforcement
 
 **DO NOT, under any circumstances, loosen the dependency boundary rules.**
