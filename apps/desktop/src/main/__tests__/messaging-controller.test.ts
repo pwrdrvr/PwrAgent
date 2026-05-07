@@ -956,19 +956,120 @@ describe("MessagingController", () => {
     expect(last?.body).toContain("@<bot>");
   });
 
-  it("help surface keeps the Resume action button as the primary tap-driven entry point", async () => {
+  it("help surface renders one button per canonical verb with Resume styled primary", async () => {
     const harness = await createHarness();
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
 
+    const last = harness.delivered.at(-1) as
+      | { actions?: Array<{ id?: string; label?: string; style?: string }> }
+      | undefined;
+    expect(last?.actions).toBeDefined();
+    // One button per canonical verb (today: 4). Catalog fits a
+    // single page on every reasonable provider profile, so no nav
+    // buttons are rendered.
+    const ids = (last?.actions ?? []).map((a) => a.id);
+    expect(ids).toEqual([
+      "command:resume",
+      "command:status",
+      "command:detach",
+      "command:help",
+    ]);
+    // Resume retains primary styling — matches the previous
+    // single-button shape for users who tap rather than read.
+    const resume = last?.actions?.find((a) => a.id === "command:resume");
+    expect(resume?.style).toBe("primary");
+  });
+
+  it("help surface omits nav buttons when the catalog fits in one page", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+
+    const last = harness.delivered.at(-1) as
+      | { actions?: Array<{ id?: string }> }
+      | undefined;
+    const navIds = (last?.actions ?? [])
+      .map((a) => a.id ?? "")
+      .filter((id) => id.startsWith("help:"));
+    // Today's catalog is 4 verbs and the test capability profile
+    // grants well over 4 + 3 (nav) action slots — single page,
+    // no navigation needed.
+    expect(navIds).toEqual([]);
+  });
+
+  it("clicking the Resume button on the help surface dispatches the resume command", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "command:resume",
+      }),
+    );
+
     expect(harness.delivered.at(-1)).toMatchObject({
-      actions: [
-        {
-          id: "command:resume",
-          label: "Resume",
-          style: "primary",
-        },
-      ],
+      kind: "thread_picker",
+    });
+  });
+
+  it("clicking the Detach button on the help surface dispatches the detach command", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "command:detach",
+      }),
+    );
+
+    // No active binding for this channel, so detach is a no-op
+    // confirmation rather than a real revoke. The point is the
+    // routing reaches `handleCommand("detach")`, not that the
+    // detach itself succeeds.
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+    });
+  });
+
+  it("clicking the help-page Cancel button replaces the surface with a dismissal", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "help:cancel",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Help dismissed",
+      actions: [],
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+    });
+  });
+
+  it("clicking help:page:next re-renders the help surface (passes value.pageIndex through)", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "help:page:next",
+        value: { pageIndex: 1 },
+      }),
+    );
+
+    // Today's catalog only paginates to a single page, so the
+    // re-render clamps back to page 0 — but the surface is still
+    // a help surface targeted at the existing post (update mode).
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "PwrAgent commands",
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
     });
   });
 

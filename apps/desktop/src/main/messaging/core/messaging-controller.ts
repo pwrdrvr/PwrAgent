@@ -36,8 +36,10 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import {
+  buildHelpActions,
   formatMessagingCommandHelpBody,
   matchMessagingCommandVerb,
+  paginateHelpCatalog,
 } from "./messaging-command-catalog.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import type { MessagingStoreLike } from "../../state/messaging-store-sqlite";
@@ -603,30 +605,56 @@ export class MessagingController {
     }
     // `verb === "help"` and any unrecognized command both fall
     // through to the help surface. For unknown commands this serves
-    // as a "did you mean?" prompt with the canonical list — keeping
-    // `Resume` as the primary action because it's the most common
-    // entry point and works as a button-driven shortcut for anyone
-    // who prefers tapping over typing.
-    //
-    // Body content is derived from `MESSAGING_COMMAND_CATALOG` so
-    // adding a new verb stays in lock-step with the help text. See
-    // `messaging-command-catalog.ts` for the catalog definition and
-    // the routine that formats the body.
+    // as a "did you mean?" prompt with the canonical list.
+    await this.presentHelp(event);
+  }
+
+  /**
+   * Render the help surface. The body is the prose
+   * description-list (derived from `MESSAGING_COMMAND_CATALOG` so it
+   * never drifts from the verb set) and the action row is one
+   * `command:<verb>` button per catalog entry on the current page,
+   * plus Prev/Next/Cancel navigation when the catalog overflows a
+   * single page.
+   *
+   * Pagination is stateless: the next/previous page index travels in
+   * `action.value.pageIndex` and comes back through the
+   * `MessagingInboundCallbackEvent.value` field. Help has no
+   * persistent session record like the resume browser does — the
+   * page content is deterministic from the catalog plus the page
+   * index.
+   *
+   * Re-renders pass `targetSurface` from the originating callback's
+   * interaction state so we update the existing post in place
+   * instead of stacking new help posts on every Next click.
+   */
+  private async presentHelp(
+    event: MessagingInboundEvent,
+    options?: { pageIndex?: number; targetSurface?: MessagingSurfaceRef },
+  ): Promise<void> {
+    const page = paginateHelpCatalog({
+      profile: this.capabilityProfile,
+      pageIndex: options?.pageIndex,
+    });
+    const actions = buildHelpActions({ page });
+    const titleSuffix
+      = page.totalPages > 1
+        ? ` (page ${page.pageIndex + 1}/${page.totalPages})`
+        : "";
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("help"),
         capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
-        title: "PwrAgent commands",
+        title: `PwrAgent commands${titleSuffix}`,
         body: formatMessagingCommandHelpBody(),
-        actions: [
-          {
-            id: "command:resume",
-            label: "Resume",
-            style: "primary",
-            fallbackText: "/resume",
-          },
-        ],
+        actions,
+        ...(options?.targetSurface
+          ? {
+              targetSurface: options.targetSurface,
+              delivery: { mode: "update" as const, replaceMarkup: true },
+            }
+          : {}),
       }),
       undefined,
       event,
@@ -1211,6 +1239,12 @@ export class MessagingController {
       return;
     }
 
+    const helpAction = readHelpNavAction(event);
+    if (helpAction) {
+      await this.handleHelpNavCallback(event, helpAction);
+      return;
+    }
+
     const browseAction = readBrowseAction(event);
     if (browseAction) {
       await this.handleBrowseCallback(event, browseAction);
@@ -1716,6 +1750,53 @@ export class MessagingController {
   dispose(): void {
     this.turnAdmission.dispose();
     this.toolUpdatePolicy.dispose();
+  }
+
+  /**
+   * Handle navigation callbacks on the paginated help surface
+   * (Prev / Next / Cancel). The page index travels in
+   * `event.value.pageIndex` so help has no persistent session
+   * record — re-rendering is a function of catalog + page index.
+   *
+   * `targetSurface` is taken from the originating callback's
+   * interaction state so the help post is updated in place rather
+   * than stacking new posts on every Next click.
+   */
+  private async handleHelpNavCallback(
+    event: MessagingInboundCallbackEvent,
+    actionId: string,
+  ): Promise<void> {
+    const targetSurface: MessagingSurfaceRef | undefined = {
+      channel: event.interaction.channel,
+      id: event.interaction.id,
+      ...(event.interaction.state ? { state: event.interaction.state } : {}),
+    };
+    if (actionId === "help:cancel") {
+      // Replace the help body with a brief dismissal and strip the
+      // action row. Mirrors the resume browser's "Resume cancelled"
+      // pattern for consistent dismissed-surface UX across both
+      // paginated flows.
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("help-dismissed"),
+          capabilityProfile: this.capabilityProfile,
+          createdAt: this.now(),
+          title: "Help dismissed",
+          body: "Send `/help` or `@<bot> help` to see commands again.",
+          actions: [],
+          delivery: { mode: "update", replaceMarkup: true },
+          targetSurface,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+    const requestedPage = readHelpPageIndex(event);
+    await this.presentHelp(event, {
+      pageIndex: requestedPage,
+      targetSurface,
+    });
   }
 
   private async presentResumeBrowser(event: MessagingInboundCommandEvent): Promise<void> {
@@ -3625,6 +3706,36 @@ function readCommandAction(event: MessagingInboundCallbackEvent): string | undef
 function readBrowseAction(event: MessagingInboundCallbackEvent): string | undefined {
   const actionId = event.actionId ?? event.interaction.id;
   return actionId.startsWith("browse:") ? actionId : undefined;
+}
+
+function readHelpNavAction(event: MessagingInboundCallbackEvent): string | undefined {
+  const actionId = event.actionId ?? event.interaction.id;
+  if (
+    actionId === "help:page:next"
+    || actionId === "help:page:prev"
+    || actionId === "help:cancel"
+  ) {
+    return actionId;
+  }
+  return undefined;
+}
+
+/**
+ * Read the target page index from a help-nav callback's value
+ * payload. Returns 0 (first page) when the value is missing or
+ * malformed — clamping in `paginateHelpCatalog` will pin to the
+ * first/last page anyway, so an absent value never crashes the
+ * re-render.
+ */
+function readHelpPageIndex(event: MessagingInboundCallbackEvent): number {
+  const value = event.value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const candidate = (value as Record<string, unknown>).pageIndex;
+    if (typeof candidate === "number" && Number.isInteger(candidate) && candidate >= 0) {
+      return candidate;
+    }
+  }
+  return 0;
 }
 
 function readStatusAction(event: MessagingInboundCallbackEvent): string | undefined {
