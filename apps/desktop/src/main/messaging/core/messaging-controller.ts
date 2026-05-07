@@ -1307,7 +1307,10 @@ export class MessagingController {
 
     const permissionsQueueCancelAction = readPermissionsQueueCancelAction(event);
     if (permissionsQueueCancelAction) {
-      await this.handlePermissionsQueueCancelCallback(event);
+      await this.handlePermissionsQueueCancelCallback(
+        event,
+        permissionsQueueCancelAction.queueId,
+      );
       return;
     }
 
@@ -1580,6 +1583,22 @@ export class MessagingController {
   ): Promise<void> {
     const queueKey = this.queueAuditKey(backend, params.threadId);
     const tracking = this.pendingQueueAuditMessages.get(queueKey);
+    // Diagnostic: surface counts and edit outcomes so we can trace
+    // "Cancel button still showing after apply" reports — if the
+    // edit silently fails (Telegram message-too-old, network blip,
+    // adapter not honoring replaceMarkup), the previously-stored
+    // surface stays visible with its button until next refresh.
+    this.logger.debug?.(
+      "messaging permissions-queue clearance",
+      {
+        backend,
+        threadId: params.threadId,
+        reason: params.reason,
+        hasTracking: !!tracking,
+        surfaceCount: tracking?.surfaces.size ?? 0,
+        queueId: tracking?.queueId,
+      },
+    );
     if (!tracking) {
       return;
     }
@@ -1622,7 +1641,23 @@ export class MessagingController {
         fallbackText: body,
       });
       try {
-        await this.deliver(intent, binding);
+        const result = await this.deliver(intent, binding);
+        this.logger.debug?.(
+          "messaging permissions-queue audit edit",
+          {
+            bindingId: binding.id,
+            threadId: params.threadId,
+            reason: params.reason,
+            outcome: result.outcome,
+            // If outcome is "presented_new" the adapter posted a
+            // fresh "submitted/cancelled" message but couldn't edit
+            // the original. The original message (with its Cancel
+            // button) stays visible in the chat — that's the user's
+            // observed bug. Stale-tap feedback in
+            // handlePermissionsQueueCancelCallback handles the
+            // recovery path.
+          },
+        );
       } catch (error) {
         this.logger.debug?.(
           "messaging permissions-queue audit edit failed",
@@ -3026,23 +3061,65 @@ export class MessagingController {
   /**
    * Handle a tap on the Cancel button of a queued-permissions audit
    * message. The actionId is `permissions:queue:cancel:${queueId}`; we
-   * route through the bridge's `cancelThreadExecutionModeQueue`. The
-   * registry's `queueCleared(reason: "cancelled")` notification then
-   * fires and the existing `handleExecutionModeQueueCleared` branch
-   * edits the original message in place.
+   * validate that the queueId still matches the active tracking entry
+   * before calling the bridge.
    *
-   * Idempotent: if the queue was already cancelled (or applied) before
-   * this click landed, the registry no-ops and emits nothing — nothing
-   * to edit and nothing to do.
+   * Stale-click feedback (mirroring `handleQueuedTurnCallback`'s
+   * "queued message no longer waiting" pattern): if the queue this
+   * button references has already been applied or cancelled, OR a
+   * different queue has replaced it, we post an explicit "no longer
+   * waiting" reply instead of silently routing through the registry's
+   * idempotent no-op. This is the same UX contract queued reply
+   * messages have used since `2026-05-03-001-fix-messaging-turn-admission-plan.md`.
+   *
+   * The visual button SHOULD have been removed by the
+   * `handleExecutionModeQueueCleared` edit when the queue resolved,
+   * but Telegram/Discord chat history can still show stale buttons
+   * (the user scrolled up; the edit failed; the tab was offline at
+   * the time of the edit; etc.) — we treat the click as the
+   * authoritative "user wants to interact with this queue" signal
+   * and respond with the truth at click time.
    */
   private async handlePermissionsQueueCancelCallback(
     event: MessagingInboundCallbackEvent,
+    queueId: string,
   ): Promise<void> {
-    if (!this.options.backend.cancelThreadExecutionModeQueue) {
-      return;
-    }
     const binding = await this.options.store.findActiveBindingForChannel(event.channel);
     if (!binding) {
+      return;
+    }
+
+    const queueKey = this.queueAuditKey(binding.backend, binding.threadId);
+    const tracking = this.pendingQueueAuditMessages.get(queueKey);
+    const isStale = !tracking || tracking.queueId !== queueId;
+    if (isStale) {
+      try {
+        await this.deliver(
+          buildErrorIntent({
+            id: this.newIntentId("expired-permissions-queue"),
+            createdAt: this.now(),
+            title: "Permissions change unavailable",
+            body: "That queued permissions change is no longer waiting.",
+            recoverable: true,
+          }),
+          binding,
+          event,
+        );
+      } catch (error) {
+        this.logger.debug?.(
+          "messaging permissions-queue stale-cancel notice failed",
+          {
+            bindingId: binding.id,
+            threadId: binding.threadId,
+            queueId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+      }
+      return;
+    }
+
+    if (!this.options.backend.cancelThreadExecutionModeQueue) {
       return;
     }
     try {
@@ -3054,6 +3131,7 @@ export class MessagingController {
       this.logger.debug?.("messaging permissions-queue cancel failed", {
         bindingId: binding.id,
         threadId: binding.threadId,
+        queueId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -4101,15 +4179,26 @@ function readStatusAction(event: MessagingInboundCallbackEvent): string | undefi
  * Match the cancel button on a "Permissions queued" audit message. The
  * action id is `permissions:queue:cancel:${queueId}`; the queueId is
  * encoded so multiple queue posts in the same conversation can't
- * collide. Returns undefined when the callback isn't ours.
+ * collide. Returns the parsed queueId on match, undefined otherwise.
+ *
+ * The queueId is what the controller-side tracking map keys against,
+ * so the cancel handler can detect stale clicks (the apply has
+ * already happened, or a different queue has replaced this one) and
+ * respond with explicit feedback rather than silently no-op'ing
+ * through the registry's `cancelThreadExecutionModeQueue` call.
  */
 function readPermissionsQueueCancelAction(
   event: MessagingInboundCallbackEvent,
-): string | undefined {
+): { queueId: string } | undefined {
   const actionId = event.actionId ?? event.interaction.id;
-  return actionId.startsWith(PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX)
-    ? actionId
-    : undefined;
+  if (!actionId.startsWith(PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX)) {
+    return undefined;
+  }
+  const queueId = actionId.slice(PERMISSIONS_QUEUE_CANCEL_ACTION_PREFIX.length);
+  if (!queueId) {
+    return undefined;
+  }
+  return { queueId };
 }
 
 function readQueuedTurnAction(

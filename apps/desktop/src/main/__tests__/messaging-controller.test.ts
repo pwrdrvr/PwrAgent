@@ -3342,9 +3342,24 @@ describe("MessagingController", () => {
     });
   });
 
-  it("routes a permissions:queue:cancel callback to cancelThreadExecutionModeQueue", async () => {
+  it("routes a permissions:queue:cancel callback to cancelThreadExecutionModeQueue when the queueId matches the active tracking entry", async () => {
     const harness = await createHarness();
     await bindThread(harness);
+
+    // Prime the tracking map so the cancel handler treats this as a
+    // live queue. Otherwise the handler treats the click as stale
+    // and posts an "expired" notice (the next test).
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/queued",
+        params: {
+          threadId: "thread-1",
+          queuedExecutionMode: "full-access",
+          queuedAt: 1500,
+        },
+      },
+    });
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
@@ -3356,6 +3371,78 @@ describe("MessagingController", () => {
       backend: "codex",
       threadId: "thread-1",
     });
+  });
+
+  it("posts a 'permissions change unavailable' notice when the cancel button references a queueId that no longer matches the active queue", async () => {
+    // Regression: real-world bug where the user tapped a stale Cancel
+    // button (for a queue that had already been applied) and got no
+    // visible feedback — registry no-op'd silently. Mirrors the
+    // queued-message Steer/Cancel pattern at handleQueuedTurnCallback.
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    // No tracking entry exists for thread-1; the cancel callback
+    // arrives "out of band".
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "permissions:queue:cancel:thread-1:1500",
+      }),
+    );
+
+    // The registry is NOT called — we don't fall through to the
+    // idempotent no-op; we explicitly tell the user the queue is gone.
+    expect(harness.cancelThreadExecutionModeQueue).not.toHaveBeenCalled();
+
+    // An error intent should have been delivered to the channel,
+    // recoverable, with the "no longer waiting" body so the user
+    // knows the click landed somewhere visible.
+    const errorIntents = harness.delivered.filter(
+      (intent) =>
+        intent.kind === "error" &&
+        typeof intent.body === "string" &&
+        intent.body.toLowerCase().includes("no longer waiting"),
+    );
+    expect(errorIntents.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("posts a 'permissions change unavailable' notice when the cancel button's queueId is from a different (replaced) queue", async () => {
+    // The user queued Default→Full at queuedAt=1500, then replaced it
+    // with another queued change at queuedAt=2000. The first audit
+    // message's Cancel button (encoded with queueId 1500) is now
+    // stale even though A queue still exists — the queueId mismatch
+    // tells the handler the click was on the older lifecycle.
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/queued",
+        params: {
+          threadId: "thread-1",
+          queuedExecutionMode: "full-access",
+          queuedAt: 2000,
+        },
+      },
+    });
+
+    // Stale click with the OLD queuedAt=1500 actionId.
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "permissions:queue:cancel:thread-1:1500",
+      }),
+    );
+
+    // Registry is NOT called — the current queue (queuedAt=2000) is
+    // not the queue this button references.
+    expect(harness.cancelThreadExecutionModeQueue).not.toHaveBeenCalled();
+    const errorIntents = harness.delivered.filter(
+      (intent) =>
+        intent.kind === "error" &&
+        typeof intent.body === "string" &&
+        intent.body.toLowerCase().includes("no longer waiting"),
+    );
+    expect(errorIntents.length).toBeGreaterThanOrEqual(1);
   });
 
   it("renders status card with queued mode arrow when queuedExecutionMode is set", async () => {
