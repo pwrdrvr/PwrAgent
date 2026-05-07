@@ -34,6 +34,21 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    */
   observedExecutionMode?: ThreadExecutionMode;
   retainedExecutionModeDriftPairs?: ThreadExecutionModeDriftPair[];
+  /**
+   * Pending permission mode change waiting for the active turn to end.
+   * Populated only when a user toggled while a turn was running; the
+   * registry queues the change and applies it at the resume boundary.
+   * Lives in registry memory only — not persisted across app restart.
+   */
+  queuedExecutionMode?: ThreadExecutionMode;
+  /** Wall-clock ms when the queue entry was created. */
+  queuedExecutionModeAt?: number;
+  /**
+   * Per-thread permission-mode transition log (audit trail). Persisted
+   * via the overlay store, capped at
+   * `MAX_PERMISSION_TRANSITION_LOG_ENTRIES` with oldest-first eviction.
+   */
+  permissionTransitionLog?: ThreadPermissionTransition[];
   optimisticUserMessage?: {
     text: string;
     imageParts?: AppServerThreadImagePart[];
@@ -332,6 +347,62 @@ export type ThreadOverlayState = {
   prs?: PrSummary[];
   /** Wall-clock ms when `prs` was last refreshed via gh. */
   prsFetchedAt?: number;
+  /**
+   * Pending permission mode change waiting for the active turn to end.
+   * Lives in registry memory only — the overlay store does NOT serialize
+   * these two fields across app restart. Surfaced on the navigation
+   * snapshot so renderer + messaging can render the queued state.
+   */
+  queuedExecutionMode?: ThreadExecutionMode;
+  queuedExecutionModeAt?: number;
+  /**
+   * Per-thread permission-mode transition audit log. Persisted to the
+   * overlay store, capped at `MAX_PERMISSION_TRANSITION_LOG_ENTRIES`
+   * (oldest-first eviction). Each entry records a `queued`, `applied`,
+   * or `cancelled` transition; entries linked by the same `queueId`
+   * represent the lifecycle of one queued change.
+   */
+  permissionTransitionLog?: ThreadPermissionTransition[];
+};
+
+/**
+ * Maximum number of permission-mode transition entries retained per
+ * thread in the audit log. Older entries are evicted oldest-first when
+ * the cap is exceeded.
+ */
+export const MAX_PERMISSION_TRANSITION_LOG_ENTRIES = 100;
+
+export type ThreadPermissionTransitionStatus =
+  | "queued"
+  | "applied"
+  | "cancelled";
+
+/**
+ * One entry in the per-thread permission-mode audit log. `queueId`
+ * links the queued / applied|cancelled pair belonging to a single
+ * user-initiated queue lifecycle.
+ */
+export type ThreadPermissionTransition = {
+  /** ULID-shaped id, used as React key + dedupe. */
+  id: string;
+  fromExecutionMode: ThreadExecutionMode;
+  toExecutionMode: ThreadExecutionMode;
+  status: ThreadPermissionTransitionStatus;
+  /** Epoch ms. */
+  occurredAt: number;
+  /**
+   * Stable id linking the entries that belong to a single queue
+   * lifecycle. Present on `queued` entries and propagated to the
+   * matching `applied` / `cancelled` entry. Absent for
+   * apply-immediately transitions (no queue lifecycle to link).
+   */
+  queueId?: string;
+  /**
+   * Optional human-readable note attached to the transition. Used to
+   * record edge-case reasons such as auto-cancellation after repeated
+   * flush failures.
+   */
+  note?: string;
 };
 
 export type ThreadBranchDriftPair = {

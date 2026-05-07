@@ -519,4 +519,97 @@ describe("OverlayStore", () => {
     expect(next.executionMode).toBe("default");
     expect(next.observedExecutionMode).toBe("full-access");
   });
+
+  describe("permission transition log", () => {
+    it("appends a transition entry surfaced via getThreadOverlayState", async () => {
+      const store = await createStore();
+      await store.appendPermissionTransition({
+        backend: "codex",
+        threadId: "thread-1",
+        transition: {
+          id: "01HVAA00000000000000000001",
+          fromExecutionMode: "default",
+          toExecutionMode: "full-access",
+          status: "queued",
+          occurredAt: 1000,
+          queueId: "queue-1",
+        },
+      });
+
+      const overlay = await store.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(overlay?.permissionTransitionLog).toEqual([
+        {
+          id: "01HVAA00000000000000000001",
+          fromExecutionMode: "default",
+          toExecutionMode: "full-access",
+          status: "queued",
+          occurredAt: 1000,
+          queueId: "queue-1",
+        },
+      ]);
+    });
+
+    it("evicts the oldest entry when 101 transitions are appended", async () => {
+      const store = await createStore();
+      for (let index = 0; index < 101; index += 1) {
+        await store.appendPermissionTransition({
+          backend: "codex",
+          threadId: "thread-1",
+          transition: {
+            id: `entry-${index}`,
+            fromExecutionMode: "default",
+            toExecutionMode: "full-access",
+            status: "queued",
+            occurredAt: 1000 + index,
+            queueId: `queue-${index}`,
+          },
+        });
+      }
+
+      const overlay = await store.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(overlay?.permissionTransitionLog).toHaveLength(100);
+      expect(overlay?.permissionTransitionLog?.[0]?.id).toBe("entry-1");
+      expect(overlay?.permissionTransitionLog?.[99]?.id).toBe("entry-100");
+    });
+
+    it("preserves the transition log across a reload", async () => {
+      const store = await createStore();
+      await store.appendPermissionTransition({
+        backend: "codex",
+        threadId: "thread-1",
+        transition: {
+          id: "entry-1",
+          fromExecutionMode: "default",
+          toExecutionMode: "full-access",
+          status: "applied",
+          occurredAt: 5000,
+        },
+      });
+
+      // Re-read via a brand new instance to confirm the log persisted.
+      // OverlayStore takes a file path; reuse it from the original.
+      const filePath = (store as unknown as { filePath: string }).filePath;
+      const { OverlayStore } = await import("../persistence/overlay-store");
+      const reopened = new OverlayStore(filePath);
+      const overlay = await reopened.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(overlay?.permissionTransitionLog).toEqual([
+        {
+          id: "entry-1",
+          fromExecutionMode: "default",
+          toExecutionMode: "full-access",
+          status: "applied",
+          occurredAt: 5000,
+        },
+      ]);
+    });
+  });
 });
