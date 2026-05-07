@@ -22,6 +22,15 @@ export type MessagingResolvedThreadState = {
   model?: string;
   observedGitBranch?: string;
   projectLabel?: string;
+  /**
+   * Pending permission-mode change waiting for the active turn to end.
+   * Populated only when a user toggled while a turn was running. The
+   * status card surfaces this as `Permissions: <current> → <queued>
+   * (queued)` instead of the plain applied-mode label.
+   */
+  queuedExecutionMode?: ThreadExecutionMode;
+  /** Wall-clock ms when the queue entry was created. */
+  queuedExecutionModeAt?: number;
   reasoningEffort?: string;
   serviceTier?: string;
   thread?: NavigationThreadSummary;
@@ -76,6 +85,8 @@ export function resolveMessagingThreadState(params: {
     model: thread.model,
     observedGitBranch: thread.observedGitBranch,
     projectLabel: linkedDirectory?.label ?? directory?.label,
+    queuedExecutionMode: thread.queuedExecutionMode,
+    queuedExecutionModeAt: thread.queuedExecutionModeAt,
     reasoningEffort: thread.reasoningEffort,
     serviceTier: thread.serviceTier,
     thread,

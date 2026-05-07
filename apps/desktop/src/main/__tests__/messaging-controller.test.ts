@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
   AppServerPendingRequestNotification,
+  CancelThreadExecutionModeQueueRequest,
   HandoffThreadWorkspaceRequest,
   ListBackendsResponse,
   MessagingToolUpdateMode,
@@ -3129,6 +3130,266 @@ describe("MessagingController", () => {
     );
   });
 
+  it("posts a permissions-queue audit message with a Cancel button on thread/executionMode/queued", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/queued",
+        params: {
+          threadId: "thread-1",
+          queuedExecutionMode: "full-access",
+          queuedAt: 1500,
+        },
+      },
+    });
+
+    const queuedIntent = harness.delivered.find(
+      (intent) =>
+        intent.kind === "confirmation" &&
+        typeof intent.title === "string" &&
+        intent.title.includes("Permissions queue"),
+    );
+    expect(queuedIntent).toBeDefined();
+    expect(queuedIntent).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Default Access → Full Access"),
+    });
+    expect(queuedIntent).toMatchObject({
+      body: expect.stringContaining("Will apply at end of current turn"),
+    });
+    const cancelAction = (queuedIntent as { actions?: MessagingSurfaceAction[] }).actions?.find(
+      (action) => action.id.startsWith("permissions:queue:cancel:"),
+    );
+    expect(cancelAction).toBeDefined();
+    expect(cancelAction).toMatchObject({ label: "Cancel" });
+  });
+
+  it("edits the queued audit message to 'Cancelled' on queueCleared with reason cancelled", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    // First post the queued message.
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/queued",
+        params: {
+          threadId: "thread-1",
+          queuedExecutionMode: "full-access",
+          queuedAt: 1500,
+        },
+      },
+    });
+
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/queueCleared",
+        params: {
+          threadId: "thread-1",
+          reason: "cancelled",
+        },
+      },
+    });
+
+    const cancelledIntent = harness.delivered.find(
+      (intent) =>
+        intent.kind === "confirmation" &&
+        typeof intent.body === "string" &&
+        intent.body.includes("Cancelled queued permissions change"),
+    );
+    expect(cancelledIntent).toBeDefined();
+    expect(cancelledIntent).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Default Access → Full Access"),
+      delivery: expect.objectContaining({
+        mode: "update",
+        fallback: "present_new",
+      }),
+      targetSurface: expect.objectContaining({
+        channel: "telegram",
+      }),
+    });
+    // Buttons must be removed on cancel.
+    expect(
+      (cancelledIntent as { actions?: MessagingSurfaceAction[] }).actions,
+    ).toEqual([]);
+  });
+
+  it("edits the queued audit message to 'submitted' on queueCleared with reason applied", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/queued",
+        params: {
+          threadId: "thread-1",
+          queuedExecutionMode: "full-access",
+          queuedAt: 1500,
+        },
+      },
+    });
+
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/queueCleared",
+        params: {
+          threadId: "thread-1",
+          reason: "applied",
+        },
+      },
+    });
+
+    const appliedIntent = harness.delivered.find(
+      (intent) =>
+        intent.kind === "confirmation" &&
+        typeof intent.body === "string" &&
+        intent.body.includes("Permissions changed"),
+    );
+    expect(appliedIntent).toBeDefined();
+    expect(appliedIntent).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Default Access → Full Access"),
+    });
+    expect(appliedIntent).toMatchObject({
+      body: expect.stringContaining("(submitted)"),
+      delivery: expect.objectContaining({
+        mode: "update",
+        fallback: "present_new",
+      }),
+    });
+    expect(
+      (appliedIntent as { actions?: MessagingSurfaceAction[] }).actions,
+    ).toEqual([]);
+  });
+
+  it("falls back to a fresh message when the queued-audit edit fails", async () => {
+    const editAttempts: MessagingSurfaceIntent[] = [];
+    let deliveryCount = 0;
+    const harness = await createHarness({
+      deliver: async (intent) => {
+        deliveryCount += 1;
+        // Record edit attempts (mode === "update" + a target surface)
+        // and report failure so the controller's logged-fallback path
+        // exercises. The adapter is responsible for the actual
+        // present_new fallback once it sees `delivery.fallback:
+        // "present_new"`.
+        if (intent.delivery?.mode === "update" && intent.targetSurface) {
+          editAttempts.push(intent);
+          return {
+            channel: "telegram" as const,
+            deliveredAt: 1000 + deliveryCount,
+            outcome: "failed" as const,
+            errorMessage: "edit not supported",
+          };
+        }
+        return {
+          channel: "telegram" as const,
+          deliveredAt: 1000 + deliveryCount,
+          outcome: "presented" as const,
+          surface: {
+            channel: "telegram" as const,
+            id: `surface:${intent.id}`,
+          },
+        };
+      },
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/queued",
+        params: {
+          threadId: "thread-1",
+          queuedExecutionMode: "full-access",
+          queuedAt: 1500,
+        },
+      },
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/queueCleared",
+        params: {
+          threadId: "thread-1",
+          reason: "cancelled",
+        },
+      },
+    });
+
+    // We attempted the edit (mode: update + targetSurface) and the
+    // intent set `fallback: "present_new"` so the adapter would post a
+    // fresh message in the conversation when the edit fails.
+    expect(editAttempts.length).toBeGreaterThanOrEqual(1);
+    expect(editAttempts[0]).toMatchObject({
+      delivery: expect.objectContaining({
+        mode: "update",
+        fallback: "present_new",
+      }),
+    });
+  });
+
+  it("routes a permissions:queue:cancel callback to cancelThreadExecutionModeQueue", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "permissions:queue:cancel:thread-1:1500",
+      }),
+    );
+
+    expect(harness.cancelThreadExecutionModeQueue).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+  });
+
+  it("renders status card with queued mode arrow when queuedExecutionMode is set", async () => {
+    const harness = await createHarness();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0]!.executionMode = "default";
+    navigation.threads[0]!.queuedExecutionMode = "full-access";
+    navigation.threads[0]!.queuedExecutionModeAt = 1500;
+    harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+
+    const statusIntent = harness.delivered.find(
+      (intent) =>
+        intent.kind === "status" &&
+        typeof intent.text === "string" &&
+        intent.text.includes("Permissions:"),
+    );
+    expect(statusIntent).toBeDefined();
+    expect(statusIntent).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining(
+        "Permissions: Default Access → Full Access (queued)",
+      ),
+    });
+    const permissionsAction = (statusIntent as {
+      actions?: MessagingSurfaceAction[];
+    }).actions?.find((action) => action.id === "status:permissions");
+    expect(permissionsAction?.label).toBe(
+      "Permissions: Default → Full Access (queued)",
+    );
+  });
+
   it("uses live thread permissions instead of stale binding preferences", async () => {
     const harness = await createHarness();
     const navigation = buildNavigationSnapshot();
@@ -3593,6 +3854,7 @@ async function createHarness(options?: {
 }): Promise<{
   controller: MessagingController;
   compactThread: ReturnType<typeof vi.fn>;
+  cancelThreadExecutionModeQueue: ReturnType<typeof vi.fn>;
   delivered: MessagingSurfaceIntent[];
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
   handoffThreadWorkspace: ReturnType<typeof vi.fn> | undefined;
@@ -3677,6 +3939,13 @@ async function createHarness(options?: {
     }
     return request;
   });
+  const cancelThreadExecutionModeQueue = vi.fn(
+    async (request: CancelThreadExecutionModeQueueRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      executionMode: "default" as const,
+    }),
+  );
   const setThreadModelSettings = vi.fn(async (request: SetThreadModelSettingsRequest) => {
     if (controllerRef) {
       await controllerRef.handleBackendEvent({
@@ -3740,6 +4009,7 @@ async function createHarness(options?: {
   }));
   const backend: MessagingBackendBridge = {
     compactThread,
+    cancelThreadExecutionModeQueue,
     getNavigationSnapshot,
     ...(handoffThreadWorkspace ? { handoffThreadWorkspace } : {}),
     interruptTurn,
@@ -3776,6 +4046,7 @@ async function createHarness(options?: {
   return {
     controller,
     compactThread,
+    cancelThreadExecutionModeQueue,
     delivered,
     getNavigationSnapshot,
     handoffThreadWorkspace,
