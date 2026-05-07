@@ -13,9 +13,13 @@ import type {
   PrSummary,
   ThreadExecutionMode,
   ThreadOverlayState,
+  ThreadPermissionTransition,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
+  buildThreadIdentityKey,
+} from "@pwragent/shared";
 import {
   buildNavigationSnapshot,
   buildNavigationSnapshotHash,
@@ -373,6 +377,37 @@ export class OverlayStore {
       const nextState: ThreadOverlayState = {
         ...current,
         retainedExecutionModeDriftPairs,
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
+  }
+
+  async appendPermissionTransition(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    transition: ThreadPermissionTransition;
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+      };
+      const nextLog = [
+        ...(current.permissionTransitionLog ?? []),
+        params.transition,
+      ];
+      // Cap at MAX_PERMISSION_TRANSITION_LOG_ENTRIES, evicting oldest first.
+      const trimmed =
+        nextLog.length > MAX_PERMISSION_TRANSITION_LOG_ENTRIES
+          ? nextLog.slice(nextLog.length - MAX_PERMISSION_TRANSITION_LOG_ENTRIES)
+          : nextLog;
+      const nextState: ThreadOverlayState = {
+        ...current,
+        permissionTransitionLog: trimmed,
       };
       data.threads[threadKey] = nextState;
       return nextState;

@@ -2,6 +2,8 @@ import { ipcMain } from "electron";
 import { subscribersForChannel } from "../window-channels";
 import type {
   AgentEvent,
+  CancelThreadExecutionModeQueueRequest,
+  CancelThreadExecutionModeQueueResponse,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
   CheckThreadExecutionModeDriftRequest,
@@ -12,6 +14,8 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  QueueThreadExecutionModeRequest,
+  QueueThreadExecutionModeResponse,
   RetainThreadBranchDriftRequest,
   RetainThreadBranchDriftResponse,
   RetainThreadExecutionModeDriftRequest,
@@ -35,11 +39,13 @@ import type {
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import {
+  AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_CHECK_THREAD_EXECUTION_MODE_DRIFT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_RETAIN_THREAD_EXECUTION_MODE_DRIFT_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
@@ -339,6 +345,28 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL);
+  ipcMain.handle(
+    AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
+    async (
+      _event,
+      request: QueueThreadExecutionModeRequest,
+    ): Promise<QueueThreadExecutionModeResponse> => {
+      return await registry.queueThreadExecutionMode(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL);
+  ipcMain.handle(
+    AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
+    async (
+      _event,
+      request: CancelThreadExecutionModeQueueRequest,
+    ): Promise<CancelThreadExecutionModeQueueResponse> => {
+      return await registry.cancelThreadExecutionModeQueue(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL);
   ipcMain.handle(
     AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
@@ -438,6 +466,8 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
+  ipcMain.removeHandler(AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL);
+  ipcMain.removeHandler(AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL);
   ipcMain.removeHandler(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL);
   ipcMain.removeHandler(AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL);

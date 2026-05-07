@@ -5,6 +5,8 @@ import type {
   ArchiveWorktreeResponse,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
+  CancelThreadExecutionModeQueueRequest,
+  CancelThreadExecutionModeQueueResponse,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   InterruptTurnRequest,
@@ -13,6 +15,8 @@ import type {
   ListBackendsResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
+  QueueThreadExecutionModeRequest,
+  QueueThreadExecutionModeResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -94,11 +98,13 @@ import type {
   ImageUploadNormalizationLogRequest,
 } from "../shared/image-normalization";
 import {
+  AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_CHECK_THREAD_EXECUTION_MODE_DRIFT_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_RETAIN_THREAD_EXECUTION_MODE_DRIFT_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
@@ -289,6 +295,20 @@ const desktopApi = Object.freeze({
     request: SetThreadExecutionModeRequest
   ): Promise<SetThreadExecutionModeResponse> =>
     await ipcRenderer.invoke(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL, request),
+  queueThreadExecutionMode: async (
+    request: QueueThreadExecutionModeRequest,
+  ): Promise<QueueThreadExecutionModeResponse> =>
+    await ipcRenderer.invoke(
+      AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
+      request,
+    ),
+  cancelThreadExecutionModeQueue: async (
+    request: CancelThreadExecutionModeQueueRequest,
+  ): Promise<CancelThreadExecutionModeQueueResponse> =>
+    await ipcRenderer.invoke(
+      AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
+      request,
+    ),
   setThreadModelSettings: async (
     request: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> =>

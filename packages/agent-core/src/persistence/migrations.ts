@@ -5,6 +5,8 @@ import type {
   NavigationLaunchpadDefaults,
   ThreadExecutionMode,
   ThreadOverlayState,
+  ThreadPermissionTransition,
+  ThreadPermissionTransitionStatus,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 
@@ -119,6 +121,44 @@ function migrateLaunchpadImageAttachments(
   });
 
   return attachments.length > 0 ? attachments : undefined;
+}
+
+function isPermissionTransitionStatus(
+  value: unknown,
+): value is ThreadPermissionTransitionStatus {
+  return value === "queued" || value === "applied" || value === "cancelled";
+}
+
+function migratePermissionTransitionLog(
+  value: unknown,
+): ThreadOverlayState["permissionTransitionLog"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = value.flatMap((item): ThreadPermissionTransition[] => {
+    const record = asRecord(item);
+    if (
+      !record ||
+      typeof record.id !== "string" ||
+      typeof record.occurredAt !== "number" ||
+      !isPermissionTransitionStatus(record.status)
+    ) {
+      return [];
+    }
+    return [
+      {
+        id: record.id,
+        fromExecutionMode: normalizeExecutionMode(record.fromExecutionMode),
+        toExecutionMode: normalizeExecutionMode(record.toExecutionMode),
+        status: record.status,
+        occurredAt: record.occurredAt,
+        queueId:
+          typeof record.queueId === "string" ? record.queueId : undefined,
+        note: typeof record.note === "string" ? record.note : undefined,
+      },
+    ];
+  });
+  return entries.length > 0 ? entries : undefined;
 }
 
 function migrateRetainedBranchDriftPairs(
@@ -330,6 +370,9 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
             worktreeSnapshots: Array.isArray(threadRecord.worktreeSnapshots)
               ? (threadRecord.worktreeSnapshots as ThreadOverlayState["worktreeSnapshots"])
               : [],
+            permissionTransitionLog: migratePermissionTransitionLog(
+              threadRecord.permissionTransitionLog,
+            ),
           } satisfies ThreadOverlayState,
         ];
       }),

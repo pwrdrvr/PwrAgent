@@ -61,6 +61,10 @@ import type {
   RestoreWorktreeResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
+  CancelThreadExecutionModeQueueRequest,
+  CancelThreadExecutionModeQueueResponse,
+  QueueThreadExecutionModeRequest,
+  QueueThreadExecutionModeResponse,
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
@@ -141,6 +145,12 @@ export type DesktopApi = {
   setThreadExecutionMode?: (
     request: SetThreadExecutionModeRequest
   ) => Promise<SetThreadExecutionModeResponse>;
+  queueThreadExecutionMode?: (
+    request: QueueThreadExecutionModeRequest,
+  ) => Promise<QueueThreadExecutionModeResponse>;
+  cancelThreadExecutionModeQueue?: (
+    request: CancelThreadExecutionModeQueueRequest,
+  ) => Promise<CancelThreadExecutionModeQueueResponse>;
   setThreadModelSettings?: (
     request: SetThreadModelSettingsRequest
   ) => Promise<SetThreadModelSettingsResponse>;

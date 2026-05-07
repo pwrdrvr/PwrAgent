@@ -11,9 +11,13 @@ import type {
   PrSummary,
   ThreadExecutionMode,
   ThreadOverlayState,
+  ThreadPermissionTransition,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
+  buildThreadIdentityKey,
+} from "@pwragent/shared";
 import {
   buildNavigationSnapshot,
   buildNavigationSnapshotHash,
@@ -379,6 +383,34 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async appendPermissionTransition(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    transition: ThreadPermissionTransition;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextLog = [
+      ...(current.permissionTransitionLog ?? []),
+      params.transition,
+    ];
+    const trimmed =
+      nextLog.length > MAX_PERMISSION_TRANSITION_LOG_ENTRIES
+        ? nextLog.slice(nextLog.length - MAX_PERMISSION_TRANSITION_LOG_ENTRIES)
+        : nextLog;
+    const nextState: ThreadOverlayState = {
+      ...current,
+      permissionTransitionLog: trimmed,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async setThreadModelSettings(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -565,6 +597,13 @@ export class SqliteOverlayStore {
   }
 
   private putThread(threadKey: string, state: ThreadOverlayState): void {
+    // Queue-only fields are registry-memory state; never persist them.
+    // They reset to undefined on app restart by design.
+    const {
+      queuedExecutionMode: _queuedExecutionMode,
+      queuedExecutionModeAt: _queuedExecutionModeAt,
+      ...persistable
+    } = state;
     this.stateDb.raw
       .prepare(
         `INSERT OR REPLACE INTO threads(thread_id, directory_path, last_seen_at, dismissed_at, snoozed_until, payload)
@@ -572,11 +611,11 @@ export class SqliteOverlayStore {
       )
       .run(
         threadKey,
-        (state as Record<string, unknown>).directoryPath as string ?? null,
-        state.lastSeenAt ?? null,
-        state.dismissedAt ?? null,
-        state.snoozedUntil ?? null,
-        JSON.stringify(state),
+        (persistable as Record<string, unknown>).directoryPath as string ?? null,
+        persistable.lastSeenAt ?? null,
+        persistable.dismissedAt ?? null,
+        persistable.snoozedUntil ?? null,
+        JSON.stringify(persistable),
       );
   }
 
@@ -670,6 +709,7 @@ export type OverlayStoreLike = Pick<
   | "retainThreadBranchDrift"
   | "setThreadObservedExecutionMode"
   | "retainThreadExecutionModeDrift"
+  | "appendPermissionTransition"
   | "getLaunchpadDefaults"
   | "setLaunchpadDefaults"
   | "getDirectoryLaunchpad"

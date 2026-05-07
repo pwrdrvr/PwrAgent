@@ -1,5 +1,6 @@
 import { app } from "electron";
 import { execFile as execFileCallback } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
@@ -59,6 +60,12 @@ import {
   type SetThreadExecutionModeResponse,
   type SetThreadModelSettingsRequest,
   type SetThreadModelSettingsResponse,
+  type QueueThreadExecutionModeRequest,
+  type QueueThreadExecutionModeResponse,
+  type CancelThreadExecutionModeQueueRequest,
+  type CancelThreadExecutionModeQueueResponse,
+  type ThreadPermissionTransition,
+  type ThreadPermissionTransitionStatus,
   type SteerTurnRequest,
   type SteerTurnResponse,
   type StartReviewRequest,
@@ -114,6 +121,14 @@ type InitializeResult = {
 const isDevelopment = process.env.NODE_ENV !== "production";
 const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
 const THREAD_LIST_REUSE_WINDOW_MS = 750;
+/**
+ * Number of consecutive queued-execution-mode flush failures tolerated
+ * before the queue is auto-cancelled and an explanatory `cancelled`
+ * audit entry is appended. Codex's `thread/resume` is normally
+ * idempotent, so repeated failure here implies a deeper protocol
+ * problem the user needs visibility into.
+ */
+const MAX_QUEUE_FLUSH_ATTEMPTS = 3;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const execFile = promisify(execFileCallback);
 
@@ -1016,6 +1031,23 @@ export class DesktopBackendRegistry {
     }
   >();
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
+  /**
+   * In-memory queue of pending permission-mode changes, keyed by
+   * threadId. Populated when a user toggles execution mode while a turn
+   * is active; flushed to codex at the resume boundary (turn-end, or
+   * just before the next turn-start). Not persisted across app restart
+   * by design — the corresponding audit-log entries on overlay state
+   * carry the historical record.
+   */
+  private readonly queuedExecutionModes = new Map<
+    string,
+    {
+      mode: ThreadExecutionMode;
+      queuedAt: number;
+      queueId: string;
+      flushAttempts: number;
+    }
+  >();
   private readonly attemptedTitleGenerations = new Set<string>();
   private titleGenerationSequence = 0;
 
@@ -1579,6 +1611,17 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     fastMode?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    // Race-safe flush: if a queued permission-mode change is still
+    // pending when the user fires off the next turn (e.g. submit
+    // immediately after the previous turn ended), apply it before
+    // codex sees the new turn so the new turn runs under the
+    // intended profile. The emit-listener flush in `emit()` is the
+    // faster path when no immediate user action follows; this is the
+    // belt-and-suspenders guarantee. Idempotent — a no-op when no
+    // queue is present.
+    if (params.backend === "codex") {
+      await this.flushQueuedExecutionModeIfPresent(params.threadId);
+    }
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: params.backend,
       threadId: params.threadId,
@@ -1787,51 +1830,308 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /**
+   * User-facing entry point for permission-mode changes. Decides
+   * queue-vs-apply based on whether a turn is currently in flight on
+   * the thread.
+   *
+   * Codex's `thread/resume` rejects (or warn-and-ignores) permission
+   * overrides while a turn is running, so the only legal moment to
+   * change a thread's permission profile is the resume boundary — i.e.
+   * turn-end. Toggles received during an active turn are queued in
+   * registry memory and flushed automatically on `thread/status/changed
+   * → idle` (or just before the next `turn/start`, whichever fires
+   * first). See the state-machine diagram in the Phase 2 plan for the
+   * full transition table.
+   */
   async setThreadExecutionMode(
     params: SetThreadExecutionModeRequest
   ): Promise<SetThreadExecutionModeResponse> {
-    let resolvedThreadId = params.threadId;
+    if (params.backend !== "codex") {
+      // Non-codex backends (e.g. Grok) currently no-op on execution
+      // mode — no overlay write, no backend change. We still emit on
+      // the bus so all surfaces stay visually consistent with the
+      // user's click. The optimistic UI is the same lie either way;
+      // symmetric emission is better than partial fan-out.
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/executionMode/updated",
+          params: {
+            threadId: params.threadId,
+            executionMode: params.executionMode,
+          },
+        },
+      });
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: params.executionMode,
+      };
+    }
 
-    if (params.backend === "codex") {
-      const modeSettings = EXECUTION_MODE_SUMMARIES[params.executionMode];
-      const result = await this.withCodexThreadClient(params.threadId, async (client) => {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: params.threadId,
+    });
+    const currentApplied = overlay?.executionMode ?? "default";
+    const hasActiveTurn = this.threadHasActiveTurn(params.threadId);
+    const hasQueue = this.queuedExecutionModes.has(params.threadId);
+
+    // Toggling back to the currently-applied mode while a queue is
+    // pending is a cancel — the user changed their mind. No codex call,
+    // no overlay flip.
+    if (hasQueue && params.executionMode === currentApplied) {
+      await this.cancelThreadExecutionModeQueue({
+        backend: "codex",
+        threadId: params.threadId,
+      });
+      return {
+        backend: "codex",
+        threadId: params.threadId,
+        executionMode: currentApplied,
+      };
+    }
+
+    // Active turn → queue. No codex call, no overlay executionMode flip.
+    if (hasActiveTurn && params.executionMode !== currentApplied) {
+      const queued = await this.queueThreadExecutionMode(params);
+      // The user-facing setThreadExecutionMode response shape is
+      // SetThreadExecutionModeResponse — we report the queued mode as
+      // the "executionMode" so callers see the thing they intended,
+      // even though it isn't applied yet. The queued state is also
+      // surfaced via the `thread/executionMode/queued` bus event for
+      // surfaces that need to render the pending-state distinct from
+      // the applied state.
+      return {
+        backend: "codex",
+        threadId: params.threadId,
+        executionMode: queued.queuedExecutionMode,
+      };
+    }
+
+    // No active turn → apply immediately.
+    return await this.applyThreadExecutionMode(params);
+  }
+
+  async queueThreadExecutionMode(
+    params: QueueThreadExecutionModeRequest,
+  ): Promise<QueueThreadExecutionModeResponse> {
+    if (params.backend !== "codex") {
+      // Non-codex backends don't have a queue concept; fall through to
+      // immediate apply so the caller observes consistent semantics.
+      await this.setThreadExecutionMode(params);
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        queuedExecutionMode: params.executionMode,
+        queuedAt: Date.now(),
+      };
+    }
+
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: params.threadId,
+    });
+    const currentApplied = overlay?.executionMode ?? "default";
+    const queuedAt = Date.now();
+    const queueId = randomUUID();
+
+    this.queuedExecutionModes.set(params.threadId, {
+      mode: params.executionMode,
+      queuedAt,
+      queueId,
+      flushAttempts: 0,
+    });
+
+    await this.appendPermissionTransition({
+      threadId: params.threadId,
+      transition: {
+        id: randomUUID(),
+        fromExecutionMode: currentApplied,
+        toExecutionMode: params.executionMode,
+        status: "queued",
+        occurredAt: queuedAt,
+        queueId,
+      },
+    });
+
+    backendRegistryLog.info("queued thread execution mode change", {
+      threadId: params.threadId,
+      from: currentApplied,
+      to: params.executionMode,
+      queueId,
+    });
+
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/queued",
+        params: {
+          threadId: params.threadId,
+          queuedExecutionMode: params.executionMode,
+          queuedAt,
+        },
+      },
+    });
+
+    return {
+      backend: "codex",
+      threadId: params.threadId,
+      queuedExecutionMode: params.executionMode,
+      queuedAt,
+    };
+  }
+
+  async cancelThreadExecutionModeQueue(
+    params: CancelThreadExecutionModeQueueRequest,
+  ): Promise<CancelThreadExecutionModeQueueResponse> {
+    const overlay =
+      params.backend === "codex"
+        ? await this.overlayStore.getThreadOverlayState({
+            backend: "codex",
+            threadId: params.threadId,
+          })
+        : undefined;
+    const currentApplied = overlay?.executionMode ?? "default";
+
+    const queue =
+      params.backend === "codex"
+        ? this.queuedExecutionModes.get(params.threadId)
+        : undefined;
+    if (!queue) {
+      // Idempotent: cancel of nothing is a no-op that returns the
+      // current applied mode.
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: currentApplied,
+      };
+    }
+
+    this.queuedExecutionModes.delete(params.threadId);
+
+    await this.appendPermissionTransition({
+      threadId: params.threadId,
+      transition: {
+        id: randomUUID(),
+        fromExecutionMode: currentApplied,
+        toExecutionMode: queue.mode,
+        status: "cancelled",
+        occurredAt: Date.now(),
+        queueId: queue.queueId,
+      },
+    });
+
+    backendRegistryLog.info("cancelled queued thread execution mode change", {
+      threadId: params.threadId,
+      from: currentApplied,
+      to: queue.mode,
+      queueId: queue.queueId,
+    });
+
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/queueCleared",
+        params: {
+          threadId: params.threadId,
+          reason: "cancelled",
+        },
+      },
+    });
+
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: currentApplied,
+    };
+  }
+
+  /**
+   * Actually apply a permission-mode change to codex. Called from both
+   * the immediate-apply path (toggle while idle) and the queue-flush
+   * path (turn-end). When called from the queue, `fromQueue: true`
+   * propagates the queue's `queueId` into the resulting `applied`
+   * audit entry and emits the matching `queueCleared(applied)` event.
+   */
+  private async applyThreadExecutionMode(
+    params: SetThreadExecutionModeRequest,
+    options?: { fromQueue?: boolean },
+  ): Promise<SetThreadExecutionModeResponse> {
+    if (params.backend !== "codex") {
+      // The non-codex grok no-op path — preserved for symmetry. Direct
+      // callers route through setThreadExecutionMode which short-circuits
+      // before reaching this method, so we should never get here, but
+      // guard anyway.
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: params.executionMode,
+      };
+    }
+
+    const previousOverlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: params.threadId,
+    });
+    const previousApplied = previousOverlay?.executionMode ?? "default";
+
+    const modeSettings = EXECUTION_MODE_SUMMARIES[params.executionMode];
+    const result = await this.withCodexThreadClient(
+      params.threadId,
+      async (client) => {
         if (!client.setThreadPermissions) {
-          throw new Error("Selected backend does not support execution mode updates");
+          throw new Error(
+            "Selected backend does not support execution mode updates",
+          );
         }
-
         return await client.setThreadPermissions({
           threadId: params.threadId,
           approvalPolicy: modeSettings.approvalPolicy,
           sandbox: modeSettings.sandbox,
         });
-      });
+      },
+    );
 
-      resolvedThreadId = result.threadId;
+    const resolvedThreadId = result.threadId;
 
-      await this.overlayStore.setThreadExecutionMode({
-        backend: "codex",
-        threadId: result.threadId,
-        executionMode: params.executionMode,
-      });
-      // Codex confirms the new permission profile in the response — record
-      // it so the drift detector compares against the canonical value
-      // rather than the value we asked for.
-      const observed =
-        result.observedExecutionMode ?? params.executionMode;
-      await this.recordObservedExecutionMode({
-        backend: "codex",
-        threadId: result.threadId,
-        observedExecutionMode: observed,
-      });
-    }
-    // Non-codex backends (e.g. Grok) currently no-op on execution mode —
-    // no overlay write, no backend change. We still emit on the bus so all
-    // surfaces stay visually consistent with the user's click. The
-    // optimistic UI is the same lie either way; symmetric emission is
-    // better than partial fan-out.
+    await this.overlayStore.setThreadExecutionMode({
+      backend: "codex",
+      threadId: resolvedThreadId,
+      executionMode: params.executionMode,
+    });
+    // Codex confirms the new permission profile in the response —
+    // record it so the drift detector compares against the canonical
+    // value rather than the value we asked for.
+    const observed = result.observedExecutionMode ?? params.executionMode;
+    await this.recordObservedExecutionMode({
+      backend: "codex",
+      threadId: resolvedThreadId,
+      observedExecutionMode: observed,
+    });
+
+    // Pull the matching queue id (if this apply came from a queue
+    // flush) BEFORE we clear the queue, so the audit entry can link
+    // to the original `queued` entry by queueId.
+    const queueIdForAuditLink = options?.fromQueue
+      ? this.queuedExecutionModes.get(resolvedThreadId)?.queueId
+      : undefined;
+
+    await this.appendPermissionTransition({
+      threadId: resolvedThreadId,
+      transition: {
+        id: randomUUID(),
+        fromExecutionMode: previousApplied,
+        toExecutionMode: params.executionMode,
+        status: "applied",
+        occurredAt: Date.now(),
+        queueId: queueIdForAuditLink,
+      },
+    });
 
     await this.emit({
-      backend: params.backend,
+      backend: "codex",
       notification: {
         method: "thread/executionMode/updated",
         params: {
@@ -1841,11 +2141,156 @@ export class DesktopBackendRegistry {
       },
     });
 
+    if (options?.fromQueue) {
+      // Order matters: clients must see the apply BEFORE the
+      // queue-clear. The applied transition is now in the log; the
+      // overlay's executionMode is current; clearing the queue is
+      // safe.
+      this.queuedExecutionModes.delete(resolvedThreadId);
+      await this.emit({
+        backend: "codex",
+        notification: {
+          method: "thread/executionMode/queueCleared",
+          params: {
+            threadId: resolvedThreadId,
+            reason: "applied",
+          },
+        },
+      });
+    }
+
     return {
-      backend: params.backend,
+      backend: "codex",
       threadId: resolvedThreadId,
       executionMode: params.executionMode,
     };
+  }
+
+  /**
+   * Returns true iff the registry currently believes a turn is in
+   * flight on this thread. `activeCodexTurnModes` is keyed by
+   * `${threadId}:${turnId}`; one or more matching keys → active turn.
+   */
+  private threadHasActiveTurn(threadId: string): boolean {
+    const prefix = `${threadId}:`;
+    for (const key of this.activeCodexTurnModes.keys()) {
+      if (key.startsWith(prefix)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Append a permission-transition entry to the overlay-store audit
+   * log. Soft-fails on overlay-store errors so a transient persistence
+   * failure does not block the queue state machine — the in-memory
+   * state remains correct, and the bus notification still fires.
+   */
+  private async appendPermissionTransition(params: {
+    threadId: string;
+    transition: ThreadPermissionTransition;
+  }): Promise<void> {
+    try {
+      await this.overlayStore.appendPermissionTransition({
+        backend: "codex",
+        threadId: params.threadId,
+        transition: params.transition,
+      });
+    } catch (error) {
+      backendRegistryLog.error("failed to append permission transition", {
+        threadId: params.threadId,
+        status: params.transition.status,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Flush any queued permission-mode change for the given thread.
+   * Called from two places:
+   *  - the `emit()` listener when codex reports `thread/status/changed
+   *    → idle` (or `turn/completed`), as the natural turn-end signal.
+   *  - the top of `startTurn` for codex, to guarantee the queue
+   *    applies BEFORE the next turn fires (race-safe ordering).
+   *
+   * Idempotent: a no-op when no queue is present. On apply error, the
+   * queue is retained and the failure counter is incremented; after
+   * `MAX_QUEUE_FLUSH_ATTEMPTS` consecutive failures, the queue is
+   * auto-cancelled with an explanatory note in the audit log.
+   */
+  private async flushQueuedExecutionModeIfPresent(
+    threadId: string,
+  ): Promise<void> {
+    const queue = this.queuedExecutionModes.get(threadId);
+    if (!queue) return;
+    try {
+      await this.applyThreadExecutionMode(
+        {
+          backend: "codex",
+          threadId,
+          executionMode: queue.mode,
+        },
+        { fromQueue: true },
+      );
+    } catch (error) {
+      const attempts = queue.flushAttempts + 1;
+      const stillRetained = this.queuedExecutionModes.get(threadId);
+      if (!stillRetained || stillRetained.queueId !== queue.queueId) {
+        // The queue was cancelled (or replaced) while we were
+        // mid-apply. Discard our retry — the new state wins.
+        return;
+      }
+      if (attempts >= MAX_QUEUE_FLUSH_ATTEMPTS) {
+        backendRegistryLog.error(
+          "auto-cancelling queued execution mode change after repeated failures",
+          {
+            threadId,
+            queueId: queue.queueId,
+            attempts,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+        const overlay = await this.overlayStore
+          .getThreadOverlayState({ backend: "codex", threadId })
+          .catch(() => undefined);
+        const currentApplied = overlay?.executionMode ?? "default";
+        this.queuedExecutionModes.delete(threadId);
+        await this.appendPermissionTransition({
+          threadId,
+          transition: {
+            id: randomUUID(),
+            fromExecutionMode: currentApplied,
+            toExecutionMode: queue.mode,
+            status: "cancelled",
+            occurredAt: Date.now(),
+            queueId: queue.queueId,
+            note: `auto-cancelled after ${MAX_QUEUE_FLUSH_ATTEMPTS} failed flush attempts`,
+          },
+        });
+        await this.emit({
+          backend: "codex",
+          notification: {
+            method: "thread/executionMode/queueCleared",
+            params: {
+              threadId,
+              reason: "cancelled",
+            },
+          },
+        });
+        return;
+      }
+      this.queuedExecutionModes.set(threadId, {
+        ...queue,
+        flushAttempts: attempts,
+      });
+      backendRegistryLog.warn("queued execution mode flush failed; will retry", {
+        threadId,
+        queueId: queue.queueId,
+        attempts,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async setThreadModelSettings(
@@ -3341,6 +3786,12 @@ export class DesktopBackendRegistry {
           event.notification.params.turnId,
         ),
       );
+      // Turn-end is the resume boundary — flush any queued mode change
+      // now. Fire-and-forget; failures are logged + retried inside
+      // flushQueuedExecutionModeIfPresent.
+      void this.flushQueuedExecutionModeIfPresent(
+        event.notification.params.threadId,
+      );
     }
 
     if (
@@ -3354,6 +3805,13 @@ export class DesktopBackendRegistry {
           this.activeCodexTurnModes.delete(key);
         }
       }
+      // Same resume-boundary flush, triggered from the
+      // `thread/status/changed → idle` path (codex emits both, depending
+      // on the protocol shape; we cover both for resilience). Idempotent
+      // when no queue is set.
+      void this.flushQueuedExecutionModeIfPresent(
+        event.notification.params.threadId,
+      );
     }
 
     if (event.notification.method === "serverRequest/resolved") {

@@ -116,6 +116,39 @@ export type SetThreadExecutionModeResponse = {
   executionMode: ThreadExecutionMode;
 };
 
+export type QueueThreadExecutionModeRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  executionMode: ThreadExecutionMode;
+};
+
+export type QueueThreadExecutionModeResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /**
+   * The mode that is now queued. Mirrors the request field name on
+   * `ThreadOverlayState` / `NavigationThreadSummary` so the renderer can
+   * apply the response straight onto its snapshot.
+   */
+  queuedExecutionMode: ThreadExecutionMode;
+  queuedAt: number;
+};
+
+export type CancelThreadExecutionModeQueueRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type CancelThreadExecutionModeQueueResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /**
+   * The currently-applied execution mode. Returned so the renderer
+   * doesn't need a separate read to refresh after cancel.
+   */
+  executionMode: ThreadExecutionMode;
+};
+
 export type SetThreadModelSettingsRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

@@ -315,6 +315,35 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    appendPermissionTransition: async ({
+      backend,
+      threadId,
+      transition,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      transition: import("@pwragent/shared").ThreadPermissionTransition;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const nextLog = [
+        ...(current.permissionTransitionLog ?? []),
+        transition,
+      ];
+      const trimmed =
+        nextLog.length > 100 ? nextLog.slice(nextLog.length - 100) : nextLog;
+      const next = {
+        ...current,
+        permissionTransitionLog: trimmed,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
   } as unknown as InstanceType<typeof import("@pwragent/agent-core").OverlayStore>;
 }
 
@@ -3252,5 +3281,398 @@ describe("DesktopBackendRegistry", () => {
     });
 
     await registry.close();
+  });
+
+  describe("queued permission-mode changes", () => {
+    function buildIdleRegistry(options?: {
+      executionMode?: "default" | "full-access";
+    }) {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/resume"] },
+      });
+      const overlayStore = createOverlayStoreMock({
+        executionMode: options?.executionMode ?? "default",
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error("grok unavailable"),
+        }),
+        overlayStore,
+      });
+      return { codexClient, overlayStore, registry };
+    }
+
+    async function getLog(
+      overlayStore: ReturnType<typeof createOverlayStoreMock>,
+      threadId: string,
+    ) {
+      const overlay = await overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId,
+      });
+      return overlay?.permissionTransitionLog ?? [];
+    }
+
+    function startActiveTurn(
+      registry: InstanceType<typeof DesktopBackendRegistry>,
+      threadId: string,
+      turnId = "turn-1",
+    ) {
+      // The registry exposes activeCodexTurnModes only privately; the
+      // legitimate way to mark a thread active is to invoke startTurn.
+      // For the queue tests the actual turn payload doesn't matter.
+      return registry.startTurn({
+        backend: "codex",
+        threadId,
+        input: [{ type: "text", text: "kicking off" }],
+      }).then((response) => {
+        // Sanity: the registry assigned an active turn key. Some tests
+        // need a deterministic turnId, so we use the returned value.
+        return response.turnId ?? turnId;
+      });
+    }
+
+    it("toggle while idle applies immediately and logs a single applied entry", async () => {
+      const { codexClient, overlayStore, registry } = buildIdleRegistry();
+
+      const response = await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      });
+
+      expect(response).toEqual({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      });
+      expect(codexClient.lastSetThreadPermissionsParams).toEqual({
+        threadId: "thread-1",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      });
+
+      const log = await getLog(overlayStore, "thread-1");
+      expect(log).toHaveLength(1);
+      expect(log[0]).toMatchObject({
+        fromExecutionMode: "default",
+        toExecutionMode: "full-access",
+        status: "applied",
+      });
+      // No queueId on apply-immediately transitions.
+      expect(log[0]?.queueId).toBeUndefined();
+
+      await registry.close();
+    });
+
+    it("toggle while a turn is active queues without calling codex", async () => {
+      const { codexClient, overlayStore, registry } = buildIdleRegistry();
+      await startActiveTurn(registry, "thread-1");
+
+      // startTurn calls setThreadPermissions? No — startTurn does NOT
+      // call setThreadPermissions; it sets sandbox via the per-turn
+      // override. Confirm the per-turn override is the only call so
+      // far.
+      expect(codexClient.lastSetThreadPermissionsParams).toBeUndefined();
+
+      const response = await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      });
+
+      expect(response).toEqual({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      });
+      // Codex was NOT asked to switch — the queue holds the change.
+      expect(codexClient.lastSetThreadPermissionsParams).toBeUndefined();
+
+      const log = await getLog(overlayStore, "thread-1");
+      expect(log).toHaveLength(1);
+      expect(log[0]).toMatchObject({
+        fromExecutionMode: "default",
+        toExecutionMode: "full-access",
+        status: "queued",
+      });
+      expect(log[0]?.queueId).toBeTruthy();
+
+      await registry.close();
+    });
+
+    it("queue then explicit cancel records both entries with matching queueId and never calls codex", async () => {
+      const { codexClient, overlayStore, registry } = buildIdleRegistry();
+      await startActiveTurn(registry, "thread-1");
+
+      await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      });
+      await registry.cancelThreadExecutionModeQueue({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+
+      expect(codexClient.lastSetThreadPermissionsParams).toBeUndefined();
+
+      const log = await getLog(overlayStore, "thread-1");
+      expect(log).toHaveLength(2);
+      expect(log[0]?.status).toBe("queued");
+      expect(log[1]?.status).toBe("cancelled");
+      expect(log[0]?.queueId).toBeTruthy();
+      expect(log[1]?.queueId).toBe(log[0]?.queueId);
+
+      await registry.close();
+    });
+
+    it("toggling back to the currently-applied mode while queued is treated as a cancel", async () => {
+      const { codexClient, overlayStore, registry } = buildIdleRegistry();
+      await startActiveTurn(registry, "thread-1");
+
+      await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      });
+      // Toggle back to "default" (the currently-applied mode) while
+      // the queue is still pending.
+      await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "default",
+      });
+
+      // Codex never called.
+      expect(codexClient.lastSetThreadPermissionsParams).toBeUndefined();
+
+      const log = await getLog(overlayStore, "thread-1");
+      expect(log.map((entry) => entry.status)).toEqual([
+        "queued",
+        "cancelled",
+      ]);
+      expect(log[0]?.queueId).toBe(log[1]?.queueId);
+
+      await registry.close();
+    });
+
+    it("queue while a queue exists replaces the target with a fresh queueId", async () => {
+      const { overlayStore, registry } = buildIdleRegistry();
+      await startActiveTurn(registry, "thread-1");
+
+      await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      });
+      // Re-queue. Same applied mode (default) is the from; the new
+      // target is "full-access" again. The previous queueId is
+      // orphaned in the log — that's correct (the user changed their
+      // mind, then changed it back to the same target). The audit
+      // semantically captures both intents.
+      await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      });
+
+      const log = await getLog(overlayStore, "thread-1");
+      // Two queued entries. The second one re-queued to the same
+      // target — but the registry produced a fresh queueId because
+      // the user intent (queue an apply) was re-asserted.
+      expect(log.map((entry) => entry.status)).toEqual([
+        "queued",
+        "queued",
+      ]);
+      expect(log[0]?.queueId).not.toBe(log[1]?.queueId);
+
+      await registry.close();
+    });
+
+    it("emits queued and queueCleared notifications around the lifecycle", async () => {
+      const { registry } = buildIdleRegistry();
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => {
+        events.push(event);
+      });
+      await startActiveTurn(registry, "thread-1");
+
+      await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      });
+      await registry.cancelThreadExecutionModeQueue({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+
+      const methodSequence = events.map(
+        (event) => event.notification.method,
+      );
+      expect(methodSequence).toContain("thread/executionMode/queued");
+      expect(methodSequence).toContain("thread/executionMode/queueCleared");
+
+      const cleared = events.find(
+        (event) =>
+          event.notification.method === "thread/executionMode/queueCleared",
+      );
+      expect(cleared?.notification.params).toMatchObject({
+        threadId: "thread-1",
+        reason: "cancelled",
+      });
+
+      await registry.close();
+    });
+
+    it("turn-end fires the queue flush, applying the queued mode and emitting queueCleared(applied)", async () => {
+      const { codexClient, overlayStore, registry } = buildIdleRegistry();
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => {
+        events.push(event);
+      });
+      const turnId = await startActiveTurn(registry, "thread-1");
+
+      await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      });
+
+      // Codex was NOT called yet — the queue holds the change.
+      expect(codexClient.lastSetThreadPermissionsParams).toBeUndefined();
+
+      // Simulate codex emitting turn/completed at the end of the turn.
+      // The registry's emit() listener flushes the queue.
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId,
+          turn: {
+            id: turnId,
+            status: "completed",
+            output: [],
+          },
+        },
+      });
+      // Wait for the fire-and-forget flush to settle. We need the
+      // entire applyThreadExecutionMode path to complete (codex call,
+      // overlay flip, audit-log append, both notifications) — polling
+      // on setThreadPermissions alone is too early.
+      const waitForApplied = async () => {
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          const log = await getLog(overlayStore, "thread-1");
+          if (log.some((entry) => entry.status === "applied")) {
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      };
+      await waitForApplied();
+
+      expect(codexClient.lastSetThreadPermissionsParams).toEqual({
+        threadId: "thread-1",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      });
+
+      const log = await getLog(overlayStore, "thread-1");
+      expect(log.map((entry) => entry.status)).toEqual([
+        "queued",
+        "applied",
+      ]);
+      // The applied entry must propagate the matching queueId.
+      expect(log[0]?.queueId).toBeTruthy();
+      expect(log[1]?.queueId).toBe(log[0]?.queueId);
+
+      // Order: thread/executionMode/updated must precede
+      // thread/executionMode/queueCleared(applied).
+      const updatedIndex = events.findIndex(
+        (event) =>
+          event.notification.method === "thread/executionMode/updated",
+      );
+      const clearedIndex = events.findIndex(
+        (event) =>
+          event.notification.method === "thread/executionMode/queueCleared" &&
+          (event.notification.params as { reason?: string }).reason ===
+            "applied",
+      );
+      expect(updatedIndex).toBeGreaterThanOrEqual(0);
+      expect(clearedIndex).toBeGreaterThan(updatedIndex);
+
+      await registry.close();
+    });
+
+    it("startTurn flushes a pending queue before the new turn fires", async () => {
+      const { codexClient, overlayStore, registry } = buildIdleRegistry();
+      const turnId = await startActiveTurn(registry, "thread-1", "turn-1");
+
+      await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      });
+
+      // The user-fast-path: turn ends, but before the emit() listener
+      // gets to run, the user submits a new turn. startTurn must flush
+      // the queue itself before letting codex see the new turn.
+      // Simulate that by emitting turn/completed (which lets the prune
+      // run) and then calling startTurn — but we don't await the
+      // turn/completed emission; we go straight to startTurn.
+      // The emit listener for the previous turn has already fired the
+      // flush via fire-and-forget; startTurn awaits the same flush
+      // function defensively, so the queue applies before the new turn.
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId,
+          turn: { id: turnId, status: "completed", output: [] },
+        },
+      });
+
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "next turn" }],
+      });
+
+      // setThreadPermissions must have been called before startTurn's
+      // turn payload was finalized. The mock client tracks the latest
+      // setThreadPermissions call; verify it was invoked at all.
+      expect(codexClient.lastSetThreadPermissionsParams).toEqual({
+        threadId: "thread-1",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      });
+
+      const log = await getLog(overlayStore, "thread-1");
+      expect(log.map((entry) => entry.status)).toContain("applied");
+
+      await registry.close();
+    });
+
+    it("evicts oldest entries past the 100-entry cap", async () => {
+      const { overlayStore, registry } = buildIdleRegistry();
+
+      // Each setThreadExecutionMode toggle on an idle thread produces
+      // exactly one "applied" entry. Ping-pong 101 times.
+      for (let index = 0; index < 101; index += 1) {
+        const target = index % 2 === 0 ? "full-access" : "default";
+        await registry.setThreadExecutionMode({
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: target,
+        });
+      }
+
+      const log = await getLog(overlayStore, "thread-1");
+      expect(log).toHaveLength(100);
+
+      await registry.close();
+    });
   });
 });

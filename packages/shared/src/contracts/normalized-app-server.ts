@@ -804,6 +804,21 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/executionMode/queued";
+      params: {
+        threadId: string;
+        queuedExecutionMode: ThreadExecutionMode;
+        queuedAt: number;
+      };
+    }
+  | {
+      method: "thread/executionMode/queueCleared";
+      params: {
+        threadId: string;
+        reason: "applied" | "cancelled";
+      };
+    }
+  | {
       method: "thread/modelSettings/updated";
       params: {
         threadId: string;
