@@ -24,6 +24,7 @@ import type { DesktopSettingsService } from "../settings/desktop-settings-servic
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { disposeDesktopBackendRegistry } from "../app-server/backend-registry";
 import { CredentialTester } from "../credential-tester/credential-tester";
+import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
 
 function getService(service?: DesktopSettingsService): DesktopSettingsService {
   return service ?? getDesktopSettingsService();
@@ -64,6 +65,8 @@ function getCredentialTester(
           ?? undefined
         );
       },
+      validateMessagingCredentials: (request) =>
+        getDesktopMessagingRuntime().requestCredentialValidation(request),
     });
   }
   return credentialTesterInstance;

@@ -205,6 +205,69 @@ A permissive profile for tests (`PERMISSIVE_CAPABILITY_PROFILE`) is exported
 from the dedicated `@pwragent/messaging-interface/testing` subpath. Production
 code must never import it — every adapter must declare a real profile.
 
+## Credential Validation
+
+Every messaging provider MUST export a top-level
+`validateCredentials(config)` function from its package barrel
+(`packages/messaging/providers/<channel>/src/index.ts`). The desktop
+Settings → Connection-test affordance dispatches to this function via
+dynamic import keyed on `MessagingChannelKind`, so the orchestration
+layer stays channel-neutral and provider SDKs stay isolated to their
+own package.
+
+**Signature:**
+
+```ts
+import type {
+  MessagingCredentialValidationResult,
+  // Plus a per-channel `*CredentialValidationConfig` type from the interface
+  // package — e.g. `TelegramCredentialValidationConfig`. Add a new one to
+  // the interface package when you onboard a new platform.
+} from "@pwragent/messaging-interface";
+
+export async function validateCredentials(
+  config: TelegramCredentialValidationConfig,
+): Promise<MessagingCredentialValidationResult>;
+```
+
+**Required properties:**
+
+1. **Non-disruptive.** No polling started, no gateway connected, no
+   webhook registered, no message sent. The probe MUST be a stateless
+   REST call (or equivalent) using the provider's real SDK.
+   - Telegram uses `grammy.Bot.api.getMe()`.
+   - Discord uses `discord.js.REST.get(Routes.user("@me"))`.
+   - Future platforms should pick the cheapest "who am I" endpoint
+     their SDK exposes.
+2. **Stateless.** Don't construct the full adapter. Don't touch the
+   store. Don't subscribe to events. Don't write logs at info level.
+3. **Result carries only public identity.** `account` is a username,
+   bot handle, or similar — never the credential. `errorMessage` is
+   clipped to ≤ 240 characters via `clipMessagingValidationError` from
+   the interface package, so the renderer never surfaces a giant
+   stack.
+4. **Returns `unset` when config is empty.** The dispatch layer
+   normally short-circuits before reaching the provider when there's
+   no credential, but providers MUST return `{ status: "unset", … }`
+   defensively if their config arrives without the required field.
+5. **Measures its own duration.** `durationMs` is the round-trip the
+   provider observed, not a runtime-side estimate.
+
+**Lazy loading:** the desktop runtime dynamically imports
+`@pwragent/messaging-provider-<channel>` on first invocation and Node
+caches the module thereafter. The provider package is NOT loaded on
+boot — only on the first Test click for that channel (or whenever the
+provider's full adapter would otherwise be loaded by the runtime).
+
+**Boundary:** the provider's `validateCredentials` may import
+`@pwragent/messaging-interface` and its own SDK. It must NOT import
+anything from `apps/desktop`, `packages/messaging/providers/*`
+siblings, or `@pwragent/shared`.
+
+See `packages/messaging/providers/telegram/src/validate-credentials.ts`
+and `packages/messaging/providers/discord/src/validate-credentials.ts`
+for canonical implementations.
+
 ## Adding A New Adapter
 
 To add Mattermost, Feishu/Lark, Slack, Matrix, or another channel:
@@ -223,11 +286,17 @@ To add Mattermost, Feishu/Lark, Slack, Matrix, or another channel:
 6. Store platform-specific details only in `MessagingAdapterState`.
 7. Use short callback handles and resolve them back to semantic actions
    inside the adapter.
-8. Add tests for command normalization, authorization by stable ID, callbacks,
+8. **Implement `validateCredentials` per the contract above.** Add a
+   `<Channel>CredentialValidationConfig` type to
+   `packages/messaging/interface/src/index.ts` and extend
+   `CredentialValidationRequest` in
+   `apps/desktop/src/main/messaging/messaging-runtime.ts`.
+9. Add tests for command normalization, authorization by stable ID, callbacks,
    markdown/code rendering, long text chunking, unsupported inbound media,
-   restart-safe binding behavior, and capability-profile reads in formatting.
-9. Document any capability gaps as adapter degradation or as profile fields
-   the new platform leaves unset, not as workflow branches.
+   restart-safe binding behavior, capability-profile reads in formatting,
+   AND the `validateCredentials` ok / failed / unset paths.
+10. Document any capability gaps as adapter degradation or as profile fields
+    the new platform leaves unset, not as workflow branches.
 
 If a platform exposes a useful feature that the generic surface cannot
 express, extend `packages/messaging/interface/src/index.ts` first and keep

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import type { MessagingCredentialValidationResult } from "@pwragent/messaging-interface";
 import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestResult,
@@ -12,9 +13,15 @@ const execFileAsync = promisify(execFile);
 const log = getMainLogger("pwragent:credential-tester");
 
 /**
- * Default per-probe timeout. Subprocess (codex) and HTTP probes both
- * cap here so the renderer never hangs on a `Testing…` pill while the
- * main process waits indefinitely for an unreachable server.
+ * Default per-probe timeout. The Codex subprocess is bounded here.
+ * The Grok HTTP probe wraps fetch in an AbortController capped at
+ * this value.
+ *
+ * Telegram / Discord probes are dispatched through the messaging
+ * runtime, which delegates to the provider's real library (grammy /
+ * discord.js). Those use the SDK's own timeout machinery and are
+ * NOT bounded by this AbortController. Keep an eye on this if a
+ * smoke check ever hangs longer than 8 seconds.
  */
 const DEFAULT_PROBE_TIMEOUT_MS = 8_000;
 
@@ -23,8 +30,8 @@ const ERROR_MESSAGE_LIMIT = 240;
 
 /**
  * Each probe needs only a tiny slice of the settings service: the
- * resolved secret (or path), and the codex-discovery snapshot for
- * the codex probe. Pulled in via this interface so tests can stub
+ * resolved secret (or path), and an entry into the messaging runtime
+ * for messaging probes. Pulled in via this interface so tests can stub
  * each piece independently.
  */
 export interface CredentialTesterDependencies {
@@ -32,33 +39,28 @@ export interface CredentialTesterDependencies {
   resolveDiscordBotToken: () => string | undefined;
   resolveGrokApiKey: () => Promise<string | undefined>;
   resolveCodexCommand: () => Promise<string | undefined>;
-  /** Override `fetch` for testing. Defaults to `globalThis.fetch`. */
+  /**
+   * Routes Telegram / Discord credential validation through the
+   * channel-neutral messaging runtime, which dynamically imports the
+   * matching provider package and calls its `validateCredentials`.
+   * Tests stub this to avoid loading the provider packages.
+   */
+  validateMessagingCredentials: (request:
+    | { channel: "telegram"; credential: { botToken: string } }
+    | { channel: "discord"; credential: { botToken: string } }
+  ) => Promise<MessagingCredentialValidationResult>;
+  /** Override `fetch` for testing. Defaults to `globalThis.fetch`.
+   *  Only used by the Grok probe — there is no `@ai-sdk/xai` smoke
+   *  check API, so the tester falls back to a direct `GET /v1/models`. */
   fetch?: typeof fetch;
   /** Override the codex `--version` runner. Defaults to spawning the binary. */
   runCodexVersion?: (
     command: string,
   ) => Promise<{ stdout: string; stderr: string }>;
-  /** Override the probe timeout (ms). */
+  /** Override the probe timeout (ms). Applied to the Grok HTTP fetch
+   *  and the Codex subprocess; messaging probes use their library's
+   *  own timeout. */
   timeoutMs?: number;
-}
-
-interface TelegramGetMeResponse {
-  ok: boolean;
-  result?: {
-    id?: number;
-    is_bot?: boolean;
-    username?: string;
-    first_name?: string;
-  };
-  description?: string;
-  error_code?: number;
-}
-
-interface DiscordUsersAtMeResponse {
-  id?: string;
-  username?: string;
-  discriminator?: string;
-  message?: string;
 }
 
 interface GrokModelsResponse {
@@ -75,10 +77,31 @@ interface GrokModelsResponse {
  * Each probe re-resolves the credential before running, so the
  * tester always uses the freshest token / path even if settings
  * changed mid-session.
+ *
+ * Architecture:
+ *
+ * - **Telegram / Discord**: dispatched through the messaging runtime,
+ *   which dynamically imports the matching provider package and calls
+ *   its `validateCredentials` function. Provider SDKs (grammy /
+ *   discord.js) stay isolated to their own packages; the desktop
+ *   tester has zero static knowledge of either. Provider modules
+ *   are loaded on first invocation and cached by Node's module
+ *   registry, so subsequent tests reuse the same module without
+ *   re-loading.
+ * - **Grok**: direct `GET https://api.x.ai/v1/models` via fetch. The
+ *   `@ai-sdk/xai` package agent-core uses doesn't expose a smoke-check
+ *   API (no `models.list()`), so per the user's "use real library
+ *   unless it doesn't have a non-disruptive method" clause, raw fetch
+ *   is the right choice here.
+ * - **Codex**: spawn `<resolved-path> --version`. There's no library
+ *   to use; Codex is a binary.
  */
 export class CredentialTester {
   private readonly deps: Required<
-    Omit<CredentialTesterDependencies, "fetch" | "runCodexVersion" | "timeoutMs">
+    Omit<
+      CredentialTesterDependencies,
+      "fetch" | "runCodexVersion" | "timeoutMs"
+    >
   > & {
     fetch: typeof fetch;
     runCodexVersion: NonNullable<
@@ -97,6 +120,7 @@ export class CredentialTester {
       resolveDiscordBotToken: dependencies.resolveDiscordBotToken,
       resolveGrokApiKey: dependencies.resolveGrokApiKey,
       resolveCodexCommand: dependencies.resolveCodexCommand,
+      validateMessagingCredentials: dependencies.validateMessagingCredentials,
       fetch:
         dependencies.fetch
         ?? ((input, init) => globalThis.fetch(input, init)),
@@ -165,79 +189,29 @@ export class CredentialTester {
   private async testTelegram(
     startedAt: number,
   ): Promise<SettingsCredentialTestResult> {
-    const token = this.deps.resolveTelegramBotToken();
-    if (!token) {
+    const botToken = this.deps.resolveTelegramBotToken();
+    if (!botToken) {
       return unset("telegram", startedAt);
     }
-    // Bot tokens MUST go in the URL path per the Telegram contract,
-    // not as a header. The full URL stays inside the main process —
-    // it never reaches the renderer.
-    const url = `https://api.telegram.org/bot${encodeURIComponent(token)}/getMe`;
-    const { json, status, durationMs } = await this.fetchJson<TelegramGetMeResponse>({
-      url,
-      method: "GET",
+    const result = await this.deps.validateMessagingCredentials({
+      channel: "telegram",
+      credential: { botToken },
     });
-    const testedAt = Date.now();
-    if (status === 200 && json?.ok && json.result?.username) {
-      return {
-        kind: "telegram",
-        status: "ok",
-        testedAt,
-        durationMs,
-        account: `@${json.result.username}`,
-        detail: "api.telegram.org",
-      };
-    }
-    return {
-      kind: "telegram",
-      status: "failed",
-      testedAt,
-      durationMs,
-      errorMessage: clipString(
-        json?.description
-          ?? `HTTP ${status} from api.telegram.org/getMe`,
-      ),
-    };
+    return liftMessagingResult("telegram", result);
   }
 
   private async testDiscord(
     startedAt: number,
   ): Promise<SettingsCredentialTestResult> {
-    const token = this.deps.resolveDiscordBotToken();
-    if (!token) {
+    const botToken = this.deps.resolveDiscordBotToken();
+    if (!botToken) {
       return unset("discord", startedAt);
     }
-    const { json, status, durationMs } = await this.fetchJson<DiscordUsersAtMeResponse>({
-      url: "https://discord.com/api/v10/users/@me",
-      method: "GET",
-      headers: { Authorization: `Bot ${token}` },
+    const result = await this.deps.validateMessagingCredentials({
+      channel: "discord",
+      credential: { botToken },
     });
-    const testedAt = Date.now();
-    if (status === 200 && json?.username) {
-      // Discord moved away from the legacy username#discriminator
-      // format in 2023; modern users return discriminator "0".
-      const account =
-        json.discriminator && json.discriminator !== "0"
-          ? `${json.username}#${json.discriminator}`
-          : json.username;
-      return {
-        kind: "discord",
-        status: "ok",
-        testedAt,
-        durationMs,
-        account,
-        detail: "discord.com/api/v10",
-      };
-    }
-    return {
-      kind: "discord",
-      status: "failed",
-      testedAt,
-      durationMs,
-      errorMessage: clipString(
-        json?.message ?? `HTTP ${status} from discord.com/users/@me`,
-      ),
-    };
+    return liftMessagingResult("discord", result);
   }
 
   private async testGrok(
@@ -247,6 +221,12 @@ export class CredentialTester {
     if (!apiKey) {
       return unset("grok", startedAt);
     }
+    // The xAI SDK (`@ai-sdk/xai`) we already use in agent-core does
+    // NOT expose a non-disruptive smoke-check API — it's a model
+    // factory, not a control-plane client. There is no `models.list()`
+    // or equivalent. Per the user's clause "use the real library
+    // unless the real library does not expose a simple non-disruptive
+    // method", a direct `GET /v1/models` is the right call here.
     const { json, status, durationMs } = await this.fetchJson<GrokModelsResponse>({
       url: "https://api.x.ai/v1/models",
       method: "GET",
@@ -326,10 +306,10 @@ export class CredentialTester {
   }
 
   /**
-   * Single helper for all three HTTP probes. Times out via
-   * AbortController so the renderer never hangs longer than
-   * `timeoutMs`. Parses JSON best-effort; non-JSON responses fall
-   * through to a string with status code only.
+   * Helper for the Grok probe. Times out via AbortController so the
+   * renderer never hangs longer than `timeoutMs`. Parses JSON
+   * best-effort; non-JSON responses fall through to a string with
+   * status code only.
    */
   private async fetchJson<T>(input: {
     url: string;
@@ -361,6 +341,29 @@ export class CredentialTester {
       clearTimeout(timeout);
     }
   }
+}
+
+/**
+ * Translate a generic `MessagingCredentialValidationResult` (returned
+ * by the messaging runtime / provider) into the IPC-shaped
+ * `SettingsCredentialTestResult` the renderer consumes. The shapes
+ * differ only in the `kind` field; everything else is preserved.
+ */
+function liftMessagingResult(
+  kind: "telegram" | "discord",
+  result: MessagingCredentialValidationResult,
+): SettingsCredentialTestResult {
+  return {
+    kind,
+    status: result.status,
+    testedAt: result.testedAt,
+    durationMs: result.durationMs,
+    ...(result.account !== undefined ? { account: result.account } : {}),
+    ...(result.detail !== undefined ? { detail: result.detail } : {}),
+    ...(result.errorMessage !== undefined
+      ? { errorMessage: result.errorMessage }
+      : {}),
+  };
 }
 
 function unset(
