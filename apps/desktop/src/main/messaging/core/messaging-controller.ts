@@ -33,7 +33,6 @@ import type {
   MessagingMessageIntent,
   MessagingPendingIntentRecord,
   MessagingStreamUpdateIntent,
-  MessagingSurfaceAction,
   MessagingSurfaceRef,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
