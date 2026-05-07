@@ -20,6 +20,30 @@ Telegram registers these commands at startup with `setMyCommands`. Telegram
 clients can cache command menus, so if old OpenClaw commands still appear,
 restart or reopen the bot menu after starting PwrAgent.
 
+### `@<bot> <verb>` text-mention alternative
+
+On Telegram and Discord, the same verbs can be invoked by mentioning the bot
+followed by the verb — for example `@PwrAgent resume` or `@PwrAgent help`.
+The mention path is recognized before the slash-prefix path and dispatches the
+identical `MessagingInboundCommandEvent` the slash form produces, so workflow
+behavior is the same regardless of invocation style. This is useful from
+keyboards or topics where the slash menu isn't readily accessible. Notes:
+
+- Telegram requires the bot's `@username` and matches it case-insensitively
+  (Telegram usernames are case-insensitive); the adapter captures the
+  username via `getMe()` at startup. If `getMe()` fails, slash commands
+  still work, but mention parsing is disabled until the next start.
+- Discord ships raw user-id mention tokens (`<@USER_ID>` or the legacy
+  `<@!USER_ID>` nickname-alias form) in `message.content` even though the
+  client UI renders `@PwrAgent`. The adapter matches on the bot's user_id,
+  taken from the configured `applicationId` (which equals the bot user_id
+  for any modern Discord app). If `applicationId` is not set, mention
+  parsing is disabled.
+- The mention parser also runs against attachment captions, so a photo or
+  file uploaded with caption `@<bot> resume` dispatches as the `resume`
+  command (the typed verb wins over the incidental upload). Bare or
+  unrecognized captions still route the attachment as media.
+
 ## Button Layout
 
 Interactive actions can carry generic layout hints. Shared workflow code may
@@ -235,6 +259,7 @@ Telegram:
 1. Start PwrAgent with `pnpm dev:op`; if the bot has a webhook configured, PwrAgent clears it before long polling.
 2. Confirm `/resume`, `/threads`, `/status`, `/detach`, and `/bind` are registered in the Telegram command menu.
 3. Send `/resume` from an allowlisted Telegram user.
+   - Repeat using a text mention (`@` + your bot's username + ` resume`) instead of the slash command — the same thread picker should render. Confirm a bare mention with no verb is treated as plain text and not as a command.
 4. Use Projects, select a project, then select a thread.
 5. Verify a pinned status card appears and updates in place.
 6. Use status buttons to change Model, Reasoning, Fast mode, and Permissions.
@@ -274,6 +299,7 @@ Discord:
 
 1. In the Discord Developer Portal, confirm the bot has Gateway access, the privileged Message Content Intent enabled, and the bot was installed with the `applications.commands` scope.
 2. Send `/resume` from an allowlisted Discord user.
+   - Repeat using a text mention (type `@` and pick the bot from the autocomplete, then ` resume`) instead of the slash command — the same thread picker should render. Confirm a bare mention with no verb is treated as plain text and not as a command. Mention parsing requires `applicationId` to be configured.
 3. Verify a numbered thread picker appears with components.
 4. Choose a thread by component, then repeat by replying `1`.
 5. For a bound Local thread with handoff branch metadata, choose Handoff from

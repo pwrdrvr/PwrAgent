@@ -1,8 +1,16 @@
-import type { MessagingAuditContext } from "@pwragent/messaging-interface";
+import type {
+  MessagingAuditContext,
+  MessagingInboundEvent,
+} from "@pwragent/messaging-interface";
 import { describe, expect, it, vi } from "vitest";
 import {
   DiscordAdapter,
+  stripDiscordBotMention,
   type DiscordApi,
+  type DiscordGatewayConnection,
+  type DiscordGatewayEvent,
+  type DiscordGatewayListener,
+  type DiscordMessageCreateDispatch,
 } from "../discord-adapter.ts";
 import type { DiscordApplicationCommand } from "../discord-commands.ts";
 
@@ -250,7 +258,296 @@ describe("discord adapter", () => {
       }),
     );
   });
+
+  describe("stripDiscordBotMention", () => {
+    const BOT_ID = "1480556454498009352";
+
+    it("strips a leading <@id> mention and returns the verb remainder", () => {
+      expect(stripDiscordBotMention(`<@${BOT_ID}> help`, BOT_ID)).toBe("help");
+    });
+
+    it("accepts the legacy <@!id> nickname-alias form", () => {
+      expect(stripDiscordBotMention(`<@!${BOT_ID}> resume`, BOT_ID)).toBe("resume");
+    });
+
+    it("preserves args after the verb", () => {
+      expect(stripDiscordBotMention(`<@${BOT_ID}> resume thread-42`, BOT_ID)).toBe(
+        "resume thread-42",
+      );
+    });
+
+    it("tolerates leading whitespace before the mention", () => {
+      expect(stripDiscordBotMention(`   <@${BOT_ID}> help`, BOT_ID)).toBe("help");
+    });
+
+    it("returns undefined when the mention is the entire message", () => {
+      expect(stripDiscordBotMention(`<@${BOT_ID}>`, BOT_ID)).toBeUndefined();
+      expect(stripDiscordBotMention(`<@${BOT_ID}>   `, BOT_ID)).toBeUndefined();
+    });
+
+    it("returns undefined when the message doesn't start with the mention", () => {
+      expect(stripDiscordBotMention(`hi <@${BOT_ID}> help`, BOT_ID)).toBeUndefined();
+      expect(stripDiscordBotMention("just text", BOT_ID)).toBeUndefined();
+    });
+
+    it("returns undefined when a different user is mentioned", () => {
+      expect(stripDiscordBotMention("<@9999999> help", BOT_ID)).toBeUndefined();
+    });
+
+    it("returns undefined when botUserId is unset", () => {
+      expect(stripDiscordBotMention(`<@${BOT_ID}> help`, undefined)).toBeUndefined();
+    });
+  });
+
+  describe("text mention dispatch", () => {
+    it("dispatches `<@bot> resume` as a command event", async () => {
+      const BOT_ID = "1480556454498009352";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          applicationId: BOT_ID,
+          authorizedActorIds: ["user-1"],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          authorBot: false,
+          content: `<@${BOT_ID}> resume`,
+          id: "msg-1",
+        }),
+      });
+
+      expect(events).toHaveLength(1);
+      const dispatched = events[0];
+      expect(dispatched).toMatchObject({
+        kind: "command",
+        command: "resume",
+        rawText: "/resume",
+      });
+      await adapter.stop();
+    });
+
+    it("dispatches `<@bot> help args` with args parsed from the remainder", async () => {
+      const BOT_ID = "1480556454498009352";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          applicationId: BOT_ID,
+          authorizedActorIds: ["user-1"],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          authorBot: false,
+          content: `<@${BOT_ID}> help foo bar`,
+          id: "msg-2",
+        }),
+      });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        kind: "command",
+        command: "help",
+        args: ["foo", "bar"],
+        rawText: "/help foo bar",
+      });
+      await adapter.stop();
+    });
+
+    it("routes a caption like `<@bot> resume` on an attachment to a command, not media", async () => {
+      const BOT_ID = "1480556454498009352";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          applicationId: BOT_ID,
+          authorizedActorIds: ["user-1"],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          attachments: [
+            {
+              filename: "screenshot.png",
+              id: "att-1",
+              size: 100,
+              url: "https://cdn.discordapp.com/.../screenshot.png",
+            },
+          ],
+          authorBot: false,
+          content: `<@${BOT_ID}> resume`,
+          id: "msg-cap-1",
+        }),
+      });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        kind: "command",
+        command: "resume",
+        rawText: "/resume",
+      });
+      await adapter.stop();
+    });
+
+    it("preserves media dispatch when the caption isn't a recognized mention command", async () => {
+      const BOT_ID = "1480556454498009352";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          applicationId: BOT_ID,
+          authorizedActorIds: ["user-1"],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          attachments: [
+            {
+              filename: "logs.txt",
+              id: "att-2",
+              size: 12,
+              url: "https://cdn.discordapp.com/.../logs.txt",
+            },
+          ],
+          authorBot: false,
+          content: "see the attached logs",
+          id: "msg-cap-2",
+        }),
+      });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        kind: "media",
+        text: "see the attached logs",
+      });
+      await adapter.stop();
+    });
+
+    it("falls through to a text event when the mention isn't ours", async () => {
+      const BOT_ID = "1480556454498009352";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          applicationId: BOT_ID,
+          authorizedActorIds: ["user-1"],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          authorBot: false,
+          content: "hey <@9999999> what's up",
+          id: "msg-3",
+        }),
+      });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        kind: "text",
+        text: "hey <@9999999> what's up",
+      });
+      await adapter.stop();
+    });
+  });
 });
+
+class TestDiscordGateway implements DiscordGatewayConnection {
+  private readonly listeners = new Set<DiscordGatewayListener>();
+
+  async start(): Promise<void> {}
+  async close(): Promise<void> {
+    this.listeners.clear();
+  }
+  onEvent(listener: DiscordGatewayListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+  async emit(event: DiscordGatewayEvent): Promise<void> {
+    await Promise.all([...this.listeners].map(async (listener) => listener(event)));
+  }
+}
+
+function messageDispatch(params: {
+  attachments?: DiscordMessageCreateDispatch["attachments"];
+  authorBot: boolean;
+  content: string;
+  id: string;
+}): DiscordMessageCreateDispatch {
+  return {
+    attachments: params.attachments,
+    author: {
+      bot: params.authorBot,
+      id: "user-1",
+      username: "huntharo",
+    },
+    channel_id: "channel-1",
+    channel_type: 0,
+    content: params.content,
+    guild_id: "guild-1",
+    id: params.id,
+    is_thread: false,
+  };
+}
 
 function discordAudit(): MessagingAuditContext {
   return {

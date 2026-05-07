@@ -677,6 +677,52 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       isThread: message.is_thread,
     });
 
+    // `<@botUserId> <verb>` text mention → command. Run BEFORE the
+    // attachment branch so captions like `@PwrAgent resume` on a
+    // file/image upload route to the command pathway too — the user
+    // typed a verb, that intent wins over the incidental attachment.
+    // Mirrors the Mattermost `@<bot> <verb>` path so users on Discord
+    // can invoke commands without remembering slash names. Discord
+    // ships raw `<@USER_ID>` (or legacy `<@!USER_ID>`) tokens in
+    // `message.content` even though the UI renders `@PwrAgent`, so we
+    // match on the id rather than the display name. The bot's user_id
+    // equals the configured applicationId for any modern Discord app
+    // (the application id and bot user id were unified for bots
+    // created since 2016).
+    if (message.content !== undefined) {
+      const mentionRemainder = stripDiscordBotMention(
+        message.content,
+        this.options.config.applicationId,
+      );
+      if (mentionRemainder !== undefined) {
+        // Synthesize the slash form so the controller sees the same
+        // `MessagingInboundCommandEvent` shape as a `/`-prefixed
+        // message. The slash regex below extracts verb + args. If
+        // the remainder doesn't form a valid verb (e.g. `@bot @bot
+        // help` strips one mention but leaves another, or `@bot 123`
+        // leads with a non-identifier char) we deliberately fall
+        // through to the standard attachment / slash / text paths
+        // below — the original `message.content` is dispatched as
+        // media or plain text rather than a half-recognized command.
+        const synthRaw = `/${mentionRemainder}`;
+        const mentionCommandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(synthRaw);
+        if (mentionCommandMatch) {
+          await listener({
+            id: `discord:message:${message.id}`,
+            kind: "command",
+            actor: this.actorFromUser(message.author),
+            args: mentionCommandMatch[2]?.split(/\s+/).filter(Boolean) ?? [],
+            channel,
+            command: mentionCommandMatch[1]?.toLowerCase() ?? "",
+            rawText: synthRaw,
+            receivedAt,
+            routingState,
+          });
+          return;
+        }
+      }
+    }
+
     if (message.attachments && message.attachments.length > 0) {
       const attachments = message.attachments.map((attachment) =>
         this.attachmentFromDiscord(attachment),
@@ -1639,6 +1685,54 @@ function defensiveAllowedMentions(): DiscordAllowedMentions {
     roles: [],
     users: [],
   };
+}
+
+/**
+ * If `text` starts with a Discord user-mention token for `botUserId`
+ * (`<@123>` or the legacy nickname-alias form `<@!123>`, with optional
+ * leading whitespace), return the rest of the message with that
+ * mention stripped and trimmed. Otherwise return `undefined`.
+ *
+ * Used to detect `@PwrAgent <verb>` text-mention commands so the
+ * adapter can dispatch them through the same command pathway as
+ * slash commands. Discord renders `@PwrAgent` in the UI but ships
+ * the raw `<@USER_ID>` token in `message.content` over the gateway,
+ * so we match on the id rather than the visible name.
+ *
+ * Returns `undefined` when:
+ *   - `botUserId` is unset (config didn't expose it)
+ *   - the message doesn't begin with the mention token
+ *   - the mention is the entire message (no command verb following)
+ */
+export function stripDiscordBotMention(
+  text: string,
+  botUserId: string | undefined,
+): string | undefined {
+  if (!botUserId) {
+    return undefined;
+  }
+  const trimmedStart = text.replace(/^\s+/, "");
+  // Match either `<@123>` or the legacy `<@!123>` form. Discord still
+  // ships both in `message.content`; the `!` variant historically
+  // signaled a server-nickname alias, but the user_id payload is the
+  // same regardless. Use plain `startsWith` rather than building a
+  // RegExp — `botUserId` comes from config and we don't want a stray
+  // metacharacter to ever change matching semantics.
+  const direct = `<@${botUserId}>`;
+  const alias = `<@!${botUserId}>`;
+  const mention = trimmedStart.startsWith(direct)
+    ? direct
+    : trimmedStart.startsWith(alias)
+      ? alias
+      : undefined;
+  if (!mention) {
+    return undefined;
+  }
+  const remainder = trimmedStart.slice(mention.length).trim();
+  if (remainder.length === 0) {
+    return undefined;
+  }
+  return remainder;
 }
 
 function messageToDispatch(message: Message): DiscordMessageCreateDispatch {

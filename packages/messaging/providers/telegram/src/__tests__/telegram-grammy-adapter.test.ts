@@ -136,6 +136,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
     editForumTopic: ReturnType<typeof vi.fn>;
     editMessageText: ReturnType<typeof vi.fn>;
     getFile: ReturnType<typeof vi.fn>;
+    getMe: ReturnType<typeof vi.fn>;
     getWebhookInfo: ReturnType<typeof vi.fn>;
     pinChatMessage: ReturnType<typeof vi.fn>;
     sendChatAction: ReturnType<typeof vi.fn>;
@@ -169,6 +170,7 @@ function createGrammyBot(): TelegramGrammyBotLike & {
         }),
       ),
       getFile: vi.fn(async () => ({ file_path: "documents/file.txt" })),
+      getMe: vi.fn(async () => ({ id: 123, is_bot: true, username: "TestBot" })),
       getWebhookInfo: vi.fn(async () => ({ url: "" })),
       pinChatMessage: vi.fn(
         async (

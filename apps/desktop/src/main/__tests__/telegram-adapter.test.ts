@@ -169,6 +169,145 @@ describe("TelegramAdapter", () => {
     });
   });
 
+  it("treats `@PwrAgentBot resume` as the /resume command", async () => {
+    const harness = await createControllerHarness();
+    await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
+    await harness.adapter.handleUpdate({
+      update_id: 1,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        date: 1,
+        from: {
+          first_name: "Ada",
+          id: 42,
+          is_bot: false,
+          username: "mutable_username",
+        },
+        message_id: 100,
+        text: "@PwrAgentBot resume",
+      },
+    });
+
+    // Same outbound shape as /resume — the inbound mention path
+    // synthesizes a `MessagingInboundCommandEvent` with command =
+    // "resume" so the controller's existing dispatcher sees an
+    // identical event.
+    expect(harness.api.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: 777,
+        reply_markup: {
+          inline_keyboard: expect.arrayContaining([
+            [
+              expect.objectContaining({ text: "1. Thread one" }),
+            ],
+          ]),
+        },
+      }),
+    );
+    const request = harness.api.sendMessage.mock.calls.at(-1)?.[0];
+    expect(request?.text).toContain("Choose a thread to resume");
+  });
+
+  it("treats a photo caption like `@PwrAgentBot resume` as a command, not media", async () => {
+    const harness = await createControllerHarness();
+    const events: MessagingInboundEvent[] = [];
+    await harness.adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await harness.adapter.handleUpdate({
+      update_id: 1,
+      message: {
+        caption: "@PwrAgentBot resume",
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        date: 1,
+        from: {
+          first_name: "Ada",
+          id: 42,
+          is_bot: false,
+          username: "mutable_username",
+        },
+        message_id: 100,
+        photo: [
+          {
+            file_id: "AgADBA",
+            height: 480,
+            width: 640,
+          },
+        ],
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "command",
+      command: "resume",
+      rawText: "/resume",
+    });
+  });
+
+  it("treats `@PwrAgentBot help` as a command and a non-leading mention as text", async () => {
+    const harness = await createControllerHarness();
+    const events: MessagingInboundEvent[] = [];
+    await harness.adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await harness.adapter.handleUpdate({
+      update_id: 1,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        date: 1,
+        from: {
+          first_name: "Ada",
+          id: 42,
+          is_bot: false,
+          username: "mutable_username",
+        },
+        message_id: 100,
+        text: "@PwrAgentBot help",
+      },
+    });
+    await harness.adapter.handleUpdate({
+      update_id: 2,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        date: 2,
+        from: {
+          first_name: "Ada",
+          id: 42,
+          is_bot: false,
+          username: "mutable_username",
+        },
+        message_id: 101,
+        text: "hi there @PwrAgentBot",
+      },
+    });
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      kind: "command",
+      command: "help",
+      rawText: "/help",
+    });
+    expect(events[1]).toMatchObject({
+      kind: "text",
+      text: "hi there @PwrAgentBot",
+    });
+  });
+
   it("signals typing activity without rendering a visible Telegram message", async () => {
     const api = createApi();
     const adapter = new TelegramAdapter({
@@ -2211,6 +2350,7 @@ function createApi(overrides?: Partial<{
   deleteWebhook: ReturnType<typeof vi.fn>;
   editForumTopic: ReturnType<typeof vi.fn>;
   editMessageText: ReturnType<typeof vi.fn>;
+  getMe: ReturnType<typeof vi.fn>;
   getWebhookInfo: ReturnType<typeof vi.fn>;
   getFile: ReturnType<typeof vi.fn>;
   pinChatMessage: ReturnType<typeof vi.fn>;
@@ -2225,6 +2365,7 @@ function createApi(overrides?: Partial<{
   deleteWebhook: ReturnType<typeof vi.fn>;
   editForumTopic: ReturnType<typeof vi.fn>;
   editMessageText: ReturnType<typeof vi.fn>;
+  getMe: ReturnType<typeof vi.fn>;
   getWebhookInfo: ReturnType<typeof vi.fn>;
   getFile: ReturnType<typeof vi.fn>;
   pinChatMessage: ReturnType<typeof vi.fn>;
@@ -2246,6 +2387,7 @@ function createApi(overrides?: Partial<{
       },
       message_id: request.message_id,
     })),
+    getMe: vi.fn(async () => ({ id: 100, is_bot: true, username: "PwrAgentBot" })),
     getWebhookInfo: vi.fn(async () => ({ url: "" })),
     getFile: vi.fn(async () => ({ file_path: "documents/streaming-logs.txt" })),
     pinChatMessage: vi.fn(async (_request: TelegramPinChatMessageRequest) => true),

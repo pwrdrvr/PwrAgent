@@ -232,6 +232,7 @@ export type TelegramBotApi = {
   deleteWebhook(params?: { drop_pending_updates?: boolean }): Promise<boolean>;
   editForumTopic(request: TelegramEditForumTopicRequest): Promise<boolean>;
   editMessageText(request: TelegramEditMessageTextRequest): Promise<TelegramSentMessage>;
+  getMe(): Promise<{ id: number; is_bot: boolean; username?: string }>;
   getWebhookInfo(): Promise<{ url: string }>;
   getFile(fileId: string): Promise<{ file_path?: string }>;
   pinChatMessage(request: TelegramPinChatMessageRequest): Promise<boolean>;
@@ -275,6 +276,12 @@ export type TelegramGrammyBotLike = {
       text: string,
       other?: Omit<TelegramEditMessageTextRequest, "chat_id" | "message_id" | "text">,
     ): Promise<TelegramSentMessage | boolean>;
+    // Telegram's `User` allows `username` to be absent (non-bot users
+    // can omit it). Grammy returns `UserFromGetMe` which always has
+    // it set for bot accounts, but we keep the type optional here to
+    // match `TelegramBotApi.getMe` and avoid a structural narrowing
+    // surprise if grammy ever loosens the type.
+    getMe(): Promise<{ id: number; is_bot: boolean; username?: string }>;
     getWebhookInfo(): Promise<{ url: string }>;
     getFile(fileId: string): Promise<{ file_path?: string }>;
     pinChatMessage(
@@ -372,6 +379,16 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   private callbackBindings = new Map<string, TelegramCallbackBinding>();
   private defaultBot?: TelegramBotLike;
+  /**
+   * The bot's `@username` as returned by `getMe()`, lower-cased once
+   * for case-insensitive prefix matching. Captured during `start()`.
+   * Telegram usernames are derived from the bot's profile (not from
+   * the bot token), so unlike `configuredBotId` this can't be
+   * computed offline. Undefined when the adapter hasn't started yet
+   * or `getMe()` failed at startup; in that case `@<bot> <verb>`
+   * mention parsing is skipped (slash commands still work).
+   */
+  private botUsername?: string;
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private streamRateLimits = new Map<string, TelegramStreamRateLimitState>();
   private streamSurfaces = new Map<string, TelegramDeliveryTarget>();
@@ -424,6 +441,25 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     const tokenDiagnostics = telegramBotTokenDiagnostics(this.options.config.botToken);
     this.options.logger?.debug("telegram startup token diagnostics", tokenDiagnostics);
+
+    // Capture the bot's `@username` so the inbound path can recognize
+    // `@<botusername> <verb>` text mentions. Telegram usernames live
+    // on the bot profile (not the token), so this requires an actual
+    // API call. Failure isn't fatal — slash commands still work; we
+    // just skip mention parsing.
+    try {
+      const me = await this.bot.api.getMe();
+      if (me.username) {
+        this.botUsername = me.username.toLowerCase();
+        this.options.logger?.debug(
+          `telegram captured bot username for mention parsing: @${this.botUsername}`,
+        );
+      }
+    } catch (error) {
+      this.options.logger?.warn?.("telegram getMe failed; @-mention commands disabled", {
+        error: errorMessage(error),
+      });
+    }
 
     let webhookInfo: { url: string };
     try {
@@ -478,6 +514,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     await this.startPromise?.catch(() => undefined);
     this.startPromise = undefined;
     this.listener = undefined;
+    this.botUsername = undefined;
   }
 
   async downloadAttachment(
@@ -944,6 +981,47 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         `telegram inbound ignored update=${updateId} message=${message.message_id} reason=${serviceMessageReason ?? "own_bot"} chat=${message.chat.id}`,
       );
       return;
+    }
+
+    // `@<botusername> <verb>` text mention → command. Run BEFORE the
+    // attachment branch so captions like `@PwrAgentBot resume` on a
+    // photo/file/voice upload route to the command pathway too — the
+    // user typed a verb, that intent wins over the incidental
+    // attachment. Mirrors the Mattermost / Discord paths so users on
+    // Telegram can invoke commands without the slash menu (helpful
+    // when a phone keyboard doesn't surface custom commands or when
+    // typing into a topic the user hasn't sent a slash to before).
+    // Username matching is case-insensitive — Telegram usernames are
+    // case-insensitive.
+    const mentionCandidate = message.text ?? message.caption;
+    const mentionRemainder = mentionCandidate
+      ? stripTelegramBotMention(mentionCandidate, this.botUsername)
+      : undefined;
+    if (mentionRemainder !== undefined && mentionCandidate !== undefined) {
+      // If the remainder after the mention doesn't form a valid verb
+      // (e.g. a second mention, or a digit-leading token), we
+      // deliberately fall through to the attachment / slash / text
+      // paths below so the user's original message is dispatched as
+      // media or plain text rather than a half-recognized command.
+      const synthRaw = `/${mentionRemainder}`;
+      const mentionCommandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(synthRaw);
+      if (mentionCommandMatch) {
+        this.options.logger?.debug(
+          `telegram inbound mention-command update=${updateId} message=${message.message_id} chat=${message.chat.id} actor=${message.from.id} command=${mentionCommandMatch[1]} preview="${compactPreview(mentionCandidate)}"`,
+        );
+        await listener({
+          id: `telegram:update:${updateId}:message:${message.message_id}`,
+          kind: "command",
+          actor: this.actorFromUser(message.from),
+          args: mentionCommandMatch[2]?.split(/\s+/).filter(Boolean) ?? [],
+          channel: this.channelFromMessage(message),
+          command: mentionCommandMatch[1]?.toLowerCase() ?? "",
+          rawText: synthRaw,
+          receivedAt: this.messageReceivedAt(message),
+          routingState: this.routingStateFromMessage(message),
+        });
+        return;
+      }
     }
 
     const attachments = this.attachmentsFromMessage(message);
@@ -1881,6 +1959,7 @@ export function adaptGrammyBot(bot: TelegramGrammyBotLike): TelegramBotLike {
           request,
         );
       },
+      getMe: async () => await bot.api.getMe(),
       getWebhookInfo: async () => await bot.api.getWebhookInfo(),
       getFile: async (fileId) => await bot.api.getFile(fileId),
       pinChatMessage: async (request) => {
@@ -1949,6 +2028,54 @@ function browseSessionIdForIntent(intent: MessagingSurfaceIntent): string | unde
   return intent.kind === "thread_picker" || intent.kind === "project_picker"
     ? intent.browseSessionId
     : undefined;
+}
+
+/**
+ * If `text` starts with `@<botUsername>` (case-insensitive, optional
+ * leading whitespace), return the rest of the message with that
+ * prefix stripped and trimmed. Otherwise return `undefined`.
+ *
+ * Used to detect `@PwrAgent <verb>` text-mention commands so the
+ * adapter can dispatch them through the same command pathway as
+ * slash commands. Telegram usernames are case-insensitive (server
+ * normalizes), so we lower-case both sides before comparing.
+ *
+ * Returns `undefined` when:
+ *   - `botUsername` is unset (adapter hasn't `start()`'d yet, or
+ *     `getMe()` failed at startup)
+ *   - the message doesn't begin with the mention
+ *   - a longer username token follows `@<botUsername>` (so
+ *     `@pwragent2` doesn't match `@pwragent`)
+ *   - the mention is the entire message (no command verb following)
+ */
+export function stripTelegramBotMention(
+  text: string,
+  botUsername: string | undefined,
+): string | undefined {
+  if (!botUsername) {
+    return undefined;
+  }
+  const trimmedStart = text.replace(/^\s+/, "");
+  const mention = `@${botUsername}`;
+  if (trimmedStart.length < mention.length) {
+    return undefined;
+  }
+  if (trimmedStart.slice(0, mention.length).toLowerCase() !== mention.toLowerCase()) {
+    return undefined;
+  }
+  // Word-boundary check: anything after the mention prefix must be
+  // whitespace or end-of-string. Telegram usernames are
+  // [A-Za-z0-9_]{5,32}, so `@pwragent2` continuing with `2` would
+  // be a different bot — not us.
+  const after = trimmedStart.charAt(mention.length);
+  if (after !== "" && !/\s/.test(after)) {
+    return undefined;
+  }
+  const remainder = trimmedStart.slice(mention.length).trim();
+  if (remainder.length === 0) {
+    return undefined;
+  }
+  return remainder;
 }
 
 function sanitizeTelegramTopicName(title: string): string {
