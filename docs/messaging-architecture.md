@@ -287,6 +287,25 @@ Providers receive persistent state only through opaque interfaces declared in `@
 
 This is enforced by package boundaries (`pnpm lint:boundaries`) and reinforced in [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md). The reason matters as much as the rule: providers come and go, the schema is shared, and a provider that owns its own table effectively owns a piece of the desktop migration plan it has no business owning. Keep the seam at the interface, not the database.
 
+## Canonical command catalog
+
+The slash-command surface every messaging provider exposes — `resume`, `status`, `detach`, `help` — is defined in a single channel-neutral catalog at [`apps/desktop/src/main/messaging/core/messaging-command-catalog.ts`](../apps/desktop/src/main/messaging/core/messaging-command-catalog.ts).
+
+Three things consume the catalog:
+
+1. **The controller's `handleCommand` dispatch.** `matchMessagingCommandVerb` resolves an inbound `MessagingInboundCommandEvent.command` to a known verb (or `undefined` for unrecognized commands). Verbs in the catalog dispatch to typed handlers; everything else falls through to the help surface.
+2. **The user-facing `/help` body.** `formatMessagingCommandHelpBody` derives the bullet list from the catalog so adding or renaming a verb in one place updates the help text everywhere it's rendered.
+3. **Provider adapters that register native slash commands.** Today each adapter maintains its own list (`packages/messaging/providers/discord/src/discord-commands.ts`, `packages/messaging/providers/mattermost/src/mattermost-commands.ts`). A future refactor can collapse those onto the shared catalog so a new verb only requires touching one file. Until then, adapter-side lists must stay in sync with the catalog by convention.
+
+To add a new canonical verb:
+
+1. Add an entry to `MESSAGING_COMMAND_CATALOG` with a stable `verb` string and a one-line description.
+2. Bump the `MessagingCommandVerb` union type.
+3. Wire a handler branch in `MessagingController.handleCommand` that calls `matchMessagingCommandVerb` and dispatches.
+4. For each provider adapter that registers native slash commands, add the verb to its own canonical-bases array (Discord's `DISCORD_APPLICATION_COMMANDS`, Mattermost's `CANONICAL_COMMAND_BASES`, etc.).
+
+The help surface and unknown-command fallback automatically pick up the new verb from the catalog — no string-list to update separately.
+
 ## How to add a provider
 
 The full procedure is in [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md). At a high level:
@@ -310,6 +329,7 @@ The full procedure is in [`docs/messaging-adapter-contract.md`](messaging-adapte
 | `packages/messaging/providers/<channel>/src/<channel>-formatting.ts` | Pure formatters that turn intents into platform-native components/text. Reads the profile for layout caps. |
 | `apps/desktop/src/main/messaging/messaging-runtime.ts` | Constructs one controller per adapter, wires backend events |
 | `apps/desktop/src/main/messaging/core/messaging-controller.ts` | Workflow logic — turn admission, picker state, status card, handoff flow, audit |
+| `apps/desktop/src/main/messaging/core/messaging-command-catalog.ts` | Canonical command catalog (verb + description), `matchMessagingCommandVerb` for dispatch lookup, `formatMessagingCommandHelpBody` for `/help` body generation |
 | `apps/desktop/src/main/messaging/core/messaging-renderer.ts` | Producers for thread picker, confirmation, questionnaire, error |
 | `apps/desktop/src/main/messaging/core/messaging-status-card.ts` | Producers for status card, model picker, reasoning picker, handoff overview/branch-picker/confirmation |
 | `apps/desktop/src/main/messaging/core/messaging-resume-browser.ts` | Producer for resume browser (`/resume`) — picker pagination, project/thread filtering |
