@@ -2082,7 +2082,7 @@ export class DesktopBackendRegistry {
    */
   private async applyThreadExecutionMode(
     params: SetThreadExecutionModeRequest,
-    options?: { fromQueue?: boolean },
+    options?: { fromQueue?: boolean; queueId?: string },
   ): Promise<SetThreadExecutionModeResponse> {
     if (params.backend !== "codex") {
       // The non-codex grok no-op path — preserved for symmetry. Direct
@@ -2136,12 +2136,12 @@ export class DesktopBackendRegistry {
       observedExecutionMode: observed,
     });
 
-    // Pull the matching queue id (if this apply came from a queue
-    // flush) BEFORE we clear the queue, so the audit entry can link
-    // to the original `queued` entry by queueId.
-    const queueIdForAuditLink = options?.fromQueue
-      ? this.queuedExecutionModes.get(resolvedThreadId)?.queueId
-      : undefined;
+    // The queueId (if this apply came from a queue flush) is passed
+    // through `options.queueId` because the flush atomically claimed
+    // the queue (deleted from the map) before calling apply — so we
+    // can't read it back from `queuedExecutionModes` here. Direct
+    // applies (idle path) leave it undefined.
+    const queueIdForAuditLink = options?.queueId;
 
     await this.appendPermissionTransition({
       threadId: resolvedThreadId,
@@ -2169,9 +2169,10 @@ export class DesktopBackendRegistry {
     if (options?.fromQueue) {
       // Order matters: clients must see the apply BEFORE the
       // queue-clear. The applied transition is now in the log; the
-      // overlay's executionMode is current; clearing the queue is
-      // safe.
-      this.queuedExecutionModes.delete(resolvedThreadId);
+      // overlay's executionMode is current. The queue map entry was
+      // already atomically claimed (deleted) by
+      // flushQueuedExecutionModeIfPresent before we ran, so just
+      // emit the event for downstream listeners.
       await this.emit({
         backend: "codex",
         notification: {
@@ -2249,6 +2250,16 @@ export class DesktopBackendRegistry {
   ): Promise<void> {
     const queue = this.queuedExecutionModes.get(threadId);
     if (!queue) return;
+    // Atomic claim: in JS's single-threaded event loop, `Map.delete`
+    // returning true gives this caller exclusive ownership of the
+    // apply. Concurrent flushes (one from the emit-listener turn-end
+    // hook, one from startTurn's race-safe prefix) both see the same
+    // queue but only one's delete returns true — the other no-ops.
+    // Without this, both callers race on applyThreadExecutionMode and
+    // each appends a duplicate "applied" transition entry.
+    if (!this.queuedExecutionModes.delete(threadId)) {
+      return;
+    }
     try {
       await this.applyThreadExecutionMode(
         {
@@ -2256,14 +2267,15 @@ export class DesktopBackendRegistry {
           threadId,
           executionMode: queue.mode,
         },
-        { fromQueue: true },
+        { fromQueue: true, queueId: queue.queueId },
       );
     } catch (error) {
       const attempts = queue.flushAttempts + 1;
       const stillRetained = this.queuedExecutionModes.get(threadId);
-      if (!stillRetained || stillRetained.queueId !== queue.queueId) {
-        // The queue was cancelled (or replaced) while we were
-        // mid-apply. Discard our retry — the new state wins.
+      if (stillRetained && stillRetained.queueId !== queue.queueId) {
+        // The queue was replaced while we were mid-apply (the user
+        // queued a different target). Discard our retry — the new
+        // state wins.
         return;
       }
       if (attempts >= MAX_QUEUE_FLUSH_ATTEMPTS) {

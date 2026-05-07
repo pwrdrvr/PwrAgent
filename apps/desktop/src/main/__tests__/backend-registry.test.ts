@@ -425,6 +425,7 @@ class MockBackendClient {
   listModelsCallCount = 0;
   steerTurnCallCount = 0;
   probeThreadPermissionsCallCount = 0;
+  setThreadPermissionsCallCount = 0;
   lastListModelsDiagnostics?: {
     callerReason?: string;
     ownerId?: string;
@@ -629,6 +630,7 @@ class MockBackendClient {
     reasoningEffort?: string;
   }): Promise<{ threadId: string; observedExecutionMode?: "default" | "full-access" }> {
     this.lastSetThreadPermissionsParams = params;
+    this.setThreadPermissionsCallCount += 1;
     if (this.options.setThreadPermissionsError) {
       throw this.options.setThreadPermissionsError;
     }
@@ -3651,6 +3653,61 @@ describe("DesktopBackendRegistry", () => {
 
       const log = await getLog(overlayStore, "thread-1");
       expect(log.map((entry) => entry.status)).toContain("applied");
+
+      await registry.close();
+    });
+
+    it("emit-listener and startTurn flush hooks do not double-apply when both fire concurrently", async () => {
+      // Regression: before the atomic-claim fix, both flush hooks
+      // (emit-listener turn-end + startTurn race-safe prefix) could
+      // both pass the `queue exists` check, both call
+      // applyThreadExecutionMode, and both append an `applied`
+      // transition. The user reported seeing two "Permissions
+      // changed" entries in the transcript at the same timestamp.
+      const { codexClient, overlayStore, registry } = buildIdleRegistry();
+      const turnId = await startActiveTurn(registry, "thread-1");
+
+      await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "thread-1",
+        executionMode: "full-access",
+      });
+
+      // Fire BOTH flush hooks back to back without awaiting in
+      // between, mirroring the production race where the emit
+      // listener and a subsequent startTurn call land on the same
+      // tick. The atomic Map.delete claim must let only one through.
+      const turnEndPromise = codexClient.emit({
+        method: "thread/status/changed",
+        params: {
+          threadId: "thread-1",
+          status: { type: "idle" },
+        },
+      });
+      const startTurnPromise = registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "next turn after queue applies" }],
+      });
+      await Promise.all([turnEndPromise, startTurnPromise]);
+
+      // Wait for any deferred flush completion.
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const log = await getLog(overlayStore, "thread-1");
+        if (log.filter((entry) => entry.status === "applied").length >= 1) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      const log = await getLog(overlayStore, "thread-1");
+      const appliedEntries = log.filter(
+        (entry) => entry.status === "applied" && entry.toExecutionMode === "full-access",
+      );
+      expect(appliedEntries).toHaveLength(1);
+      // codex.setThreadPermissions called exactly once (not twice).
+      expect(codexClient.setThreadPermissionsCallCount).toBe(1);
+      expect(turnId).toBeDefined();
 
       await registry.close();
     });
