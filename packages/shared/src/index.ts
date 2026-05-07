@@ -3,6 +3,7 @@ export * from "./contracts/backend";
 export * from "./contracts/agent";
 export * from "./contracts/branch-drift";
 export * from "./contracts/diff-focus";
+export * from "./contracts/execution-mode-drift";
 export * from "./contracts/messaging";
 export * from "./contracts/navigation";
 export * from "./contracts/settings";

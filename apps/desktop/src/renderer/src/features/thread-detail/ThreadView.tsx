@@ -24,7 +24,7 @@ import type {
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
-import { isBranchDrifted } from "@pwragent/shared";
+import { isBranchDrifted, isExecutionModeDrifted } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -698,6 +698,14 @@ type BranchDriftDialogState = {
   threadKey: string;
 };
 
+type ExecutionModeDriftDialogState = {
+  checkedAt?: number;
+  expectedExecutionMode: ThreadExecutionMode;
+  observedExecutionMode: ThreadExecutionMode;
+  reason: "focus";
+  threadKey: string;
+};
+
 export function ThreadView(props: ThreadViewProps) {
   const [pendingActivityEntry, setPendingActivityEntry] =
     useState<AppServerThreadActivityEntry>();
@@ -736,6 +744,10 @@ export function ThreadView(props: ThreadViewProps) {
     useState<BranchDriftDialogState>();
   const [branchDriftError, setBranchDriftError] = useState<string>();
   const [branchDriftBusy, setBranchDriftBusy] = useState(false);
+  const [executionModeDriftDialog, setExecutionModeDriftDialog] =
+    useState<ExecutionModeDriftDialogState>();
+  const [executionModeDriftError, setExecutionModeDriftError] = useState<string>();
+  const [executionModeDriftBusy, setExecutionModeDriftBusy] = useState(false);
 
   const selectedThreadKey = selectedThread
     ? `${selectedThread.source}:${selectedThread.id}`
@@ -802,6 +814,102 @@ export function ThreadView(props: ThreadViewProps) {
     return showBranchDriftDialog(thread, expectedBranch, observedBranch, reason, checkedAt);
   };
 
+  const executionModeDriftRetained = (
+    thread: NavigationThreadSummary,
+    expectedExecutionMode: ThreadExecutionMode,
+    observedExecutionMode: ThreadExecutionMode,
+  ): boolean => {
+    return (thread.retainedExecutionModeDriftPairs ?? []).some(
+      (pair) =>
+        pair.expectedExecutionMode === expectedExecutionMode &&
+        pair.observedExecutionMode === observedExecutionMode,
+    );
+  };
+
+  const showExecutionModeDriftDialog = (
+    thread: NavigationThreadSummary,
+    expectedExecutionMode: ThreadExecutionMode,
+    observedExecutionMode: ThreadExecutionMode,
+    reason: ExecutionModeDriftDialogState["reason"],
+    checkedAt?: number,
+  ): boolean => {
+    if (!isExecutionModeDrifted(expectedExecutionMode, observedExecutionMode)) {
+      return false;
+    }
+    if (
+      executionModeDriftRetained(
+        thread,
+        expectedExecutionMode,
+        observedExecutionMode,
+      )
+    ) {
+      return false;
+    }
+    setExecutionModeDriftError(undefined);
+    setExecutionModeDriftDialog({
+      checkedAt,
+      expectedExecutionMode,
+      observedExecutionMode,
+      reason,
+      threadKey: `${thread.source}:${thread.id}`,
+    });
+    return true;
+  };
+
+  const checkSelectedThreadExecutionModeDrift = async (
+    reason: ExecutionModeDriftDialogState["reason"],
+  ): Promise<boolean> => {
+    const thread = selectedThread;
+    if (
+      !thread ||
+      thread.source !== "codex" ||
+      !props.desktopApi?.checkThreadExecutionModeDrift
+    ) {
+      return false;
+    }
+    const startedThreadKey = `${thread.source}:${thread.id}`;
+    if (props.activeTurnId !== undefined) {
+      // Don't probe codex while a turn is in flight — the per-turn permission
+      // refresh happens on the next turn anyway, and probing concurrently
+      // racy with thread/resume / turn/start.
+      return false;
+    }
+    try {
+      const result = await props.desktopApi.checkThreadExecutionModeDrift({
+        backend: thread.source,
+        threadId: thread.id,
+      });
+      if (selectedThreadKeyRef.current !== startedThreadKey) {
+        return false;
+      }
+      if (result.observedExecutionMode !== thread.observedExecutionMode) {
+        await props.onRefreshNavigation?.();
+        if (selectedThreadKeyRef.current !== startedThreadKey) {
+          return false;
+        }
+      }
+      if (
+        !result.drifted ||
+        !result.expectedExecutionMode ||
+        !result.observedExecutionMode
+      ) {
+        setExecutionModeDriftDialog((current) =>
+          current?.threadKey === startedThreadKey ? undefined : current,
+        );
+        return false;
+      }
+      return showExecutionModeDriftDialog(
+        thread,
+        result.expectedExecutionMode,
+        result.observedExecutionMode,
+        reason,
+        result.checkedAt,
+      );
+    } catch {
+      return false;
+    }
+  };
+
   const checkSelectedThreadBranchDrift = async (
     reason: BranchDriftDialogState["reason"],
   ): Promise<boolean> => {
@@ -853,6 +961,8 @@ export function ThreadView(props: ThreadViewProps) {
   useEffect(() => {
     setBranchDriftDialog(undefined);
     setBranchDriftError(undefined);
+    setExecutionModeDriftDialog(undefined);
+    setExecutionModeDriftError(undefined);
   }, [selectedThreadKey]);
 
   // Live mirror of selectedThreadKey for async stale-closure guards.
@@ -913,8 +1023,10 @@ export function ThreadView(props: ThreadViewProps) {
     }
 
     void checkSelectedThreadBranchDrift("focus");
+    void checkSelectedThreadExecutionModeDrift("focus");
     const unsubscribeFocus = props.desktopApi?.onWindowFocus?.(() => {
       void checkSelectedThreadBranchDrift("focus");
+      void checkSelectedThreadExecutionModeDrift("focus");
     });
 
     return () => {
@@ -1730,8 +1842,137 @@ export function ThreadView(props: ThreadViewProps) {
         </div>
       ) : null}
 
+      {executionModeDriftDialog && selectedThread ? (
+        <div className="workspace-handoff-modal">
+          <div
+            aria-labelledby="execution-mode-drift-title"
+            aria-modal="true"
+            className="workspace-handoff-dialog"
+            role="dialog"
+          >
+            <h2 id="execution-mode-drift-title">Permission mode out of sync</h2>
+            <p>
+              PwrAgent expected this thread to be running with{" "}
+              <strong>
+                {executionModeLabel(
+                  executionModeDriftDialog.expectedExecutionMode,
+                )}
+              </strong>{" "}
+              but Codex is reporting{" "}
+              <strong>
+                {executionModeLabel(
+                  executionModeDriftDialog.observedExecutionMode,
+                )}
+              </strong>
+              .
+            </p>
+            <p>
+              The thread may have been toggled in the Codex desktop app, or an
+              earlier turn updated the permission profile in a way PwrAgent
+              didn't observe.
+            </p>
+            <dl className="workspace-handoff-dialog__summary">
+              <div>
+                <dt>PwrAgent expects</dt>
+                <dd>
+                  {executionModeLabel(
+                    executionModeDriftDialog.expectedExecutionMode,
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Codex reports</dt>
+                <dd>
+                  {executionModeLabel(
+                    executionModeDriftDialog.observedExecutionMode,
+                  )}
+                </dd>
+              </div>
+            </dl>
+            {executionModeDriftError ? (
+              <p className="workspace-handoff-dialog__error">
+                {executionModeDriftError}
+              </p>
+            ) : null}
+            <div className="workspace-handoff-dialog__actions">
+              <button
+                className="button-secondary"
+                disabled={executionModeDriftBusy}
+                title="Keep PwrAgent's value, push it back to Codex on the next turn."
+                type="button"
+                onClick={async () => {
+                  if (
+                    !props.desktopApi?.retainThreadExecutionModeDrift ||
+                    !selectedThread
+                  ) {
+                    setExecutionModeDriftDialog(undefined);
+                    return;
+                  }
+
+                  setExecutionModeDriftBusy(true);
+                  setExecutionModeDriftError(undefined);
+                  try {
+                    await props.desktopApi.retainThreadExecutionModeDrift({
+                      backend: selectedThread.source,
+                      threadId: selectedThread.id,
+                      expectedExecutionMode:
+                        executionModeDriftDialog.expectedExecutionMode,
+                      observedExecutionMode:
+                        executionModeDriftDialog.observedExecutionMode,
+                    });
+                    await props.onRefreshNavigation?.();
+                    setExecutionModeDriftDialog(undefined);
+                  } catch (error) {
+                    setExecutionModeDriftError(
+                      error instanceof Error ? error.message : String(error),
+                    );
+                  } finally {
+                    setExecutionModeDriftBusy(false);
+                  }
+                }}
+              >
+                Keep PwrAgent value
+              </button>
+              <button
+                className="button-primary"
+                disabled={executionModeDriftBusy}
+                title="Adopt Codex's value as the expected mode."
+                type="button"
+                onClick={async () => {
+                  if (!props.onSetExecutionMode || !selectedThread) {
+                    return;
+                  }
+                  setExecutionModeDriftBusy(true);
+                  setExecutionModeDriftError(undefined);
+                  try {
+                    await props.onSetExecutionMode(
+                      executionModeDriftDialog.observedExecutionMode,
+                    );
+                    await props.onRefreshNavigation?.();
+                    setExecutionModeDriftDialog(undefined);
+                  } catch (error) {
+                    setExecutionModeDriftError(
+                      error instanceof Error ? error.message : String(error),
+                    );
+                  } finally {
+                    setExecutionModeDriftBusy(false);
+                  }
+                }}
+              >
+                Use Codex value
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
     </section>
   );
+}
+
+function executionModeLabel(mode: ThreadExecutionMode): string {
+  if (mode === "full-access") return "Full Access";
+  return "Default Access";
 }
 
 function buildPendingRequestResponse(

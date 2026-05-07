@@ -22,6 +22,10 @@ export const AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL =
   "agent:update-thread-expected-branch";
 export const AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL =
   "agent:retain-thread-branch-drift";
+export const AGENT_CHECK_THREAD_EXECUTION_MODE_DRIFT_CHANNEL =
+  "agent:check-thread-execution-mode-drift";
+export const AGENT_RETAIN_THREAD_EXECUTION_MODE_DRIFT_CHANNEL =
+  "agent:retain-thread-execution-mode-drift";
 export const AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "agent:materialize-directory-launchpad";
 export const AGENT_SUBMIT_SERVER_REQUEST_CHANNEL = "agent:submit-server-request";

@@ -2,6 +2,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  executionModeFromCodexResponse,
   shortenDerivedThreadTitle,
 } from "@pwragent/shared";
 import type {
@@ -35,6 +36,7 @@ import type {
   BackendModelOption,
   BackendRateLimitSummary,
   LinkedDirectorySummary,
+  ThreadExecutionMode,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import type {
@@ -3071,6 +3073,39 @@ function extractStringProperty(value: unknown, ...keys: string[]): string | unde
   return undefined;
 }
 
+function extractCodexApprovalPolicyFromValue(value: unknown): string | undefined {
+  return extractStringProperty(value, "approvalPolicy", "approval_policy");
+}
+
+function extractCodexSandboxModeFromValue(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const raw = record.sandbox ?? record.sandbox_policy ?? record.sandboxPolicy;
+  if (typeof raw === "string") {
+    return raw.trim() || undefined;
+  }
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const variant = (raw as Record<string, unknown>).type;
+    if (typeof variant !== "string") return undefined;
+    if (variant === "workspaceWrite") return "workspace-write";
+    if (variant === "dangerFullAccess") return "danger-full-access";
+    if (variant === "readOnly") return "read-only";
+    return undefined;
+  }
+  return undefined;
+}
+
+function extractObservedExecutionModeFromCodexResult(
+  value: unknown,
+): ThreadExecutionMode | undefined {
+  return executionModeFromCodexResponse({
+    approvalPolicy: extractCodexApprovalPolicyFromValue(value),
+    sandbox: extractCodexSandboxModeFromValue(value),
+  });
+}
+
 function buildCollaborationModeOverrides(params: {
   collaborationMode?: AppServerCollaborationModeRequest;
   fallbackModel?: string;
@@ -3802,7 +3837,7 @@ export class CodexAppServerClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ threadId: string }> {
+  }): Promise<{ threadId: string; observedExecutionMode?: ThreadExecutionMode }> {
     await this.ensureInitialized();
 
     const result = await requestWithFallbacks({
@@ -3819,7 +3854,10 @@ export class CodexAppServerClient {
 
     await this.recordThreadInSessionIndex(result);
 
-    return { threadId };
+    return {
+      threadId,
+      observedExecutionMode: extractObservedExecutionModeFromCodexResult(result),
+    };
   }
 
   async startTurn(params: {
@@ -3833,7 +3871,11 @@ export class CodexAppServerClient {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-  }): Promise<{ threadId: string; turnId: string }> {
+  }): Promise<{
+    threadId: string;
+    turnId: string;
+    observedExecutionMode?: ThreadExecutionMode;
+  }> {
     await this.ensureInitialized();
 
     const resumeResult = await requestWithFallbacks({
@@ -3883,7 +3925,13 @@ export class CodexAppServerClient {
       input: params.input,
     });
 
-    return { threadId, turnId };
+    // The thread/resume response carries the canonical permission state;
+    // turn/start does not. Prefer the resume value when present.
+    const observedExecutionMode =
+      extractObservedExecutionModeFromCodexResult(resumeResult) ??
+      extractObservedExecutionModeFromCodexResult(result);
+
+    return { threadId, turnId, observedExecutionMode };
   }
 
   async generateTitle(params: ThreadTitleAdapterParams): Promise<ThreadTitleAdapterResult> {
@@ -4011,6 +4059,34 @@ export class CodexAppServerClient {
     };
   }
 
+  /**
+   * Best-effort probe of codex's per-thread permission profile, used to
+   * detect drift when the user opens a thread without sending a turn.
+   *
+   * This sends `thread/resume` without policy overrides, so codex returns
+   * the thread's current `approvalPolicy` + `sandbox` without us mutating
+   * them. Returns `undefined` if codex's response can't be classified into
+   * one of PwrAgent's two surfaced modes (e.g. a granular approval policy
+   * the UI doesn't have a button for).
+   */
+  async probeThreadPermissions(params: {
+    threadId: string;
+  }): Promise<{ threadId: string; observedExecutionMode?: ThreadExecutionMode }> {
+    await this.ensureInitialized();
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads({ threadId: params.threadId }),
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+      observedExecutionMode: extractObservedExecutionModeFromCodexResult(result),
+    };
+  }
+
   async setThreadPermissions(params: {
     threadId: string;
     cwd?: string;
@@ -4019,7 +4095,7 @@ export class CodexAppServerClient {
     sandbox?: string;
     serviceTier?: string;
     reasoningEffort?: string;
-  }): Promise<{ threadId: string }> {
+  }): Promise<{ threadId: string; observedExecutionMode?: ThreadExecutionMode }> {
     await this.ensureInitialized();
 
     const result = await requestWithFallbacks({
@@ -4031,6 +4107,7 @@ export class CodexAppServerClient {
 
     return {
       threadId: extractThreadIdFromValue(result) ?? params.threadId,
+      observedExecutionMode: extractObservedExecutionModeFromCodexResult(result),
     };
   }
 
