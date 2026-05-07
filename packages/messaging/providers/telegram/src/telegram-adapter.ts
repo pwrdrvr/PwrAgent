@@ -276,7 +276,12 @@ export type TelegramGrammyBotLike = {
       text: string,
       other?: Omit<TelegramEditMessageTextRequest, "chat_id" | "message_id" | "text">,
     ): Promise<TelegramSentMessage | boolean>;
-    getMe(): Promise<{ id: number; is_bot: boolean; username: string }>;
+    // Telegram's `User` allows `username` to be absent (non-bot users
+    // can omit it). Grammy returns `UserFromGetMe` which always has
+    // it set for bot accounts, but we keep the type optional here to
+    // match `TelegramBotApi.getMe` and avoid a structural narrowing
+    // surprise if grammy ever loosens the type.
+    getMe(): Promise<{ id: number; is_bot: boolean; username?: string }>;
     getWebhookInfo(): Promise<{ url: string }>;
     getFile(fileId: string): Promise<{ file_path?: string }>;
     pinChatMessage(
@@ -978,6 +983,47 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return;
     }
 
+    // `@<botusername> <verb>` text mention → command. Run BEFORE the
+    // attachment branch so captions like `@PwrAgentBot resume` on a
+    // photo/file/voice upload route to the command pathway too — the
+    // user typed a verb, that intent wins over the incidental
+    // attachment. Mirrors the Mattermost / Discord paths so users on
+    // Telegram can invoke commands without the slash menu (helpful
+    // when a phone keyboard doesn't surface custom commands or when
+    // typing into a topic the user hasn't sent a slash to before).
+    // Username matching is case-insensitive — Telegram usernames are
+    // case-insensitive.
+    const mentionCandidate = message.text ?? message.caption;
+    const mentionRemainder = mentionCandidate
+      ? stripTelegramBotMention(mentionCandidate, this.botUsername)
+      : undefined;
+    if (mentionRemainder !== undefined && mentionCandidate !== undefined) {
+      // If the remainder after the mention doesn't form a valid verb
+      // (e.g. a second mention, or a digit-leading token), we
+      // deliberately fall through to the attachment / slash / text
+      // paths below so the user's original message is dispatched as
+      // media or plain text rather than a half-recognized command.
+      const synthRaw = `/${mentionRemainder}`;
+      const mentionCommandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(synthRaw);
+      if (mentionCommandMatch) {
+        this.options.logger?.debug(
+          `telegram inbound mention-command update=${updateId} message=${message.message_id} chat=${message.chat.id} actor=${message.from.id} command=${mentionCommandMatch[1]} preview="${compactPreview(mentionCandidate)}"`,
+        );
+        await listener({
+          id: `telegram:update:${updateId}:message:${message.message_id}`,
+          kind: "command",
+          actor: this.actorFromUser(message.from),
+          args: mentionCommandMatch[2]?.split(/\s+/).filter(Boolean) ?? [],
+          channel: this.channelFromMessage(message),
+          command: mentionCommandMatch[1]?.toLowerCase() ?? "",
+          rawText: synthRaw,
+          receivedAt: this.messageReceivedAt(message),
+          routingState: this.routingStateFromMessage(message),
+        });
+        return;
+      }
+    }
+
     const attachments = this.attachmentsFromMessage(message);
     if (attachments.length > 0) {
       await listener({
@@ -1008,35 +1054,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
     if (!message.text) {
       return;
-    }
-
-    // `@<botusername> <verb>` text mention → command. Mirrors the
-    // Mattermost / Discord paths so users on Telegram can invoke
-    // commands without the slash menu (helpful when a phone keyboard
-    // doesn't surface custom commands or when typing into a topic
-    // the user hasn't sent a slash to before). Username matching is
-    // case-insensitive — Telegram usernames are case-insensitive.
-    const mentionRemainder = stripTelegramBotMention(message.text, this.botUsername);
-    if (mentionRemainder !== undefined) {
-      const synthRaw = `/${mentionRemainder}`;
-      const mentionCommandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(synthRaw);
-      if (mentionCommandMatch) {
-        this.options.logger?.debug(
-          `telegram inbound mention-command update=${updateId} message=${message.message_id} chat=${message.chat.id} actor=${message.from.id} command=${mentionCommandMatch[1]} preview="${compactPreview(message.text)}"`,
-        );
-        await listener({
-          id: `telegram:update:${updateId}:message:${message.message_id}`,
-          kind: "command",
-          actor: this.actorFromUser(message.from),
-          args: mentionCommandMatch[2]?.split(/\s+/).filter(Boolean) ?? [],
-          channel: this.channelFromMessage(message),
-          command: mentionCommandMatch[1]?.toLowerCase() ?? "",
-          rawText: synthRaw,
-          receivedAt: this.messageReceivedAt(message),
-          routingState: this.routingStateFromMessage(message),
-        });
-        return;
-      }
     }
 
     const commandMatch = /^\/([A-Za-z0-9_]+)(?:@\S+)?(?:\s+(.*))?$/.exec(message.text);

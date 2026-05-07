@@ -39,6 +39,10 @@ keyboards or topics where the slash menu isn't readily accessible. Notes:
   taken from the configured `applicationId` (which equals the bot user_id
   for any modern Discord app). If `applicationId` is not set, mention
   parsing is disabled.
+- The mention parser also runs against attachment captions, so a photo or
+  file uploaded with caption `@<bot> resume` dispatches as the `resume`
+  command (the typed verb wins over the incidental upload). Bare or
+  unrecognized captions still route the attachment as media.
 
 ## Button Layout
 
@@ -255,7 +259,7 @@ Telegram:
 1. Start PwrAgent with `pnpm dev:op`; if the bot has a webhook configured, PwrAgent clears it before long polling.
 2. Confirm `/resume`, `/threads`, `/status`, `/detach`, and `/bind` are registered in the Telegram command menu.
 3. Send `/resume` from an allowlisted Telegram user.
-3a. Repeat the previous step using `@<botusername> resume` instead of the slash command — the same thread picker should render. Confirm `@<botusername>` (no verb) is treated as plain text and not as a command.
+   - Repeat using a text mention (`@` + your bot's username + ` resume`) instead of the slash command — the same thread picker should render. Confirm a bare mention with no verb is treated as plain text and not as a command.
 4. Use Projects, select a project, then select a thread.
 5. Verify a pinned status card appears and updates in place.
 6. Use status buttons to change Model, Reasoning, Fast mode, and Permissions.
@@ -295,7 +299,7 @@ Discord:
 
 1. In the Discord Developer Portal, confirm the bot has Gateway access, the privileged Message Content Intent enabled, and the bot was installed with the `applications.commands` scope.
 2. Send `/resume` from an allowlisted Discord user.
-2a. Repeat the previous step using `@PwrAgent resume` (a text mention) instead of the slash command — the same thread picker should render. Confirm `@PwrAgent` (no verb) is treated as plain text and not as a command. Mention parsing requires `applicationId` to be configured.
+   - Repeat using a text mention (type `@` and pick the bot from the autocomplete, then ` resume`) instead of the slash command — the same thread picker should render. Confirm a bare mention with no verb is treated as plain text and not as a command. Mention parsing requires `applicationId` to be configured.
 3. Verify a numbered thread picker appears with components.
 4. Choose a thread by component, then repeat by replying `1`.
 5. For a bound Local thread with handoff branch metadata, choose Handoff from

@@ -211,6 +211,47 @@ describe("TelegramAdapter", () => {
     expect(request?.text).toContain("Choose a thread to resume");
   });
 
+  it("treats a photo caption like `@PwrAgentBot resume` as a command, not media", async () => {
+    const harness = await createControllerHarness();
+    const events: MessagingInboundEvent[] = [];
+    await harness.adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await harness.adapter.handleUpdate({
+      update_id: 1,
+      message: {
+        caption: "@PwrAgentBot resume",
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        date: 1,
+        from: {
+          first_name: "Ada",
+          id: 42,
+          is_bot: false,
+          username: "mutable_username",
+        },
+        message_id: 100,
+        photo: [
+          {
+            file_id: "AgADBA",
+            height: 480,
+            width: 640,
+          },
+        ],
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "command",
+      command: "resume",
+      rawText: "/resume",
+    });
+  });
+
   it("treats `@PwrAgentBot help` as a command and a non-leading mention as text", async () => {
     const harness = await createControllerHarness();
     const events: MessagingInboundEvent[] = [];

@@ -329,7 +329,6 @@ describe("discord adapter", () => {
           id: "msg-1",
         }),
       });
-      // Allow the async listener to run.
 
       expect(events).toHaveLength(1);
       const dispatched = events[0];
@@ -376,6 +375,97 @@ describe("discord adapter", () => {
         command: "help",
         args: ["foo", "bar"],
         rawText: "/help foo bar",
+      });
+      await adapter.stop();
+    });
+
+    it("routes a caption like `<@bot> resume` on an attachment to a command, not media", async () => {
+      const BOT_ID = "1480556454498009352";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          applicationId: BOT_ID,
+          authorizedActorIds: ["user-1"],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          attachments: [
+            {
+              filename: "screenshot.png",
+              id: "att-1",
+              size: 100,
+              url: "https://cdn.discordapp.com/.../screenshot.png",
+            },
+          ],
+          authorBot: false,
+          content: `<@${BOT_ID}> resume`,
+          id: "msg-cap-1",
+        }),
+      });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        kind: "command",
+        command: "resume",
+        rawText: "/resume",
+      });
+      await adapter.stop();
+    });
+
+    it("preserves media dispatch when the caption isn't a recognized mention command", async () => {
+      const BOT_ID = "1480556454498009352";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          applicationId: BOT_ID,
+          authorizedActorIds: ["user-1"],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          attachments: [
+            {
+              filename: "logs.txt",
+              id: "att-2",
+              size: 12,
+              url: "https://cdn.discordapp.com/.../logs.txt",
+            },
+          ],
+          authorBot: false,
+          content: "see the attached logs",
+          id: "msg-cap-2",
+        }),
+      });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        kind: "media",
+        text: "see the attached logs",
       });
       await adapter.stop();
     });
@@ -438,11 +528,13 @@ class TestDiscordGateway implements DiscordGatewayConnection {
 }
 
 function messageDispatch(params: {
+  attachments?: DiscordMessageCreateDispatch["attachments"];
   authorBot: boolean;
   content: string;
   id: string;
 }): DiscordMessageCreateDispatch {
   return {
+    attachments: params.attachments,
     author: {
       bot: params.authorBot,
       id: "user-1",
