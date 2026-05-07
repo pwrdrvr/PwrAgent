@@ -47,13 +47,15 @@ PR #213 plumbed the override through `buildTurnStartPayload` and added defensive
 
 **Lesson:** When upstream protocols add new fields with names like "override for this turn and subsequent turns", they are usually load-bearing for protocol invariants you don't realize you depend on. Always check the reference client implementation (here: codex TUI) when wiring a new app-server backend.
 
-### Layer 4 — Cross-process state divergence
+### Layer 4 — Cross-process state divergence (and the drift detector that briefly stood in for a real fix)
 
 By the time PRs #203, #209, #213 had landed, the per-turn happy path was correct. But two-process architecture introduced a subtler bug: when the same thread was loaded into both codex children (one default, one full-access), they each kept independent in-memory caches of the thread's `CodexThread` object. Codex has no `thread/unload` RPC. Round-trip toggles (Default → Full → Default) left the now-active child reading from disk while the previously-active child held a stale cache. Subsequent turns on the round-tripped child silently used outdated context.
 
 [PR #217](https://github.com/pwrdrvr/PwrAgent/pull/217) added drift detection — comparing PwrAgent's overlay-stored `executionMode` against codex's reported permission state on each `thread/resume` response. When they disagreed, a banner prompted the user to either keep PwrAgent's value or adopt codex's. This caught the *symptom* (user-visible mode disagreement) but did not address the underlying split-brain.
 
-**Lesson:** Drift detection is a useful safety net, but it's a debugging tool, not a fix. If your architecture allows two pieces of state to disagree, eliminate the second piece if you can. The cleanest fix for a class of bugs is often "make the bug structurally impossible".
+**Once Layer 5 (single-instance + queue) shipped, drift detection became dead code.** The new architecture makes permission state deterministic — one process holds the canonical profile, every `turn/start` re-asserts it, and the queue serializes mid-turn changes at the resume boundary. The user tested across multiple threads and transitions and confirmed the new architecture maintains state correctly. The drift dialog was just UI noise; the probe was wasted runtime cost. **PR #217 was reverted in commit `2f0e8282` after the new architecture proved itself in real-world use.**
+
+**Lesson:** Drift detection is a useful safety net during a transition, but it's a debugging tool, not a fix. If your architecture allows two pieces of state to disagree, eliminate the second piece if you can. The cleanest fix for a class of bugs is often "make the bug structurally impossible". Once you've made it structurally impossible, the safety net becomes dead weight — remove it.
 
 ### Layer 5 — Single-instance + queue at the resume boundary
 
@@ -81,7 +83,7 @@ This is the same pattern Joel Spolsky calls "the iceberg secret" — bugs hide e
 
 - The `codex thread client routing` debug log line (added in PR #203, surviving into the single-instance era for documentation) is your first stop when investigating any "ran with wrong mode" report. Grep for the threadId.
 - The `permissionTransitionLog` on `ThreadOverlayState` (capped at 100 entries, sqlite-backed) is the persistent audit trail. Each transition is queued/applied/cancelled with a `queueId` linking related entries.
-- The drift detector (`checkThreadExecutionModeDrift`, registry method) is still useful — it's the safety net for any case where codex's persisted profile diverges from PwrAgent's overlay (e.g., codex Desktop edits the same thread, or an older PwrAgent build wrote one value but the running codex profile reports another).
+- **Drift detection was removed** with PR #217's revert in `2f0e8282`. If you find yourself reaching for it again, that's a strong signal the architecture has regressed — investigate whether the per-turn override on `turn/start` and the queue at the resume boundary are still both intact. The combination is what makes drift impossible.
 - Upstream codex is moving toward named-profile selection (`permissions: PermissionProfileSelectionParams`) as the canonical mechanism, with the raw `approvalPolicy`/`sandboxPolicy`/`sandbox` fields slated for server-rejection. The single-instance architecture is forward-compatible — when that lands on `origin/main`, swap raw values for named-profile selection in `client.setThreadPermissions` and the per-turn override. Localized change.
 
 ## Tests that lock the invariants
@@ -98,6 +100,6 @@ If you ever revert one of these layers without realizing it, these tests should 
 - [PR #203](https://github.com/pwrdrvr/PwrAgent/pull/203) — Composer `executionMode` + registry no-fallback
 - [PR #209](https://github.com/pwrdrvr/PwrAgent/pull/209) — codex client spawn-args
 - [PR #213](https://github.com/pwrdrvr/PwrAgent/pull/213) — per-turn `approvalPolicy`/`sandboxPolicy` + resume-failure logging
-- [PR #217](https://github.com/pwrdrvr/PwrAgent/pull/217) — permission-mode drift detection
+- [PR #217](https://github.com/pwrdrvr/PwrAgent/pull/217) — permission-mode drift detection (later removed in `2f0e8282` once the structural fix made it dead code)
 - `docs/plans/2026-05-07-001-feat-codex-single-instance-queued-permissions-plan.md` — single-instance + queue plan
 - Upstream codex: per-thread profile migration in #18278, #19773–19776, #20106; `TurnStartParams.{approvalPolicy,sandboxPolicy}` since 2026-02-01.
