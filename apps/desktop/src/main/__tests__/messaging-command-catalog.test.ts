@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
+import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import {
-  MESSAGING_COMMAND_CATALOG,
+  buildHelpActions,
   formatMessagingCommandHelpBody,
+  helpPageSize,
   matchMessagingCommandVerb,
+  MESSAGING_COMMAND_CATALOG,
+  paginateHelpCatalog,
+  type MessagingCommandSpec,
 } from "../messaging/core/messaging-command-catalog.js";
 
 describe("MESSAGING_COMMAND_CATALOG", () => {
@@ -124,5 +130,195 @@ describe("formatMessagingCommandHelpBody", () => {
     // Between them: at least one blank line.
     const between = body.slice(lastBulletIdx, footerIdx);
     expect(between).toMatch(/\n\n/);
+  });
+});
+
+// Capability-profile fixtures for pagination tests. Override the
+// permissive profile's `actions.maxActions` to exercise the
+// page-size math; everything else stays at the test-friendly
+// defaults. The `!` is safe — `PERMISSIVE_CAPABILITY_PROFILE.actions`
+// is statically known to be defined (the permissive profile's whole
+// purpose is to declare every field), but the type marks it
+// optional because the production profile shape allows omission.
+function profileWithMaxActions(maxActions: number): MessagingCapabilityProfile {
+  return {
+    ...PERMISSIVE_CAPABILITY_PROFILE,
+    actions: {
+      ...PERMISSIVE_CAPABILITY_PROFILE.actions!,
+      maxActions,
+    },
+  };
+}
+
+// Synthetic catalog used to exercise multi-page rendering without
+// touching the canonical catalog. 12 entries × 8 page-size cap →
+// two pages.
+function syntheticCatalog(count: number): MessagingCommandSpec[] {
+  return Array.from({ length: count }, (_, i) => ({
+    // The catalog type expects the canonical verb union. Cast
+    // through `unknown` because synthetic verbs only exist in
+    // tests; the catalog never exposes these names at runtime.
+    verb: (`v${i}` as unknown) as MessagingCommandSpec["verb"],
+    description: `synthetic verb ${i}`,
+  }));
+}
+
+describe("helpPageSize", () => {
+  it("returns the soft cap (8) when no profile is provided", () => {
+    expect(helpPageSize(undefined)).toBe(8);
+  });
+
+  it("returns the soft cap when the profile's action budget is generous", () => {
+    expect(helpPageSize(profileWithMaxActions(25))).toBe(8);
+  });
+
+  it("clamps to the available budget when the profile is constrained", () => {
+    // 5 maxActions − 3 nav reservation = 2 command buttons / page.
+    expect(helpPageSize(profileWithMaxActions(5))).toBe(2);
+  });
+
+  it("returns 0 when the profile has fewer slots than the nav budget", () => {
+    // 2 maxActions − 3 nav reservation = -1 → 0 (text-only fallback).
+    expect(helpPageSize(profileWithMaxActions(2))).toBe(0);
+  });
+});
+
+describe("paginateHelpCatalog", () => {
+  it("returns a single page with every catalog entry when the profile fits all", () => {
+    const page = paginateHelpCatalog({
+      profile: profileWithMaxActions(25),
+    });
+    expect(page.totalPages).toBe(1);
+    expect(page.pageIndex).toBe(0);
+    expect(page.commands.map((c) => c.verb)).toEqual([
+      "resume",
+      "status",
+      "detach",
+      "help",
+    ]);
+  });
+
+  it("paginates correctly when the catalog overflows page size", () => {
+    const synthetic = syntheticCatalog(12);
+    const profile = profileWithMaxActions(25); // 8-cap → page size 8
+    const first = paginateHelpCatalog({
+      catalog: synthetic,
+      profile,
+      pageIndex: 0,
+    });
+    expect(first.totalPages).toBe(2);
+    expect(first.commands).toHaveLength(8);
+    expect(first.commands[0].verb).toBe("v0");
+    expect(first.commands[7].verb).toBe("v7");
+
+    const second = paginateHelpCatalog({
+      catalog: synthetic,
+      profile,
+      pageIndex: 1,
+    });
+    expect(second.commands).toHaveLength(4);
+    expect(second.commands[0].verb).toBe("v8");
+    expect(second.commands[3].verb).toBe("v11");
+  });
+
+  it("clamps pageIndex past the last page back to the last page", () => {
+    const synthetic = syntheticCatalog(12);
+    const page = paginateHelpCatalog({
+      catalog: synthetic,
+      profile: profileWithMaxActions(25),
+      pageIndex: 99,
+    });
+    // Last page is index 1 (totalPages = 2).
+    expect(page.pageIndex).toBe(1);
+    expect(page.commands[0].verb).toBe("v8");
+  });
+
+  it("clamps negative pageIndex to 0", () => {
+    const page = paginateHelpCatalog({
+      profile: profileWithMaxActions(25),
+      pageIndex: -5,
+    });
+    expect(page.pageIndex).toBe(0);
+  });
+
+  it("returns an empty page when the profile is too constrained to render any buttons", () => {
+    const page = paginateHelpCatalog({
+      profile: profileWithMaxActions(2),
+    });
+    expect(page.pageSize).toBe(0);
+    expect(page.totalPages).toBe(0);
+    expect(page.commands).toHaveLength(0);
+  });
+});
+
+describe("buildHelpActions", () => {
+  it("emits one command:<verb> button per catalog entry, no nav when single page", () => {
+    const page = paginateHelpCatalog({
+      profile: profileWithMaxActions(25),
+    });
+    const actions = buildHelpActions({ page });
+    const ids = actions.map((a) => a.id);
+    expect(ids).toEqual([
+      "command:resume",
+      "command:status",
+      "command:detach",
+      "command:help",
+    ]);
+  });
+
+  it("styles `command:resume` as primary, leaves the rest neutral (matches existing single-button shape)", () => {
+    const page = paginateHelpCatalog({
+      profile: profileWithMaxActions(25),
+    });
+    const actions = buildHelpActions({ page });
+    const resume = actions.find((a) => a.id === "command:resume");
+    expect(resume?.style).toBe("primary");
+    const status = actions.find((a) => a.id === "command:status");
+    expect(status?.style).toBeUndefined();
+  });
+
+  it("renders Next + Cancel on the first page of a multi-page catalog (no Prev)", () => {
+    const synthetic = syntheticCatalog(12);
+    const page = paginateHelpCatalog({
+      catalog: synthetic,
+      profile: profileWithMaxActions(25),
+      pageIndex: 0,
+    });
+    const ids = buildHelpActions({ page }).map((a) => a.id);
+    expect(ids).toContain("help:page:next");
+    expect(ids).toContain("help:cancel");
+    expect(ids).not.toContain("help:page:prev");
+  });
+
+  it("renders Prev + Cancel on the last page of a multi-page catalog (no Next)", () => {
+    const synthetic = syntheticCatalog(12);
+    const page = paginateHelpCatalog({
+      catalog: synthetic,
+      profile: profileWithMaxActions(25),
+      pageIndex: 1,
+    });
+    const ids = buildHelpActions({ page }).map((a) => a.id);
+    expect(ids).toContain("help:page:prev");
+    expect(ids).toContain("help:cancel");
+    expect(ids).not.toContain("help:page:next");
+  });
+
+  it("nav buttons carry pageIndex in `value` so the callback handler is stateless", () => {
+    const synthetic = syntheticCatalog(12);
+    const page = paginateHelpCatalog({
+      catalog: synthetic,
+      profile: profileWithMaxActions(25),
+      pageIndex: 0,
+    });
+    const actions = buildHelpActions({ page });
+    const next = actions.find((a) => a.id === "help:page:next");
+    expect(next?.value).toEqual({ pageIndex: 1 });
+  });
+
+  it("emits an empty action array when the profile is too constrained for buttons", () => {
+    const page = paginateHelpCatalog({
+      profile: profileWithMaxActions(2),
+    });
+    expect(buildHelpActions({ page })).toEqual([]);
   });
 });
