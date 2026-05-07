@@ -915,7 +915,7 @@ describe("MessagingController", () => {
     });
   });
 
-  it("does not treat legacy /threads as a resume alias", async () => {
+  it("does not treat legacy /threads as a resume alias — falls through to the help surface", async () => {
     const harness = await createHarness();
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/threads"));
@@ -923,7 +923,52 @@ describe("MessagingController", () => {
     expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
-      title: "PwrAgent",
+      title: "PwrAgent commands",
+    });
+  });
+
+  it("renders the help surface for an explicit /help command", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "PwrAgent commands",
+    });
+  });
+
+  it("help surface body lists every canonical verb (catalog-derived)", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+
+    const last = harness.delivered.at(-1) as { body?: string } | undefined;
+    expect(last?.body).toBeDefined();
+    expect(last?.body).toContain("`resume`");
+    expect(last?.body).toContain("`status`");
+    expect(last?.body).toContain("`detach`");
+    expect(last?.body).toContain("`help`");
+    // Both invocation styles must be discoverable from the help text
+    // — the whole reason we ship a catalog-derived body.
+    expect(last?.body).toContain("/<cmd>");
+    expect(last?.body).toContain("@<bot>");
+  });
+
+  it("help surface keeps the Resume action button as the primary tap-driven entry point", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      actions: [
+        {
+          id: "command:resume",
+          label: "Resume",
+          style: "primary",
+        },
+      ],
     });
   });
 

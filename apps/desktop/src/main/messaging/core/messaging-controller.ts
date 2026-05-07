@@ -35,6 +35,10 @@ import type {
   MessagingSurfaceRef,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
+import {
+  formatMessagingCommandHelpBody,
+  matchMessagingCommandVerb,
+} from "./messaging-command-catalog.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import type { MessagingStoreLike } from "../../state/messaging-store-sqlite";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
@@ -584,39 +588,37 @@ export class MessagingController {
   }
 
   private async handleCommand(event: MessagingInboundCommandEvent): Promise<void> {
-    const command = event.command.replace(/^\//, "").toLowerCase();
-    if (command === "status") {
+    const verb = matchMessagingCommandVerb(event.command);
+    if (verb === "status") {
       await this.presentStatus(event);
       return;
     }
-    if (command === "detach") {
+    if (verb === "detach") {
       await this.detachBinding(event);
       return;
     }
-    if (command === "resume") {
+    if (verb === "resume") {
       await this.presentResumeBrowser(event);
       return;
     }
-    // `help` and any unrecognized command both fall through to the
-    // help surface — for unknown commands this serves as a "did you
-    // mean?" prompt with the canonical list. Keeping `Resume` as the
-    // primary action because it's the most common entry point and
-    // works as a button-driven shortcut for anyone who prefers
-    // tapping over typing.
+    // `verb === "help"` and any unrecognized command both fall
+    // through to the help surface. For unknown commands this serves
+    // as a "did you mean?" prompt with the canonical list — keeping
+    // `Resume` as the primary action because it's the most common
+    // entry point and works as a button-driven shortcut for anyone
+    // who prefers tapping over typing.
+    //
+    // Body content is derived from `MESSAGING_COMMAND_CATALOG` so
+    // adding a new verb stays in lock-step with the help text. See
+    // `messaging-command-catalog.ts` for the catalog definition and
+    // the routine that formats the body.
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("help"),
         capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
         title: "PwrAgent commands",
-        body: [
-          "• `resume` — choose a thread to control from this conversation",
-          "• `status` — show the current binding and controls",
-          "• `detach` — detach this conversation from its thread",
-          "• `help` — show this message",
-          "",
-          "Invoke via the slash menu (`/<cmd>`) or by mentioning the bot (`@<bot> <cmd>`).",
-        ].join("\n"),
+        body: formatMessagingCommandHelpBody(),
         actions: [
           {
             id: "command:resume",
