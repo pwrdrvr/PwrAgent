@@ -4,6 +4,8 @@ import type {
   DesktopSettingsSnapshot,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
+import { DiscordIcon, TelegramIcon } from "../../icons";
+import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -11,6 +13,7 @@ import {
   type SettingsChipTone,
 } from "./SettingsLayout";
 import { SettingsSwitch } from "./SettingsSwitch";
+import { SettingsTestBlock } from "./SettingsTestBlock";
 import {
   formatSourceLabel,
   joinListValue,
@@ -21,6 +24,7 @@ import {
 } from "./settings-fields";
 
 export function MessagingSettings(props: {
+  desktopApi?: DesktopApi;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
@@ -123,6 +127,19 @@ export function MessagingSettings(props: {
             onClearSecret={props.onClearSecret}
             onReplaceSecret={props.onReplaceSecret}
           />
+          <SettingsField
+            label="Connection test"
+            sub="Pings getMe on the Telegram Bot API."
+            control={
+              <SettingsTestBlock
+                kind="telegram"
+                desktopApi={props.desktopApi}
+                icon={<TelegramIcon size={14} />}
+                defaultName="@your_bot"
+                defaultSub="api.telegram.org"
+              />
+            }
+          />
           <ToggleField
             checked={telegram.streamingResponses.value}
             disabled={props.saving}
@@ -202,6 +219,19 @@ export function MessagingSettings(props: {
             state={discord.botToken}
             onClearSecret={props.onClearSecret}
             onReplaceSecret={props.onReplaceSecret}
+          />
+          <SettingsField
+            label="Connection test"
+            sub="Validates the bot token via /users/@me on the Discord API."
+            control={
+              <SettingsTestBlock
+                kind="discord"
+                desktopApi={props.desktopApi}
+                icon={<DiscordIcon size={14} />}
+                defaultName="Your bot"
+                defaultSub="discord.com/api/v10"
+              />
+            }
           />
           <ToggleField
             checked={discord.streamingResponses.value}

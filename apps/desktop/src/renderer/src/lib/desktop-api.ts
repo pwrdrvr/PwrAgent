@@ -83,6 +83,9 @@ import type {
   ReadDesktopSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
+  SettingsCredentialTestKind,
+  SettingsCredentialTestRequest,
+  SettingsCredentialTestResult,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
   UpdateThreadExpectedBranchRequest,
@@ -183,6 +186,18 @@ export type DesktopApi = {
   refreshCodexDiscovery?: (
     request?: RefreshDesktopCodexDiscoveryRequest
   ) => Promise<ReadDesktopSettingsResponse>;
+  /** Run the per-credential connection-test probe for a settings panel.
+   *  Result contains parsed identity (bot username, model IDs, codex
+   *  version) — never the secret itself. */
+  testSettingsCredentials?: (
+    request: SettingsCredentialTestRequest,
+  ) => Promise<SettingsCredentialTestResult>;
+  /** Read the last-known credential-test result without firing a new
+   *  probe. Used by the test-block primitive to render the previous
+   *  status on settings-pane mount. */
+  readLastSettingsCredentialTest?: (
+    request: { kind: SettingsCredentialTestKind },
+  ) => Promise<SettingsCredentialTestResult | undefined>;
   openApplication?: (
     request: OpenDesktopApplicationRequest
   ) => Promise<OpenDesktopApplicationResponse>;

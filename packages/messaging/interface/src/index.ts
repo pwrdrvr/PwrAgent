@@ -975,3 +975,81 @@ export type MessagingCallbackHandleStore = {
     callbackHandle: MessagingCallbackHandleRecord,
   ): Promise<MessagingCallbackHandleRecord>;
 };
+
+/* -----------------------------------------------------------------
+ * Credential validation (Settings → Connection test)
+ * -----------------------------------------------------------------
+ *
+ * Each messaging provider package exports a top-level
+ * `validateCredentials(config) -> MessagingCredentialValidationResult`
+ * function. The desktop main process dispatches to the right provider
+ * via dynamic import keyed on `MessagingChannelKind`, so the
+ * orchestration layer stays channel-neutral and provider SDKs stay
+ * isolated to their own package.
+ *
+ * The probe MUST be non-disruptive — no polling started, no gateway
+ * connected, no message sent. Telegram uses `grammy.Bot.api.getMe()`,
+ * Discord uses `discord.js.REST.get(Routes.user('@me'))`. Both are
+ * stateless REST calls that don't change adapter state.
+ *
+ * The result carries only public identity (bot username, account
+ * name) — never the credential. Errors are clipped so the renderer
+ * never shows a giant stack trace.
+ *
+ * See `docs/messaging-adapter-contract.md` § "Credential validation"
+ * for the per-adapter contract.
+ */
+export type MessagingCredentialValidationStatus =
+  /** Probe succeeded; account info is populated. */
+  | "ok"
+  /** Probe ran but the platform rejected the credential. */
+  | "failed"
+  /** No credential supplied. The dispatch layer normally short-circuits
+   *  before reaching the provider, but providers MAY return this
+   *  defensively if their config arrives empty. */
+  | "unset";
+
+export type MessagingCredentialValidationResult = {
+  status: MessagingCredentialValidationStatus;
+  /** Round-trip duration in ms, measured by the provider. */
+  durationMs: number;
+  /** Wall-clock ms when the probe finished. */
+  testedAt: number;
+  /** Public identity: bot username, account name, etc.
+   *  Always already-public information; never a secret. */
+  account?: string;
+  /** Short human-readable detail for the test row sub-line.
+   *  e.g. host, library version. */
+  detail?: string;
+  /** Failure detail when `status === "failed"`. Truncated by the
+   *  provider to ≤ 240 chars so the renderer never surfaces a giant
+   *  stack trace. */
+  errorMessage?: string;
+};
+
+/** Maximum length of `errorMessage` returned from
+ *  `validateCredentials`. Providers MUST clip to this length. */
+export const MESSAGING_CREDENTIAL_VALIDATION_ERROR_LIMIT = 240;
+
+/** Telegram-shaped probe input — just the bot token. */
+export type TelegramCredentialValidationConfig = {
+  botToken: string;
+};
+
+/** Discord-shaped probe input — just the bot token. */
+export type DiscordCredentialValidationConfig = {
+  botToken: string;
+};
+
+/**
+ * Helper providers can use to clip an error message to the contract
+ * limit. Trims whitespace, replaces a tail with an ellipsis when over
+ * the cap.
+ */
+export function clipMessagingValidationError(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= MESSAGING_CREDENTIAL_VALIDATION_ERROR_LIMIT) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, MESSAGING_CREDENTIAL_VALIDATION_ERROR_LIMIT - 1)}…`;
+}

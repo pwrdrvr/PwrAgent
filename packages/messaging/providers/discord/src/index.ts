@@ -22,3 +22,4 @@ export {
   textForDiscordIntent,
 } from "./discord-formatting.ts";
 export type { DiscordMessagingConfig } from "./discord-config.ts";
+export { validateCredentials } from "./validate-credentials.ts";

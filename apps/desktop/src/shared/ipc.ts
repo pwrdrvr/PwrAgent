@@ -54,6 +54,25 @@ export const MESSAGING_LIST_ACTIVITY_CHANNEL = "messaging:list-activity";
 export const MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL =
   "messaging:open-activity-window";
 /**
+ * Drives the per-credential "Test" button on Settings → Messaging
+ * and Settings → Models. Request payload: `{ kind: "telegram" |
+ * "discord" | "grok" | "codex" }`. Response: `SettingsCredentialTestResult`.
+ *
+ * The probe runs entirely in the main process — secrets never leave
+ * it. The result returned to the renderer contains only public
+ * identity (bot username, model IDs, codex version), never the
+ * token or API key.
+ */
+export const SETTINGS_TEST_CREDENTIALS_CHANNEL =
+  "settings:test-credentials";
+/**
+ * Sibling channel for "what was the last result?" — driven on
+ * settings-pane mount so the test block can render the previous
+ * status without auto-firing a fresh probe.
+ */
+export const SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL =
+  "settings:last-credential-test";
+/**
  * Fired main → renderer whenever the messaging store has had bindings
  * created, revoked, or had their conversation metadata change. The
  * payload is intentionally minimal — receivers should refetch the

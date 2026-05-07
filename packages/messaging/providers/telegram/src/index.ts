@@ -27,3 +27,4 @@ export {
   textForTelegramIntent,
 } from "./telegram-formatting.ts";
 export type { TelegramMessagingConfig } from "./telegram-config.ts";
+export { validateCredentials } from "./validate-credentials.ts";

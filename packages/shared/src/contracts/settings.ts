@@ -275,3 +275,53 @@ export function isDesktopWorktreeStorageLocation(
     value as DesktopWorktreeStorageLocation,
   );
 }
+
+/**
+ * Credential-test surface — drives the per-credential "Test" buttons
+ * on the Settings → Messaging and Settings → Models panels. Each kind
+ * maps to a distinct main-process probe:
+ *
+ * - `telegram`  → HTTP GET https://api.telegram.org/bot<TOKEN>/getMe
+ * - `discord`   → HTTP GET https://discord.com/api/v10/users/@me
+ * - `grok`      → HTTP GET https://api.x.ai/v1/models
+ * - `codex`     → spawn `<resolved-path> --version`
+ */
+export const SETTINGS_CREDENTIAL_TEST_KINDS = [
+  "telegram",
+  "discord",
+  "grok",
+  "codex",
+] as const;
+
+export type SettingsCredentialTestKind =
+  (typeof SETTINGS_CREDENTIAL_TEST_KINDS)[number];
+
+export type SettingsCredentialTestStatus =
+  /** Probe ran cleanly. */
+  | "ok"
+  /** Probe ran but reported a failure (auth rejected, timeout, etc.). */
+  | "failed"
+  /** Required credential / path is not configured. No probe was attempted. */
+  | "unset";
+
+export type SettingsCredentialTestResult = {
+  kind: SettingsCredentialTestKind;
+  status: SettingsCredentialTestStatus;
+  /** Wall-clock ms when the test finished. */
+  testedAt: number;
+  /** Round-trip duration in ms (subprocess wall-clock or HTTP). */
+  durationMs: number;
+  /** Identity returned by the probe — bot username, account name, etc.
+   *  Always already-public information; never a secret. */
+  account?: string;
+  /** Short human-readable detail to show under the row title.
+   *  e.g. version string for codex, comma-joined model IDs for grok. */
+  detail?: string;
+  /** Failure detail when `status === "failed"`. Truncated by the
+   *  tester to ~240 chars so we never surface a giant stack trace. */
+  errorMessage?: string;
+};
+
+export type SettingsCredentialTestRequest = {
+  kind: SettingsCredentialTestKind;
+};

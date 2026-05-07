@@ -1,7 +1,7 @@
 ---
 title: Desktop Design Overhaul (Tangerine Terminal v2)
 type: feat
-status: active
+status: completed
 date: 2026-05-04
 ---
 
@@ -917,9 +917,13 @@ ripple effects:
       component or styled span (verified by grep).
 - [ ] The Sidebar masthead's folder/branch chips are visibly heavier
       and higher contrast against the near-black surface.
-- [ ] Settings shell has `← Exit Settings` top-left under the brand,
+- [x] Settings shell has `← Exit Settings` top-left under the brand,
       consistent section/row/help layout, and test affordances on
-      credential-based settings.
+      credential-based settings. Test affordances landed via the
+      `SettingsTestBlock` primitive (Telegram `getMe`, Discord
+      `/users/@me`, Grok `GET /v1/models`, Codex `--version`) — see
+      `apps/desktop/src/main/credential-tester/credential-tester.ts`
+      and `apps/desktop/src/renderer/src/features/settings/SettingsTestBlock.tsx`.
 - [ ] Diff Eliding setting exists, defaults to disabled, and gates
       every `XaiAiSdkObjectClient` call site.
 - [ ] Sticky directory headers stay pinned during scroll on the

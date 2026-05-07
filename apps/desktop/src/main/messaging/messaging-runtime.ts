@@ -17,6 +17,7 @@ import type {
   MessagingBindingRecord,
   MessagingCapabilityProfile,
   MessagingChannelKind,
+  MessagingCredentialValidationResult,
   MessagingDeliveryResult,
   MessagingInboundEvent,
   MessagingSurfaceIntent,
@@ -101,6 +102,21 @@ export type BindingRevokeAllForThreadResult = {
    * notification flow. The remainder were store-only fallbacks. */
   notifiedCount: number;
 };
+
+/**
+ * Request payload for `requestCredentialValidation`. The runtime
+ * routes by `channel` and forwards `credential` to the matching
+ * provider package's `validateCredentials` function.
+ *
+ * The runtime is channel-neutral: it does not parse the credential,
+ * does not branch on platform, and does not know which library each
+ * provider uses. Adding a new platform means adding a new
+ * dynamic-import case to `dispatchCredentialValidation` below — no
+ * other changes to the runtime.
+ */
+export type CredentialValidationRequest =
+  | { channel: "telegram"; credential: { botToken: string } }
+  | { channel: "discord"; credential: { botToken: string } };
 
 export class DesktopMessagingRuntime {
   private adapters: DesktopMessagingAdapter[] = [];
@@ -425,6 +441,53 @@ export class DesktopMessagingRuntime {
     });
 
     return { revokedCount: bindings.length, notifiedCount };
+  }
+
+  /**
+   * Bus entry point for the per-credential "Test" button on Settings →
+   * Messaging. Routes to the matching provider package's
+   * `validateCredentials(config)` via dynamic import — the provider is
+   * loaded on first invocation and cached by Node's module registry,
+   * so subsequent tests reuse the same imported module without
+   * re-loading.
+   *
+   * The runtime stays channel-neutral: it does not import provider
+   * packages statically, does not parse credentials, and does not
+   * know which library (grammy / discord.js / etc.) each provider
+   * uses for its smoke check. Adding a new platform means adding one
+   * branch here and exporting `validateCredentials` from the new
+   * provider package.
+   *
+   * NOTE: this path does NOT require the messaging runtime to be
+   * `started()` — credential validation works regardless of whether
+   * the platform is currently enabled. Loading the provider here also
+   * does NOT spin up its full adapter (no polling, no gateway, no
+   * store mutation). The provider's `validateCredentials` is a
+   * stateless REST call.
+   */
+  async requestCredentialValidation(
+    request: CredentialValidationRequest,
+  ): Promise<MessagingCredentialValidationResult> {
+    switch (request.channel) {
+      case "telegram": {
+        const telegramProvider = await import(
+          "@pwragent/messaging-provider-telegram"
+        );
+        return await telegramProvider.validateCredentials(request.credential);
+      }
+      case "discord": {
+        const discordProvider = await import(
+          "@pwragent/messaging-provider-discord"
+        );
+        return await discordProvider.validateCredentials(request.credential);
+      }
+      default: {
+        const exhaustive: never = request;
+        throw new Error(
+          `unknown credential validation channel: ${(exhaustive as { channel: string }).channel}`,
+        );
+      }
+    }
   }
 
   private async dispatchRevokeToControllers(

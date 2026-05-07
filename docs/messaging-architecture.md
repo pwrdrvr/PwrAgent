@@ -317,7 +317,8 @@ The full procedure is in [`docs/messaging-adapter-contract.md`](messaging-adapte
 4. Translate inbound platform events into `MessagingInboundEvent`. Authorize on stable platform user IDs. Use short opaque callback handles persisted in the messaging store.
 5. Translate outbound `MessagingSurfaceIntent` into platform-native messages. Apply defensive caps from the profile. Stay channel-neutral — the workflow logic in `MessagingController` should not need any changes.
 6. Add to `apps/desktop/src/main/messaging/provider-loader.ts` so the desktop runtime can load it.
-7. Tests cover: command normalization, authorization, callbacks, markdown rendering, long-text chunking, inbound media handling, restart-safe binding behavior, and capability-profile reads in the formatter.
+7. Export `validateCredentials(config)` from the package barrel using the platform's real SDK in a non-disruptive smoke-check call (e.g. `grammy.Bot.api.getMe()` for Telegram, `discord.js.REST.get(Routes.user("@me"))` for Discord). Add a `<Channel>CredentialValidationConfig` type to `packages/messaging/interface/src/index.ts` and extend `CredentialValidationRequest` in `apps/desktop/src/main/messaging/messaging-runtime.ts` with the new channel branch. The desktop runtime dynamically imports the provider package on first Test click, so the Settings → Connection-test button stays decoupled from boot-time provider load. Full contract: [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md) § "Credential Validation".
+8. Tests cover: command normalization, authorization, callbacks, markdown rendering, long-text chunking, inbound media handling, restart-safe binding behavior, capability-profile reads in the formatter, and `validateCredentials` ok / failed / unset paths.
 
 ## File map
 
@@ -328,6 +329,7 @@ The full procedure is in [`docs/messaging-adapter-contract.md`](messaging-adapte
 | `packages/messaging/interface/AGENTS.md` | Package guidance |
 | `packages/messaging/providers/<channel>/src/<channel>-adapter.ts` | The adapter class, capability profile declaration, inbound event translation, outbound intent rendering |
 | `packages/messaging/providers/<channel>/src/<channel>-formatting.ts` | Pure formatters that turn intents into platform-native components/text. Reads the profile for layout caps. |
+| `packages/messaging/providers/<channel>/src/validate-credentials.ts` | Top-level `validateCredentials(config)` exported from the package barrel. Stateless smoke check using the platform's real SDK (`grammy.Bot.api.getMe()`, `discord.js.REST.get(Routes.user("@me"))`, …). Driven by Settings → Connection-test via `DesktopMessagingRuntime.requestCredentialValidation`. Contract: [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md) § "Credential Validation". |
 | `apps/desktop/src/main/messaging/messaging-runtime.ts` | Constructs one controller per adapter, wires backend events |
 | `apps/desktop/src/main/messaging/core/messaging-controller.ts` | Workflow logic — turn admission, picker state, status card, handoff flow, audit |
 | `apps/desktop/src/main/messaging/core/messaging-command-catalog.ts` | Canonical command catalog (verb + description), `matchMessagingCommandVerb` for dispatch lookup, `formatMessagingCommandHelpBody` for `/help` body generation, `paginateHelpCatalog` + `buildHelpActions` for the paginated command-button row |
