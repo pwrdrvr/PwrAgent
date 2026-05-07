@@ -87,7 +87,6 @@ describe("App", () => {
           hmacSecret: { configured: false, source: "unset", writable: true },
           serverUrl: { value: "", source: "default" },
           callbackBaseUrl: { value: "", source: "default" },
-          callbackPort: { value: 0, source: "default" },
           slashCommandPrefix: { value: "pwragent_", source: "default" },
           registerSlashCommands: { value: false, source: "default" },
           authorizedUserIds: { value: [], source: "default" },

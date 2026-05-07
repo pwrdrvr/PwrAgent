@@ -277,7 +277,6 @@ function SettingsSectionBody(props: {
               mattermost: {
                 authorizedUserIds: mattermost.authorizedUserIds.value,
                 callbackBaseUrl: mattermost.callbackBaseUrl.value,
-                callbackPort: mattermost.callbackPort.value,
                 enabled: mattermost.enabled.value,
                 registerSlashCommands: mattermost.registerSlashCommands.value,
                 serverUrl: mattermost.serverUrl.value,

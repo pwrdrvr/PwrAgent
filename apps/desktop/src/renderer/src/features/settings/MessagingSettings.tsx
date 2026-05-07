@@ -378,7 +378,18 @@ export function MessagingSettings(props: {
           <TextField
             disabled={props.saving}
             label="Callback Base URL"
-            sub="Public URL Mattermost POSTs button clicks to (Cloudflare Tunnel / Tailscale Funnel / ngrok)."
+            sub="Public URL Mattermost POSTs button clicks to. The local listener binds to the URL's port if present, otherwise to 47821."
+            help={
+              <>
+                Examples:
+                <br />
+                <code>https://mm-callback.example.com/</code> (Cloudflare Tunnel / Tailscale Funnel)
+                <br />
+                <code>http://localhost:47821/</code> (local)
+                <br />
+                <code>http://host.docker.internal:47821/</code> (Mattermost in Docker on the same host)
+              </>
+            }
             source={optionalStringSourceBadge(mattermost.callbackBaseUrl)}
             value={mattermost.callbackBaseUrl.value}
             onSave={(callbackBaseUrl) => {
@@ -388,21 +399,6 @@ export function MessagingSettings(props: {
                   ...mattermost.callbackBaseUrl,
                   value: callbackBaseUrl,
                 },
-              });
-            }}
-          />
-          <NumberField
-            disabled={props.saving}
-            label="Callback Port"
-            sub="Localhost port the HTTP listener binds to. Use 0 to pick a free port automatically."
-            min={0}
-            max={65535}
-            source={sourceBadge(mattermost.callbackPort)}
-            value={mattermost.callbackPort.value}
-            onSave={(callbackPort) => {
-              void props.onSaveMattermost({
-                ...mattermost,
-                callbackPort: { ...mattermost.callbackPort, value: callbackPort },
               });
             }}
           />
@@ -566,6 +562,7 @@ function TextField(props: {
   disabled?: boolean;
   label: string;
   sub?: ReactNode;
+  help?: ReactNode;
   source: string;
   value: string;
   onSave: (value: string) => void;
@@ -576,6 +573,7 @@ function TextField(props: {
     <SettingsField
       label={props.label}
       sub={props.sub}
+      help={props.help}
       source={props.source}
       control={
         <input

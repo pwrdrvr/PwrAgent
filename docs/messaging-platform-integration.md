@@ -392,8 +392,10 @@ Steps:
 2. Run `cloudflared tunnel run <tunnel-id>` on the PwrAgent host (typically
    as a launchd / systemd service).
 3. Configure the public hostname route to forward to
-   `http://localhost:47821` (or whatever port you set
-   `PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_PORT` to).
+   `http://localhost:47821` (the default bind port — change it by
+   embedding a different port in `callbackBaseUrl`, e.g.
+   `http://localhost:8000/`, which the adapter parses to derive the
+   listener port).
 
 **Recommended hardening (defense in depth on top of PwrAgent's HMAC):**
 
@@ -448,12 +450,13 @@ PWRAGENT_MESSAGING_MATTERMOST_ENABLED=true
 PWRAGENT_MESSAGING_MATTERMOST_BOT_TOKEN=<bot access token>
 PWRAGENT_MESSAGING_MATTERMOST_SERVER_URL=https://chat.example.com
 PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_BASE_URL=https://pwragent.example.com/messaging/mattermost/callback
-PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_PORT=47821    # optional; default 47821
 PWRAGENT_MESSAGING_MATTERMOST_AUTHORIZED_USER_IDS=<mattermost user id>,<another id>
 PWRAGENT_MESSAGING_MATTERMOST_REGISTER_SLASH_COMMANDS=true       # optional; default false
 PWRAGENT_MESSAGING_MATTERMOST_SLASH_COMMAND_PREFIX=pwragent_     # optional; default pwragent_
 PWRAGENT_MESSAGING_MATTERMOST_CALLBACK_HMAC_SECRET=<hex secret>  # optional; regenerated per-restart if unset
 ```
+
+The local HTTP listener binds to the port embedded in `CALLBACK_BASE_URL` if one is present (e.g., `http://localhost:47821/` → 47821), otherwise to the default port 47821. There is no separate port setting — the URL is the single source of truth so the bind port and the URL Mattermost dials cannot disagree.
 
 ### 3a. Slash command registration
 

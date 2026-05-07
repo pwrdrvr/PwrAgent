@@ -419,7 +419,6 @@ describe("DesktopSettingsService", () => {
           streamingResponses: true,
           serverUrl: "https://chat.example.com",
           callbackBaseUrl: "https://tunnel.example.com/mm",
-          callbackPort: 47821,
           slashCommandPrefix: "agent_",
           registerSlashCommands: true,
           authorizedUserIds: ["userA", "userB"],
@@ -434,7 +433,7 @@ describe("DesktopSettingsService", () => {
     expect(contents).toContain("[messaging.mattermost]");
     expect(contents).toContain('server_url = "https://chat.example.com"');
     expect(contents).toContain("register_slash_commands = true");
-    expect(contents).toContain("callback_port = 47821");
+    expect(contents).not.toContain("callback_port");
     expect(contents).toContain('slash_command_prefix = "agent_"');
     expect(contents).toContain('authorized_user_ids = ["userA", "userB"]');
     // Bot token + HMAC secret never written to TOML
@@ -456,7 +455,6 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.messaging.mattermost.callbackBaseUrl.value).toBe(
       "https://tunnel.example.com/mm",
     );
-    expect(snapshot.messaging.mattermost.callbackPort.value).toBe(47821);
     expect(snapshot.messaging.mattermost.slashCommandPrefix.value).toBe(
       "agent_",
     );

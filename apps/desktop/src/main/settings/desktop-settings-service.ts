@@ -36,7 +36,6 @@ import {
   MATTERMOST_BOT_TOKEN_ENV,
   MATTERMOST_CALLBACK_BASE_URL_ENV,
   MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
-  MATTERMOST_CALLBACK_PORT_ENV,
   MATTERMOST_ENABLED_ENV,
   MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
   MATTERMOST_SERVER_URL_ENV,
@@ -259,11 +258,6 @@ export class DesktopSettingsService {
           callbackBaseUrl: this.resolveString(
             config.messaging?.mattermost?.callbackBaseUrl,
             MATTERMOST_CALLBACK_BASE_URL_ENV,
-          ),
-          callbackPort: this.resolveNumber(
-            config.messaging?.mattermost?.callbackPort,
-            0,
-            MATTERMOST_CALLBACK_PORT_ENV,
           ),
           slashCommandPrefix: this.resolveStringWithDefault(
             config.messaging?.mattermost?.slashCommandPrefix,

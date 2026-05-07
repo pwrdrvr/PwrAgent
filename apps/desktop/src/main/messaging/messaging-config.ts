@@ -15,7 +15,6 @@ import {
   MATTERMOST_BOT_TOKEN_ENV,
   MATTERMOST_CALLBACK_BASE_URL_ENV,
   MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
-  MATTERMOST_CALLBACK_PORT_ENV,
   MATTERMOST_ENABLED_ENV,
   MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
   MATTERMOST_SERVER_URL_ENV,
@@ -44,7 +43,6 @@ export {
   MATTERMOST_BOT_TOKEN_ENV,
   MATTERMOST_CALLBACK_BASE_URL_ENV,
   MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
-  MATTERMOST_CALLBACK_PORT_ENV,
   MATTERMOST_ENABLED_ENV,
   MATTERMOST_REGISTER_SLASH_COMMANDS_ENV,
   MATTERMOST_SERVER_URL_ENV,
@@ -95,7 +93,6 @@ export function loadDesktopMessagingConfig(
   const mattermostAuthorizedActorIds = parseList(
     env[MATTERMOST_AUTHORIZED_USER_IDS_ENV],
   );
-  const mattermostCallbackPort = readEnvInteger(env, MATTERMOST_CALLBACK_PORT_ENV).value;
   const mattermostCallbackHmacSecret = readEnv(
     env,
     MATTERMOST_CALLBACK_HMAC_SECRET_ENV,
@@ -154,9 +151,6 @@ export function loadDesktopMessagingConfig(
             botToken: mattermostBotToken,
             serverUrl: mattermostServerUrl,
             callbackBaseUrl: mattermostCallbackBaseUrl,
-            ...(mattermostCallbackPort !== undefined
-              ? { callbackPort: mattermostCallbackPort }
-              : {}),
             ...(mattermostCallbackHmacSecret
               ? { callbackHmacSecret: mattermostCallbackHmacSecret }
               : {}),
@@ -211,11 +205,6 @@ export async function loadDesktopMessagingConfigFromSettings(
     envConfig.mattermost?.callbackBaseUrl
     || snapshot.messaging.mattermost.callbackBaseUrl.value
     || undefined;
-  const mattermostCallbackPort =
-    envConfig.mattermost?.callbackPort
-    ?? (snapshot.messaging.mattermost.callbackPort.value > 0
-      ? snapshot.messaging.mattermost.callbackPort.value
-      : undefined);
   const mattermostSlashCommandPrefix =
     envConfig.mattermost?.slashCommandPrefix
     ?? snapshot.messaging.mattermost.slashCommandPrefix.value;
@@ -308,9 +297,6 @@ export async function loadDesktopMessagingConfigFromSettings(
             botToken: mattermostBotToken!,
             serverUrl: mattermostServerUrl,
             callbackBaseUrl: mattermostCallbackBaseUrl,
-            ...(mattermostCallbackPort !== undefined
-              ? { callbackPort: mattermostCallbackPort }
-              : {}),
             ...(mattermostHmacSecret
               ? { callbackHmacSecret: mattermostHmacSecret }
               : {}),
@@ -420,7 +406,6 @@ export function redactDesktopMessagingConfig(
           enabled: config.mattermost.enabled !== false,
           serverUrl: config.mattermost.serverUrl,
           callbackBaseUrl: config.mattermost.callbackBaseUrl,
-          callbackPort: config.mattermost.callbackPort,
           botToken: "[REDACTED]",
           callbackHmacSecret: config.mattermost.callbackHmacSecret
             ? "[REDACTED]"

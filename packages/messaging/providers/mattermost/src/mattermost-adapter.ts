@@ -60,6 +60,39 @@ import {
 const DEFAULT_CALLBACK_PORT = 47821;
 
 /**
+ * Derive the local HTTP listener port from the public callback URL.
+ *
+ * - `http://localhost:47821/cb`        → 47821 (localhost-direct mode)
+ * - `http://host.docker.internal:1234/` → 1234  (Docker-on-host)
+ * - `https://chat.example.com/mm/cb`   → 47821 (tunnel mode — public TLS)
+ *
+ * The URL Mattermost dials and the local bind port are separate
+ * concerns ONLY when a tunnel terminates TLS and forwards to localhost.
+ * In every other deployment Mattermost dials the URL directly, so the
+ * URL's port and the bind port MUST match. Deriving from the URL makes
+ * that guarantee structural rather than aspirational.
+ *
+ * Unparsable URLs fall through to the default; the higher-level
+ * `loadDesktopMessagingConfigFromSettings` already gates startup on
+ * a non-empty `callbackBaseUrl`, so an unparsable URL means the
+ * runtime config layer made a mistake.
+ */
+function bindPortFromCallbackUrl(callbackBaseUrl: string): number {
+  try {
+    const parsed = new URL(callbackBaseUrl);
+    if (parsed.port) {
+      const port = Number(parsed.port);
+      if (Number.isInteger(port) && port > 0 && port <= 65535) {
+        return port;
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+  return DEFAULT_CALLBACK_PORT;
+}
+
+/**
  * Conversation title (channel header) limit per Mattermost product limits.
  */
 const MATTERMOST_CHANNEL_HEADER_LIMIT = 1024;
@@ -273,7 +306,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     this.callbackServer =
       options.callbackServer ??
       createMattermostCallbackServer({
-        port: options.config.callbackPort ?? DEFAULT_CALLBACK_PORT,
+        port: bindPortFromCallbackUrl(options.config.callbackBaseUrl),
         hmacSecret:
           options.config.callbackHmacSecret ?? generateMattermostHmacSecret(),
         handler: (body, rawBody) =>

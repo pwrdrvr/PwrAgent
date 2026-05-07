@@ -168,7 +168,6 @@ export type DesktopSettingsSnapshot = {
       hmacSecret: DesktopSettingsSecretState;
       serverUrl: DesktopSettingsValue<string>;
       callbackBaseUrl: DesktopSettingsValue<string>;
-      callbackPort: DesktopSettingsValue<number>;
       slashCommandPrefix: DesktopSettingsValue<string>;
       registerSlashCommands: DesktopSettingsValue<boolean>;
       authorizedUserIds: DesktopSettingsValue<string[]>;
@@ -225,7 +224,6 @@ export type DesktopSettingsConfigPatch = {
       streamingResponses?: boolean;
       serverUrl?: string;
       callbackBaseUrl?: string;
-      callbackPort?: number;
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
       authorizedUserIds?: string[];

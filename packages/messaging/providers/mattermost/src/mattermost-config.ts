@@ -7,21 +7,21 @@ export type MattermostMessagingConfig = {
   botToken: string;
   /**
    * Public URL Mattermost will POST to when a user clicks an interactive
-   * button. Mattermost embeds this in the action's `integration.url`. The
-   * adapter binds an HTTP listener to `127.0.0.1:callbackPort`; production
-   * deployments expose this via Cloudflare Tunnel / Tailscale Funnel / ngrok
-   * which terminates TLS and forwards to localhost.
+   * button. Mattermost embeds this verbatim in each action's
+   * `integration.url`. Production deployments front this with a tunnel
+   * (Cloudflare Tunnel / Tailscale Funnel / ngrok) that terminates TLS
+   * and forwards to localhost.
    *
-   * Path is up to you (e.g., `/messaging/mattermost/callback`); the listener
-   * accepts any POST under the configured port.
+   * The local bind port is derived from this URL: if the URL has an
+   * explicit port (`http://localhost:47821/`, `http://host.docker.internal:47821/`),
+   * the listener binds there; otherwise the listener binds to a default
+   * port (47821) and the tunnel forwards to that. There is no separate
+   * port field — having two sources of truth invites them to disagree.
+   *
+   * Path is up to you (e.g., `/messaging/mattermost/callback`); the
+   * listener accepts any POST.
    */
   callbackBaseUrl: string;
-  /**
-   * Optional: override the localhost port the HTTP listener binds to.
-   * Defaults to 47821 (a randomly chosen unused port — change if it
-   * conflicts with something else on the host).
-   */
-  callbackPort?: number;
   /**
    * Optional: override the HMAC secret used to sign each rendered button's
    * `integration.context`. Defaults to a fresh random secret per adapter

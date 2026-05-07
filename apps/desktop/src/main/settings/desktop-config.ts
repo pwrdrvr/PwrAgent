@@ -51,7 +51,6 @@ export type DesktopSettingsConfig = {
       streamingResponses?: boolean;
       serverUrl?: string;
       callbackBaseUrl?: string;
-      callbackPort?: number;
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
       authorizedUserIds?: string[];
@@ -341,7 +340,6 @@ export function stringifyDesktopSettingsToml(
           "callback_base_url",
           mattermost.callbackBaseUrl,
         ),
-        formatOptionalTomlEntry("callback_port", mattermost.callbackPort),
         formatOptionalTomlEntry(
           "slash_command_prefix",
           mattermost.slashCommandPrefix,
@@ -448,7 +446,6 @@ function normalizeDesktopConfig(
         streamingResponses: readBoolean(mattermost?.streaming_responses),
         serverUrl: readString(mattermost?.server_url),
         callbackBaseUrl: readString(mattermost?.callback_base_url),
-        callbackPort: readNumber(mattermost?.callback_port),
         slashCommandPrefix: readString(mattermost?.slash_command_prefix),
         registerSlashCommands: readBoolean(mattermost?.register_slash_commands),
         authorizedUserIds: readStringArray(mattermost?.authorized_user_ids),

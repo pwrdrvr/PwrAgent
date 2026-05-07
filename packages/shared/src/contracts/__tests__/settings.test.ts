@@ -87,7 +87,6 @@ describe("desktop settings contracts", () => {
           },
           serverUrl: { value: "", source: "default" },
           callbackBaseUrl: { value: "", source: "default" },
-          callbackPort: { value: 0, source: "default" },
           slashCommandPrefix: { value: "pwragent_", source: "default" },
           registerSlashCommands: { value: false, source: "default" },
           authorizedUserIds: { value: [], source: "default" },
