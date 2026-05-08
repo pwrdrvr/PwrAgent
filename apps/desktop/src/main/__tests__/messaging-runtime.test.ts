@@ -576,7 +576,7 @@ describe("DesktopMessagingRuntime", () => {
       }),
     );
     expect(messagingLog.info).toHaveBeenCalledWith(
-      "messaging runtime started",
+      "messaging runtime config applied",
       expect.objectContaining({
         started: ["discord"],
         failed: ["telegram"],
@@ -1111,6 +1111,162 @@ describe("DesktopMessagingRuntime", () => {
 
     expect(factory).toHaveBeenCalledTimes(1);
     expect(adapter.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("hot-applies config by leaving unchanged adapters alone and starting new channels", async () => {
+    await prepareRuntimeStore();
+    const telegramAdapter = createAdapter("telegram");
+    const discordAdapter = createAdapter("discord");
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) => [
+      ...(config.telegram ? [telegramAdapter] : []),
+      ...(config.discord ? [discordAdapter] : []),
+    ]);
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        inputDebounceMs: 0,
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await runtime.start();
+    await runtime.applyConfig({
+      inputDebounceMs: 0,
+      telegram: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
+      discord: {
+        channel: "discord",
+        botToken: "discord-token",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
+    });
+
+    expect(telegramAdapter.start).toHaveBeenCalledTimes(1);
+    expect(telegramAdapter.stop).not.toHaveBeenCalled();
+    expect(discordAdapter.start).toHaveBeenCalledTimes(1);
+    expect(runtime.getPlatformStatuses()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ platform: "telegram", health: "enabled" }),
+        expect.objectContaining({ platform: "discord", health: "enabled" }),
+      ]),
+    );
+  });
+
+  it("hot-applies config by stopping disabled channels and restarting changed credentials", async () => {
+    await prepareRuntimeStore();
+    const firstTelegramAdapter = createAdapter("telegram");
+    const secondTelegramAdapter = createAdapter("telegram");
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) => {
+      if (!config.telegram) return [];
+      return [
+        config.telegram.botToken === "telegram-token-2"
+          ? secondTelegramAdapter
+          : firstTelegramAdapter,
+      ];
+    });
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        inputDebounceMs: 0,
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token-1",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await runtime.start();
+    await runtime.applyConfig({
+      inputDebounceMs: 0,
+      telegram: {
+        channel: "telegram",
+        botToken: "telegram-token-2",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
+    });
+    await runtime.applyConfig({
+      inputDebounceMs: 0,
+      enabled: false,
+    });
+
+    expect(firstTelegramAdapter.stop).toHaveBeenCalledTimes(1);
+    expect(secondTelegramAdapter.start).toHaveBeenCalledTimes(1);
+    expect(secondTelegramAdapter.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.getPlatformStatuses()).toEqual([
+      expect.objectContaining({
+        platform: "telegram",
+        health: "suspended",
+      }),
+    ]);
+  });
+
+  it("preserves errored health when a hot restart replacement fails", async () => {
+    await prepareRuntimeStore();
+    const firstTelegramAdapter = createAdapter("telegram");
+    const failingTelegramAdapter = createAdapter("telegram", {
+      start: vi.fn(async () => {
+        throw new Error("new token rejected");
+      }),
+    });
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) => {
+      if (!config.telegram) return [];
+      return [
+        config.telegram.botToken === "telegram-token-2"
+          ? failingTelegramAdapter
+          : firstTelegramAdapter,
+      ];
+    });
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        inputDebounceMs: 0,
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token-1",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await runtime.start();
+    await runtime.applyConfig({
+      inputDebounceMs: 0,
+      telegram: {
+        channel: "telegram",
+        botToken: "telegram-token-2",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
+    });
+
+    expect(firstTelegramAdapter.stop).toHaveBeenCalledTimes(1);
+    expect(failingTelegramAdapter.start).toHaveBeenCalledTimes(1);
+    expect(runtime.getPlatformStatuses()).toEqual([
+      expect.objectContaining({
+        platform: "telegram",
+        health: "errored",
+        reason: "new token rejected",
+      }),
+    ]);
   });
 });
 

@@ -4,13 +4,18 @@ import type {
   ListMessagingActivityResponse,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  SetMessagingEnabledRequest,
+  SetMessagingEnabledResponse,
   UnbindMessagingThreadRequest,
   UnbindMessagingThreadResponse,
 } from "@pwragent/shared";
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
+import { loadDesktopMessagingConfigFromSettings } from "../messaging/messaging-config";
 import { getDesktopMessagingActivityLog } from "../messaging/desktop-messaging-activity-log";
 import { getMainLogger } from "../log";
 import { showMessagingActivityWindow } from "../messaging-activity-window";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { resolveRuntimeMessagingOverride } from "../runtime-flags";
 import { subscribersForChannel } from "../window-channels";
 import {
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
@@ -18,6 +23,7 @@ import {
   MESSAGING_LIST_ACTIVITY_CHANNEL,
   MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
+  MESSAGING_SET_ENABLED_CHANNEL,
   MESSAGING_UNBIND_THREAD_CHANNEL,
 } from "../../shared/ipc";
 
@@ -107,6 +113,35 @@ export function registerMessagingStatusIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(MESSAGING_SET_ENABLED_CHANNEL);
+  ipcMain.handle(
+    MESSAGING_SET_ENABLED_CHANNEL,
+    async (
+      _event,
+      request: SetMessagingEnabledRequest,
+    ): Promise<SetMessagingEnabledResponse> => {
+      if (request.enabled) {
+        await runtime.applyConfig(
+          await loadDesktopMessagingConfigFromSettings(
+            getDesktopSettingsService(),
+            process.env,
+            { messagingEnabledOverride: true },
+          ),
+          { allowStart: true },
+        );
+      } else {
+        await runtime.stop();
+      }
+
+      const override = resolveRuntimeMessagingOverride();
+      return {
+        enabled: runtime.isEnabled(),
+        overridden: override.disabled,
+        ...(override.reason ? { overrideReason: override.reason } : {}),
+      };
+    },
+  );
+
   ipcMain.removeHandler(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL);
   ipcMain.handle(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL, async (): Promise<void> => {
     showMessagingActivityWindow();
@@ -121,5 +156,6 @@ export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL);
   ipcMain.removeHandler(MESSAGING_LIST_ACTIVITY_CHANNEL);
   ipcMain.removeHandler(MESSAGING_UNBIND_THREAD_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_SET_ENABLED_CHANNEL);
   ipcMain.removeHandler(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL);
 }

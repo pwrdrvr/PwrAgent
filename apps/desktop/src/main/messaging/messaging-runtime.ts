@@ -70,6 +70,14 @@ export type DesktopMessagingConfigLoader = (
   | DesktopMessagingConfig
   | Promise<DesktopMessagingConfig>;
 
+type RunningMessagingAdapter = {
+  adapter: DesktopMessagingAdapter;
+  controller: MessagingController;
+  fingerprint: string;
+  unsubscribeInboundRejected?: () => void;
+  unsubscribeRuntimeError?: () => void;
+};
+
 const messagingLog = getMainLogger("pwragent:messaging");
 
 /**
@@ -137,13 +145,11 @@ export type CredentialValidationRequest =
 export class DesktopMessagingRuntime {
   private adapters: DesktopMessagingAdapter[] = [];
   private controllers: MessagingController[] = [];
+  private readonly runningAdapters = new Map<
+    MessagingChannelKind,
+    RunningMessagingAdapter
+  >();
   private unsubscribeBackendEvents?: () => void;
-  /**
-   * One unsubscribe per running adapter that exposed `onRuntimeError`.
-   * Held so `stop()` can detach before adapters are torn down.
-   */
-  private adapterRuntimeErrorUnsubscribes: Array<() => void> = [];
-  private adapterInboundRejectedUnsubscribes: Array<() => void> = [];
   private started = false;
   /**
    * Per-platform health snapshot. Keyed by `MessagingChannelKind`. Updated
@@ -177,158 +183,8 @@ export class DesktopMessagingRuntime {
   ) {}
 
   async start(): Promise<void> {
-    if (this.started) {
-      return;
-    }
-    this.started = true;
-
-    const store = getDesktopMessagingStore();
     const config = await this.loadConfig({ logStartupEligibility: true });
-    const configuredAdapters = await this.options.adapterFactory({
-      config,
-      store,
-    });
-
-    const failedChannels: string[] = [];
-    for (const adapter of configuredAdapters) {
-      const authorizedActorIds = [...adapter.authorizedActorIds];
-      const authorizedActorIdSet = new Set(authorizedActorIds);
-      const controller = new MessagingController({
-        adapter,
-        attachmentPolicy: config.attachmentPolicy,
-        authorizedActorIds,
-        backend: this.options.backendBridge,
-        channel: adapter.channel,
-        inputDebounceMs: config.inputDebounceMs,
-        store,
-        toolUpdateDefaultMode: async () =>
-          (await this.loadConfig()).toolUpdateDefaultMode ?? "show_some",
-        onBindingChanged: () => this.broadcastBindingsChanged(),
-      });
-
-      try {
-        const unsubscribeInboundRejected = adapter.onInboundRejected?.((event) => {
-          this.emitPlatformActivity(adapter.channel);
-          this.recordActivityFromRejected(adapter.channel, event);
-          messagingLog.warn("messaging event rejected before dispatch", {
-            actorDisplayName: event.actor.displayName,
-            actorId: event.actor.platformUserId,
-            actorIsBot: event.actor.isBot,
-            actorUsername: event.actor.username,
-            channel: adapter.channel,
-            conversationId: event.channel.conversation.id,
-            conversationKind: event.channel.conversation.kind,
-            eventId: event.id,
-            eventKind: event.kind,
-            reason: event.reason,
-          });
-        });
-        if (unsubscribeInboundRejected) {
-          this.adapterInboundRejectedUnsubscribes.push(unsubscribeInboundRejected);
-        }
-        await adapter.start?.(async (event) => {
-          // Activity ping fires on every inbound, *before* authorization
-          // checks — the platform is active even when the message is
-          // rejected, and the user wants the dot to reflect that.
-          this.emitPlatformActivity(adapter.channel);
-          const authorized = authorizedActorIdSet.has(
-            event.actor.platformUserId,
-          );
-          this.recordActivityFromInbound(adapter.channel, event, authorized);
-          try {
-            if (!authorized) {
-              messagingLog.warn("messaging event rejected by authorization", {
-                actorDisplayName: event.actor.displayName,
-                actorId: event.actor.platformUserId,
-                actorIsBot: event.actor.isBot,
-                actorUsername: event.actor.username,
-                authorizedActorCount: authorizedActorIds.length,
-                channel: adapter.channel,
-                conversationId: event.channel.conversation.id,
-                conversationKind: event.channel.conversation.kind,
-                eventId: event.id,
-                eventKind: event.kind,
-              });
-            }
-            await controller.handleInboundEvent(event);
-          } catch (error) {
-            messagingLog.error("messaging controller failed to handle inbound event", {
-              actorDisplayName: event.actor.displayName,
-              actorId: event.actor.platformUserId,
-              channel: adapter.channel,
-              conversationId: event.channel.conversation.id,
-              conversationKind: event.channel.conversation.kind,
-              error,
-              eventId: event.id,
-              eventKind: event.kind,
-            });
-          }
-        });
-      } catch (error) {
-        messagingLog.error(`${adapter.channel}: failed to start adapter`, {
-          channel: adapter.channel,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        failedChannels.push(adapter.channel);
-        this.setPlatformHealth(adapter.channel, "errored", {
-          reason: error instanceof Error ? error.message : String(error),
-        });
-        continue;
-      }
-
-      messagingLog.info(`${adapter.channel}: adapter started successfully`, {
-        channel: adapter.channel,
-      });
-      this.adapters.push(adapter);
-      this.controllers.push(controller);
-      this.setPlatformHealth(adapter.channel, "enabled");
-
-      const unsubscribeRuntimeError = adapter.onRuntimeError?.((reason) => {
-        messagingLog.warn(`${adapter.channel}: adapter runtime error`, {
-          channel: adapter.channel,
-          reason,
-        });
-        this.setPlatformHealth(adapter.channel, "errored", { reason });
-      });
-      if (unsubscribeRuntimeError) {
-        this.adapterRuntimeErrorUnsubscribes.push(unsubscribeRuntimeError);
-      }
-    }
-
-    this.unsubscribeBackendEvents = this.options.backendBridge.onEvent?.(async (event) => {
-      await Promise.all(
-        this.controllers.map(async (controller) => {
-          try {
-            if (isMessagingPendingRequest(event.notification)) {
-              await controller.handleBackendPendingRequest(
-                event.backend,
-                event.notification,
-              );
-            } else {
-              await controller.handleBackendEvent(event);
-            }
-          } catch (error) {
-            messagingLog.error("messaging controller failed to handle backend event", {
-              backend: event.backend,
-              error,
-              method: event.notification.method,
-            });
-          }
-        }),
-      );
-    });
-
-    const startedChannels = this.adapters.map((adapter) => adapter.channel);
-    if (startedChannels.length > 0 || failedChannels.length > 0) {
-      messagingLog.info("messaging runtime started", {
-        started: startedChannels,
-        failed: failedChannels.length > 0 ? failedChannels : undefined,
-      });
-    } else {
-      messagingLog.info(
-        "messaging runtime started with no adapters — no platforms configured",
-      );
-    }
+    await this.applyConfig(config);
   }
 
   async stop(): Promise<void> {
@@ -339,29 +195,13 @@ export class DesktopMessagingRuntime {
 
     this.unsubscribeBackendEvents?.();
     this.unsubscribeBackendEvents = undefined;
-    for (const unsubscribe of this.adapterRuntimeErrorUnsubscribes) {
-      try {
-        unsubscribe();
-      } catch (error) {
-        messagingLog.warn("messaging adapter runtime-error unsubscribe threw", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    this.adapterRuntimeErrorUnsubscribes = [];
-    for (const unsubscribe of this.adapterInboundRejectedUnsubscribes) {
-      try {
-        unsubscribe();
-      } catch (error) {
-        messagingLog.warn("messaging adapter inbound-rejected unsubscribe threw", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    this.adapterInboundRejectedUnsubscribes = [];
-    this.controllers.forEach((controller) => controller.dispose());
-    const stoppedChannels = this.adapters.map((adapter) => adapter.channel);
-    await Promise.all(this.adapters.map(async (adapter) => adapter.stop?.()));
+    const stoppedChannels = [...this.runningAdapters.keys()];
+    await Promise.all(
+      [...this.runningAdapters.values()].map(async (running) =>
+        this.stopRunningAdapter(running)
+      ),
+    );
+    this.runningAdapters.clear();
     this.adapters = [];
     this.controllers = [];
     // Mark each previously-running platform as suspended (not removed),
@@ -370,6 +210,101 @@ export class DesktopMessagingRuntime {
     for (const channel of stoppedChannels) {
       this.setPlatformHealth(channel, "suspended");
     }
+  }
+
+  async applyConfig(
+    config: DesktopMessagingConfig,
+    options: { allowStart?: boolean } = {},
+  ): Promise<void> {
+    if (config.enabled === false) {
+      await this.stop();
+      return;
+    }
+
+    if (!this.started) {
+      if (options.allowStart === false) {
+        return;
+      }
+      this.started = true;
+      this.subscribeBackendEvents();
+    }
+
+    const store = getDesktopMessagingStore();
+    const configuredAdapters = await this.options.adapterFactory({
+      config,
+      store,
+    });
+    const nextAdapters = new Map<MessagingChannelKind, DesktopMessagingAdapter>();
+    for (const adapter of configuredAdapters) {
+      nextAdapters.set(adapter.channel, adapter);
+    }
+
+    const stoppedChannels: MessagingChannelKind[] = [];
+    for (const [channel, running] of [...this.runningAdapters.entries()]) {
+      const next = nextAdapters.get(channel);
+      const nextFingerprint = next
+        ? messagingAdapterConfigFingerprint(config, channel)
+        : undefined;
+      if (!next || running.fingerprint !== nextFingerprint) {
+        await this.stopRunningAdapter(running);
+        this.runningAdapters.delete(channel);
+        stoppedChannels.push(channel);
+      }
+    }
+
+    const startedChannels: MessagingChannelKind[] = [];
+    const failedChannels: MessagingChannelKind[] = [];
+    for (const [channel, adapter] of nextAdapters.entries()) {
+      if (this.runningAdapters.has(channel)) {
+        continue;
+      }
+
+      const started = await this.startRunningAdapter({
+        adapter,
+        config,
+        store,
+      });
+      if (started) {
+        startedChannels.push(channel);
+      } else {
+        failedChannels.push(channel);
+      }
+    }
+
+    this.syncRunningAdapterLists();
+
+    const failedChannelSet = new Set<MessagingChannelKind>(failedChannels);
+    for (const channel of stoppedChannels) {
+      if (!this.runningAdapters.has(channel) && !failedChannelSet.has(channel)) {
+        this.setPlatformHealth(channel, "suspended");
+      }
+    }
+
+    if (
+      startedChannels.length > 0
+      || stoppedChannels.length > 0
+      || failedChannels.length > 0
+    ) {
+      messagingLog.info("messaging runtime config applied", {
+        started: startedChannels.length > 0 ? startedChannels : undefined,
+        stopped: stoppedChannels.length > 0 ? stoppedChannels : undefined,
+        failed: failedChannels.length > 0 ? failedChannels : undefined,
+      });
+    } else if (this.runningAdapters.size === 0) {
+      messagingLog.info(
+        "messaging runtime started with no adapters — no platforms configured",
+      );
+    }
+  }
+
+  async applyLatestConfig(
+    options: { allowStart?: boolean } = {},
+  ): Promise<void> {
+    await this.applyConfig(await this.loadConfig(), options);
+  }
+
+  isEnabled(): boolean {
+    return this.started;
   }
 
   /**
@@ -566,6 +501,180 @@ export class DesktopMessagingRuntime {
         );
       }
     }
+  }
+
+  private async startRunningAdapter(params: {
+    adapter: DesktopMessagingAdapter;
+    config: DesktopMessagingConfig;
+    store: MessagingStoreLike;
+  }): Promise<boolean> {
+    const { adapter, config, store } = params;
+    const authorizedActorIds = [...adapter.authorizedActorIds];
+    const authorizedActorIdSet = new Set(authorizedActorIds);
+    const controller = new MessagingController({
+      adapter,
+      attachmentPolicy: config.attachmentPolicy,
+      authorizedActorIds,
+      backend: this.options.backendBridge,
+      channel: adapter.channel,
+      inputDebounceMs: config.inputDebounceMs,
+      store,
+      toolUpdateDefaultMode: async () =>
+        (await this.loadConfig()).toolUpdateDefaultMode ?? "show_some",
+      onBindingChanged: () => this.broadcastBindingsChanged(),
+    });
+
+    let unsubscribeInboundRejected: (() => void) | undefined;
+    try {
+      unsubscribeInboundRejected = adapter.onInboundRejected?.((event) => {
+        this.emitPlatformActivity(adapter.channel);
+        this.recordActivityFromRejected(adapter.channel, event);
+        messagingLog.warn("messaging event rejected before dispatch", {
+          actorDisplayName: event.actor.displayName,
+          actorId: event.actor.platformUserId,
+          actorIsBot: event.actor.isBot,
+          actorUsername: event.actor.username,
+          channel: adapter.channel,
+          conversationId: event.channel.conversation.id,
+          conversationKind: event.channel.conversation.kind,
+          eventId: event.id,
+          eventKind: event.kind,
+          reason: event.reason,
+        });
+      });
+      await adapter.start?.(async (event) => {
+        // Activity ping fires on every inbound, before authorization checks.
+        this.emitPlatformActivity(adapter.channel);
+        const authorized = authorizedActorIdSet.has(event.actor.platformUserId);
+        this.recordActivityFromInbound(adapter.channel, event, authorized);
+        try {
+          if (!authorized) {
+            messagingLog.warn("messaging event rejected by authorization", {
+              actorDisplayName: event.actor.displayName,
+              actorId: event.actor.platformUserId,
+              actorIsBot: event.actor.isBot,
+              actorUsername: event.actor.username,
+              authorizedActorCount: authorizedActorIds.length,
+              channel: adapter.channel,
+              conversationId: event.channel.conversation.id,
+              conversationKind: event.channel.conversation.kind,
+              eventId: event.id,
+              eventKind: event.kind,
+            });
+          }
+          await controller.handleInboundEvent(event);
+        } catch (error) {
+          messagingLog.error("messaging controller failed to handle inbound event", {
+            actorDisplayName: event.actor.displayName,
+            actorId: event.actor.platformUserId,
+            channel: adapter.channel,
+            conversationId: event.channel.conversation.id,
+            conversationKind: event.channel.conversation.kind,
+            error,
+            eventId: event.id,
+            eventKind: event.kind,
+          });
+        }
+      });
+    } catch (error) {
+      try {
+        unsubscribeInboundRejected?.();
+      } catch {
+        // Best effort cleanup after startup failure.
+      }
+      controller.dispose();
+      try {
+        await adapter.stop?.();
+      } catch (stopError) {
+        messagingLog.warn(`${adapter.channel}: adapter stop after failed start threw`, {
+          channel: adapter.channel,
+          error: stopError instanceof Error ? stopError.message : String(stopError),
+        });
+      }
+      messagingLog.error(`${adapter.channel}: failed to start adapter`, {
+        channel: adapter.channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.setPlatformHealth(adapter.channel, "errored", {
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+
+    const unsubscribeRuntimeError = adapter.onRuntimeError?.((reason) => {
+      messagingLog.warn(`${adapter.channel}: adapter runtime error`, {
+        channel: adapter.channel,
+        reason,
+      });
+      this.setPlatformHealth(adapter.channel, "errored", { reason });
+    });
+
+    this.runningAdapters.set(adapter.channel, {
+      adapter,
+      controller,
+      fingerprint: messagingAdapterConfigFingerprint(config, adapter.channel),
+      unsubscribeInboundRejected,
+      unsubscribeRuntimeError,
+    });
+    this.setPlatformHealth(adapter.channel, "enabled");
+    messagingLog.info(`${adapter.channel}: adapter started successfully`, {
+      channel: adapter.channel,
+    });
+    return true;
+  }
+
+  private async stopRunningAdapter(running: RunningMessagingAdapter): Promise<void> {
+    try {
+      running.unsubscribeRuntimeError?.();
+    } catch (error) {
+      messagingLog.warn("messaging adapter runtime-error unsubscribe threw", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      running.unsubscribeInboundRejected?.();
+    } catch (error) {
+      messagingLog.warn("messaging adapter inbound-rejected unsubscribe threw", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    running.controller.dispose();
+    await running.adapter.stop?.();
+  }
+
+  private subscribeBackendEvents(): void {
+    if (this.unsubscribeBackendEvents) {
+      return;
+    }
+
+    this.unsubscribeBackendEvents = this.options.backendBridge.onEvent?.(async (event) => {
+      await Promise.all(
+        this.controllers.map(async (controller) => {
+          try {
+            if (isMessagingPendingRequest(event.notification)) {
+              await controller.handleBackendPendingRequest(
+                event.backend,
+                event.notification,
+              );
+            } else {
+              await controller.handleBackendEvent(event);
+            }
+          } catch (error) {
+            messagingLog.error("messaging controller failed to handle backend event", {
+              backend: event.backend,
+              error,
+              method: event.notification.method,
+            });
+          }
+        }),
+      );
+    });
+  }
+
+  private syncRunningAdapterLists(): void {
+    const running = [...this.runningAdapters.values()];
+    this.adapters = running.map((record) => record.adapter);
+    this.controllers = running.map((record) => record.controller);
   }
 
   private async dispatchRevokeToControllers(
@@ -771,6 +880,41 @@ function createConfiguredAdapters(params: {
   store: MessagingStoreLike;
 }): Promise<DesktopMessagingAdapter[]> {
   return loadConfiguredMessagingAdapters(params);
+}
+
+function messagingAdapterConfigFingerprint(
+  config: DesktopMessagingConfig,
+  channel: MessagingChannelKind,
+): string {
+  const channelConfig =
+    channel === "telegram"
+      ? config.telegram
+      : channel === "discord"
+        ? config.discord
+        : channel === "mattermost"
+          ? config.mattermost
+          : undefined;
+
+  return stableStringify({
+    attachmentPolicy: config.attachmentPolicy,
+    channelConfig,
+    inputDebounceMs: config.inputDebounceMs,
+  });
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .filter((key) => record[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function isMessagingPendingRequest(

@@ -50,6 +50,8 @@ import type {
   ListMessagingActivityResponse,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  SetMessagingEnabledRequest,
+  SetMessagingEnabledResponse,
   PickDirectoryFromDiskResponse,
   PickGhCommandResponse,
   RegisterDirectoryFromDiskRequest,
@@ -141,6 +143,7 @@ import {
   MESSAGING_LIST_ACTIVITY_CHANNEL,
   MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
+  MESSAGING_SET_ENABLED_CHANNEL,
   MESSAGING_UNBIND_THREAD_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
@@ -433,6 +436,10 @@ const desktopApi = Object.freeze({
   },
   getMessagingPlatformStatuses: async (): Promise<MessagingPlatformStatus[]> =>
     await ipcRenderer.invoke(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL),
+  setMessagingEnabled: async (
+    request: SetMessagingEnabledRequest,
+  ): Promise<SetMessagingEnabledResponse> =>
+    await ipcRenderer.invoke(MESSAGING_SET_ENABLED_CHANNEL, request),
   unbindMessagingThread: async (
     request: UnbindMessagingThreadRequest,
   ): Promise<UnbindMessagingThreadResponse> =>

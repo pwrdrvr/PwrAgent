@@ -47,6 +47,7 @@ export const MESSAGING_GET_PLATFORM_STATUSES_CHANNEL =
 export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =
   "messaging:platform-status-event";
 export const MESSAGING_UNBIND_THREAD_CHANNEL = "messaging:unbind-thread";
+export const MESSAGING_SET_ENABLED_CHANNEL = "messaging:set-enabled";
 export const MESSAGING_LIST_ACTIVITY_CHANNEL = "messaging:list-activity";
 /**
  * Fire-and-forget IPC: opens the dedicated Messaging Activity window

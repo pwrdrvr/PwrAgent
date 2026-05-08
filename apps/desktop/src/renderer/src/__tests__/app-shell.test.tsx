@@ -63,6 +63,7 @@ describe("App", () => {
         },
       },
       messaging: {
+        enabled: { value: true, source: "default" },
         inputDebounceMs: { value: 500, source: "default" },
         toolUpdateMode: { value: "show_some", source: "default" },
         telegram: {
