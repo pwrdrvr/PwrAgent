@@ -6,4 +6,5 @@ export * from "./contracts/diff-focus";
 export * from "./contracts/messaging";
 export * from "./contracts/navigation";
 export * from "./contracts/settings";
+export * from "./messaging-id-validation";
 export * from "./thread-titles";

@@ -14,6 +14,13 @@ import type {
 // import path without seeing two parallel declarations.
 export {
   MESSAGING_TOOL_UPDATE_MODES,
+  validateDiscordSnowflake,
+  validateMattermostId,
+  validateTelegramChatId,
+  validateTelegramPositiveId,
+  validateTelegramSupergroupId,
+  type IdentifierValidationReason,
+  type IdentifierValidationResult,
   type MessagingToolUpdateMode,
 } from "@pwragent/shared";
 

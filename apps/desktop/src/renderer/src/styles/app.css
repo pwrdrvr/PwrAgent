@@ -551,7 +551,7 @@ textarea,
 .messaging-activity-row__body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -573,6 +573,55 @@ textarea,
   font-size: 11px;
   color: var(--text-muted);
   font-family: var(--font-mono);
+}
+
+.messaging-activity-row__ids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.messaging-activity-row__copy {
+  display: inline-grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  max-width: 100%;
+  gap: 6px;
+  min-height: 26px;
+  padding: 4px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.messaging-activity-row__copy:hover {
+  border-color: var(--accent-border);
+  color: var(--text-secondary);
+}
+
+.messaging-activity-row__copy:focus-visible {
+  border-color: var(--accent-border);
+  outline: none;
+  box-shadow: 0 0 0 1px var(--accent-shadow);
+}
+
+.messaging-activity-row__copy code {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messaging-activity-row__copy-state {
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 10px;
 }
 
 .sidebar__icon-button {
@@ -2542,6 +2591,45 @@ textarea,
   border-color: var(--accent-border);
   outline: none;
   box-shadow: 0 0 0 1px var(--accent-shadow);
+}
+
+.settings-input--invalid {
+  border-color: var(--danger-border);
+  box-shadow: 0 0 0 1px rgba(196, 90, 58, 0.22);
+}
+
+.settings-list-validation {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-list-validation__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 8px;
+  border: 1px solid var(--danger-border);
+  border-radius: 6px;
+  background: var(--danger-soft);
+}
+
+.settings-list-validation__message {
+  min-width: 0;
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settings-list-validation__message code {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.settings-list-validation__remove {
+  flex: 0 0 auto;
 }
 
 /* Segmented control — chip-pill chiclets that fit the design's

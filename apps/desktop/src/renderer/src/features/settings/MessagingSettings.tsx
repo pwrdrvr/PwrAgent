@@ -1,8 +1,13 @@
-import { useState, type ReactNode } from "react";
-import type {
-  DesktopSettingsSecretName,
-  DesktopSettingsSnapshot,
-  MessagingToolUpdateMode,
+import { useId, useState, type ReactNode } from "react";
+import {
+  validateDiscordSnowflake,
+  validateMattermostId,
+  validateTelegramPositiveId,
+  validateTelegramSupergroupId,
+  type IdentifierValidationResult,
+  type DesktopSettingsSecretName,
+  type DesktopSettingsSnapshot,
+  type MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import { DiscordIcon, MattermostIcon, TelegramIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -57,7 +62,7 @@ export function MessagingSettings(props: {
       <SettingsPanelHead
         eyebrow="Messaging"
         title="Connected chat platforms"
-        help="Bridge PwrAgent threads to messaging platforms so you can drive runs from your phone. Tokens are stored in the system keychain. Each platform's enabled switch is independent of the global messaging switch."
+        help="Bridge PwrAgent threads to messaging platforms so you can drive runs from your phone. Tokens are stored in the system keychain. Authorization defaults closed: if no allowed IDs are configured, nothing can use that entry. Check the Messaging Activity window for rejected IDs to add here."
       />
 
       {runtimeMessaging.disabled ? (
@@ -166,7 +171,9 @@ export function MessagingSettings(props: {
             disabled={props.saving}
             label="Authorized User IDs"
             sub="Comma-separated Telegram user IDs that can DM the bot."
+            help="Numeric peer ID, e.g. 8460800771. Rejected Telegram DMs show the peer ID in Messaging Activity; use the numeric form, not @username."
             source={optionalListSourceBadge(telegram.authorizedUserIds)}
+            validateEntry={validateTelegramUserIdEntry}
             value={telegram.authorizedUserIds.value}
             onSave={(authorizedUserIds) => {
               void props.onSaveTelegram({
@@ -182,7 +189,9 @@ export function MessagingSettings(props: {
             disabled={props.saving}
             label="Authorized SuperGroups"
             sub="Comma-separated Telegram supergroup IDs that may host bound threads."
+            help="Negative ID starting with -100, e.g. -1003841603622. Rejected group messages show the supergroup ID in Messaging Activity."
             source={optionalListSourceBadge(telegram.authorizedSupergroups)}
+            validateEntry={validateTelegramSupergroupEntry}
             value={telegram.authorizedSupergroups.value}
             onSave={(authorizedSupergroups) => {
               void props.onSaveTelegram({
@@ -276,7 +285,9 @@ export function MessagingSettings(props: {
             disabled={props.saving}
             label="Authorized User IDs"
             sub="Comma-separated Discord user IDs that can DM the bot."
+            help="Snowflake (17-19 digit number), e.g. 1177378744822943744. Rejected Discord messages show the user ID in Messaging Activity."
             source={optionalListSourceBadge(discord.authorizedUserIds)}
+            validateEntry={validateDiscordUserIdEntry}
             value={discord.authorizedUserIds.value}
             onSave={(authorizedUserIds) => {
               void props.onSaveDiscord({
@@ -292,7 +303,9 @@ export function MessagingSettings(props: {
             disabled={props.saving}
             label="Authorized Guilds"
             sub="Comma-separated Discord guild (server) IDs that may host bound threads."
+            help="Snowflake (17-19 digit number), e.g. 1480554271907905731. Rejected server messages show the guild ID in Messaging Activity."
             source={optionalListSourceBadge(discord.authorizedGuilds)}
+            validateEntry={validateDiscordGuildIdEntry}
             value={discord.authorizedGuilds.value}
             onSave={(authorizedGuilds) => {
               void props.onSaveDiscord({
@@ -470,7 +483,9 @@ export function MessagingSettings(props: {
             disabled={props.saving}
             label="Authorized User IDs"
             sub="Comma-separated Mattermost user IDs that can DM the bot."
+            help="26-character lowercase a-z0-9 ID. Rejected Mattermost messages show the user ID in Messaging Activity."
             source={optionalListSourceBadge(mattermost.authorizedUserIds)}
+            validateEntry={validateMattermostUserIdEntry}
             value={mattermost.authorizedUserIds.value}
             onSave={(authorizedUserIds) => {
               void props.onSaveMattermost({
@@ -676,31 +691,172 @@ function NumberField(props: {
 
 function ListField(props: {
   disabled?: boolean;
+  help?: ReactNode;
   label: string;
   sub?: ReactNode;
   source: string;
+  validateEntry?: (value: string) => string | undefined;
   value: string[];
   onSave: (value: string[]) => void;
 }) {
+  const inputId = useId();
+  const descriptionId = `${inputId}-validation`;
   const [value, setValue] = useState(joinListValue(props.value));
+  const entries = parseListValue(value);
+  const invalidEntries = props.validateEntry
+    ? entries
+        .map((entry, index) => ({
+          entry,
+          index,
+          message: props.validateEntry?.(entry),
+        }))
+        .filter(
+          (result): result is { entry: string; index: number; message: string } =>
+            Boolean(result.message),
+        )
+    : [];
+  const hasInvalidEntries = invalidEntries.length > 0;
+
+  const removeEntry = (indexToRemove: number) => {
+    const nextEntries = entries.filter((_, index) => index !== indexToRemove);
+    const nextValue = joinListValue(nextEntries);
+    setValue(nextValue);
+    if (!props.validateEntry || nextEntries.every((entry) => !props.validateEntry!(entry))) {
+      props.onSave(nextEntries);
+    }
+  };
 
   return (
     <SettingsField
       label={props.label}
       sub={props.sub}
+      help={props.help}
       source={props.source}
+      error={
+        hasInvalidEntries
+          ? "Fix or remove invalid IDs before saving this setting."
+          : undefined
+      }
       control={
-        <input
-          aria-label={props.label}
-          className="settings-input"
-          disabled={props.disabled}
-          value={value}
-          onBlur={() => props.onSave(parseListValue(value))}
-          onChange={(event) => setValue(event.currentTarget.value)}
-        />
+        <>
+          <input
+            aria-describedby={hasInvalidEntries ? descriptionId : undefined}
+            aria-invalid={hasInvalidEntries ? "true" : undefined}
+            aria-label={props.label}
+            className={`settings-input${hasInvalidEntries ? " settings-input--invalid" : ""}`}
+            disabled={props.disabled}
+            value={value}
+            onBlur={() => {
+              const nextEntries = parseListValue(value);
+              if (
+                props.validateEntry &&
+                nextEntries.some((entry) => props.validateEntry?.(entry))
+              ) {
+                return;
+              }
+              props.onSave(nextEntries);
+            }}
+            onChange={(event) => setValue(event.currentTarget.value)}
+          />
+          {hasInvalidEntries ? (
+            <div
+              id={descriptionId}
+              className="settings-list-validation"
+              role="status"
+            >
+              {invalidEntries.map((invalid) => (
+                <div
+                  key={`${invalid.index}-${invalid.entry}`}
+                  className="settings-list-validation__item"
+                >
+                  <span className="settings-list-validation__message">
+                    <code>{invalid.entry}</code>
+                    {" — "}
+                    {invalid.message}
+                  </span>
+                  <button
+                    className="button button--ghost settings-list-validation__remove"
+                    disabled={props.disabled}
+                    type="button"
+                    onClick={() => removeEntry(invalid.index)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </>
       }
     />
   );
+}
+
+function validateTelegramUserIdEntry(value: string): string | undefined {
+  return validationMessage(
+    validateTelegramPositiveId(value),
+    "Telegram user ID",
+    {
+      format:
+        value.startsWith("@") || /^[A-Za-z][A-Za-z0-9_]*$/.test(value)
+          ? "That looks like a Telegram username, not a peer ID. Use the numeric form (e.g. 8460800771)."
+          : "Use a positive numeric Telegram peer ID, e.g. 8460800771.",
+      length: "Telegram peer IDs must fit the decimal numeric ID form.",
+      range: "Use a positive Telegram peer ID, e.g. 8460800771.",
+    },
+  );
+}
+
+function validateTelegramSupergroupEntry(value: string): string | undefined {
+  return validationMessage(
+    validateTelegramSupergroupId(value),
+    "Telegram supergroup ID",
+    {
+      format:
+        "Use the negative supergroup ID starting with -100, e.g. -1003841603622.",
+      length: "Telegram supergroup IDs must fit the decimal numeric ID form.",
+      range:
+        "Use the negative supergroup ID starting with -100, e.g. -1003841603622.",
+    },
+  );
+}
+
+function validateDiscordUserIdEntry(value: string): string | undefined {
+  return validationMessage(validateDiscordSnowflake(value), "Discord user ID", {
+    format: "Use the numeric Discord snowflake, e.g. 1177378744822943744.",
+    future: "That snowflake timestamp is in the future. Copy the user ID from Messaging Activity.",
+    length: "Discord IDs are snowflakes: 17-19 digits.",
+    range: "Use a positive Discord snowflake, e.g. 1177378744822943744.",
+  });
+}
+
+function validateDiscordGuildIdEntry(value: string): string | undefined {
+  return validationMessage(validateDiscordSnowflake(value), "Discord guild ID", {
+    format: "Use the numeric Discord guild snowflake, e.g. 1480554271907905731.",
+    future: "That snowflake timestamp is in the future. Copy the guild ID from Messaging Activity.",
+    length: "Discord guild IDs are snowflakes: 17-19 digits.",
+    range: "Use a positive Discord guild snowflake, e.g. 1480554271907905731.",
+  });
+}
+
+function validateMattermostUserIdEntry(value: string): string | undefined {
+  return validationMessage(validateMattermostId(value), "Mattermost user ID", {
+    format: "Use the 26-character lowercase a-z0-9 Mattermost user ID.",
+    length: "Mattermost user IDs are exactly 26 lowercase a-z0-9 characters.",
+  });
+}
+
+function validationMessage(
+  result: IdentifierValidationResult,
+  label: string,
+  messages: Partial<
+    Record<Exclude<IdentifierValidationResult, { ok: true }>["reason"], string>
+  >,
+): string | undefined {
+  if (result.ok) return undefined;
+  if (result.reason === "empty") return `${label} cannot be blank.`;
+  if (result.reason === "type") return `${label} must be a string.`;
+  return messages[result.reason] ?? `${label} has the wrong format.`;
 }
 
 function SecretField(props: {

@@ -633,6 +633,7 @@ export class DesktopMessagingRuntime {
           eventId: event.id,
           eventKind: event.kind,
           conversationKind: conversation.kind,
+          conversationParentId: conversation.parentId,
           actorUsername: event.actor.username,
           actorIsBot: event.actor.isBot,
         },

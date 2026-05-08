@@ -4,6 +4,7 @@ import type {
   MessagingActivityKind,
 } from "@pwragent/shared";
 import { DiscordIcon, MattermostIcon, TelegramIcon } from "../../icons";
+import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 const REFRESH_INTERVAL_MS = 5_000;
@@ -148,6 +149,8 @@ function ActivitySection(props: {
 function ActivityRow(props: { entry: MessagingActivityEntry }) {
   const { entry } = props;
   const tone = KIND_TONE[entry.kind];
+  const [copiedKey, setCopiedKey] = useState<string | undefined>(undefined);
+  const copyFields = copyFieldsForEntry(entry);
   return (
     <li className="messaging-activity-row">
       <span className={`messaging-activity-row__icon messaging-activity-row__icon--${tone}`}>
@@ -173,9 +176,104 @@ function ActivityRow(props: { entry: MessagingActivityEntry }) {
           {" · "}
           {formatRelative(entry.createdAt)}
         </div>
+        {copyFields.length > 0 ? (
+          <div className="messaging-activity-row__ids" aria-label="Copy identifiers">
+            {copyFields.map((field) => (
+              <button
+                key={field.key}
+                className="messaging-activity-row__copy"
+                type="button"
+                onClick={() => {
+                  void copyText(field.value).then(() => {
+                    setCopiedKey(field.key);
+                    window.setTimeout(() => {
+                      setCopiedKey((current) =>
+                        current === field.key ? undefined : current,
+                      );
+                    }, 1200);
+                  });
+                }}
+              >
+                <span>{field.label}</span>
+                <code>{field.value}</code>
+                <span className="messaging-activity-row__copy-state">
+                  {copiedKey === field.key ? "Copied" : "Copy"}
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
     </li>
   );
+}
+
+function copyFieldsForEntry(
+  entry: MessagingActivityEntry,
+): Array<{ key: string; label: string; value: string }> {
+  const fields: Array<{ key: string; label: string; value: string }> = [];
+  if (entry.actorId) {
+    fields.push({
+      key: "actor",
+      label: userIdLabel(entry.platform),
+      value: entry.actorId,
+    });
+  }
+
+  const conversationKind =
+    typeof entry.payload?.conversationKind === "string"
+      ? entry.payload.conversationKind
+      : undefined;
+  const parentId =
+    typeof entry.payload?.conversationParentId === "string"
+      ? entry.payload.conversationParentId
+      : undefined;
+
+  if (parentId) {
+    fields.push({
+      key: "parent",
+      label: parentIdLabel(entry.platform, conversationKind),
+      value: parentId,
+    });
+  }
+  if (entry.conversationId) {
+    fields.push({
+      key: "conversation",
+      label: conversationIdLabel(entry.platform, conversationKind),
+      value: entry.conversationId,
+    });
+  }
+
+  return fields;
+}
+
+function userIdLabel(platform: MessagingActivityEntry["platform"]): string {
+  if (platform === "telegram") return "Peer ID";
+  if (platform === "discord") return "User ID";
+  if (platform === "mattermost") return "User ID";
+  return "Actor ID";
+}
+
+function parentIdLabel(
+  platform: MessagingActivityEntry["platform"],
+  conversationKind?: string,
+): string {
+  if (platform === "telegram") return "Supergroup ID";
+  if (platform === "discord") return "Guild ID";
+  if (platform === "mattermost" && conversationKind === "thread") return "Root ID";
+  return "Parent ID";
+}
+
+function conversationIdLabel(
+  platform: MessagingActivityEntry["platform"],
+  conversationKind?: string,
+): string {
+  if (platform === "telegram" && conversationKind !== "dm") {
+    return conversationKind === "topic" ? "Topic ID" : "Supergroup ID";
+  }
+  if (platform === "discord" && conversationKind !== "dm") return "Channel ID";
+  if (platform === "mattermost" && conversationKind !== "dm") return "Channel ID";
+  return "Conversation ID";
 }
 
 function groupByKind(
