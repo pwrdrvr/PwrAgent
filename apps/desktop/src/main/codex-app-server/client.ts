@@ -3294,6 +3294,7 @@ export class CodexAppServerClient {
       request: AppServerPendingRequestNotification
     ) => Promise<unknown> | unknown
   >();
+  private readonly pendingFirstTurnThreadResults = new Map<string, unknown>();
   private readonly helperThreadIds = new Set<string>();
   private readonly helperTurnWaiters = new Map<
     string,
@@ -3398,6 +3399,7 @@ export class CodexAppServerClient {
     this.initializationPromise = null;
     this.initializeResult = null;
     this.rejectHelperTurnWaiters(new Error("codex app server client closed"));
+    this.pendingFirstTurnThreadResults.clear();
     this.helperThreadIds.clear();
     this.completedHelperTurnResults.clear();
     this.helperTurnTitleObjects.clear();
@@ -3850,6 +3852,7 @@ export class CodexAppServerClient {
       throw new Error("codex app server thread/start did not return threadId");
     }
 
+    this.pendingFirstTurnThreadResults.set(threadId, result);
     await this.recordThreadInSessionIndex(result);
 
     return {
@@ -3874,36 +3877,36 @@ export class CodexAppServerClient {
   }> {
     await this.ensureInitialized();
 
+    const pendingFirstTurnResult = this.pendingFirstTurnThreadResults.get(params.threadId);
     // thread/resume primes the per-thread permission profile in codex
-    // before turn/start runs. We don't fail the whole turn if resume
-    // fails — turn/start carries the same approvalPolicy + sandboxPolicy
-    // overrides as a defense-in-depth path — but a silent failure is a
-    // real signal that the user's expected mode may diverge from codex's
-    // actual profile, so we log it with the full requested-policy
-    // context for diagnosis.
-    const resumeResult = await requestWithFallbacks({
-      client: this.connection,
-      methods: ["thread/resume"],
-      payloads: buildThreadResumePayloads({
-        threadId: params.threadId,
-        cwd: params.cwd,
-        approvalPolicy: params.approvalPolicy,
-        sandbox: params.sandbox,
-        model: params.model,
-        serviceTier: params.serviceTier,
-        reasoningEffort: params.reasoningEffort,
-        fastMode: params.fastMode
-      }),
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-    }).catch((error: unknown) => {
-      codexClientLog.warn("thread/resume failed before turn/start", {
-        threadId: params.threadId,
-        requestedApprovalPolicy: params.approvalPolicy ?? null,
-        requestedSandbox: params.sandbox ?? null,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return undefined;
-    });
+    // before later turn/start calls. A just-created thread has no rollout
+    // yet, so resume is guaranteed to be too early; turn/start already
+    // carries the permission/model overrides needed for the first turn.
+    const resumeResult =
+      pendingFirstTurnResult ??
+      (await requestWithFallbacks({
+        client: this.connection,
+        methods: ["thread/resume"],
+        payloads: buildThreadResumePayloads({
+          threadId: params.threadId,
+          cwd: params.cwd,
+          approvalPolicy: params.approvalPolicy,
+          sandbox: params.sandbox,
+          model: params.model,
+          serviceTier: params.serviceTier,
+          reasoningEffort: params.reasoningEffort,
+          fastMode: params.fastMode
+        }),
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      }).catch((error: unknown) => {
+        codexClientLog.warn("thread/resume failed before turn/start", {
+          threadId: params.threadId,
+          requestedApprovalPolicy: params.approvalPolicy ?? null,
+          requestedSandbox: params.sandbox ?? null,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
+      }));
 
     const result = await requestWithFallbacks({
       client: this.connection,
@@ -3933,6 +3936,7 @@ export class CodexAppServerClient {
 
     const threadId = extractThreadIdFromValue(result) ?? params.threadId;
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
+    this.pendingFirstTurnThreadResults.delete(params.threadId);
     await this.recordDerivedThreadNameInSessionIndex({
       threadId: params.threadId,
       input: params.input,
@@ -4035,14 +4039,16 @@ export class CodexAppServerClient {
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     await this.ensureInitialized();
 
-    await requestWithFallbacks({
-      client: this.connection,
-      methods: ["thread/resume"],
-      payloads: buildThreadResumePayloads({
-        threadId: params.threadId,
-      }),
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-    }).catch(() => undefined);
+    if (!this.pendingFirstTurnThreadResults.has(params.threadId)) {
+      await requestWithFallbacks({
+        client: this.connection,
+        methods: ["thread/resume"],
+        payloads: buildThreadResumePayloads({
+          threadId: params.threadId,
+        }),
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      }).catch(() => undefined);
+    }
 
     const result = await requestWithFallbacks({
       client: this.connection,
@@ -4058,6 +4064,7 @@ export class CodexAppServerClient {
       extractTurnIdFromValue(result) ??
       pickString(turnRecord ?? {}, ["id", "turnId", "turn_id"]) ??
       `pending:${reviewThreadId}`;
+    this.pendingFirstTurnThreadResults.delete(params.threadId);
 
     return {
       threadId: params.threadId,

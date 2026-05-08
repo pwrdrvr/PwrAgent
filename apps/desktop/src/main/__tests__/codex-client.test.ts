@@ -2893,6 +2893,92 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("starts the first turn on a newly created thread without a resume preflight", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-3",
+      },
+      turn: {
+        id: "turn-1",
+      },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const created = await client.startThread({
+      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    await client.startTurn({
+      threadId: created.threadId,
+      input: [{ type: "text", text: "First prompt" }],
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const rpcMethods = transport!.sentMessages.map((message) => {
+      const payload = JSON.parse(message) as { method?: string };
+      return payload.method;
+    });
+
+    expect(rpcMethods).toContain("thread/start");
+    expect(rpcMethods).toContain("turn/start");
+    expect(rpcMethods).not.toContain("thread/resume");
+
+    await client.close();
+  });
+
+  it("resumes a created thread again after the first turn has started", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-3",
+      },
+      turn: {
+        id: "turn-1",
+      },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const created = await client.startThread({
+      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+    });
+    await client.startTurn({
+      threadId: created.threadId,
+      input: [{ type: "text", text: "First prompt" }],
+    });
+    await client.startTurn({
+      threadId: created.threadId,
+      input: [{ type: "text", text: "Second prompt" }],
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const rpcMethods = transport!.sentMessages.map((message) => {
+      const payload = JSON.parse(message) as { method?: string };
+      return payload.method;
+    });
+
+    expect(rpcMethods.filter((method) => method === "turn/start")).toHaveLength(2);
+    expect(rpcMethods.filter((method) => method === "thread/resume")).toHaveLength(1);
+    expect(rpcMethods.lastIndexOf("thread/resume")).toBeLessThan(
+      rpcMethods.lastIndexOf("turn/start")
+    );
+
+    await client.close();
+  });
+
   it("updates placeholder session index names after the first turn starts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
     const sessionIndexPath = path.join(tempDir, "session_index.jsonl");
