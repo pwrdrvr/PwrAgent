@@ -43,7 +43,13 @@ export type TomlEditValue =
 
 export type TomlEdit =
   | { op: "set"; path: readonly string[]; value: TomlEditValue }
-  | { op: "delete"; path: readonly string[] };
+  | { op: "delete"; path: readonly string[] }
+  | {
+      op: "setTableArray";
+      path: readonly string[];
+      value: readonly Record<string, TomlEditScalar>[];
+    }
+  | { op: "deleteTableArray"; path: readonly string[] };
 
 /** Parsed value type for the read-side parser. */
 export type TomlValue =
@@ -75,6 +81,7 @@ type SectionLocation = {
   headerLine: number; // -1 for the implicit top-level section
   keys: KeyLocation[];
   duplicate: boolean; // true if this is the 2nd+ occurrence of the name
+  arrayOfTables: boolean;
 };
 
 type SourceModel = {
@@ -106,6 +113,7 @@ export function parseTomlTables(source: string, filePath: string): TomlTables {
   const tables: TomlTables = {};
   const seenSections = new Set<string>();
   let currentTable = "";
+  let currentTarget: Record<string, TomlValue> | undefined;
   let skipSection = false;
 
   let i = 0;
@@ -124,15 +132,30 @@ export function parseTomlTables(source: string, filePath: string): TomlTables {
       if (!name) {
         throw new Error(`Invalid TOML table on line ${i + 1} in ${filePath}`);
       }
-      if (seenSections.has(name)) {
+      if (arrayHeader) {
+        const { parentTable, keyName } = splitArrayTableName(name);
+        const parent = (tables[parentTable] ??= {});
+        const existing = parent[keyName];
+        const entries =
+          Array.isArray(existing) && isInlineTableArray(existing)
+            ? existing
+            : [];
+        const entry: Record<string, TomlEditScalar> = {};
+        entries.push(entry);
+        parent[keyName] = entries;
+        currentTable = name;
+        currentTarget = entry;
+        skipSection = false;
+      } else if (seenSections.has(name)) {
         console.warn(
           `Duplicate section [${name}] on line ${i + 1} in ${filePath} — using the first occurrence; subsequent keys are ignored.`,
         );
         skipSection = true;
+        currentTarget = undefined;
       } else {
         seenSections.add(name);
         currentTable = name;
-        tables[currentTable] ??= {};
+        currentTarget = tables[currentTable] ??= {};
         skipSection = false;
       }
       i += 1;
@@ -162,8 +185,12 @@ export function parseTomlTables(source: string, filePath: string): TomlTables {
       continue;
     }
 
-    tables[currentTable] ??= {};
-    tables[currentTable][key] = parsed.value;
+    if (currentTarget) {
+      currentTarget[key] = parsed.value;
+    } else {
+      tables[currentTable] ??= {};
+      tables[currentTable][key] = parsed.value;
+    }
     i = endLine + 1;
   }
 
@@ -180,7 +207,11 @@ export function applyTomlEdits(
 
   const model = parseSource(source);
   const plan = planEdits(model, edits);
-  if (plan.lineOps.length === 0 && plan.newSections.length === 0) {
+  if (
+    plan.lineOps.length === 0
+    && plan.newSections.length === 0
+    && plan.newTableArrays.length === 0
+  ) {
     return source;
   }
   const newLines = executePlan(model, plan);
@@ -199,7 +230,13 @@ function parseSource(source: string): SourceModel {
   const lines = body.length === 0 ? [] : body.split("\n");
 
   const sections: SectionLocation[] = [
-    { name: "", headerLine: -1, keys: [], duplicate: false },
+    {
+      name: "",
+      headerLine: -1,
+      keys: [],
+      duplicate: false,
+      arrayOfTables: false,
+    },
   ];
   const seenNames = new Set<string>();
 
@@ -217,9 +254,15 @@ function parseSource(source: string): SourceModel {
     const sectionMatch = arrayHeader ?? SECTION_HEADER.exec(line);
     if (sectionMatch) {
       const name = sectionMatch[1].trim();
-      const duplicate = seenNames.has(name);
-      if (!duplicate) seenNames.add(name);
-      sections.push({ name, headerLine: i, keys: [], duplicate });
+      const duplicate = !arrayHeader && seenNames.has(name);
+      if (!duplicate && !arrayHeader) seenNames.add(name);
+      sections.push({
+        name,
+        headerLine: i,
+        keys: [],
+        duplicate,
+        arrayOfTables: Boolean(arrayHeader),
+      });
       i += 1;
       continue;
     }
@@ -274,9 +317,15 @@ type NewSectionPlan = {
   keyLines: string[]; // already formatted, including any multi-line entries
 };
 
+type NewTableArrayPlan = {
+  tableName: string;
+  entries: readonly Record<string, TomlEditScalar>[];
+};
+
 type EditPlan = {
   lineOps: LineOp[];
   newSections: NewSectionPlan[];
+  newTableArrays: NewTableArrayPlan[];
 };
 
 function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
@@ -285,8 +334,28 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
   // the same nonexistent section land in one new section in the order they
   // were requested.
   const newSections = new Map<string, string[]>();
+  const newTableArrays: NewTableArrayPlan[] = [];
 
   for (const edit of edits) {
+    if (edit.op === "deleteTableArray" || edit.op === "setTableArray") {
+      for (const section of findTableArraySections(model, edit.path.join("."))) {
+        const { startLine, endLine } = sectionLineRange(model, section);
+        lineOps.push({
+          kind: "replace",
+          startLine,
+          endLine,
+          newLines: [],
+        });
+      }
+      if (edit.op === "setTableArray" && edit.value.length > 0) {
+        newTableArrays.push({
+          tableName: edit.path.join("."),
+          entries: edit.value,
+        });
+      }
+      continue;
+    }
+
     const { tableName, keyName } = splitPath(edit.path);
     const section = findSection(model, tableName);
 
@@ -342,7 +411,7 @@ function planEdits(model: SourceModel, edits: readonly TomlEdit[]): EditPlan {
     newSectionPlans.push({ tableName, keyLines });
   }
 
-  return { lineOps, newSections: newSectionPlans };
+  return { lineOps, newSections: newSectionPlans, newTableArrays };
 }
 
 function executePlan(model: SourceModel, plan: EditPlan): string[] {
@@ -411,6 +480,18 @@ function executePlan(model: SourceModel, plan: EditPlan): string[] {
     for (const ln of section.keyLines) result.push(ln);
   }
 
+  for (const tableArray of plan.newTableArrays) {
+    for (const entry of tableArray.entries) {
+      if (result.length > 0 && result[result.length - 1].trim().length !== 0) {
+        result.push("");
+      }
+      result.push(`[[${tableArray.tableName}]]`);
+      for (const [key, value] of Object.entries(entry)) {
+        result.push(...formatKeyValue(key, value, ""));
+      }
+    }
+  }
+
   return result;
 }
 
@@ -434,6 +515,35 @@ function splitPath(path: readonly string[]): {
   };
 }
 
+function splitArrayTableName(name: string): {
+  parentTable: string;
+  keyName: string;
+} {
+  const segments = name.split(".");
+  const keyName = segments.pop();
+  if (!keyName) {
+    throw new Error(`Invalid TOML array table name '${name}'`);
+  }
+  return {
+    parentTable: segments.join("."),
+    keyName,
+  };
+}
+
+function isInlineTableArray(
+  value: unknown,
+): value is Record<string, TomlEditScalar>[] {
+  return (
+    Array.isArray(value)
+    && value.every(
+      (entry) =>
+        typeof entry === "object"
+        && entry !== null
+        && !Array.isArray(entry),
+    )
+  );
+}
+
 function findSection(
   model: SourceModel,
   name: string,
@@ -442,11 +552,34 @@ function findSection(
   // for editing purposes (the duplicate-detection in parseSource also skips
   // recording keys for them on read).
   for (const section of model.sections) {
-    if (section.name === name && !section.duplicate) {
+    if (section.name === name && !section.duplicate && !section.arrayOfTables) {
       return section;
     }
   }
   return undefined;
+}
+
+function findTableArraySections(
+  model: SourceModel,
+  name: string,
+): SectionLocation[] {
+  return model.sections.filter(
+    (section) => section.name === name && section.arrayOfTables,
+  );
+}
+
+function sectionLineRange(
+  model: SourceModel,
+  section: SectionLocation,
+): { startLine: number; endLine: number } {
+  const sectionIndex = model.sections.indexOf(section);
+  const nextSection = model.sections[sectionIndex + 1];
+  const sectionEnd =
+    nextSection !== undefined ? nextSection.headerLine : model.lines.length;
+  return {
+    startLine: section.headerLine,
+    endLine: Math.max(section.headerLine, sectionEnd - 1),
+  };
 }
 
 function computeKeyInsertionLine(

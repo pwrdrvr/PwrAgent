@@ -37,6 +37,11 @@ export type DesktopSettingsValue<T> = {
   error?: string;
 };
 
+export type DesktopAuthorizedContact = {
+  id: string;
+  displayName: string;
+};
+
 export type DesktopSettingsSecretName =
   | "telegramBotToken"
   | "discordBotToken"
@@ -180,16 +185,16 @@ export type DesktopSettingsSnapshot = {
       enabled: DesktopSettingsValue<boolean>;
       streamingResponses: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
-      authorizedUserIds: DesktopSettingsValue<string[]>;
-      authorizedSupergroups: DesktopSettingsValue<string[]>;
+      authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+      authorizedSupergroups: DesktopSettingsValue<DesktopAuthorizedContact[]>;
     };
     discord: {
       enabled: DesktopSettingsValue<boolean>;
       streamingResponses: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
       applicationId: DesktopSettingsValue<string>;
-      authorizedUserIds: DesktopSettingsValue<string[]>;
-      authorizedGuilds: DesktopSettingsValue<string[]>;
+      authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+      authorizedGuilds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
     };
     mattermost: {
       enabled: DesktopSettingsValue<boolean>;
@@ -200,7 +205,7 @@ export type DesktopSettingsSnapshot = {
       callbackBaseUrl: DesktopSettingsValue<string>;
       slashCommandPrefix: DesktopSettingsValue<string>;
       registerSlashCommands: DesktopSettingsValue<boolean>;
-      authorizedUserIds: DesktopSettingsValue<string[]>;
+      authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
     };
   };
   models: {
@@ -239,15 +244,15 @@ export type DesktopSettingsConfigPatch = {
     telegram?: {
       enabled?: boolean;
       streamingResponses?: boolean;
-      authorizedUserIds?: string[];
-      authorizedSupergroups?: string[];
+      authorizedUserIds?: DesktopAuthorizedContact[];
+      authorizedSupergroups?: DesktopAuthorizedContact[];
     };
     discord?: {
       enabled?: boolean;
       streamingResponses?: boolean;
       applicationId?: string;
-      authorizedUserIds?: string[];
-      authorizedGuilds?: string[];
+      authorizedUserIds?: DesktopAuthorizedContact[];
+      authorizedGuilds?: DesktopAuthorizedContact[];
     };
     mattermost?: {
       enabled?: boolean;
@@ -256,7 +261,7 @@ export type DesktopSettingsConfigPatch = {
       callbackBaseUrl?: string;
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
-      authorizedUserIds?: string[];
+      authorizedUserIds?: DesktopAuthorizedContact[];
     };
   };
   models?: {

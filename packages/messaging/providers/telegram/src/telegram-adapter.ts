@@ -460,7 +460,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   get authorizedActorIds(): readonly string[] {
-    return this.options.config.authorizedActorIds;
+    return this.options.config.authorizedActorIds.map((contact) => contact.id);
   }
 
   onInboundRejected(listener: MessagingInboundRejectedListener): () => void {
@@ -1305,7 +1305,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     options: { actionable: boolean },
   ): boolean {
     const actorId = String(message.from?.id ?? "");
-    if (!this.authorizedActorIds.includes(actorId)) {
+    if (!this.isAuthorizedActor(actorId)) {
       if (message.chat.type === "private" || options.actionable) {
         this.options.logger?.warn?.("telegram inbound ignored unauthorized actor", {
           actorId,
@@ -1335,7 +1335,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private isAuthorizedCallbackSource(callbackQuery: TelegramCallbackQuery): boolean {
     const actorId = String(callbackQuery.from.id);
     const chat = callbackQuery.message?.chat;
-    if (!this.authorizedActorIds.includes(actorId)) {
+    if (!this.isAuthorizedActor(actorId)) {
       this.options.logger?.warn?.("telegram callback ignored unauthorized actor", {
         actorId,
         chatId: chat ? String(chat.id) : undefined,
@@ -1357,12 +1357,21 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return true;
   }
 
+  private isAuthorizedActor(actorId: string): boolean {
+    return this.options.config.authorizedActorIds.some(
+      (contact) => contact.id === actorId,
+    );
+  }
+
   private isAuthorizedTelegramConversation(chat: TelegramChat): boolean {
     if (chat.type !== "supergroup" && chat.type !== "group") {
       return true;
     }
     const authorized = this.options.config.authorizedSupergroupIds ?? [];
-    return authorized.length === 0 || authorized.includes(String(chat.id));
+    return (
+      authorized.length === 0
+      || authorized.some((contact) => contact.id === String(chat.id))
+    );
   }
 
   private logUnauthorizedConversationOnce(

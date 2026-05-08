@@ -29,7 +29,7 @@ describe("discord adapter", () => {
         createMessage: vi.fn().mockRejectedValue(unknownChannelError),
       }),
       config: {
-        authorizedActorIds: [TEST_USER_ID],
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
         botToken: "token",
         channel: "discord",
       },
@@ -64,7 +64,7 @@ describe("discord adapter", () => {
         updateMessage: vi.fn().mockRejectedValue(unknownChannelError),
       }),
       config: {
-        authorizedActorIds: [TEST_USER_ID],
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
         botToken: "token",
         channel: "discord",
       },
@@ -108,7 +108,7 @@ describe("discord adapter", () => {
     const adapter = new DiscordAdapter({
       api: createApi({ updateChannelName }),
       config: {
-        authorizedActorIds: [TEST_USER_ID],
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
         botToken: "token",
         channel: "discord",
       },
@@ -167,7 +167,7 @@ describe("discord adapter", () => {
     const adapter = new DiscordAdapter({
       api: createApi({ createMessage }),
       config: {
-        authorizedActorIds: [TEST_USER_ID],
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
         botToken: "token",
         channel: "discord",
       },
@@ -224,7 +224,7 @@ describe("discord adapter", () => {
     const adapter = new DiscordAdapter({
       api: createApi({ createMessage }),
       config: {
-        authorizedActorIds: [TEST_USER_ID],
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
         botToken: "token",
         channel: "discord",
       },
@@ -313,8 +313,8 @@ describe("discord adapter", () => {
       const adapter = new DiscordAdapter({
         api: createApi(),
         config: {
-          authorizedActorIds: [TEST_USER_ID],
-          authorizedGuildIds: ["1480556454498009999"],
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: [{ id: "1480556454498009999", displayName: "" }],
           botToken: "token",
           channel: "discord",
         },
@@ -369,7 +369,7 @@ describe("discord adapter", () => {
         api: createApi({ createInteractionResponse }),
         config: {
           applicationId: TEST_CHANNEL_ID,
-          authorizedActorIds: [TEST_USER_ID],
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
           botToken: "token",
           channel: "discord",
         },
@@ -422,8 +422,8 @@ describe("discord adapter", () => {
         api: createApi({ createInteractionResponse }),
         config: {
           applicationId: TEST_CHANNEL_ID,
-          authorizedActorIds: [TEST_USER_ID],
-          authorizedGuildIds: ["1480556454498009999"],
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: [{ id: "1480556454498009999", displayName: "" }],
           botToken: "token",
           channel: "discord",
         },
@@ -490,7 +490,7 @@ describe("discord adapter", () => {
         api: createApi({ createInteractionResponse }),
         config: {
           applicationId: TEST_CHANNEL_ID,
-          authorizedActorIds: ["1480556454498009999"],
+          authorizedActorIds: [{ id: "1480556454498009999", displayName: "" }],
           botToken: "token",
           channel: "discord",
         },
@@ -543,7 +543,7 @@ describe("discord adapter", () => {
         api: createApi(),
         config: {
           applicationId: BOT_ID,
-          authorizedActorIds: [TEST_USER_ID],
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
           botToken: "token",
           channel: "discord",
         },
@@ -583,7 +583,7 @@ describe("discord adapter", () => {
         api: createApi(),
         config: {
           applicationId: BOT_ID,
-          authorizedActorIds: [TEST_USER_ID],
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
           botToken: "token",
           channel: "discord",
         },
@@ -622,7 +622,7 @@ describe("discord adapter", () => {
         api: createApi(),
         config: {
           applicationId: BOT_ID,
-          authorizedActorIds: [TEST_USER_ID],
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
           botToken: "token",
           channel: "discord",
         },
@@ -668,7 +668,7 @@ describe("discord adapter", () => {
         api: createApi(),
         config: {
           applicationId: BOT_ID,
-          authorizedActorIds: [TEST_USER_ID],
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
           botToken: "token",
           channel: "discord",
         },
@@ -713,7 +713,7 @@ describe("discord adapter", () => {
         api: createApi(),
         config: {
           applicationId: BOT_ID,
-          authorizedActorIds: [TEST_USER_ID],
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
           botToken: "token",
           channel: "discord",
         },

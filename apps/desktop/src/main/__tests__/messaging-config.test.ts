@@ -43,7 +43,10 @@ describe("desktop messaging config", () => {
         enabled: true,
         botToken: "tg-token",
         streamingResponses: false,
-        authorizedActorIds: ["user-1", "user-2"],
+        authorizedActorIds: [
+          { id: "user-1", displayName: "" },
+          { id: "user-2", displayName: "" },
+        ],
         authorizedSupergroupIds: [],
       },
     });
@@ -62,13 +65,16 @@ describe("desktop messaging config", () => {
       telegram: {
         botToken: "legacy-tg-token",
         streamingResponses: false,
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       discord: {
         applicationId: "discord-app",
         botToken: "legacy-discord-token",
         streamingResponses: false,
-        authorizedActorIds: ["100", "200"],
+        authorizedActorIds: [
+          { id: "100", displayName: "" },
+          { id: "200", displayName: "" },
+        ],
       },
     });
   });
@@ -116,7 +122,7 @@ describe("desktop messaging config", () => {
         enabled: true,
         botToken: "settings-telegram-token",
         streamingResponses: true,
-        authorizedActorIds: ["111111111"],
+        authorizedActorIds: [{ id: "111111111", displayName: "" }],
         authorizedSupergroupIds: [],
       },
       discord: {
@@ -125,7 +131,7 @@ describe("desktop messaging config", () => {
         applicationId: "discord-app",
         botToken: "settings-discord-token",
         streamingResponses: true,
-        authorizedActorIds: ["222222222"],
+        authorizedActorIds: [{ id: "222222222", displayName: "" }],
         authorizedGuildIds: [],
       },
     });
@@ -146,7 +152,7 @@ describe("desktop messaging config", () => {
     expect(config.telegram).toMatchObject({
       botToken: "env-telegram-token",
       streamingResponses: false,
-      authorizedActorIds: ["42"],
+      authorizedActorIds: [{ id: "42", displayName: "" }],
     });
   });
 
@@ -174,14 +180,17 @@ describe("desktop messaging config", () => {
         channel: "telegram",
         botToken: "secret-token",
         streamingResponses: true,
-        authorizedActorIds: ["1", "2"],
+        authorizedActorIds: [
+          { id: "1", displayName: "" },
+          { id: "2", displayName: "" },
+        ],
       },
       discord: {
         channel: "discord",
         applicationId: "app-id",
         botToken: "discord-secret",
         streamingResponses: false,
-        authorizedActorIds: ["3"],
+        authorizedActorIds: [{ id: "3", displayName: "" }],
       },
     });
 

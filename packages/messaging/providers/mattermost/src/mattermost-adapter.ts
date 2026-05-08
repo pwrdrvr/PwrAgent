@@ -336,7 +336,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
 
   constructor(options: MattermostAdapterOptions) {
     this.config = options.config;
-    this.authorizedActorIds = [...options.config.authorizedActorIds];
+    this.authorizedActorIds = options.config.authorizedActorIds.map(
+      (contact) => contact.id,
+    );
     this.callbackHandleStore = options.callbackHandleStore;
     this.logger = options.logger;
     this.now = options.now ?? Date.now;

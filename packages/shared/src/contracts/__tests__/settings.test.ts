@@ -51,7 +51,10 @@ describe("desktop settings contracts", () => {
             writable: true,
           },
           authorizedUserIds: {
-            value: ["111111111", "222222222"],
+            value: [
+              { id: "111111111", displayName: "" },
+              { id: "222222222", displayName: "Harold" },
+            ],
             source: "config",
           },
           authorizedSupergroups: {

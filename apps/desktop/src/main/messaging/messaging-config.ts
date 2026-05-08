@@ -88,17 +88,17 @@ export function loadDesktopMessagingConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): DesktopMessagingConfig {
   const telegramBotToken = readEnv(env, TELEGRAM_BOT_TOKEN_ENV, "TELEGRAM_BOT_TOKEN");
-  const telegramAuthorizedActorIds = parseList(env[TELEGRAM_AUTHORIZED_USER_IDS_ENV]);
-  const telegramAuthorizedSupergroupIds = parseList(
+  const telegramAuthorizedActorIds = parseContactList(env[TELEGRAM_AUTHORIZED_USER_IDS_ENV]);
+  const telegramAuthorizedSupergroupIds = parseContactList(
     env[TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV],
   );
   const discordBotToken = readEnv(env, DISCORD_BOT_TOKEN_ENV, "DISCORD_BOT_TOKEN");
-  const discordAuthorizedActorIds = parseList(env[DISCORD_AUTHORIZED_USER_IDS_ENV]);
-  const discordAuthorizedGuildIds = parseList(env[DISCORD_AUTHORIZED_GUILDS_ENV]);
+  const discordAuthorizedActorIds = parseContactList(env[DISCORD_AUTHORIZED_USER_IDS_ENV]);
+  const discordAuthorizedGuildIds = parseContactList(env[DISCORD_AUTHORIZED_GUILDS_ENV]);
   const mattermostBotToken = readEnv(env, MATTERMOST_BOT_TOKEN_ENV);
   const mattermostServerUrl = readEnv(env, MATTERMOST_SERVER_URL_ENV);
   const mattermostCallbackBaseUrl = readEnv(env, MATTERMOST_CALLBACK_BASE_URL_ENV);
-  const mattermostAuthorizedActorIds = parseList(
+  const mattermostAuthorizedActorIds = parseContactList(
     env[MATTERMOST_AUTHORIZED_USER_IDS_ENV],
   );
   const mattermostCallbackHmacSecret = readEnv(
@@ -462,7 +462,10 @@ function readEnv(
   return env[primary]?.trim() || (fallback ? env[fallback]?.trim() : undefined);
 }
 
-function parseList(value: string | undefined): string[] {
+function parseContactList(value: string | undefined): Array<{
+  id: string;
+  displayName: string;
+}> {
   return [
     ...new Set(
       (value ?? "")
@@ -470,7 +473,7 @@ function parseList(value: string | undefined): string[] {
         .map((item) => item.trim())
         .filter(Boolean),
     ),
-  ];
+  ].map((id) => ({ id, displayName: "" }));
 }
 
 function readAttachmentPolicyFromEnv(

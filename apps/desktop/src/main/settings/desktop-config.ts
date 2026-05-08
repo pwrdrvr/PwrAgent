@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type {
   DesktopChatReplyComposer,
+  DesktopAuthorizedContact,
   DesktopMessagingImageProfile,
   DesktopSettingsConfigPatch,
   DesktopWorktreeStorageLocation,
@@ -24,6 +25,8 @@ type DesktopConfigPathOptions = {
   cliProfile?: string;
 };
 
+type AuthorizedContactConfig = DesktopAuthorizedContact;
+
 export type DesktopSettingsConfig = {
   experimental?: {
     chatReplyComposer?: DesktopChatReplyComposer;
@@ -43,15 +46,15 @@ export type DesktopSettingsConfig = {
     telegram?: {
       enabled?: boolean;
       streamingResponses?: boolean;
-      authorizedUserIds?: string[];
-      authorizedSupergroups?: string[];
+      authorizedUserIds?: AuthorizedContactConfig[];
+      authorizedSupergroups?: AuthorizedContactConfig[];
     };
     discord?: {
       enabled?: boolean;
       streamingResponses?: boolean;
       applicationId?: string;
-      authorizedUserIds?: string[];
-      authorizedGuilds?: string[];
+      authorizedUserIds?: AuthorizedContactConfig[];
+      authorizedGuilds?: AuthorizedContactConfig[];
     };
     mattermost?: {
       enabled?: boolean;
@@ -60,7 +63,7 @@ export type DesktopSettingsConfig = {
       callbackBaseUrl?: string;
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
-      authorizedUserIds?: string[];
+      authorizedUserIds?: AuthorizedContactConfig[];
     };
   };
   models?: {
@@ -85,6 +88,8 @@ export type DesktopSettingsConfig = {
 };
 
 type TomlScalar = TomlValue;
+
+const AUTHORIZED_CONTACT_DISPLAY_NAME_MAX_LENGTH = 64;
 
 export function defaultDesktopConfigDir(
   options?: DesktopConfigPathOptions,
@@ -156,6 +161,33 @@ export function desktopSettingsPatchToEdits(
     if (value === undefined) return;
     edits.push({ op: "set", path: pathSegments, value });
   };
+  const setAuthorizedContacts = (
+    tablePath: readonly string[],
+    legacyKey: string,
+    tableArrayKey: string,
+    value: readonly DesktopAuthorizedContact[] | undefined,
+  ): void => {
+    if (value === undefined) return;
+    const tableArrayPath = [...tablePath, tableArrayKey];
+    edits.push({ op: "delete", path: [...tablePath, legacyKey] });
+    if (legacyKey !== tableArrayKey) {
+      edits.push({ op: "delete", path: tableArrayPath });
+    }
+    edits.push({ op: "deleteTableArray", path: tableArrayPath });
+    const normalizedContacts = normalizeAuthorizedContacts(value);
+    if (normalizedContacts.length === 0) {
+      edits.push({ op: "set", path: tableArrayPath, value: [] });
+      return;
+    }
+    edits.push({
+      op: "setTableArray",
+      path: tableArrayPath,
+      value: normalizedContacts.map((contact) => ({
+        id: contact.id,
+        display_name: contact.displayName,
+      })),
+    });
+  };
 
   if (patch.experimental?.chatReplyComposer !== undefined) {
     set(["experimental", "chat_reply_composer"], patch.experimental.chatReplyComposer);
@@ -199,11 +231,18 @@ export function desktopSettingsPatchToEdits(
     set(["messaging", "telegram", "streaming_responses"], telegram.streamingResponses);
   }
   if (telegram?.authorizedUserIds !== undefined) {
-    set(["messaging", "telegram", "authorized_user_ids"], telegram.authorizedUserIds);
+    setAuthorizedContacts(
+      ["messaging", "telegram"],
+      "authorized_user_ids",
+      "authorized_users",
+      telegram.authorizedUserIds,
+    );
   }
   if (telegram?.authorizedSupergroups !== undefined) {
-    set(
-      ["messaging", "telegram", "authorized_supergroups"],
+    setAuthorizedContacts(
+      ["messaging", "telegram"],
+      "authorized_supergroups",
+      "authorized_supergroups",
       telegram.authorizedSupergroups,
     );
   }
@@ -219,10 +258,20 @@ export function desktopSettingsPatchToEdits(
     set(["messaging", "discord", "application_id"], discord.applicationId);
   }
   if (discord?.authorizedUserIds !== undefined) {
-    set(["messaging", "discord", "authorized_user_ids"], discord.authorizedUserIds);
+    setAuthorizedContacts(
+      ["messaging", "discord"],
+      "authorized_user_ids",
+      "authorized_users",
+      discord.authorizedUserIds,
+    );
   }
   if (discord?.authorizedGuilds !== undefined) {
-    set(["messaging", "discord", "authorized_guilds"], discord.authorizedGuilds);
+    setAuthorizedContacts(
+      ["messaging", "discord"],
+      "authorized_guilds",
+      "authorized_guilds",
+      discord.authorizedGuilds,
+    );
   }
 
   const mattermost = patch.messaging?.mattermost;
@@ -257,8 +306,10 @@ export function desktopSettingsPatchToEdits(
     );
   }
   if (mattermost?.authorizedUserIds !== undefined) {
-    set(
-      ["messaging", "mattermost", "authorized_user_ids"],
+    setAuthorizedContacts(
+      ["messaging", "mattermost"],
+      "authorized_user_ids",
+      "authorized_users",
       mattermost.authorizedUserIds,
     );
   }
@@ -326,15 +377,23 @@ function normalizeDesktopConfig(
       telegram: {
         enabled: readBoolean(telegram?.enabled),
         streamingResponses: readBoolean(telegram?.streaming_responses),
-        authorizedUserIds: readStringArray(telegram?.authorized_user_ids),
-        authorizedSupergroups: readStringArray(telegram?.authorized_supergroups),
+        authorizedUserIds: readAuthorizedContacts(
+          telegram?.authorized_users,
+          telegram?.authorized_user_ids,
+        ),
+        authorizedSupergroups: readAuthorizedContacts(
+          telegram?.authorized_supergroups,
+        ),
       },
       discord: {
         enabled: readBoolean(discord?.enabled),
         streamingResponses: readBoolean(discord?.streaming_responses),
         applicationId: readString(discord?.application_id),
-        authorizedUserIds: readStringArray(discord?.authorized_user_ids),
-        authorizedGuilds: readStringArray(discord?.authorized_guilds),
+        authorizedUserIds: readAuthorizedContacts(
+          discord?.authorized_users,
+          discord?.authorized_user_ids,
+        ),
+        authorizedGuilds: readAuthorizedContacts(discord?.authorized_guilds),
       },
       mattermost: {
         enabled: readBoolean(mattermost?.enabled),
@@ -343,7 +402,10 @@ function normalizeDesktopConfig(
         callbackBaseUrl: readString(mattermost?.callback_base_url),
         slashCommandPrefix: readString(mattermost?.slash_command_prefix),
         registerSlashCommands: readBoolean(mattermost?.register_slash_commands),
-        authorizedUserIds: readStringArray(mattermost?.authorized_user_ids),
+        authorizedUserIds: readAuthorizedContacts(
+          mattermost?.authorized_users,
+          mattermost?.authorized_user_ids,
+        ),
       },
     },
     models: {
@@ -498,6 +560,66 @@ function readStringArray(value: TomlScalar | undefined): string[] | undefined {
     return undefined;
   }
   return value.map((item) => item.trim()).filter(Boolean);
+}
+
+function readAuthorizedContacts(
+  value: TomlScalar | undefined,
+  legacyValue?: TomlScalar | undefined,
+): DesktopAuthorizedContact[] | undefined {
+  const contacts = readAuthorizedContactArray(value);
+  if (contacts !== undefined) {
+    return contacts;
+  }
+  const legacy = readStringArray(value) ?? readStringArray(legacyValue);
+  if (legacy !== undefined) {
+    return legacy.map((id) => ({ id, displayName: "" }));
+  }
+  return undefined;
+}
+
+function readAuthorizedContactArray(
+  value: TomlScalar | undefined,
+): DesktopAuthorizedContact[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  if (value.length === 0) return [];
+  if (
+    !value.every(
+      (item): item is Record<string, string | number | boolean> =>
+        typeof item === "object" && item !== null && !Array.isArray(item),
+    )
+  ) {
+    return undefined;
+  }
+  return normalizeAuthorizedContacts(
+    value.map((entry) => ({
+      id: typeof entry.id === "string" ? entry.id : "",
+      displayName:
+        typeof entry.display_name === "string"
+          ? entry.display_name
+          : typeof entry.displayName === "string"
+            ? entry.displayName
+            : "",
+    })),
+  );
+}
+
+function normalizeAuthorizedContacts(
+  contacts: readonly DesktopAuthorizedContact[],
+): DesktopAuthorizedContact[] {
+  return contacts
+    .map((contact) => ({
+      id: contact.id.trim(),
+      displayName: sanitizeAuthorizedContactDisplayName(contact.displayName),
+    }))
+    .filter((contact) => contact.id.length > 0);
+}
+
+function sanitizeAuthorizedContactDisplayName(value: string): string {
+  return value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, AUTHORIZED_CONTACT_DISPLAY_NAME_MAX_LENGTH);
 }
 
 function readNumber(value: TomlScalar | undefined): number | undefined {

@@ -12,7 +12,10 @@ describe("desktopSettingsPatchToEdits — Mattermost", () => {
           callbackBaseUrl: "https://callbacks.example.com",
           slashCommandPrefix: "pwragent_",
           registerSlashCommands: true,
-          authorizedUserIds: ["abc", "def"],
+          authorizedUserIds: [
+            { id: "abc", displayName: "Alice" },
+            { id: "def", displayName: "Dev Team" },
+          ],
         },
       },
     });
@@ -49,9 +52,24 @@ describe("desktopSettingsPatchToEdits — Mattermost", () => {
         value: true,
       },
       {
-        op: "set",
+        op: "delete",
         path: ["messaging", "mattermost", "authorized_user_ids"],
-        value: ["abc", "def"],
+      },
+      {
+        op: "delete",
+        path: ["messaging", "mattermost", "authorized_users"],
+      },
+      {
+        op: "deleteTableArray",
+        path: ["messaging", "mattermost", "authorized_users"],
+      },
+      {
+        op: "setTableArray",
+        path: ["messaging", "mattermost", "authorized_users"],
+        value: [
+          { id: "abc", display_name: "Alice" },
+          { id: "def", display_name: "Dev Team" },
+        ],
       },
     ]);
   });

@@ -65,7 +65,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "12345:test-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       logger,
       now: () => 1000,
@@ -105,7 +105,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "12345:test-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       logger,
       now: () => 1000,
@@ -157,7 +157,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "12345:test-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       logger,
       now: () => 1000,
@@ -403,7 +403,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "12345:test-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       now: () => 1000,
     });
@@ -474,7 +474,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "12345:test-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       logger,
       now: () => 1000,
@@ -521,7 +521,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "12345:test-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       now: () => 1000,
     });
@@ -569,7 +569,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "12345:test-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
         streamingResponses: true,
       },
       now: () => 1000,
@@ -656,7 +656,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "12345:test-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
         streamingResponses: true,
       },
       now: () => 1000,
@@ -726,7 +726,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "12345:test-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
         streamingResponses: true,
       },
       now: () => now,
@@ -798,7 +798,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "12345:test-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
         streamingResponses: true,
       },
       now: () => now,
@@ -918,7 +918,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "12345:test-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
         streamingResponses: true,
       },
       now: () => now,
@@ -1007,7 +1007,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "12345:test-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
         streamingResponses: true,
       },
       now: () => now,
@@ -1069,7 +1069,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "12345:test-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       now: () => 1000,
     });
@@ -1122,7 +1122,7 @@ describe("TelegramAdapter", () => {
         config: {
           channel: "telegram",
           botToken: "12345:test-token",
-          authorizedActorIds: ["42"],
+          authorizedActorIds: [{ id: "42", displayName: "" }],
         },
         now: () => 1000,
       });
@@ -1193,7 +1193,7 @@ describe("TelegramAdapter", () => {
         config: {
           channel: "telegram",
           botToken: "12345:test-token",
-          authorizedActorIds: ["42"],
+          authorizedActorIds: [{ id: "42", displayName: "" }],
         },
         now: () => 1000,
       });
@@ -1345,7 +1345,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       pollOnStart: false,
     });
@@ -1364,7 +1364,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       pollOnStart: false,
     });
@@ -1400,7 +1400,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: " 12345:test-token ",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       logger,
       pollOnStart: false,
@@ -1442,7 +1442,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "bad token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       logger,
       pollOnStart: false,
@@ -1477,7 +1477,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       now: () => 1000,
       pollOnStart: false,
@@ -1542,7 +1542,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       now: () => 1000,
     });
@@ -1605,7 +1605,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       now: () => 1000,
       pollOnStart: false,
@@ -1668,7 +1668,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       now: () => 1000,
       pollOnStart: false,
@@ -1879,7 +1879,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       now: () => 1000,
       pollOnStart: false,
@@ -2001,7 +2001,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       pollOnStart: false,
     });
@@ -2054,7 +2054,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       pollOnStart: false,
     });
@@ -2102,7 +2102,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       pollOnStart: false,
     });
@@ -2142,7 +2142,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "8378950683:telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       pollOnStart: false,
     });
@@ -2179,7 +2179,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "8378950683:telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       pollOnStart: false,
     });
@@ -2215,7 +2215,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       now: () => 1000,
       pollOnStart: false,
@@ -2267,7 +2267,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       now: () => 1000,
       pollOnStart: false,
@@ -2320,7 +2320,7 @@ describe("TelegramAdapter", () => {
       config: {
         channel: "telegram",
         botToken: "telegram-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [{ id: "42", displayName: "" }],
       },
       now: () => 1000,
       pollOnStart: false,
@@ -2395,7 +2395,7 @@ async function createControllerHarness(): Promise<{
     config: {
       channel: "telegram",
       botToken: "telegram-token",
-      authorizedActorIds: ["42"],
+      authorizedActorIds: [{ id: "42", displayName: "" }],
     },
     now: () => 1000,
     pollOnStart: false,
