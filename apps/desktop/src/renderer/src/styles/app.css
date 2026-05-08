@@ -2104,9 +2104,10 @@ textarea,
   min-height: 0;
   overflow: auto;
   /* Section headers stick inside this scroll container, which already
-     starts below `.settings-titlebar`; a zero offset pins them to the
-     titlebar's bottom edge rather than the absolute window top. */
-  --settings-section-sticky-top: 0px;
+     starts below `.settings-titlebar`. The content has 20px top
+     padding for the pane head, so the sticky offset cancels that
+     padding when a section header pins. */
+  --settings-section-sticky-top: -20px;
   /* More generous interior padding now that the card chrome around
      the layout is gone — the panels need breathing room from the
      window edges and from the nav's right border. */
