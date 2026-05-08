@@ -13,6 +13,11 @@ const providerMocks = vi.hoisted(() => ({
   resolveDiscordContact: vi.fn(),
   resolveMattermostContact: vi.fn(),
 }));
+const runtimeMock = vi.hoisted(() => ({
+  applyConfig: vi.fn(async () => undefined),
+  isEnabled: vi.fn(() => false),
+  requestCredentialValidation: vi.fn(),
+}));
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -34,6 +39,10 @@ vi.mock("../app-server/backend-registry", () => ({
   disposeDesktopBackendRegistry: disposeDesktopBackendRegistryMock,
 }));
 
+vi.mock("../messaging/messaging-runtime", () => ({
+  getDesktopMessagingRuntime: vi.fn(() => runtimeMock),
+}));
+
 vi.mock("@pwragent/messaging-provider-telegram", () => ({
   resolveContact: providerMocks.resolveTelegramContact,
 }));
@@ -51,6 +60,7 @@ describe("settings ipc", () => {
     for (const root of tempRoots.splice(0)) {
       fs.rmSync(root, { recursive: true, force: true });
     }
+    vi.unstubAllEnvs();
   });
 
   beforeEach(() => {
@@ -59,6 +69,9 @@ describe("settings ipc", () => {
     providerMocks.resolveTelegramContact.mockReset();
     providerMocks.resolveDiscordContact.mockReset();
     providerMocks.resolveMattermostContact.mockReset();
+    runtimeMock.applyConfig.mockClear();
+    runtimeMock.isEnabled.mockClear();
+    runtimeMock.requestCredentialValidation.mockReset();
   });
 
   it("registers redacted read and write handlers", async () => {
@@ -166,6 +179,41 @@ describe("settings ipc", () => {
     );
 
     expect(disposeDesktopBackendRegistryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("hot-applies messaging config writes without defeating a launch disable override", async () => {
+    vi.stubEnv("PWRAGENT_DISABLE_MESSAGING", "1");
+    runtimeMock.isEnabled.mockReturnValue(false);
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
+
+    registerSettingsIpcHandlers(service);
+
+    await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
+      {},
+      {
+        patch: {
+          messaging: {
+            telegram: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    );
+
+    expect(runtimeMock.applyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true }),
+      { allowStart: false },
+    );
   });
 
   it("resolves messaging contacts through provider packages", async () => {

@@ -110,19 +110,20 @@ export function bootstrapApp(): void {
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
     }
+    const messagingRuntime = getDesktopMessagingRuntime((options) =>
+      loadDesktopMessagingConfigFromSettings(
+        getDesktopSettingsService(),
+        process.env,
+        options,
+      ),
+    );
     const messagingOverride = resolveRuntimeMessagingOverride();
     if (messagingOverride.disabled) {
       mainLog.info("messaging runtime disabled for this app instance", {
         reason: messagingOverride.reason,
       });
     } else {
-      await getDesktopMessagingRuntime((options) =>
-        loadDesktopMessagingConfigFromSettings(
-          getDesktopSettingsService(),
-          process.env,
-          options,
-        ),
-      ).start();
+      await messagingRuntime.start();
     }
     // Register status IPC after the runtime is constructed so the
     // initial subscriber attaches before the renderer asks for the

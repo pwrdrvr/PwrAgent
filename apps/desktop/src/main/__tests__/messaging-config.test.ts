@@ -36,6 +36,7 @@ describe("desktop messaging config", () => {
     });
 
     expect(config).toEqual({
+      enabled: true,
       inputDebounceMs: 500,
       toolUpdateDefaultMode: "show_some",
       telegram: {
@@ -110,6 +111,7 @@ describe("desktop messaging config", () => {
     const config = await loadDesktopMessagingConfigFromSettings(service, {});
 
     expect(config).toEqual({
+      enabled: true,
       inputDebounceMs: 500,
       toolUpdateDefaultMode: "show_some",
       attachmentPolicy: {
@@ -135,6 +137,38 @@ describe("desktop messaging config", () => {
         authorizedGuildIds: [],
       },
     });
+  });
+
+  it("honors the persisted master messaging switch before building providers", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[messaging]",
+        "enabled = false",
+        "",
+        "[messaging.telegram]",
+        "enabled = true",
+        'authorized_user_ids = ["111111111"]',
+      ].join("\n"),
+      "utf8",
+    );
+    const secretStore = new MemoryDesktopSecretStore();
+    await secretStore.setSecret("telegramBotToken", "settings-telegram-token");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore,
+    });
+
+    const config = await loadDesktopMessagingConfigFromSettings(service, {});
+
+    expect(config).toMatchObject({
+      enabled: false,
+      inputDebounceMs: 500,
+    });
+    expect(config.telegram).toBeUndefined();
   });
 
   it("keeps env-only messaging config fallback enabled for tests", async () => {
@@ -196,6 +230,7 @@ describe("desktop messaging config", () => {
 
     expect(JSON.stringify(redacted)).not.toContain("secret");
     expect(redacted).toEqual({
+      enabled: true,
       telegram: {
         channel: "telegram",
         enabled: true,

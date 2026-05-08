@@ -42,6 +42,8 @@ import type {
   ListMessagingActivityResponse,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  SetMessagingEnabledRequest,
+  SetMessagingEnabledResponse,
   PickDirectoryFromDiskResponse,
   RegisterDirectoryFromDiskRequest,
   RegisterDirectoryFromDiskResponse,
@@ -253,6 +255,9 @@ export type DesktopApi = {
   reportRendererError?: (report: RendererErrorReport) => Promise<void>;
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
   getMessagingPlatformStatuses?: () => Promise<MessagingPlatformStatus[]>;
+  setMessagingEnabled?: (
+    request: SetMessagingEnabledRequest,
+  ) => Promise<SetMessagingEnabledResponse>;
   onMessagingPlatformStatusEvent?: (
     callback: (event: MessagingPlatformStatusEvent) => void,
   ) => () => void;

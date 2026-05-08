@@ -188,6 +188,7 @@ export type DesktopSettingsSnapshot = {
     messaging: {
       disabled: boolean;
       disabledReason?: string;
+      overrideActive?: boolean;
     };
   };
   secretStorage: DesktopSettingsSecretStorageState;
@@ -210,6 +211,7 @@ export type DesktopSettingsSnapshot = {
     };
   };
   messaging: {
+    enabled: DesktopSettingsValue<boolean>;
     inputDebounceMs: DesktopSettingsValue<number>;
     toolUpdateMode: DesktopSettingsValue<MessagingToolUpdateMode>;
     attachments: DesktopMessagingAttachmentSettingsSnapshot;
@@ -266,6 +268,7 @@ export type DesktopSettingsConfigPatch = {
     };
   };
   messaging?: {
+    enabled?: boolean;
     inputDebounceMs?: number;
     toolUpdateMode?: MessagingToolUpdateMode;
     attachments?: {

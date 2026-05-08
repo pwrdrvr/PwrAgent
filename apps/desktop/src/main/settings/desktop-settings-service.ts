@@ -154,6 +154,7 @@ export class DesktopSettingsService {
       runtime: {
         messaging: {
           disabled: messagingOverride.disabled,
+          overrideActive: messagingOverride.disabled,
           ...(messagingOverride.reason
             ? { disabledReason: messagingOverride.reason }
             : {}),
@@ -174,6 +175,7 @@ export class DesktopSettingsService {
         },
       },
       messaging: {
+        enabled: this.resolveConfigBoolean(config.messaging?.enabled, true),
         inputDebounceMs: this.resolveClampedNumber(
           config.messaging?.inputDebounceMs,
           DEFAULT_MESSAGING_INPUT_DEBOUNCE_MS,
@@ -459,6 +461,16 @@ export class DesktopSettingsService {
       value: configValue ?? defaultValue,
       source: configValue === undefined ? "default" : "config",
       error: envValue.error,
+    };
+  }
+
+  private resolveConfigBoolean(
+    configValue: boolean | undefined,
+    defaultValue: boolean,
+  ): DesktopSettingsValue<boolean> {
+    return {
+      value: configValue ?? defaultValue,
+      source: configValue === undefined ? "default" : "config",
     };
   }
 

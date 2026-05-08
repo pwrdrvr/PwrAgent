@@ -44,6 +44,7 @@ function createSnapshot(
       },
     },
     messaging: {
+      enabled: { value: true, source: "default" },
       inputDebounceMs: { value: 500, source: "default" },
       toolUpdateMode: { value: "show_some", source: "default" },
       telegram: {
@@ -864,6 +865,7 @@ describe("SettingsScreen", () => {
             runtime: {
               messaging: {
                 disabled: true,
+                overrideActive: true,
                 disabledReason: "--disable-messaging was provided at startup",
               },
             },
@@ -879,8 +881,59 @@ describe("SettingsScreen", () => {
       "Messaging disabled for this app instance",
     );
     expect(screen.getByRole("status")).toHaveTextContent(
-      "--disable-messaging was provided at startup",
+      "The override applies to this session only",
     );
+  });
+
+  it("persists the master messaging switch when no runtime override is active", async () => {
+    const settings = createSettingsState();
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Messaging" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Messaging" }));
+
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: { enabled: false },
+      });
+    });
+  });
+
+  it("uses a session-only master messaging switch when the runtime override is active", async () => {
+    const setMessagingEnabled = vi.fn(async () => ({
+      enabled: true,
+      overridden: true,
+      overrideReason: "--disable-messaging was provided at startup",
+    }));
+    const settings = createSettingsState(
+      createSnapshot({
+        runtime: {
+          messaging: {
+            disabled: true,
+            overrideActive: true,
+            disabledReason: "--disable-messaging was provided at startup",
+          },
+        },
+      }),
+    );
+    render(
+      <SettingsScreen
+        desktopApi={{ setMessagingEnabled }}
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Messaging" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Messaging" }));
+
+    await waitFor(() => {
+      expect(setMessagingEnabled).toHaveBeenCalledWith({ enabled: true });
+      expect(settings.refresh).toHaveBeenCalled();
+    });
+    expect(settings.writeConfig).not.toHaveBeenCalledWith({
+      messaging: { enabled: true },
+    });
   });
 
   it("keeps a secret draft when replacement fails", async () => {

@@ -49,6 +49,7 @@ export function MessagingSettings(props: {
   ) => Promise<boolean>;
   onToolUpdateModeChange: (mode: MessagingToolUpdateMode) => Promise<void>;
   onInputDebounceMsChange: (value: number) => Promise<void>;
+  onMessagingEnabledChange: (enabled: boolean) => Promise<void>;
   onSaveDiscord: (
     patch: NonNullable<DesktopSettingsSnapshot["messaging"]["discord"]>,
   ) => Promise<void>;
@@ -62,9 +63,14 @@ export function MessagingSettings(props: {
   const telegram = props.snapshot.messaging.telegram;
   const discord = props.snapshot.messaging.discord;
   const mattermost = props.snapshot.messaging.mattermost;
+  const messagingEnabled = props.snapshot.messaging.enabled;
   const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
   const inputDebounceMs = props.snapshot.messaging.inputDebounceMs;
   const runtimeMessaging = props.snapshot.runtime.messaging;
+  const masterEnabled = runtimeMessaging.overrideActive
+    ? !runtimeMessaging.disabled
+    : messagingEnabled.value;
+  const platformControlsDisabled = props.saving || !masterEnabled;
 
   return (
     <SettingsSectionStack paneId="messaging" aria-label="Messaging settings">
@@ -74,7 +80,7 @@ export function MessagingSettings(props: {
         help="Bridge PwrAgent threads to messaging platforms so you can drive runs from your phone. Tokens are stored in the system keychain. Authorization defaults closed: if no allowed IDs are configured, nothing can use that entry. Check the Messaging Activity window for rejected IDs to add here."
       />
 
-      {runtimeMessaging.disabled ? (
+      {runtimeMessaging.overrideActive && runtimeMessaging.disabled ? (
         <section className="settings-panel settings-panel--warning" role="status">
           <div className="settings-panel__header">
             <div>
@@ -83,14 +89,39 @@ export function MessagingSettings(props: {
             </div>
           </div>
           <p className="settings-row__description">
-            {runtimeMessaging.disabledReason
-              ?? "Messaging startup was disabled by a launch override."}
+            Messaging is off because the app was launched with the no-messaging
+            flag. You can override this for the current session by flipping the
+            master toggle below, but make sure messaging is off in any other
+            PwrAgent instances first. The override applies to this session only;
+            the saved default is unchanged.
           </p>
         </section>
       ) : null}
 
       <SettingsSection eyebrow="Messaging" title="General">
         <div className="settings-fields">
+          <ToggleField
+            checked={masterEnabled}
+            disabled={
+              props.saving
+              || (runtimeMessaging.overrideActive
+                && !props.desktopApi?.setMessagingEnabled)
+            }
+            label="Messaging"
+            sub={
+              runtimeMessaging.overrideActive
+                ? "Session-only master switch. The saved default is unchanged while the launch override is active."
+                : "Master switch for all messaging adapters."
+            }
+            source={
+              runtimeMessaging.overrideActive
+                ? "session"
+                : sourceBadge(messagingEnabled)
+            }
+            onChange={(enabled) => {
+              void props.onMessagingEnabledChange(enabled);
+            }}
+          />
           <SegmentedField
             disabled={props.saving}
             label="Tool usage notifications"
@@ -126,7 +157,7 @@ export function MessagingSettings(props: {
         <div className="settings-fields">
           <ToggleField
             checked={telegram.enabled.value}
-            disabled={props.saving}
+            disabled={platformControlsDisabled}
             label="Enabled"
             sub="Turn the Telegram adapter on or off independently of the global messaging switch."
             source={sourceBadge(telegram.enabled)}
@@ -234,7 +265,7 @@ export function MessagingSettings(props: {
         <div className="settings-fields">
           <ToggleField
             checked={discord.enabled.value}
-            disabled={props.saving}
+            disabled={platformControlsDisabled}
             label="Enabled"
             sub="Turn the Discord adapter on or off independently of the global messaging switch."
             source={sourceBadge(discord.enabled)}
@@ -358,7 +389,7 @@ export function MessagingSettings(props: {
         <div className="settings-fields">
           <ToggleField
             checked={mattermost.enabled.value}
-            disabled={props.saving}
+            disabled={platformControlsDisabled}
             label="Enabled"
             sub="Turn the Mattermost adapter on or off independently of the global messaging switch."
             source={sourceBadge(mattermost.enabled)}

@@ -159,15 +159,10 @@ export type SetMessagingEnabledRequest = {
 };
 
 export type SetMessagingEnabledResponse = {
-  /**
-   * Effective state after the toggle. May not equal the requested
-   * `enabled` if the startup override
-   * (`--disable-messaging` / `PWRAGENT_DISABLE_MESSAGING`) is in
-   * force.
-   */
+  /** Effective runtime state after the toggle. */
   enabled: boolean;
-  /** True when an override prevented the runtime from honoring the request. */
+  /** True when the process was launched with a no-messaging override. */
   overridden: boolean;
-  /** Human-readable explanation of the override, when applicable. */
+  /** Human-readable explanation of the launch override, when applicable. */
   overrideReason?: string;
 };

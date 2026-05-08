@@ -65,6 +65,7 @@ export {
 export type DesktopMessagingConfig = {
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
   discord?: DiscordMessagingConfig;
+  enabled?: boolean;
   inputDebounceMs?: number;
   mattermost?: MattermostMessagingConfig;
   telegram?: TelegramMessagingConfig;
@@ -116,6 +117,7 @@ export function loadDesktopMessagingConfig(
   const attachmentPolicy = readAttachmentPolicyFromEnv(env);
 
   return {
+    enabled: true,
     inputDebounceMs: readInputDebounceMsFromEnv(env) ?? 500,
     toolUpdateDefaultMode: "show_some",
     ...(attachmentPolicy ? { attachmentPolicy } : {}),
@@ -242,6 +244,7 @@ export async function loadDesktopMessagingConfigFromSettings(
     maxAttachmentBytes: snapshot.messaging.attachments.maxAttachmentBytes.value,
     maxAttachmentCount: snapshot.messaging.attachments.maxAttachmentCount.value,
   };
+  const messagingEnabled = snapshot.messaging.enabled.value;
 
   // Resolve per-platform enablement and log the decision for each
   const telegramEnabled = shouldEnableSettingsChannel(
@@ -263,7 +266,7 @@ export async function loadDesktopMessagingConfigFromSettings(
     MATTERMOST_ENABLED_ENV,
   );
 
-  const telegramConfig = buildChannelConfig({
+  const telegramConfig = messagingEnabled && buildChannelConfig({
     log,
     channel: "telegram",
     enabled: telegramEnabled,
@@ -283,7 +286,7 @@ export async function loadDesktopMessagingConfigFromSettings(
       }
     : {};
 
-  const discordConfig = buildChannelConfig({
+  const discordConfig = messagingEnabled && buildChannelConfig({
     log,
     channel: "discord",
     enabled: discordEnabled,
@@ -308,7 +311,8 @@ export async function loadDesktopMessagingConfigFromSettings(
     : {};
 
   const mattermostConfig =
-    buildChannelConfig({
+    messagingEnabled
+    && buildChannelConfig({
       log,
       channel: "mattermost",
       enabled: mattermostEnabled,
@@ -340,6 +344,7 @@ export async function loadDesktopMessagingConfigFromSettings(
       : {};
 
   return {
+    enabled: messagingEnabled,
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
     toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
     attachmentPolicy,
@@ -416,6 +421,7 @@ export function redactDesktopMessagingConfig(
           authorizedActorCount: config.telegram.authorizedActorIds.length,
         }
       : undefined,
+    enabled: config.enabled !== false,
     toolUpdateDefaultMode: config.toolUpdateDefaultMode ?? "show_some",
     inputDebounceMs: config.inputDebounceMs ?? 500,
     discord: config.discord

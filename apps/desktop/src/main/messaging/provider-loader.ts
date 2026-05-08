@@ -63,6 +63,10 @@ export async function loadConfiguredMessagingAdapters(params: {
 export function configuredMessagingProviderIds(
   config: DesktopMessagingConfig,
 ): DesktopMessagingProviderId[] {
+  if (config.enabled === false) {
+    return [];
+  }
+
   return [
     ...(config.telegram && config.telegram.enabled !== false
       ? (["telegram"] as const)

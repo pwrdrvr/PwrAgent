@@ -251,6 +251,18 @@ function SettingsSectionBody(props: {
             },
           });
         }}
+        onMessagingEnabledChange={async (enabled) => {
+          if (props.snapshot.runtime.messaging.overrideActive) {
+            await props.desktopApi?.setMessagingEnabled?.({ enabled });
+            await props.settings.refresh();
+            return;
+          }
+          await props.settings.writeConfig({
+            messaging: {
+              enabled,
+            },
+          });
+        }}
         onSaveDiscord={async (discord) => {
           const delta = buildDiscordPatchDelta(
             props.snapshot.messaging.discord,

@@ -40,6 +40,7 @@ export type DesktopSettingsConfig = {
     };
   };
   messaging?: {
+    enabled?: boolean;
     inputDebounceMs?: number;
     toolUpdateMode?: MessagingToolUpdateMode;
     attachments?: {
@@ -245,6 +246,9 @@ export function desktopSettingsPatchToEdits(
   if (patch.messaging?.inputDebounceMs !== undefined) {
     set(["messaging", "input_debounce_ms"], patch.messaging.inputDebounceMs);
   }
+  if (patch.messaging?.enabled !== undefined) {
+    set(["messaging", "enabled"], patch.messaging.enabled);
+  }
   if (patch.messaging?.toolUpdateMode !== undefined) {
     set(["messaging", "tool_update_mode"], patch.messaging.toolUpdateMode);
   }
@@ -407,6 +411,7 @@ function normalizeDesktopConfig(
       },
     },
     messaging: {
+      enabled: readBoolean(messaging?.enabled),
       inputDebounceMs: readNumber(messaging?.input_debounce_ms),
       toolUpdateMode: readToolUpdateMode(messaging?.tool_update_mode),
       attachments: {
@@ -489,8 +494,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const discord = config.messaging?.discord;
   const mattermost = config.messaging?.mattermost;
   const inputDebounceMs = config.messaging?.inputDebounceMs;
+  const enabled = config.messaging?.enabled;
   const toolUpdateMode = config.messaging?.toolUpdateMode;
   if (
+    enabled !== undefined ||
     inputDebounceMs !== undefined ||
     toolUpdateMode !== undefined ||
     (attachments && hasDefinedValue(attachments))
@@ -499,6 +506,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     || (mattermost && hasDefinedValue(mattermost))
   ) {
     pruned.messaging = {};
+    if (enabled !== undefined) {
+      pruned.messaging.enabled = enabled;
+    }
     if (inputDebounceMs !== undefined) {
       pruned.messaging.inputDebounceMs = inputDebounceMs;
     }
