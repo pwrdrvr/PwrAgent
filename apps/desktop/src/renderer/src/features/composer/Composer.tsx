@@ -52,6 +52,7 @@ import {
 } from "./ComposerRichInput";
 import { ComposerTextareaInput } from "./ComposerTextareaInput";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
+import { ProjectPicker } from "./ProjectPicker";
 import {
   useComposerDraftStore,
   type ComposerDraftSnapshot,
@@ -69,6 +70,13 @@ type ComposerProps = {
   applications?: DesktopApplicationsSnapshot;
   desktopApi?: DesktopApi;
   directory?: NavigationDirectorySummary;
+  /**
+   * Full set of currently-tracked directories from the navigation
+   * snapshot. Used by the project picker (issue #223) to render the
+   * "recent directories" list. Optional so tests / threads-only
+   * surfaces don't have to provide it.
+   */
+  directories?: NavigationDirectorySummary[];
   disabled?: boolean;
   contextWindow?: ThreadContextWindowState;
   composerImplementation?: DesktopChatReplyComposer;
@@ -110,6 +118,16 @@ type ComposerProps = {
     options?: { stickySettingsChanged?: boolean }
   ) => Promise<void>;
   removeOptimisticMessage?: (id: string) => void;
+  /**
+   * Project-directory picker plumbing (issue #223). Optional — surfaces
+   * that don't render a launchpad (read-only thread views) won't pass
+   * these through and the picker won't render.
+   */
+  onSelectDirectoryFromPicker?: (directory: NavigationDirectorySummary) => void;
+  onPickAndRegisterDirectory?: () => void;
+  onClearPickDirectoryError?: () => void;
+  pickDirectoryError?: string;
+  pickingDirectory?: boolean;
   setExecutionModeError?: string;
   skillError?: string;
   skillLoading?: boolean;
@@ -3621,6 +3639,35 @@ export function Composer(props: ComposerProps) {
                 ) {
                   void props.onSetExecutionMode?.(executionMode);
                 }
+              }}
+            />
+          ) : null}
+
+          {props.launchpad &&
+          (props.onSelectDirectoryFromPicker || props.onPickAndRegisterDirectory) ? (
+            // Project picker (issue #223). Only render in the launchpad
+            // surface — once a thread exists, the directory binding is
+            // immutable. The current directory shows as the trigger
+            // value when the launchpad is anchored to an actual
+            // directory; the synthesized "workspace:new-thread"
+            // launchpad reads as "No selected project" instead.
+            <ProjectPicker
+              value={
+                props.directory && props.directory.kind === "directory"
+                  ? props.directory
+                  : undefined
+              }
+              directories={props.directories ?? []}
+              disabled={launchpadSubmitting}
+              pickError={props.pickDirectoryError}
+              picking={props.pickingDirectory}
+              onSelect={(directory) => {
+                props.onClearPickDirectoryError?.();
+                props.onSelectDirectoryFromPicker?.(directory);
+              }}
+              onPickFromDisk={() => {
+                props.onClearPickDirectoryError?.();
+                props.onPickAndRegisterDirectory?.();
               }}
             />
           ) : null}

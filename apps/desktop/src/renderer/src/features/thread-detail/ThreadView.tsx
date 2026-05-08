@@ -603,6 +603,17 @@ type ThreadViewProps = {
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
+  /**
+   * Project-directory picker (issue #223) — surfaced in the launchpad
+   * composer when no thread is selected yet. Rendering happens inside
+   * `Composer.tsx`; we just plumb the data and callbacks through.
+   */
+  directories?: NavigationDirectorySummary[];
+  pickDirectoryError?: string;
+  pickingDirectory?: boolean;
+  onSelectDirectoryFromPicker?: (directory: NavigationDirectorySummary) => void;
+  onPickAndRegisterDirectory?: () => void;
+  onClearPickDirectoryError?: () => void;
   setExecutionModeError?: string;
   setThreadModelSettingsError?: string;
   worktreeArchiveError?: string;
@@ -1482,12 +1493,18 @@ export function ThreadView(props: ThreadViewProps) {
               composerImplementation={props.composerImplementation}
               draftStore={props.composerDraftStore}
               directory={props.selectedDirectory}
+              directories={props.directories}
               disabled={!launchpadBackend?.available}
               launchpad={selectedLaunchpad}
               launchpadError={props.launchpadError}
               onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
               onMaterializeLaunchpad={handleMaterializeLaunchpad}
               onUpdateLaunchpad={props.onUpdateLaunchpad}
+              onSelectDirectoryFromPicker={props.onSelectDirectoryFromPicker}
+              onPickAndRegisterDirectory={props.onPickAndRegisterDirectory}
+              onClearPickDirectoryError={props.onClearPickDirectoryError}
+              pickDirectoryError={props.pickDirectoryError}
+              pickingDirectory={props.pickingDirectory}
               skillError={props.skillError}
               skillLoading={props.skillLoading}
               skills={props.skills}

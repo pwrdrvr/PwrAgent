@@ -42,6 +42,9 @@ import type {
   ListMessagingActivityResponse,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  PickDirectoryFromDiskResponse,
+  RegisterDirectoryFromDiskRequest,
+  RegisterDirectoryFromDiskResponse,
   UnbindMessagingThreadRequest,
   UnbindMessagingThreadResponse,
   RefreshThreadPullRequestsRequest,
@@ -221,6 +224,18 @@ export type DesktopApi = {
   resetDirectoryLaunchpad?: (
     request: ResetDirectoryLaunchpadRequest
   ) => Promise<ResetDirectoryLaunchpadResponse>;
+  /**
+   * Project-directory picker (issue #223): two-step flow so the renderer
+   * can show inline validation errors. `pickDirectoryFromDisk` opens the
+   * OS dialog and returns the chosen path (or `canceled: true` if the
+   * user dismissed). The renderer then calls `registerDirectoryFromDisk`
+   * with the path so the main process can validate it's a git repo and
+   * seed a launchpad in one round-trip.
+   */
+  pickDirectoryFromDisk?: () => Promise<PickDirectoryFromDiskResponse>;
+  registerDirectoryFromDisk?: (
+    request: RegisterDirectoryFromDiskRequest,
+  ) => Promise<RegisterDirectoryFromDiskResponse>;
   normalizeImageForUpload?: (
     request: ImageUploadFallbackRequest
   ) => Promise<ImageUploadFallbackResponse>;

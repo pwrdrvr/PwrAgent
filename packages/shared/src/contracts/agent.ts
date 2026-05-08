@@ -280,6 +280,57 @@ export type MaterializeDirectoryLaunchpadResponse = {
   workMode: LaunchpadWorkMode;
 };
 
+/**
+ * Ask the main process to open the system "choose folder" dialog. The
+ * renderer never sees the path until the user confirms — `canceled: true`
+ * signals the user dismissed the dialog and the renderer should treat it
+ * as a no-op (no error). The returned `path` is whatever the OS dialog
+ * yielded; validation (is-this-a-git-repo, accessibility) happens in the
+ * follow-up `registerDirectoryFromDisk` call so the picker can show a
+ * useful error inline rather than blocking inside the dialog.
+ */
+export type PickDirectoryFromDiskResponse =
+  | { canceled: true }
+  | { canceled: false; path: string };
+
+export type RegisterDirectoryFromDiskRequest = {
+  /** Absolute path the user picked from the system dialog. */
+  path: string;
+  /**
+   * Backend the new directory's launchpad should default to. The launchpad
+   * defaults are otherwise loaded from the overlay store.
+   */
+  preferredBackend?: AppServerBackendKind;
+};
+
+/** Why a registration attempt failed — drives the inline error copy. */
+export type RegisterDirectoryFromDiskFailureReason =
+  | "inaccessible"
+  | "not-a-directory"
+  | "not-a-git-repo";
+
+export type RegisterDirectoryFromDiskResponse =
+  | {
+      ok: true;
+      /**
+       * Canonical filesystem path (resolved via `git rev-parse
+       * --show-toplevel` so symlinked roots normalize). The directoryKey
+       * is derived from this path with the `directory:` prefix.
+       */
+      directoryPath: string;
+      directoryKey: string;
+      directoryLabel: string;
+      currentBranch?: string;
+      launchpad: NavigationLaunchpadDraft;
+      defaults: NavigationLaunchpadDefaults;
+    }
+  | {
+      ok: false;
+      reason: RegisterDirectoryFromDiskFailureReason;
+      /** Human-readable reason for surfacing in the picker UI. */
+      message: string;
+    };
+
 export type AgentEvent = {
   backend: AppServerBackendKind;
   notification: AppServerNotification;
