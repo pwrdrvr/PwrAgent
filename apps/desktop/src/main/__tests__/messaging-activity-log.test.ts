@@ -59,6 +59,52 @@ describe("MessagingActivityLog", () => {
     ]);
   });
 
+  it("binds adversarial platform text literally without executing it as SQL", () => {
+    const adversarialText =
+      "'; UPDATE meta SET value = 'pwned' WHERE key = 'sql_injection_sentinel'; DROP TABLE bindings; --\0"
+      + "x".repeat(8_192);
+    stateDb.raw
+      .prepare("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)")
+      .run("sql_injection_sentinel", "intact");
+
+    log.record({
+      platform: "telegram",
+      kind: "inbound-routed",
+      backend: "codex",
+      threadId: adversarialText,
+      bindingId: adversarialText,
+      conversationId: adversarialText,
+      conversationTitle: adversarialText,
+      actorId: adversarialText,
+      actorDisplayName: adversarialText,
+      summary: adversarialText,
+      payload: { adversarialText },
+      createdAt: 1_234,
+    });
+
+    const sentinel = stateDb.raw
+      .prepare("SELECT value FROM meta WHERE key = ?")
+      .get("sql_injection_sentinel") as { value: string };
+    expect(sentinel.value).toBe("intact");
+    expect(
+      stateDb.raw
+        .prepare("SELECT COUNT(*) AS count FROM bindings")
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(log.list()).toEqual([
+      expect.objectContaining({
+        threadId: adversarialText,
+        bindingId: adversarialText,
+        conversationId: adversarialText,
+        conversationTitle: adversarialText,
+        actorId: adversarialText,
+        actorDisplayName: adversarialText,
+        summary: adversarialText,
+        payload: { adversarialText },
+      }),
+    ]);
+  });
+
   it("returns events newest-first by id", () => {
     log.record({ platform: "telegram", kind: "outbound", summary: "first", createdAt: 1 });
     log.record({ platform: "telegram", kind: "outbound", summary: "second", createdAt: 2 });

@@ -131,6 +131,20 @@ The desktop app sits at the **top** of the dependency hierarchy and may import a
 
 Enforcement runs via `pnpm lint:boundaries` and fails CI on any violation.
 
+## SQLite Query Rules
+
+- Never interpolate user-sourced values into SQL strings. Always use
+  `better-sqlite3` prepared statements with positional or named bindings.
+- Messaging-platform inbound text is the highest-risk SQLite input category:
+  public Telegram, Discord, Mattermost, Slack, Signal, Feishu, and future
+  adapter traffic must be treated as hostile even when the local desktop user
+  trusts the bound thread.
+- Generated SQL fragments are only allowed for non-data structure, such as a
+  generated `?, ?, ?` placeholder list. Hardcoded maintenance table names must
+  stay allowlisted by the SQL-template lint guard.
+- Run `pnpm lint:sql` after changing desktop main-process SQLite code. It flags
+  interpolated SQL template strings in the messaging/state persistence surface.
+
 ## Implementation Notes
 
 - Centralize visual tokens in `styles/app.css` before expanding renderer surfaces.

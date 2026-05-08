@@ -67,6 +67,61 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
+  it("routes adversarial Telegram inbound text literally without mutating SQLite state", async () => {
+    const { runtime, adapter, bridge } = await createRuntimeHarness();
+    const { getAppStateDb } = await import("../state/app-state");
+    const stateDb = getAppStateDb();
+    const adversarialText =
+      "'; UPDATE meta SET value = 'pwned' WHERE key = 'sql_injection_sentinel'; DROP TABLE bindings; --\0"
+      + "x".repeat(8_192);
+    stateDb.raw
+      .prepare("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)")
+      .run("sql_injection_sentinel", "intact");
+
+    await runtime.start();
+    await adapter.listener?.(
+      buildCallbackEvent("bind:codex:thread-1", {
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    );
+    await adapter.listener?.(buildTextEvent(adversarialText, {
+      actorDisplayName: adversarialText,
+      conversationTitle: adversarialText,
+    }));
+
+    expect(bridge.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [{ type: "text", text: adversarialText }],
+      }),
+    );
+    expect(
+      stateDb.raw
+        .prepare("SELECT value FROM meta WHERE key = ?")
+        .get("sql_injection_sentinel"),
+    ).toEqual({ value: "intact" });
+    expect(
+      stateDb.raw
+        .prepare("SELECT COUNT(*) AS count FROM bindings WHERE binding_id = ?")
+        .get("binding:telegram:dm::chat-1:codex:thread-1"),
+    ).toEqual({ count: 1 });
+    expect(
+      stateDb.raw
+        .prepare(
+          `SELECT conversation_title, actor_display_name, summary
+           FROM messaging_activity_log
+           WHERE kind = ?
+           ORDER BY id DESC
+           LIMIT 1`,
+        )
+        .get("inbound-routed"),
+    ).toEqual({
+      conversation_title: adversarialText,
+      actor_display_name: adversarialText,
+      summary: `Inbound from ${adversarialText}`,
+    });
+  });
+
   it("requests messaging startup eligibility logging only for the startup config load", async () => {
     await prepareRuntimeStore();
     const adapter = createAdapter("telegram");
@@ -1172,5 +1227,32 @@ function buildCallbackEvent(
     actionId,
     value,
     receivedAt: 1000,
+  };
+}
+
+function buildTextEvent(
+  text: string,
+  overrides: {
+    actorDisplayName?: string;
+    conversationTitle?: string;
+  } = {},
+): Extract<MessagingInboundEvent, { kind: "text" }> {
+  return {
+    id: "event-text",
+    kind: "text",
+    actor: {
+      platformUserId: "user-1",
+      displayName: overrides.actorDisplayName,
+    },
+    channel: {
+      channel: "telegram",
+      conversation: {
+        id: "chat-1",
+        kind: "dm",
+        title: overrides.conversationTitle,
+      },
+    },
+    receivedAt: 1000,
+    text,
   };
 }
