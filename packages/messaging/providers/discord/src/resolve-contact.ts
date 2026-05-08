@@ -1,6 +1,8 @@
 import { REST, Routes } from "discord.js";
 import {
   clipMessagingValidationError,
+  sanitizeMessagingContactHandle,
+  sanitizeMessagingContactLabel,
   type MessagingContactLookupRequest,
   type MessagingContactLookupResult,
 } from "@pwragent/messaging-interface";
@@ -40,17 +42,20 @@ export async function resolveContact(
       return {
         status: "ok",
         id: request.id,
-        displayName: guild.name ?? guild.id ?? request.id,
+        displayName: sanitizeOptionalContactLabel(guild.name)
+          ?? sanitizeOptionalContactLabel(guild.id)
+          ?? request.id,
         detail: "guild",
       };
     }
 
     const user = (await rest.get(Routes.user(request.id))) as DiscordLookupUser;
+    const handle = formatContactHandle(user.username);
     return {
       status: "ok",
       id: request.id,
       displayName: formatDiscordUserDisplayName(user),
-      handle: user.username ? `@${user.username}` : undefined,
+      handle,
       detail: "user",
     };
   } catch (error) {
@@ -61,13 +66,25 @@ export async function resolveContact(
 function formatDiscordUserDisplayName(
   user: DiscordLookupUser,
 ): string | undefined {
-  const username = user.discriminator && user.discriminator !== "0"
-    ? `${user.username ?? "unknown"}#${user.discriminator}`
-    : user.username;
-  const handle = user.username ? `@${user.username}` : undefined;
-  const display = user.global_name ?? undefined;
-  if (display && handle && display !== user.username) return `${display} (${handle})`;
-  return display ?? username ?? handle;
+  const username = sanitizeOptionalContactLabel(user.username);
+  const discriminator = sanitizeOptionalContactLabel(user.discriminator);
+  const legacyUsername = discriminator && discriminator !== "0"
+    ? sanitizeOptionalContactLabel(`${username ?? "unknown"} ${discriminator}`)
+    : username;
+  const handle = formatContactHandle(user.username);
+  const display = sanitizeOptionalContactLabel(user.global_name ?? undefined);
+  if (display && handle && display !== username) return `${display} (${handle})`;
+  return display ?? legacyUsername ?? handle;
+}
+
+function sanitizeOptionalContactLabel(value: string | undefined): string | undefined {
+  const sanitized = sanitizeMessagingContactLabel(value);
+  return sanitized || undefined;
+}
+
+function formatContactHandle(value: string | undefined): string | undefined {
+  const sanitized = sanitizeMessagingContactHandle(value);
+  return sanitized ? `@${sanitized}` : undefined;
 }
 
 function lookupFailure(id: string, error: unknown): MessagingContactLookupResult {

@@ -42,6 +42,34 @@ describe("Mattermost resolveContact", () => {
     expect(init.headers.Authorization).toBe("Bearer token");
   });
 
+  it("sanitizes provider-controlled names from the REST API", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "user-1",
+          username: "hun<tharo>",
+          nickname: "<img src=x onerror=alert(1)>Harold\u202e",
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await resolveContact(
+      {
+        botToken: "token",
+        serverUrl: "https://chat.example.com",
+      },
+      { id: "user-1", kind: "user" },
+      { fetch: fetchMock as unknown as typeof fetch },
+    );
+
+    expect(result).toMatchObject({
+      status: "ok",
+      displayName: "Harold (@hun)",
+      handle: "@hun",
+    });
+  });
+
   it("returns unset without complete connection settings", async () => {
     const result = await resolveContact(
       { botToken: "", serverUrl: "https://chat.example.com" },

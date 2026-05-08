@@ -15,6 +15,10 @@ import type {
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared";
 import {
+  sanitizeMessagingContactHandle,
+  sanitizeMessagingContactLabel,
+} from "@pwragent/shared";
+import {
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
@@ -66,9 +70,11 @@ async function resolveMessagingContact(
       const botToken = service.resolveTelegramBotTokenSync();
       if (!botToken) return { status: "unset", id };
       const provider = await import("@pwragent/messaging-provider-telegram");
-      return provider.resolveContact(
-        { botToken },
-        { id, kind: request.kind },
+      return sanitizeMessagingContactLookupResponse(
+        await provider.resolveContact(
+          { botToken },
+          { id, kind: request.kind },
+        ),
       );
     }
     case "discord": {
@@ -78,9 +84,11 @@ async function resolveMessagingContact(
       const botToken = service.resolveDiscordBotTokenSync();
       if (!botToken) return { status: "unset", id };
       const provider = await import("@pwragent/messaging-provider-discord");
-      return provider.resolveContact(
-        { botToken },
-        { id, kind: request.kind },
+      return sanitizeMessagingContactLookupResponse(
+        await provider.resolveContact(
+          { botToken },
+          { id, kind: request.kind },
+        ),
       );
     }
     case "mattermost": {
@@ -91,12 +99,26 @@ async function resolveMessagingContact(
       const serverUrl = service.resolveMattermostServerUrlSync();
       if (!botToken || !serverUrl) return { status: "unset", id };
       const provider = await import("@pwragent/messaging-provider-mattermost");
-      return provider.resolveContact(
-        { botToken, serverUrl },
-        { id, kind: request.kind },
+      return sanitizeMessagingContactLookupResponse(
+        await provider.resolveContact(
+          { botToken, serverUrl },
+          { id, kind: request.kind },
+        ),
       );
     }
   }
+}
+
+function sanitizeMessagingContactLookupResponse(
+  response: DesktopMessagingContactLookupResponse,
+): DesktopMessagingContactLookupResponse {
+  const displayName = sanitizeMessagingContactLabel(response.displayName);
+  const handle = sanitizeMessagingContactHandle(response.handle);
+  return {
+    ...response,
+    displayName: displayName || undefined,
+    handle: handle ? `@${handle}` : undefined,
+  };
 }
 
 function unsupportedLookup(

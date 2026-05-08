@@ -186,7 +186,8 @@ describe("settings ipc", () => {
     providerMocks.resolveTelegramContact.mockResolvedValue({
       status: "ok",
       id: "8460800771",
-      displayName: "Harold (@huntharo)",
+      displayName: "<script>alert(1)</script>Harold\u202e",
+      handle: "@hunt<haro>",
     });
 
     registerSettingsIpcHandlers(service);
@@ -202,7 +203,8 @@ describe("settings ipc", () => {
       ),
     ).resolves.toMatchObject({
       status: "ok",
-      displayName: "Harold (@huntharo)",
+      displayName: "Harold",
+      handle: "@hunt",
     });
     expect(providerMocks.resolveTelegramContact).toHaveBeenCalledExactlyOnceWith(
       { botToken: "telegram-token" },
