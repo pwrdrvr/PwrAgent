@@ -94,6 +94,59 @@ describe("TelegramAdapter inbound security boundary", () => {
       }),
     );
   });
+
+  it("answers valid callbacks from unauthorized actors before dropping them", async () => {
+    const listener = vi.fn();
+    const bot = fakeBot();
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const adapter = new TelegramAdapter({
+      bot,
+      config: {
+        authorizedActorIds: ["42"],
+        botToken: "token",
+        channel: "telegram",
+      },
+      logger,
+      pollOnStart: false,
+    });
+    await adapter.start(listener);
+
+    await adapter.handleUpdate({
+      update_id: 102,
+      callback_query: {
+        id: "callback-1",
+        data: "tg:abcdefghijklmnopqr",
+        from: {
+          id: 99,
+          first_name: "Mallory",
+        },
+        message: {
+          chat: {
+            id: 99,
+            type: "private",
+          },
+          from: {
+            id: 42,
+            first_name: "Harold",
+          },
+          message_id: 202,
+          text: "Status",
+        },
+      },
+    });
+
+    expect(bot.api.answerCallbackQuery).toHaveBeenCalledWith({
+      callback_query_id: "callback-1",
+    });
+    expect(listener).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "telegram callback ignored unauthorized actor",
+      expect.objectContaining({
+        actorId: "99",
+        chatId: "99",
+      }),
+    );
+  });
 });
 
 function fakeBot(): TelegramBotLike & {

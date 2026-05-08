@@ -394,6 +394,112 @@ describe("discord adapter", () => {
       await adapter.stop();
     });
 
+    it("acknowledges valid component interactions from unauthorized guilds before dropping them", async () => {
+      const events: MessagingInboundEvent[] = [];
+      const createInteractionResponse = vi.fn(async () => {});
+      const gateway = new TestDiscordGateway();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const adapter = new DiscordAdapter({
+        api: createApi({ createInteractionResponse }),
+        config: {
+          applicationId: TEST_CHANNEL_ID,
+          authorizedActorIds: [TEST_USER_ID],
+          authorizedGuildIds: ["1480556454498009999"],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        logger,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "INTERACTION_CREATE",
+        d: {
+          channel_id: TEST_CHANNEL_ID,
+          data: {
+            custom_id: "dc:abcdefghijklmnopqrstuvwx",
+          },
+          guild_id: TEST_GUILD_ID,
+          id: TEST_MESSAGE_ID,
+          token: "token_ABC.123",
+          type: 3,
+          user: {
+            id: TEST_USER_ID,
+            username: "huntharo",
+          },
+        },
+      });
+
+      expect(createInteractionResponse).toHaveBeenCalledWith(TEST_MESSAGE_ID, "token_ABC.123", {
+        type: 6,
+      });
+      expect(events).toHaveLength(0);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "discord inbound ignored unauthorized guild",
+        expect.objectContaining({ guildId: TEST_GUILD_ID, surface: "interaction" }),
+      );
+      await adapter.stop();
+    });
+
+    it("defers valid slash commands from unauthorized actors before dropping them", async () => {
+      const events: MessagingInboundEvent[] = [];
+      const createInteractionResponse = vi.fn(async () => {});
+      const gateway = new TestDiscordGateway();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const adapter = new DiscordAdapter({
+        api: createApi({ createInteractionResponse }),
+        config: {
+          applicationId: TEST_CHANNEL_ID,
+          authorizedActorIds: ["1480556454498009999"],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        logger,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "INTERACTION_CREATE",
+        d: {
+          channel_id: TEST_CHANNEL_ID,
+          data: {
+            name: "resume",
+          },
+          guild_id: TEST_GUILD_ID,
+          id: TEST_MESSAGE_ID,
+          token: "token_ABC.123",
+          type: 2,
+          user: {
+            id: TEST_USER_ID,
+            username: "huntharo",
+          },
+        },
+      });
+
+      expect(createInteractionResponse).toHaveBeenCalledWith(TEST_MESSAGE_ID, "token_ABC.123", {
+        type: 5,
+      });
+      expect(events).toHaveLength(0);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "discord interaction ignored unauthorized actor",
+        expect.objectContaining({
+          actorId: TEST_USER_ID,
+          interactionKind: "command",
+        }),
+      );
+      await adapter.stop();
+    });
+
     it("dispatches `<@bot> resume` as a command event", async () => {
       const BOT_ID = "1480556454498009352";
       const events: MessagingInboundEvent[] = [];

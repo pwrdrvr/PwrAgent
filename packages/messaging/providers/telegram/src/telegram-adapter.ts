@@ -1160,6 +1160,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       return;
     }
     if (!this.isAuthorizedCallbackSource(callbackQuery)) {
+      await this.bot.api.answerCallbackQuery({
+        callback_query_id: callbackQuery.id,
+      });
       return;
     }
 

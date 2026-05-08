@@ -811,11 +811,22 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     if (!this.validateInteractionIdentifiers(interaction, actor)) {
       return;
     }
+
+    const customId = interaction.data?.custom_id ?? "";
+    const commandName = interaction.data?.name?.toLowerCase();
     if (!this.isAuthorizedInteractionSource(interaction, actor)) {
+      if (customId) {
+        await this.api.createInteractionResponse(interaction.id, interaction.token, {
+          type: 6,
+        });
+      } else if (commandName) {
+        await this.api.createInteractionResponse(interaction.id, interaction.token, {
+          type: 5,
+        });
+      }
       return;
     }
 
-    const customId = interaction.data?.custom_id ?? "";
     if (customId) {
       await this.api.createInteractionResponse(interaction.id, interaction.token, {
         type: 6,
@@ -824,7 +835,6 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return;
     }
 
-    const commandName = interaction.data?.name?.toLowerCase();
     if (commandName) {
       await this.api.createInteractionResponse(interaction.id, interaction.token, {
         type: 5,
