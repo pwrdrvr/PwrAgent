@@ -42,6 +42,14 @@ import {
   splitDiscordContent,
   textForDiscordIntent,
 } from "./discord-formatting.ts";
+import {
+  logDiscordInvalidIdentifier,
+  validateDiscordAttachmentUrl,
+  validateDiscordCustomId,
+  validateDiscordInteractionToken,
+  validateDiscordSnowflake,
+  type DiscordIdentifierField,
+} from "./validate-ids.ts";
 
 const DISCORD_DEFAULT_TYPING_SIGNAL_LEASE_MS = 15_000;
 const DISCORD_TYPING_SIGNAL_INTERVAL_MS = 4_000;
@@ -298,6 +306,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private static readonly BREADCRUMB_CACHE_CAP = 500;
   private readonly channelCache = new Map<string, DiscordChannelInfo>();
   private readonly guildCache = new Map<string, DiscordGuildInfo>();
+  private readonly unauthorizedGuildLogKeys = new Set<string>();
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private readonly options: DiscordAdapterOptions;
   private streamSurfaces = new Map<string, string>();
@@ -659,7 +668,27 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   private async handleMessageCreate(message: DiscordMessageCreateDispatch): Promise<void> {
     const listener = this.listener;
-    if (!listener || message.author.bot) {
+    if (!listener) {
+      return;
+    }
+    if (!this.validateMessageIdentifiers(message)) {
+      return;
+    }
+    if (message.author.bot) {
+      return;
+    }
+    const mentionRemainder =
+      message.content !== undefined
+        ? stripDiscordBotMention(
+            message.content,
+            this.options.config.applicationId,
+          )
+        : undefined;
+    if (
+      !this.isAuthorizedMessageSource(message, {
+        actionable: Boolean(mentionRemainder) || Boolean(message.content?.startsWith("/")),
+      })
+    ) {
       return;
     }
 
@@ -690,10 +719,6 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     // (the application id and bot user id were unified for bots
     // created since 2016).
     if (message.content !== undefined) {
-      const mentionRemainder = stripDiscordBotMention(
-        message.content,
-        this.options.config.applicationId,
-      );
       if (mentionRemainder !== undefined) {
         // Synthesize the slash form so the controller sees the same
         // `MessagingInboundCommandEvent` shape as a `/`-prefixed
@@ -783,8 +808,25 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     if (!listener || !actor) {
       return;
     }
+    if (!this.validateInteractionIdentifiers(interaction, actor)) {
+      return;
+    }
 
     const customId = interaction.data?.custom_id ?? "";
+    const commandName = interaction.data?.name?.toLowerCase();
+    if (!this.isAuthorizedInteractionSource(interaction, actor)) {
+      if (customId) {
+        await this.api.createInteractionResponse(interaction.id, interaction.token, {
+          type: 6,
+        });
+      } else if (commandName) {
+        await this.api.createInteractionResponse(interaction.id, interaction.token, {
+          type: 5,
+        });
+      }
+      return;
+    }
+
     if (customId) {
       await this.api.createInteractionResponse(interaction.id, interaction.token, {
         type: 6,
@@ -793,7 +835,6 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return;
     }
 
-    const commandName = interaction.data?.name?.toLowerCase();
     if (commandName) {
       await this.api.createInteractionResponse(interaction.id, interaction.token, {
         type: 5,
@@ -880,6 +921,150 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         },
       ),
     });
+  }
+
+  private validateMessageIdentifiers(message: DiscordMessageCreateDispatch): boolean {
+    return (
+      this.validateIdentifier("message.id", message.id, validateDiscordSnowflake)
+      && this.validateIdentifier("channel_id", message.channel_id, validateDiscordSnowflake)
+      && this.validateIdentifier("user.id", message.author.id, validateDiscordSnowflake)
+      && (message.guild_id === undefined
+        || this.validateIdentifier("guild_id", message.guild_id, validateDiscordSnowflake))
+      && this.validateAttachments(message.attachments ?? [])
+    );
+  }
+
+  private validateInteractionIdentifiers(
+    interaction: DiscordInteractionCreateDispatch,
+    actor: DiscordUser,
+  ): boolean {
+    return (
+      this.validateIdentifier("interaction.id", interaction.id, validateDiscordSnowflake)
+      && this.validateIdentifier("channel_id", interaction.channel_id, validateDiscordSnowflake)
+      && this.validateIdentifier("user.id", actor.id, validateDiscordSnowflake)
+      && this.validateIdentifier(
+        "interaction.token",
+        interaction.token,
+        validateDiscordInteractionToken,
+      )
+      && (this.options.config.applicationId === undefined
+        || this.validateIdentifier(
+          "application_id",
+          this.options.config.applicationId,
+          validateDiscordSnowflake,
+        ))
+      && (interaction.guild_id === undefined
+        || this.validateIdentifier("guild_id", interaction.guild_id, validateDiscordSnowflake))
+      && (interaction.message?.id === undefined
+        || this.validateIdentifier(
+          "message.id",
+          interaction.message.id,
+          validateDiscordSnowflake,
+        ))
+      && (interaction.data?.custom_id === undefined
+        || this.validateIdentifier(
+          "custom_id",
+          interaction.data.custom_id,
+          validateDiscordCustomId,
+        ))
+    );
+  }
+
+  private validateAttachments(
+    attachments: NonNullable<DiscordMessageCreateDispatch["attachments"]>,
+  ): boolean {
+    for (const attachment of attachments) {
+      if (
+        !this.validateIdentifier("attachment.id", attachment.id, validateDiscordSnowflake)
+        || !this.validateIdentifier(
+          "attachment.url",
+          attachment.url,
+          validateDiscordAttachmentUrl,
+        )
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private validateIdentifier(
+    field: DiscordIdentifierField,
+    value: unknown,
+    validator: (value: unknown) => ReturnType<typeof validateDiscordSnowflake>,
+  ): boolean {
+    const result = validator(value);
+    if (result.ok) {
+      return true;
+    }
+    logDiscordInvalidIdentifier({
+      field,
+      logger: this.options.logger,
+      reason: result.reason,
+      value,
+    });
+    return false;
+  }
+
+  private isAuthorizedMessageSource(
+    message: DiscordMessageCreateDispatch,
+    options: { actionable: boolean },
+  ): boolean {
+    if (!this.isAuthorizedGuild(message.guild_id, "message")) {
+      return false;
+    }
+    if (!this.authorizedActorIds.includes(message.author.id)) {
+      if (!message.guild_id || options.actionable) {
+        this.options.logger?.warn?.("discord inbound ignored unauthorized actor", {
+          actorId: message.author.id,
+          channelId: message.channel_id,
+          guildId: message.guild_id,
+          actionable: options.actionable,
+        });
+      }
+      return false;
+    }
+    return true;
+  }
+
+  private isAuthorizedInteractionSource(
+    interaction: DiscordInteractionCreateDispatch,
+    actor: DiscordUser,
+  ): boolean {
+    if (!this.isAuthorizedGuild(interaction.guild_id, "interaction")) {
+      return false;
+    }
+    if (!this.authorizedActorIds.includes(actor.id)) {
+      this.options.logger?.warn?.("discord interaction ignored unauthorized actor", {
+        actorId: actor.id,
+        channelId: interaction.channel_id,
+        guildId: interaction.guild_id,
+        interactionKind: interaction.data?.custom_id ? "component" : "command",
+      });
+      return false;
+    }
+    return true;
+  }
+
+  private isAuthorizedGuild(
+    guildId: string | undefined,
+    surface: "interaction" | "message",
+  ): boolean {
+    if (!guildId) {
+      return true;
+    }
+    const authorized = this.options.config.authorizedGuildIds ?? [];
+    if (authorized.length === 0 || authorized.includes(guildId)) {
+      return true;
+    }
+    if (!this.unauthorizedGuildLogKeys.has(guildId)) {
+      this.unauthorizedGuildLogKeys.add(guildId);
+      this.options.logger?.warn?.("discord inbound ignored unauthorized guild", {
+        guildId,
+        surface,
+      });
+    }
+    return false;
   }
 
   private async reconcileApplicationCommands(): Promise<void> {

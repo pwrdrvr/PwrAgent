@@ -1,5 +1,12 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  logMattermostInvalidIdentifier,
+  validateMattermostId,
+  validateMattermostOpaqueToken,
+  validateMattermostResponseUrl,
+  type MattermostIdentifierField,
+} from "./validate-ids.ts";
 
 /**
  * Localhost-bound HTTP listener that receives Mattermost interactive
@@ -317,6 +324,11 @@ export function createMattermostCallbackServer(
     const issuedAtRaw = numberField(context["issuedAt"]);
     const providedHmac = stringField(context["hmac"]);
 
+    if (!validateInteractiveCallbackIdentifiers(body, config.logger)) {
+      respondInteractiveAck();
+      return;
+    }
+
     if (!intentId || !actionId || issuedAtRaw === undefined || !providedHmac) {
       config.logger.warn("mattermost callback context missing required fields", {
         hasIntentId: Boolean(intentId),
@@ -338,8 +350,6 @@ export function createMattermostCallbackServer(
     if (!safeEqual(providedHmac, expectedHmac)) {
       // Always respond 200 — never reveal verification status to attackers.
       config.logger.warn("mattermost callback HMAC verification failed", {
-        intentId,
-        actionId,
         issuedAt: issuedAtRaw,
       });
       respondInteractiveAck();
@@ -378,6 +388,10 @@ export function createMattermostCallbackServer(
       cfg.logger.warn("mattermost slash command body unparseable; dropping", {
         bytes: rawBody.length,
       });
+      respond();
+      return;
+    }
+    if (!validateSlashCommandIdentifiers(body, cfg.logger)) {
       respond();
       return;
     }
@@ -488,6 +502,64 @@ function numberField(value: unknown): number | undefined {
     return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;
+}
+
+function validateInteractiveCallbackIdentifiers(
+  body: MattermostInteractiveCallbackBody,
+  logger: MattermostCallbackServerConfig["logger"],
+): boolean {
+  return (
+    validateMattermostIdentifier("user_id", body.user_id, validateMattermostId, logger)
+    && validateMattermostIdentifier("channel_id", body.channel_id, validateMattermostId, logger)
+    && (body.team_id === undefined
+      || validateMattermostIdentifier("team_id", body.team_id, validateMattermostId, logger))
+    && (body.post_id === undefined
+      || validateMattermostIdentifier("post_id", body.post_id, validateMattermostId, logger))
+    && (body.trigger_id === undefined
+      || validateMattermostIdentifier("trigger_id", body.trigger_id, validateMattermostId, logger))
+  );
+}
+
+function validateSlashCommandIdentifiers(
+  body: MattermostSlashCommandBody,
+  logger: MattermostCallbackServerConfig["logger"],
+): boolean {
+  return (
+    validateMattermostIdentifier("token", body.token, validateMattermostOpaqueToken, logger)
+    && validateMattermostIdentifier("team_id", body.team_id, validateMattermostId, logger)
+    && validateMattermostIdentifier("channel_id", body.channel_id, validateMattermostId, logger)
+    && validateMattermostIdentifier("user_id", body.user_id, validateMattermostId, logger)
+    && (body.trigger_id === undefined
+      || validateMattermostIdentifier("trigger_id", body.trigger_id, validateMattermostId, logger))
+    && (body.root_id === undefined
+      || validateMattermostIdentifier("root_id", body.root_id, validateMattermostId, logger))
+    && (body.response_url === undefined
+      || validateMattermostIdentifier(
+        "response_url",
+        body.response_url,
+        validateMattermostResponseUrl,
+        logger,
+      ))
+  );
+}
+
+function validateMattermostIdentifier(
+  field: MattermostIdentifierField,
+  value: unknown,
+  validator: (value: unknown) => ReturnType<typeof validateMattermostId>,
+  logger: MattermostCallbackServerConfig["logger"],
+): boolean {
+  const result = validator(value);
+  if (result.ok) {
+    return true;
+  }
+  logMattermostInvalidIdentifier({
+    field,
+    logger,
+    reason: result.reason,
+    value,
+  });
+  return false;
 }
 
 function safeEqual(left: string, right: string): boolean {

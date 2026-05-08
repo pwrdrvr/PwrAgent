@@ -15,6 +15,10 @@ import {
 import type { DiscordApplicationCommand } from "../discord-commands.ts";
 
 const unknownChannelError = new Error("DiscordAPIError[10003]: Unknown Channel");
+const TEST_CHANNEL_ID = "1480556454498009352";
+const TEST_GUILD_ID = "1480556454498009353";
+const TEST_MESSAGE_ID = "1480556454498009354";
+const TEST_USER_ID = "1480556454498009355";
 
 describe("discord adapter", () => {
   it("returns a failed delivery when a stale channel rejects new messages", async () => {
@@ -24,7 +28,7 @@ describe("discord adapter", () => {
         createMessage: vi.fn().mockRejectedValue(unknownChannelError),
       }),
       config: {
-        authorizedActorIds: ["user-1"],
+        authorizedActorIds: [TEST_USER_ID],
         botToken: "token",
         channel: "discord",
       },
@@ -59,7 +63,7 @@ describe("discord adapter", () => {
         updateMessage: vi.fn().mockRejectedValue(unknownChannelError),
       }),
       config: {
-        authorizedActorIds: ["user-1"],
+        authorizedActorIds: [TEST_USER_ID],
         botToken: "token",
         channel: "discord",
       },
@@ -103,7 +107,7 @@ describe("discord adapter", () => {
     const adapter = new DiscordAdapter({
       api: createApi({ updateChannelName }),
       config: {
-        authorizedActorIds: ["user-1"],
+        authorizedActorIds: [TEST_USER_ID],
         botToken: "token",
         channel: "discord",
       },
@@ -162,7 +166,7 @@ describe("discord adapter", () => {
     const adapter = new DiscordAdapter({
       api: createApi({ createMessage }),
       config: {
-        authorizedActorIds: ["user-1"],
+        authorizedActorIds: [TEST_USER_ID],
         botToken: "token",
         channel: "discord",
       },
@@ -219,7 +223,7 @@ describe("discord adapter", () => {
     const adapter = new DiscordAdapter({
       api: createApi({ createMessage }),
       config: {
-        authorizedActorIds: ["user-1"],
+        authorizedActorIds: [TEST_USER_ID],
         botToken: "token",
         channel: "discord",
       },
@@ -300,6 +304,202 @@ describe("discord adapter", () => {
   });
 
   describe("text mention dispatch", () => {
+    it("drops messages from unauthorized guilds before listener dispatch", async () => {
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          authorizedActorIds: [TEST_USER_ID],
+          authorizedGuildIds: ["1480556454498009999"],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        logger,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          authorBot: false,
+          content: "/status",
+          id: "unauthorized-guild-msg",
+        }),
+      });
+
+      expect(events).toHaveLength(0);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "discord inbound ignored unauthorized guild",
+        expect.objectContaining({ guildId: TEST_GUILD_ID }),
+      );
+      await adapter.stop();
+    });
+
+    it("drops malformed component IDs before acknowledging the interaction", async () => {
+      const events: MessagingInboundEvent[] = [];
+      const createInteractionResponse = vi.fn(async () => {});
+      const gateway = new TestDiscordGateway();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const adapter = new DiscordAdapter({
+        api: createApi({ createInteractionResponse }),
+        config: {
+          applicationId: TEST_CHANNEL_ID,
+          authorizedActorIds: [TEST_USER_ID],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        logger,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "INTERACTION_CREATE",
+        d: {
+          channel_id: TEST_CHANNEL_ID,
+          data: {
+            custom_id: "bad\r\ncustom-id",
+          },
+          guild_id: TEST_GUILD_ID,
+          id: TEST_MESSAGE_ID,
+          token: "token_ABC.123",
+          type: 3,
+          user: {
+            id: TEST_USER_ID,
+            username: "huntharo",
+          },
+        },
+      });
+
+      expect(createInteractionResponse).not.toHaveBeenCalled();
+      expect(events).toHaveLength(0);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "messaging inbound identifier rejected",
+        expect.objectContaining({
+          platform: "discord",
+          identifier_field: "custom_id",
+        }),
+      );
+      await adapter.stop();
+    });
+
+    it("acknowledges valid component interactions from unauthorized guilds before dropping them", async () => {
+      const events: MessagingInboundEvent[] = [];
+      const createInteractionResponse = vi.fn(async () => {});
+      const gateway = new TestDiscordGateway();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const adapter = new DiscordAdapter({
+        api: createApi({ createInteractionResponse }),
+        config: {
+          applicationId: TEST_CHANNEL_ID,
+          authorizedActorIds: [TEST_USER_ID],
+          authorizedGuildIds: ["1480556454498009999"],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        logger,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "INTERACTION_CREATE",
+        d: {
+          channel_id: TEST_CHANNEL_ID,
+          data: {
+            custom_id: "dc:abcdefghijklmnopqrstuvwx",
+          },
+          guild_id: TEST_GUILD_ID,
+          id: TEST_MESSAGE_ID,
+          token: "token_ABC.123",
+          type: 3,
+          user: {
+            id: TEST_USER_ID,
+            username: "huntharo",
+          },
+        },
+      });
+
+      expect(createInteractionResponse).toHaveBeenCalledWith(TEST_MESSAGE_ID, "token_ABC.123", {
+        type: 6,
+      });
+      expect(events).toHaveLength(0);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "discord inbound ignored unauthorized guild",
+        expect.objectContaining({ guildId: TEST_GUILD_ID, surface: "interaction" }),
+      );
+      await adapter.stop();
+    });
+
+    it("defers valid slash commands from unauthorized actors before dropping them", async () => {
+      const events: MessagingInboundEvent[] = [];
+      const createInteractionResponse = vi.fn(async () => {});
+      const gateway = new TestDiscordGateway();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const adapter = new DiscordAdapter({
+        api: createApi({ createInteractionResponse }),
+        config: {
+          applicationId: TEST_CHANNEL_ID,
+          authorizedActorIds: ["1480556454498009999"],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        logger,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "INTERACTION_CREATE",
+        d: {
+          channel_id: TEST_CHANNEL_ID,
+          data: {
+            name: "resume",
+          },
+          guild_id: TEST_GUILD_ID,
+          id: TEST_MESSAGE_ID,
+          token: "token_ABC.123",
+          type: 2,
+          user: {
+            id: TEST_USER_ID,
+            username: "huntharo",
+          },
+        },
+      });
+
+      expect(createInteractionResponse).toHaveBeenCalledWith(TEST_MESSAGE_ID, "token_ABC.123", {
+        type: 5,
+      });
+      expect(events).toHaveLength(0);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "discord interaction ignored unauthorized actor",
+        expect.objectContaining({
+          actorId: TEST_USER_ID,
+          interactionKind: "command",
+        }),
+      );
+      await adapter.stop();
+    });
+
     it("dispatches `<@bot> resume` as a command event", async () => {
       const BOT_ID = "1480556454498009352";
       const events: MessagingInboundEvent[] = [];
@@ -308,7 +508,7 @@ describe("discord adapter", () => {
         api: createApi(),
         config: {
           applicationId: BOT_ID,
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [TEST_USER_ID],
           botToken: "token",
           channel: "discord",
         },
@@ -348,7 +548,7 @@ describe("discord adapter", () => {
         api: createApi(),
         config: {
           applicationId: BOT_ID,
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [TEST_USER_ID],
           botToken: "token",
           channel: "discord",
         },
@@ -387,7 +587,7 @@ describe("discord adapter", () => {
         api: createApi(),
         config: {
           applicationId: BOT_ID,
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [TEST_USER_ID],
           botToken: "token",
           channel: "discord",
         },
@@ -433,7 +633,7 @@ describe("discord adapter", () => {
         api: createApi(),
         config: {
           applicationId: BOT_ID,
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [TEST_USER_ID],
           botToken: "token",
           channel: "discord",
         },
@@ -478,7 +678,7 @@ describe("discord adapter", () => {
         api: createApi(),
         config: {
           applicationId: BOT_ID,
-          authorizedActorIds: ["user-1"],
+          authorizedActorIds: [TEST_USER_ID],
           botToken: "token",
           channel: "discord",
         },
@@ -534,19 +734,30 @@ function messageDispatch(params: {
   id: string;
 }): DiscordMessageCreateDispatch {
   return {
-    attachments: params.attachments,
+    attachments: params.attachments?.map((attachment) => ({
+      ...attachment,
+      id: snowflakeForTestId(attachment.id),
+    })),
     author: {
       bot: params.authorBot,
-      id: "user-1",
+      id: TEST_USER_ID,
       username: "huntharo",
     },
-    channel_id: "channel-1",
+    channel_id: TEST_CHANNEL_ID,
     channel_type: 0,
     content: params.content,
-    guild_id: "guild-1",
-    id: params.id,
+    guild_id: TEST_GUILD_ID,
+    id: snowflakeForTestId(params.id),
     is_thread: false,
   };
+}
+
+function snowflakeForTestId(id: string): string {
+  let hash = 0n;
+  for (let index = 0; index < id.length; index += 1) {
+    hash = (hash * 31n + BigInt(id.charCodeAt(index))) & 0xfffffn;
+  }
+  return String(1480556454498009352n + hash);
 }
 
 function discordAudit(): MessagingAuditContext {
@@ -587,7 +798,7 @@ function createApi(overrides: Partial<DiscordApi> = {}): DiscordApi {
     updateChannelName: async () => {},
     updateApplicationCommand: async () => applicationCommand(),
     updateInteractionOriginalResponse: async () => ({
-      channel_id: "channel-1",
+      channel_id: TEST_CHANNEL_ID,
       id: "message-1",
     }),
     updateMessage: async (channelId, messageId) => ({

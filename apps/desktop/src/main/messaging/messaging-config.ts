@@ -7,6 +7,7 @@ import type { DesktopSettingsService } from "../settings/desktop-settings-servic
 import { getMainLogger } from "../log";
 import {
   DISCORD_APPLICATION_ID_ENV,
+  DISCORD_AUTHORIZED_GUILDS_ENV,
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
@@ -25,6 +26,7 @@ import {
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
+  TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
   TELEGRAM_STREAMING_RESPONSES_ENV,
@@ -35,6 +37,7 @@ import {
 
 export {
   DISCORD_APPLICATION_ID_ENV,
+  DISCORD_AUTHORIZED_GUILDS_ENV,
   DISCORD_AUTHORIZED_USER_IDS_ENV,
   DISCORD_BOT_TOKEN_ENV,
   DISCORD_ENABLED_ENV,
@@ -53,6 +56,7 @@ export {
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
   TELEGRAM_AUTHORIZED_USER_IDS_ENV,
+  TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV,
   TELEGRAM_BOT_TOKEN_ENV,
   TELEGRAM_ENABLED_ENV,
   TELEGRAM_STREAMING_RESPONSES_ENV,
@@ -85,8 +89,12 @@ export function loadDesktopMessagingConfig(
 ): DesktopMessagingConfig {
   const telegramBotToken = readEnv(env, TELEGRAM_BOT_TOKEN_ENV, "TELEGRAM_BOT_TOKEN");
   const telegramAuthorizedActorIds = parseList(env[TELEGRAM_AUTHORIZED_USER_IDS_ENV]);
+  const telegramAuthorizedSupergroupIds = parseList(
+    env[TELEGRAM_AUTHORIZED_SUPERGROUPS_ENV],
+  );
   const discordBotToken = readEnv(env, DISCORD_BOT_TOKEN_ENV, "DISCORD_BOT_TOKEN");
   const discordAuthorizedActorIds = parseList(env[DISCORD_AUTHORIZED_USER_IDS_ENV]);
+  const discordAuthorizedGuildIds = parseList(env[DISCORD_AUTHORIZED_GUILDS_ENV]);
   const mattermostBotToken = readEnv(env, MATTERMOST_BOT_TOKEN_ENV);
   const mattermostServerUrl = readEnv(env, MATTERMOST_SERVER_URL_ENV);
   const mattermostCallbackBaseUrl = readEnv(env, MATTERMOST_CALLBACK_BASE_URL_ENV);
@@ -122,6 +130,7 @@ export function loadDesktopMessagingConfig(
               TELEGRAM_STREAMING_RESPONSES_ENV,
             ).value ?? false,
             authorizedActorIds: telegramAuthorizedActorIds,
+            authorizedSupergroupIds: telegramAuthorizedSupergroupIds,
           },
         }
       : {}),
@@ -137,6 +146,7 @@ export function loadDesktopMessagingConfig(
               DISCORD_STREAMING_RESPONSES_ENV,
             ).value ?? false,
             authorizedActorIds: discordAuthorizedActorIds,
+            authorizedGuildIds: discordAuthorizedGuildIds,
           },
         }
       : {}),
@@ -191,9 +201,15 @@ export async function loadDesktopMessagingConfigFromSettings(
   const telegramAuthorizedActorIds =
     envConfig.telegram?.authorizedActorIds
     ?? snapshot.messaging.telegram.authorizedUserIds.value;
+  const telegramAuthorizedSupergroupIds =
+    envConfig.telegram?.authorizedSupergroupIds
+    ?? snapshot.messaging.telegram.authorizedSupergroups.value;
   const discordAuthorizedActorIds =
     envConfig.discord?.authorizedActorIds
     ?? snapshot.messaging.discord.authorizedUserIds.value;
+  const discordAuthorizedGuildIds =
+    envConfig.discord?.authorizedGuildIds
+    ?? snapshot.messaging.discord.authorizedGuilds.value;
   const mattermostAuthorizedActorIds =
     envConfig.mattermost?.authorizedActorIds
     ?? snapshot.messaging.mattermost.authorizedUserIds.value;
@@ -262,6 +278,7 @@ export async function loadDesktopMessagingConfigFromSettings(
           botToken: telegramBotToken!,
           streamingResponses: snapshot.messaging.telegram.streamingResponses.value,
           authorizedActorIds: telegramAuthorizedActorIds,
+          authorizedSupergroupIds: telegramAuthorizedSupergroupIds,
         },
       }
     : {};
@@ -285,6 +302,7 @@ export async function loadDesktopMessagingConfigFromSettings(
             || undefined,
           streamingResponses: snapshot.messaging.discord.streamingResponses.value,
           authorizedActorIds: discordAuthorizedActorIds,
+          authorizedGuildIds: discordAuthorizedGuildIds,
         },
       }
     : {};

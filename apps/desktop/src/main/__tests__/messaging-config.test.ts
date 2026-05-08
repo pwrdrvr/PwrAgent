@@ -44,6 +44,7 @@ describe("desktop messaging config", () => {
         botToken: "tg-token",
         streamingResponses: false,
         authorizedActorIds: ["user-1", "user-2"],
+        authorizedSupergroupIds: [],
       },
     });
   });
@@ -116,6 +117,7 @@ describe("desktop messaging config", () => {
         botToken: "settings-telegram-token",
         streamingResponses: true,
         authorizedActorIds: ["111111111"],
+        authorizedSupergroupIds: [],
       },
       discord: {
         channel: "discord",
@@ -124,6 +126,7 @@ describe("desktop messaging config", () => {
         botToken: "settings-discord-token",
         streamingResponses: true,
         authorizedActorIds: ["222222222"],
+        authorizedGuildIds: [],
       },
     });
   });

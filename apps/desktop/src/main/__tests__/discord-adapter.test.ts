@@ -27,6 +27,14 @@ import type {
 } from "@pwragent/messaging-provider-discord";
 
 const tempDirs: string[] = [];
+const DISCORD_APP_ID = "1480556454498009350";
+const DISCORD_CHANNEL_ID = "1480556454498009352";
+const DISCORD_GUILD_ID = "1480556454498009353";
+const DISCORD_MESSAGE_ID = "1480556454498009354";
+const DISCORD_USER_ID = "1480556454498009355";
+const DISCORD_OTHER_USER_ID = "1480556454498009356";
+const DISCORD_INTERACTION_ID = "1480556454498009357";
+const DISCORD_ATTACHMENT_ID = "1480556454498009358";
 
 afterEach(async () => {
   await Promise.all(
@@ -64,17 +72,17 @@ describe("DiscordAdapter", () => {
     const adapter = new DiscordAdapter({
       api: api as unknown as DiscordApi,
       config: {
-        applicationId: "app-1",
+        applicationId: DISCORD_APP_ID,
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [DISCORD_USER_ID],
       },
       gateway: createGateway(),
     });
 
     await adapter.start(async () => {});
 
-    expect(api.listApplicationCommands).toHaveBeenCalledWith("app-1");
+    expect(api.listApplicationCommands).toHaveBeenCalledWith(DISCORD_APP_ID);
     expect(api.createApplicationCommand).not.toHaveBeenCalled();
     expect(api.updateApplicationCommand).not.toHaveBeenCalled();
     expect(api.deleteApplicationCommand).not.toHaveBeenCalled();
@@ -100,19 +108,19 @@ describe("DiscordAdapter", () => {
     const adapter = new DiscordAdapter({
       api: api as unknown as DiscordApi,
       config: {
-        applicationId: "app-1",
+        applicationId: DISCORD_APP_ID,
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [DISCORD_USER_ID],
       },
       gateway: createGateway(),
     });
 
     await adapter.start(async () => {});
 
-    expect(api.deleteApplicationCommand).toHaveBeenCalledWith("app-1", "cmd-legacy");
+    expect(api.deleteApplicationCommand).toHaveBeenCalledWith(DISCORD_APP_ID, "cmd-legacy");
     expect(api.updateApplicationCommand).toHaveBeenCalledWith(
-      "app-1",
+      DISCORD_APP_ID,
       "cmd-resume",
       expect.objectContaining({
         name: "resume",
@@ -120,7 +128,7 @@ describe("DiscordAdapter", () => {
     );
     expect(api.createApplicationCommand).toHaveBeenCalledTimes(1);
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
-      "app-1",
+      DISCORD_APP_ID,
       expect.objectContaining({
         name: "detach",
       }),
@@ -132,20 +140,20 @@ describe("DiscordAdapter", () => {
     const adapter = new DiscordAdapter({
       api: api as unknown as DiscordApi,
       config: {
-        applicationId: "app-1",
+        applicationId: DISCORD_APP_ID,
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [DISCORD_USER_ID],
       },
       gateway: createGateway(),
     });
 
     await adapter.start(async () => {});
 
-    expect(api.listApplicationCommands).toHaveBeenCalledWith("app-1");
+    expect(api.listApplicationCommands).toHaveBeenCalledWith(DISCORD_APP_ID);
     expect(api.createApplicationCommand).toHaveBeenCalledTimes(3);
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
-      "app-1",
+      DISCORD_APP_ID,
       expect.objectContaining({
         name: "resume",
       }),
@@ -162,7 +170,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [DISCORD_USER_ID],
       },
       gateway,
       now: () => 1000,
@@ -173,7 +181,7 @@ describe("DiscordAdapter", () => {
     });
     await gateway.emit({
       d: {
-        channel_id: "channel-1",
+        channel_id: DISCORD_CHANNEL_ID,
         data: {
           name: "resume",
           options: [
@@ -183,12 +191,12 @@ describe("DiscordAdapter", () => {
             },
           ],
         },
-        guild_id: "guild-1",
-        id: "interaction-command-1",
+        guild_id: DISCORD_GUILD_ID,
+        id: DISCORD_INTERACTION_ID,
         member: {
           nick: "Ada",
           user: {
-            id: "42",
+            id: DISCORD_USER_ID,
             username: "ada",
           },
         },
@@ -201,7 +209,7 @@ describe("DiscordAdapter", () => {
     });
 
     expect(api.createInteractionResponse).toHaveBeenCalledWith(
-      "interaction-command-1",
+      DISCORD_INTERACTION_ID,
       "interaction-token",
       {
         type: 5,
@@ -217,21 +225,21 @@ describe("DiscordAdapter", () => {
 
   it("renders slash command responses through the deferred interaction response", async () => {
     const harness = await createControllerHarness({
-      applicationId: "app-1",
+      applicationId: DISCORD_APP_ID,
     });
 
     await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
     await harness.gateway.emit({
       d: {
-        channel_id: "channel-1",
+        channel_id: DISCORD_CHANNEL_ID,
         data: {
           name: "resume",
         },
-        guild_id: "guild-1",
-        id: "interaction-command-1",
+        guild_id: DISCORD_GUILD_ID,
+        id: DISCORD_INTERACTION_ID,
         member: {
           user: {
-            id: "42",
+            id: DISCORD_USER_ID,
             username: "ada",
           },
         },
@@ -244,7 +252,7 @@ describe("DiscordAdapter", () => {
     });
 
     expect(harness.api.createInteractionResponse).toHaveBeenCalledWith(
-      "interaction-command-1",
+      DISCORD_INTERACTION_ID,
       "interaction-token",
       {
         type: 5,
@@ -252,7 +260,7 @@ describe("DiscordAdapter", () => {
     );
     expect(harness.api.createMessage).not.toHaveBeenCalled();
     expect(harness.api.updateInteractionOriginalResponse).toHaveBeenCalledWith(
-      "app-1",
+      DISCORD_APP_ID,
       "interaction-token",
       expect.objectContaining({
         content: expect.stringContaining("Choose a thread to resume"),
@@ -268,13 +276,13 @@ describe("DiscordAdapter", () => {
     await harness.gateway.emit({
       d: {
         author: {
-          id: "42",
+          id: DISCORD_USER_ID,
           username: "ada",
         },
-        channel_id: "channel-1",
+        channel_id: DISCORD_CHANNEL_ID,
         content: "/resume",
-        guild_id: "guild-1",
-        id: "message-1",
+        guild_id: DISCORD_GUILD_ID,
+        id: DISCORD_MESSAGE_ID,
       },
       op: 0,
       s: 1,
@@ -283,7 +291,7 @@ describe("DiscordAdapter", () => {
 
     const request = harness.api.createMessage.mock.calls.at(-1)?.[1];
     expect(harness.api.createMessage).toHaveBeenCalledWith(
-      "channel-1",
+      DISCORD_CHANNEL_ID,
       expect.objectContaining({
         allowed_mentions: {
           parse: [],
@@ -340,7 +348,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [DISCORD_USER_ID],
       },
       gateway: createGateway(),
       now: () => 1000,
@@ -349,12 +357,12 @@ describe("DiscordAdapter", () => {
     const result = await adapter.deliver({
       audit: {
         actor: {
-          platformUserId: "42",
+          platformUserId: DISCORD_USER_ID,
         },
         channel: {
           channel: "discord",
           conversation: {
-            id: "channel-1",
+            id: DISCORD_CHANNEL_ID,
             kind: "dm",
           },
         },
@@ -388,7 +396,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [DISCORD_USER_ID],
         streamingResponses: true,
       },
       gateway: createGateway(),
@@ -398,12 +406,12 @@ describe("DiscordAdapter", () => {
     const baseIntent = {
       audit: {
         actor: {
-          platformUserId: "42",
+          platformUserId: DISCORD_USER_ID,
         },
         channel: {
           channel: "discord",
           conversation: {
-            id: "channel-1",
+            id: DISCORD_CHANNEL_ID,
             kind: "dm",
           },
         },
@@ -437,18 +445,18 @@ describe("DiscordAdapter", () => {
     expect(first).toMatchObject({
       outcome: "presented",
       surface: {
-        id: "message-1",
+        id: DISCORD_MESSAGE_ID,
       },
     });
     expect(second).toMatchObject({
       outcome: "updated",
       surface: {
-        id: "message-1",
+        id: DISCORD_MESSAGE_ID,
       },
     });
     expect(api.createMessage).toHaveBeenCalledTimes(1);
     expect(api.createMessage).toHaveBeenCalledWith(
-      "channel-1",
+      DISCORD_CHANNEL_ID,
       expect.objectContaining({
         allowed_mentions: {
           parse: [],
@@ -460,8 +468,8 @@ describe("DiscordAdapter", () => {
       }),
     );
     expect(api.updateMessage).toHaveBeenCalledWith(
-      "channel-1",
-      "message-1",
+      DISCORD_CHANNEL_ID,
+      DISCORD_MESSAGE_ID,
       expect.objectContaining({
         content: "Hello world",
       }),
@@ -477,13 +485,13 @@ describe("DiscordAdapter", () => {
     await harness.gateway.emit({
       d: {
         author: {
-          id: "42",
+          id: DISCORD_USER_ID,
           username: "ada",
         },
-        channel_id: "channel-1",
+        channel_id: DISCORD_CHANNEL_ID,
         content: "/resume",
-        guild_id: "guild-1",
-        id: "message-1",
+        guild_id: DISCORD_GUILD_ID,
+        id: DISCORD_MESSAGE_ID,
       },
       op: 0,
       s: 1,
@@ -501,20 +509,20 @@ describe("DiscordAdapter", () => {
 
     await harness.gateway.emit({
       d: {
-        channel_id: "channel-1",
+        channel_id: DISCORD_CHANNEL_ID,
         data: {
           custom_id: nextCustomId,
         },
-        guild_id: "guild-1",
-        id: "interaction-1",
+        guild_id: DISCORD_GUILD_ID,
+        id: DISCORD_INTERACTION_ID,
         member: {
           user: {
-            id: "42",
+            id: DISCORD_USER_ID,
             username: "ada",
           },
         },
         message: {
-          id: "message-1",
+          id: DISCORD_MESSAGE_ID,
         },
         token: "interaction-token",
         type: 3,
@@ -526,8 +534,8 @@ describe("DiscordAdapter", () => {
 
     expect(harness.api.createMessage).toHaveBeenCalledTimes(1);
     expect(harness.api.updateMessage).toHaveBeenCalledWith(
-      "channel-1",
-      "message-1",
+      DISCORD_CHANNEL_ID,
+      DISCORD_MESSAGE_ID,
       expect.objectContaining({
         content: expect.stringContaining("Page 2/2"),
       }),
@@ -560,13 +568,13 @@ describe("DiscordAdapter", () => {
     await harness.gateway.emit({
       d: {
         author: {
-          id: "42",
+          id: DISCORD_USER_ID,
           username: "ada",
         },
-        channel_id: "channel-1",
+        channel_id: DISCORD_CHANNEL_ID,
         content: "/resume",
-        guild_id: "guild-1",
-        id: "message-1",
+        guild_id: DISCORD_GUILD_ID,
+        id: DISCORD_MESSAGE_ID,
       },
       op: 0,
       s: 1,
@@ -582,20 +590,20 @@ describe("DiscordAdapter", () => {
 
     await harness.gateway.emit({
       d: {
-        channel_id: "channel-1",
+        channel_id: DISCORD_CHANNEL_ID,
         data: {
           custom_id: cancelCustomId,
         },
-        guild_id: "guild-1",
-        id: "interaction-1",
+        guild_id: DISCORD_GUILD_ID,
+        id: DISCORD_INTERACTION_ID,
         member: {
           user: {
-            id: "42",
+            id: DISCORD_USER_ID,
             username: "ada",
           },
         },
         message: {
-          id: "message-1",
+          id: DISCORD_MESSAGE_ID,
         },
         token: "interaction-token",
         type: 3,
@@ -607,8 +615,8 @@ describe("DiscordAdapter", () => {
 
     expect(harness.api.createMessage).toHaveBeenCalledTimes(1);
     expect(harness.api.updateMessage).toHaveBeenCalledWith(
-      "channel-1",
-      "message-1",
+      DISCORD_CHANNEL_ID,
+      DISCORD_MESSAGE_ID,
       expect.objectContaining({
         components: [],
         content: "Resume cancelled\n\nNo thread binding changed.",
@@ -623,7 +631,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [DISCORD_USER_ID],
       },
       gateway: createGateway(),
       now: () => 1000,
@@ -637,14 +645,14 @@ describe("DiscordAdapter", () => {
       state: "active",
       audit: {
         actor: {
-          platformUserId: "42",
+          platformUserId: DISCORD_USER_ID,
         },
         channel: {
           channel: "discord",
           conversation: {
-            id: "channel-1",
+            id: DISCORD_CHANNEL_ID,
             kind: "channel",
-            parentId: "guild-1",
+            parentId: DISCORD_GUILD_ID,
           },
         },
         occurredAt: 1000,
@@ -658,14 +666,14 @@ describe("DiscordAdapter", () => {
       state: "idle",
       audit: {
         actor: {
-          platformUserId: "42",
+          platformUserId: DISCORD_USER_ID,
         },
         channel: {
           channel: "discord",
           conversation: {
-            id: "channel-1",
+            id: DISCORD_CHANNEL_ID,
             kind: "channel",
-            parentId: "guild-1",
+            parentId: DISCORD_GUILD_ID,
           },
         },
         occurredAt: 1000,
@@ -674,7 +682,7 @@ describe("DiscordAdapter", () => {
 
     expect(activeResult.outcome).toBe("signaled");
     expect(idleResult.outcome).toBe("signaled");
-    expect(api.sendTyping).toHaveBeenCalledWith("channel-1");
+    expect(api.sendTyping).toHaveBeenCalledWith(DISCORD_CHANNEL_ID);
     expect(api.createMessage).not.toHaveBeenCalled();
   });
 
@@ -685,7 +693,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [DISCORD_USER_ID],
       },
       gateway: createGateway(),
       now: () => 1000,
@@ -702,14 +710,14 @@ describe("DiscordAdapter", () => {
       },
       audit: {
         actor: {
-          platformUserId: "42",
+          platformUserId: DISCORD_USER_ID,
         },
         channel: {
           channel: "discord",
           conversation: {
-            id: "channel-1",
+            id: DISCORD_CHANNEL_ID,
             kind: "channel",
-            parentId: "guild-1",
+            parentId: DISCORD_GUILD_ID,
           },
         },
         occurredAt: 1000,
@@ -717,7 +725,7 @@ describe("DiscordAdapter", () => {
     });
 
     expect(pinResult.outcome).toBe("pinned");
-    expect(api.pinMessage).toHaveBeenCalledWith("channel-1", "message-1");
+    expect(api.pinMessage).toHaveBeenCalledWith(DISCORD_CHANNEL_ID, DISCORD_MESSAGE_ID);
 
     const unpinResult = await adapter.deliver({
       id: "dismiss-1",
@@ -728,18 +736,18 @@ describe("DiscordAdapter", () => {
       },
       targetSurface: {
         channel: "discord",
-        id: "message-1",
+        id: DISCORD_MESSAGE_ID,
         state: {
           opaque: {
-            channelId: "channel-1",
-            messageId: "message-1",
+            channelId: DISCORD_CHANNEL_ID,
+            messageId: DISCORD_MESSAGE_ID,
           },
         },
       },
     });
 
     expect(unpinResult.outcome).toBe("unpinned");
-    expect(api.unpinMessage).toHaveBeenCalledWith("channel-1", "message-1");
+    expect(api.unpinMessage).toHaveBeenCalledWith(DISCORD_CHANNEL_ID, DISCORD_MESSAGE_ID);
   });
 
   it("expires Discord typing activity when no idle signal arrives", async () => {
@@ -751,7 +759,7 @@ describe("DiscordAdapter", () => {
         config: {
           channel: "discord",
           botToken: "discord-token",
-          authorizedActorIds: ["42"],
+          authorizedActorIds: [DISCORD_USER_ID],
         },
         gateway: createGateway(),
         now: () => 1000,
@@ -766,14 +774,14 @@ describe("DiscordAdapter", () => {
         state: "active",
         audit: {
           actor: {
-            platformUserId: "42",
+            platformUserId: DISCORD_USER_ID,
           },
           channel: {
             channel: "discord",
             conversation: {
-              id: "channel-1",
+              id: DISCORD_CHANNEL_ID,
               kind: "channel",
-              parentId: "guild-1",
+              parentId: DISCORD_GUILD_ID,
             },
           },
           occurredAt: 1000,
@@ -788,14 +796,14 @@ describe("DiscordAdapter", () => {
         state: "active",
         audit: {
           actor: {
-            platformUserId: "42",
+            platformUserId: DISCORD_USER_ID,
           },
           channel: {
             channel: "discord",
             conversation: {
-              id: "channel-1",
+              id: DISCORD_CHANNEL_ID,
               kind: "channel",
-              parentId: "guild-1",
+              parentId: DISCORD_GUILD_ID,
             },
           },
           occurredAt: 1000,
@@ -821,21 +829,21 @@ describe("DiscordAdapter", () => {
         config: {
           channel: "discord",
           botToken: "discord-token",
-          authorizedActorIds: ["42"],
+          authorizedActorIds: [DISCORD_USER_ID],
         },
         gateway: createGateway(),
         now: () => 1000,
       });
       const audit = {
         actor: {
-          platformUserId: "42",
+          platformUserId: DISCORD_USER_ID,
         },
         channel: {
           channel: "discord" as const,
           conversation: {
-            id: "channel-1",
+            id: DISCORD_CHANNEL_ID,
             kind: "channel" as const,
-            parentId: "guild-1",
+            parentId: DISCORD_GUILD_ID,
           },
         },
         occurredAt: 1000,
@@ -876,13 +884,13 @@ describe("DiscordAdapter", () => {
     await harness.gateway.emit({
       d: {
         author: {
-          id: "42",
+          id: DISCORD_USER_ID,
           username: "ada",
         },
-        channel_id: "channel-1",
+        channel_id: DISCORD_CHANNEL_ID,
         content: "/resume",
-        guild_id: "guild-1",
-        id: "message-1",
+        guild_id: DISCORD_GUILD_ID,
+        id: DISCORD_MESSAGE_ID,
       },
       op: 0,
       s: 1,
@@ -894,15 +902,15 @@ describe("DiscordAdapter", () => {
 
     await harness.gateway.emit({
       d: {
-        channel_id: "channel-1",
+        channel_id: DISCORD_CHANNEL_ID,
         data: {
           custom_id: customId,
         },
-        guild_id: "guild-1",
-        id: "interaction-1",
+        guild_id: DISCORD_GUILD_ID,
+        id: DISCORD_INTERACTION_ID,
         member: {
           user: {
-            id: "42",
+            id: DISCORD_USER_ID,
             username: "ada",
           },
         },
@@ -915,7 +923,7 @@ describe("DiscordAdapter", () => {
     });
 
     expect(harness.api.createInteractionResponse).toHaveBeenCalledWith(
-      "interaction-1",
+      DISCORD_INTERACTION_ID,
       "interaction-token",
       {
         type: 6,
@@ -925,9 +933,9 @@ describe("DiscordAdapter", () => {
       harness.store.findActiveBindingForChannel({
         channel: "discord",
         conversation: {
-          id: "channel-1",
+          id: DISCORD_CHANNEL_ID,
           kind: "channel",
-          parentId: "guild-1",
+          parentId: DISCORD_GUILD_ID,
         },
       }),
     ).resolves.toMatchObject({
@@ -941,14 +949,14 @@ describe("DiscordAdapter", () => {
 
     await harness.store.upsertBinding({
       id: "binding:discord:channel:guild-1:channel-1:codex:thread-1",
-      authorizedActorIds: ["42"],
+      authorizedActorIds: [DISCORD_USER_ID],
       backend: "codex",
       channel: {
         channel: "discord",
         conversation: {
-          id: "channel-1",
+          id: DISCORD_CHANNEL_ID,
           kind: "channel",
-          parentId: "guild-1",
+          parentId: DISCORD_GUILD_ID,
         },
       },
       createdAt: 1000,
@@ -960,13 +968,13 @@ describe("DiscordAdapter", () => {
       d: {
         author: {
           global_name: "Ada New",
-          id: "42",
+          id: DISCORD_USER_ID,
           username: "ada_new",
         },
-        channel_id: "channel-1",
+        channel_id: DISCORD_CHANNEL_ID,
         content: "run the focused tests",
-        guild_id: "guild-1",
-        id: "message-2",
+        guild_id: DISCORD_GUILD_ID,
+        id: DISCORD_MESSAGE_ID,
       },
       op: 0,
       s: 3,
@@ -985,7 +993,7 @@ describe("DiscordAdapter", () => {
     });
   });
 
-  it("rejects matching display names with different Discord ids through the controller", async () => {
+  it("drops matching display names with different Discord ids before controller dispatch", async () => {
     const harness = await createControllerHarness();
 
     await harness.adapter.start((event) => harness.controller.handleInboundEvent(event));
@@ -993,13 +1001,13 @@ describe("DiscordAdapter", () => {
       d: {
         author: {
           global_name: "Ada",
-          id: "99",
+          id: DISCORD_OTHER_USER_ID,
           username: "ada",
         },
-        channel_id: "channel-1",
+        channel_id: DISCORD_CHANNEL_ID,
         content: "/resume",
-        guild_id: "guild-1",
-        id: "message-3",
+        guild_id: DISCORD_GUILD_ID,
+        id: DISCORD_MESSAGE_ID,
       },
       op: 0,
       s: 4,
@@ -1007,9 +1015,7 @@ describe("DiscordAdapter", () => {
     });
 
     expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
-    expect(harness.api.createMessage.mock.calls.at(-1)?.[1].content).toContain(
-      "Not authorized",
-    );
+    expect(harness.api.createMessage).not.toHaveBeenCalled();
   });
 
   it("normalizes inbound attachments as unsupported without downloading them", async () => {
@@ -1021,7 +1027,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [DISCORD_USER_ID],
       },
       gateway,
     });
@@ -1034,18 +1040,18 @@ describe("DiscordAdapter", () => {
         attachments: [
           {
             filename: "secret.txt",
-            id: "attachment-1",
+            id: DISCORD_ATTACHMENT_ID,
             size: 12,
             url: "https://cdn.discordapp.com/secret.txt",
           },
         ],
         author: {
-          id: "42",
+          id: DISCORD_USER_ID,
           username: "ada",
         },
-        channel_id: "channel-1",
-        guild_id: "guild-1",
-        id: "message-4",
+        channel_id: DISCORD_CHANNEL_ID,
+        guild_id: DISCORD_GUILD_ID,
+        id: DISCORD_MESSAGE_ID,
       },
       op: 0,
       s: 5,
@@ -1075,7 +1081,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [DISCORD_USER_ID],
       },
       gateway,
     });
@@ -1086,12 +1092,12 @@ describe("DiscordAdapter", () => {
       gateway.emit({
         d: {
           author: {
-            id: "42",
+            id: DISCORD_USER_ID,
             username: "ada",
           },
-          channel_id: "channel-1",
-          guild_id: "guild-1",
-          id: "message-5",
+          channel_id: DISCORD_CHANNEL_ID,
+          guild_id: DISCORD_GUILD_ID,
+          id: DISCORD_MESSAGE_ID,
         },
         op: 0,
         s: 6,
@@ -1109,7 +1115,7 @@ describe("DiscordAdapter", () => {
       config: {
         channel: "discord",
         botToken: "discord-token",
-        authorizedActorIds: ["42"],
+        authorizedActorIds: [DISCORD_USER_ID],
       },
       now: () => 1000,
     });
@@ -1117,14 +1123,14 @@ describe("DiscordAdapter", () => {
     await adapter.deliver({
       audit: {
         actor: {
-          platformUserId: "42",
+          platformUserId: DISCORD_USER_ID,
         },
         channel: {
           channel: "discord",
           conversation: {
-            id: "channel-1",
+            id: DISCORD_CHANNEL_ID,
             kind: "channel",
-            parentId: "guild-1",
+            parentId: DISCORD_GUILD_ID,
           },
         },
         occurredAt: 1000,
@@ -1145,7 +1151,7 @@ describe("DiscordAdapter", () => {
     });
 
     expect(api.createMessage).toHaveBeenCalledWith(
-      "channel-1",
+      DISCORD_CHANNEL_ID,
       expect.objectContaining({
         allowed_mentions: {
           parse: [],
@@ -1197,14 +1203,14 @@ async function createControllerHarness(options: {
       applicationId: options.applicationId,
       channel: "discord",
       botToken: "discord-token",
-      authorizedActorIds: ["42"],
+      authorizedActorIds: [DISCORD_USER_ID],
     },
     gateway,
     now: () => 1000,
   });
   const controller = new MessagingController({
     adapter,
-    authorizedActorIds: ["42"],
+    authorizedActorIds: [DISCORD_USER_ID],
     backend: {
       getNavigationSnapshot,
       startTurn,
@@ -1241,7 +1247,6 @@ function createApi(options: {
   updateInteractionOriginalResponse: ReturnType<typeof vi.fn>;
   updateMessage: ReturnType<typeof vi.fn>;
 } {
-  let messageSequence = 0;
   let commandSequence = options.applicationCommands?.length ?? 0;
   let applicationCommands = [...(options.applicationCommands ?? [])];
   return {
@@ -1267,7 +1272,7 @@ function createApi(options: {
       async (channelId: string, request: DiscordCreateMessageRequest) => ({
         channel_id: channelId,
         content: request.content,
-        id: `message-${++messageSequence}`,
+        id: DISCORD_MESSAGE_ID,
       }),
     ),
     deleteApplicationCommand: vi.fn(
@@ -1309,9 +1314,9 @@ function createApi(options: {
         _interactionToken: string,
         request: DiscordCreateMessageRequest,
       ) => ({
-        channel_id: "channel-1",
+        channel_id: DISCORD_CHANNEL_ID,
         content: request.content,
-        id: `message-${++messageSequence}`,
+        id: DISCORD_MESSAGE_ID,
       }),
     ),
     updateMessage: vi.fn(
@@ -1337,7 +1342,7 @@ function createApplicationCommand(
     integration_types: [0, 1],
     type: 1,
     ...command,
-    application_id: "app-1",
+    application_id: DISCORD_APP_ID,
     id,
     version: "1",
   };

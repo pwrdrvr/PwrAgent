@@ -27,6 +27,15 @@ import {
   type TelegramInlineKeyboardMarkup,
   textForTelegramIntent,
 } from "./telegram-formatting.ts";
+import {
+  logTelegramInvalidIdentifier,
+  validateTelegramCallbackData,
+  validateTelegramCallbackQueryId,
+  validateTelegramChatId,
+  validateTelegramFileId,
+  validateTelegramPositiveId,
+  type TelegramIdentifierField,
+} from "./validate-ids.ts";
 
 const TELEGRAM_ALLOWED_UPDATES = ["message", "callback_query"];
 const TELEGRAM_DEFAULT_TYPING_SIGNAL_LEASE_MS = 15_000;
@@ -420,6 +429,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
    */
   private static readonly TOPIC_NAME_CACHE_CAP = 500;
   private readonly topicNameCache = new Map<string, string>();
+  private readonly unauthorizedConversationLogKeys = new Set<string>();
   private readonly options: {
     api?: TelegramBotApi;
     bot?: TelegramBotLike;
@@ -1017,6 +1027,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     if (!listener || !message.from) {
       return;
     }
+    if (!this.validateMessageIdentifiers(updateId, message)) {
+      return;
+    }
 
     const serviceMessageReason = telegramServiceMessageReason(message);
     if (serviceMessageReason || this.isOwnBotUser(message.from)) {
@@ -1045,6 +1058,13 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const mentionRemainder = mentionCandidate
       ? stripTelegramBotMention(mentionCandidate, this.botUsername)
       : undefined;
+    if (
+      !this.isAuthorizedMessageSource(message, {
+        actionable: Boolean(mentionRemainder) || Boolean(message.text?.startsWith("/")),
+      })
+    ) {
+      return;
+    }
     if (mentionRemainder !== undefined && mentionCandidate !== undefined) {
       // If the remainder after the mention doesn't form a valid verb
       // (e.g. a second mention, or a digit-leading token), we
@@ -1131,15 +1151,24 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     updateId: number,
     callbackQuery: TelegramCallbackQuery,
   ): Promise<void> {
-    await this.bot.api.answerCallbackQuery({
-      callback_query_id: callbackQuery.id,
-    });
-
     const listener = this.listener;
     const message = callbackQuery.message;
     if (!listener || !message) {
       return;
     }
+    if (!this.validateCallbackIdentifiers(updateId, callbackQuery)) {
+      return;
+    }
+    if (!this.isAuthorizedCallbackSource(callbackQuery)) {
+      await this.bot.api.answerCallbackQuery({
+        callback_query_id: callbackQuery.id,
+      });
+      return;
+    }
+
+    await this.bot.api.answerCallbackQuery({
+      callback_query_id: callbackQuery.id,
+    });
 
     const channel = this.channelFromMessage(message);
     const binding = callbackQuery.data
@@ -1175,6 +1204,153 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       value: binding?.value ?? persistedBinding?.value,
       receivedAt: this.now(),
       routingState: this.routingStateFromMessage(message),
+    });
+  }
+
+  private validateMessageIdentifiers(
+    updateId: number,
+    message: TelegramMessage,
+    options: { requireActor: boolean } = { requireActor: true },
+  ): boolean {
+    return (
+      this.validateIdentifier("update.update_id", updateId, validateTelegramPositiveId)
+      && this.validateIdentifier("message.message_id", message.message_id, validateTelegramPositiveId)
+      && this.validateIdentifier("chat.id", message.chat.id, validateTelegramChatId)
+      && (!options.requireActor
+        || this.validateIdentifier("user.id", message.from?.id, validateTelegramPositiveId))
+      && (message.message_thread_id === undefined
+        || this.validateIdentifier(
+          "message.message_thread_id",
+          message.message_thread_id,
+          validateTelegramPositiveId,
+        ))
+      && this.validateMessageFileIds(message)
+    );
+  }
+
+  private validateCallbackIdentifiers(
+    updateId: number,
+    callbackQuery: TelegramCallbackQuery,
+  ): boolean {
+    return (
+      this.validateIdentifier("update.update_id", updateId, validateTelegramPositiveId)
+      && this.validateIdentifier(
+        "callback_query.id",
+        callbackQuery.id,
+        validateTelegramCallbackQueryId,
+      )
+      && this.validateIdentifier("user.id", callbackQuery.from.id, validateTelegramPositiveId)
+      && this.validateIdentifier(
+        "callback_query.data",
+        callbackQuery.data,
+        validateTelegramCallbackData,
+      )
+      && (!callbackQuery.message
+        || this.validateMessageIdentifiers(updateId, callbackQuery.message, {
+          requireActor: false,
+        }))
+    );
+  }
+
+  private validateMessageFileIds(message: TelegramMessage): boolean {
+    const fileIds = [
+      message.animation?.file_id,
+      message.document?.file_id,
+      message.video?.file_id,
+      message.voice?.file_id,
+      ...(message.photo?.map((photo) => photo.file_id) ?? []),
+    ];
+    for (const fileId of fileIds) {
+      if (
+        fileId !== undefined
+        && !this.validateIdentifier("file_id", fileId, validateTelegramFileId)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private validateIdentifier(
+    field: TelegramIdentifierField,
+    value: unknown,
+    validator: (value: unknown) => ReturnType<typeof validateTelegramPositiveId>,
+  ): boolean {
+    const result = validator(value);
+    if (result.ok) {
+      return true;
+    }
+    logTelegramInvalidIdentifier({
+      field,
+      logger: this.options.logger,
+      reason: result.reason,
+      value,
+    });
+    return false;
+  }
+
+  private isAuthorizedMessageSource(
+    message: TelegramMessage,
+    options: { actionable: boolean },
+  ): boolean {
+    const actorId = String(message.from?.id ?? "");
+    if (!this.authorizedActorIds.includes(actorId)) {
+      if (message.chat.type === "private" || options.actionable) {
+        this.options.logger?.warn?.("telegram inbound ignored unauthorized actor", {
+          actorId,
+          chatId: String(message.chat.id),
+          chatType: message.chat.type,
+          actionable: options.actionable,
+        });
+      }
+      return false;
+    }
+
+    if (!this.isAuthorizedTelegramConversation(message.chat)) {
+      this.logUnauthorizedConversationOnce("message", message.chat);
+      return false;
+    }
+    return true;
+  }
+
+  private isAuthorizedCallbackSource(callbackQuery: TelegramCallbackQuery): boolean {
+    const actorId = String(callbackQuery.from.id);
+    const chat = callbackQuery.message?.chat;
+    if (!this.authorizedActorIds.includes(actorId)) {
+      this.options.logger?.warn?.("telegram callback ignored unauthorized actor", {
+        actorId,
+        chatId: chat ? String(chat.id) : undefined,
+      });
+      return false;
+    }
+    if (chat && !this.isAuthorizedTelegramConversation(chat)) {
+      this.logUnauthorizedConversationOnce("callback", chat);
+      return false;
+    }
+    return true;
+  }
+
+  private isAuthorizedTelegramConversation(chat: TelegramChat): boolean {
+    if (chat.type !== "supergroup" && chat.type !== "group") {
+      return true;
+    }
+    const authorized = this.options.config.authorizedSupergroupIds ?? [];
+    return authorized.length === 0 || authorized.includes(String(chat.id));
+  }
+
+  private logUnauthorizedConversationOnce(
+    surface: "callback" | "message",
+    chat: TelegramChat,
+  ): void {
+    const key = `${chat.type}:${chat.id}`;
+    if (this.unauthorizedConversationLogKeys.has(key)) {
+      return;
+    }
+    this.unauthorizedConversationLogKeys.add(key);
+    this.options.logger?.warn?.("telegram inbound ignored unauthorized conversation", {
+      chatId: String(chat.id),
+      chatType: chat.type,
+      surface,
     });
   }
 

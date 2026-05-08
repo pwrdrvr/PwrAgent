@@ -55,6 +55,12 @@ import {
   type MattermostMessageAttachment,
   type MattermostPostBody,
 } from "./mattermost-formatting.ts";
+import {
+  logMattermostInvalidIdentifier,
+  validateMattermostCallbackHandle,
+  validateMattermostId,
+  type MattermostIdentifierField,
+} from "./validate-ids.ts";
 
 const DEFAULT_CALLBACK_PORT = 47821;
 
@@ -317,6 +323,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
    * compared to typical WS round-trip but avoids unbounded growth.
    */
   private readonly responseUrlPostIds = new Set<string>();
+  private readonly unauthorizedConversationLogKeys = new Set<string>();
   /**
    * Last reconciliation result per team, kept for diagnostics + future
    * re-reconcile passes (e.g. on team-membership change).
@@ -670,6 +677,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (!post) {
       return;
     }
+    if (!this.validatePostIdentifiers(post)) {
+      return;
+    }
     if (this.botUserId && post.user_id === this.botUserId) {
       // Don't react to our own posts.
       return;
@@ -704,11 +714,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       return;
     }
     if (!this.authorizedActorIds.includes(post.user_id)) {
-      this.logger.warn("mattermost ignored unauthorized actor", {
-        actorId: post.user_id,
-        channelId: post.channel_id,
-        eventId: post.id,
-      });
+      this.logUnauthorizedPostIfActionable(post, data);
       return;
     }
 
@@ -790,6 +796,9 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (!channelId) {
       return;
     }
+    if (!this.validateIdentifier("channel_id", channelId, validateMattermostId)) {
+      return;
+    }
     await this.listener({
       kind: "lifecycle",
       id: this.newEventId("lifecycle"),
@@ -809,6 +818,74 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     });
   }
 
+  private validatePostIdentifiers(
+    post: NonNullable<ReturnType<typeof parseEmbeddedPost>>,
+  ): boolean {
+    return (
+      this.validateIdentifier("post_id", post.id, validateMattermostId)
+      && this.validateIdentifier("channel_id", post.channel_id, validateMattermostId)
+      && this.validateIdentifier("user_id", post.user_id, validateMattermostId)
+      && (post.root_id === undefined
+        || this.validateIdentifier("root_id", post.root_id, validateMattermostId))
+      && this.validateFileIds(post.file_ids ?? [])
+    );
+  }
+
+  private validateFileIds(fileIds: string[]): boolean {
+    for (const fileId of fileIds) {
+      if (!this.validateIdentifier("file_id", fileId, validateMattermostId)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private validateIdentifier(
+    field: MattermostIdentifierField,
+    value: unknown,
+    validator: (value: unknown) => ReturnType<typeof validateMattermostId>,
+  ): boolean {
+    const result = validator(value);
+    if (result.ok) {
+      return true;
+    }
+    logMattermostInvalidIdentifier({
+      field,
+      logger: this.logger,
+      reason: result.reason,
+      value,
+    });
+    return false;
+  }
+
+  private logUnauthorizedPostIfActionable(
+    post: NonNullable<ReturnType<typeof parseEmbeddedPost>>,
+    data: {
+      channel_type?: string;
+    },
+  ): void {
+    const messageText = post.message ?? "";
+    const actionable =
+      messageText.startsWith("/") ||
+      stripBotMention(messageText, this.botUsername) !== undefined;
+    const isDm = data.channel_type === "D";
+    if (!isDm && !actionable) {
+      return;
+    }
+    const key = isDm ? `dm:${post.channel_id}:${post.user_id}` : `action:${post.id}`;
+    if (this.unauthorizedConversationLogKeys.has(key)) {
+      return;
+    }
+    this.unauthorizedConversationLogKeys.add(key);
+    this.logger.warn("mattermost ignored unauthorized actor", {
+      actorId: post.user_id,
+      channelId: post.channel_id,
+      eventId: post.id,
+      actionable,
+      conversationKind: isDm ? "dm" : "channel",
+    });
+  }
+
   // -------------------------------------------------------------
   // Inbound: HTTP callback handling
   // -------------------------------------------------------------
@@ -821,6 +898,18 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       return;
     }
     void rawBody;
+    if (
+      !this.validateIdentifier("user_id", body.user_id, validateMattermostId)
+      || !this.validateIdentifier("channel_id", body.channel_id, validateMattermostId)
+      || (body.team_id !== undefined
+        && !this.validateIdentifier("team_id", body.team_id, validateMattermostId))
+      || (body.post_id !== undefined
+        && !this.validateIdentifier("post_id", body.post_id, validateMattermostId))
+      || (body.trigger_id !== undefined
+        && !this.validateIdentifier("trigger_id", body.trigger_id, validateMattermostId))
+    ) {
+      return;
+    }
     if (!this.authorizedActorIds.includes(body.user_id)) {
       this.logger.warn("mattermost ignored unauthorized callback actor", {
         actorId: body.user_id,
@@ -834,6 +923,15 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         actorId: body.user_id,
         channelId: body.channel_id,
       });
+      return;
+    }
+    if (
+      !this.validateIdentifier(
+        "callback.context.handle",
+        handle,
+        validateMattermostCallbackHandle,
+      )
+    ) {
       return;
     }
     // Mattermost interactive callbacks tell us the channel_id but not its
@@ -858,6 +956,12 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         ? contextKind
         : "channel";
     const contextRootId = stringField((body.context ?? {})["rootId"]);
+    if (
+      contextRootId
+      && !this.validateIdentifier("root_id", contextRootId, validateMattermostId)
+    ) {
+      return;
+    }
     // Interactive callback bodies do include `channel_name`, but it's
     // the slug ("development"), not display name ("Development").
     // Better than the bare kind label in the binding chip; use it for
@@ -1057,6 +1161,17 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (!this.listener) {
       return;
     }
+    if (
+      !this.validateIdentifier("team_id", body.team_id, validateMattermostId)
+      || !this.validateIdentifier("channel_id", body.channel_id, validateMattermostId)
+      || !this.validateIdentifier("user_id", body.user_id, validateMattermostId)
+      || (body.root_id !== undefined
+        && !this.validateIdentifier("root_id", body.root_id, validateMattermostId))
+      || (body.trigger_id !== undefined
+        && !this.validateIdentifier("trigger_id", body.trigger_id, validateMattermostId))
+    ) {
+      return;
+    }
     // Diagnostic for thread-routing bugs: the picker rendering in the
     // parent channel instead of the invoking thread is a `root_id`
     // propagation problem; logging the raw `root_id` (along with
@@ -1082,7 +1197,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         command: body.command,
         channelId: body.channel_id,
       });
-      return { ephemeralText: "You are not authorized to use this command." };
+      return undefined;
     }
 
     const actor: MessagingActorIdentity = {

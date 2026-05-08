@@ -16,6 +16,8 @@ For a layered architecture overview with diagrams, data-flow sequences, the capa
 ## Design Rules
 
 - Keep workflow semantics channel-neutral. Resume navigation, status cards, approvals, questionnaires, markdown/content composition, attachments, and message routing should be expressed as generic intents and actions.
+- Provider adapters must validate every inbound platform identifier at the boundary before authorization, persistence, logging, store lookup, or listener dispatch. Use ReDoS-safe validators: hard length cap first, simple character loops or anchored single-class bounded regex only, and reject-and-log with `platform`, `identifier_field`, `length`, `first8_hash`, and `reason` without echoing raw attacker input.
+- Provider adapters must enforce configured actor and conversation allowlists before dispatching to the desktop controller. Unauthorized general group/guild chatter should drop silently; log only DMs or actionable attempts such as slash commands, button clicks, or bot mentions, with rate-limiting for repeated unauthorized conversations.
 - Store provider-specific routing data only as opaque adapter state. Core workflow code may persist and echo this state, but must not parse Telegram chat IDs, Discord message IDs, callback payloads, or provider SDK types.
 - When a platform has limitations, encode them as provider capabilities, delivery results, fallback behavior, or generic interface extensions. Do not add Telegram/Discord conditionals to shared workflow logic.
 - If a future provider needs a feature the interface cannot express, extend the generic interface first, then implement the extension in providers that can support it.

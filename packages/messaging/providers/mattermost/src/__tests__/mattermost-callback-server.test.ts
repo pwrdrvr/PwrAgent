@@ -9,6 +9,10 @@ import {
 
 const PORT_BASE = 47900;
 let nextPort = PORT_BASE;
+const TEST_CHANNEL_ID = "abcdefghijklmnopqrstu12345";
+const TEST_POST_ID = "bcdefghijklmnopqrstu123456";
+const TEST_TEAM_ID = "cdefghijklmnopqrstu1234567";
+const TEST_USER_ID = "defghijklmnopqrstu12345678";
 
 const silentLogger = {
   debug: vi.fn(),
@@ -95,9 +99,9 @@ describe("MattermostCallbackServer", () => {
         issuedAt,
       });
       const body = {
-        user_id: "user-1",
-        channel_id: "channel-1",
-        post_id: "post-1",
+        user_id: TEST_USER_ID,
+        channel_id: TEST_CHANNEL_ID,
+        post_id: TEST_POST_ID,
         context: {
           handle: "h",
           intentId: "intent-1",
@@ -115,8 +119,8 @@ describe("MattermostCallbackServer", () => {
       expect(await response.text()).toContain("update");
       expect(handler).toHaveBeenCalledTimes(1);
       expect(handler.mock.calls[0]?.[0]).toMatchObject({
-        user_id: "user-1",
-        channel_id: "channel-1",
+        user_id: TEST_USER_ID,
+        channel_id: TEST_CHANNEL_ID,
       });
     } finally {
       await server.stop();
@@ -135,8 +139,8 @@ describe("MattermostCallbackServer", () => {
     await server.start();
     try {
       const body = {
-        user_id: "user-1",
-        channel_id: "channel-1",
+        user_id: TEST_USER_ID,
+        channel_id: TEST_CHANNEL_ID,
         context: {
           handle: "h",
           intentId: "intent-1",
@@ -154,6 +158,52 @@ describe("MattermostCallbackServer", () => {
       expect(silentLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining("HMAC"),
         expect.any(Object),
+      );
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("rejects malformed callback identifiers before dispatch", async () => {
+    const port = nextPort++;
+    const handler = vi.fn();
+    const server = createMattermostCallbackServer({
+      port,
+      hmacSecret: "test-secret",
+      handler,
+      logger: silentLogger,
+    });
+    await server.start();
+    try {
+      const issuedAt = 1234;
+      const hmac = computeMattermostContextHmac({
+        hmacSecret: "test-secret",
+        intentId: "intent-1",
+        actionId: "act",
+        issuedAt,
+      });
+      const response = await fetch(`http://127.0.0.1:${port}/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: "bad\r\nuser",
+          channel_id: TEST_CHANNEL_ID,
+          context: {
+            intentId: "intent-1",
+            actionId: "act",
+            issuedAt,
+            hmac,
+          },
+        }),
+      });
+      expect(response.status).toBe(200);
+      expect(handler).not.toHaveBeenCalled();
+      expect(silentLogger.warn).toHaveBeenCalledWith(
+        "messaging inbound identifier rejected",
+        expect.objectContaining({
+          platform: "mattermost",
+          identifier_field: "user_id",
+        }),
       );
     } finally {
       await server.stop();
@@ -196,9 +246,9 @@ describe("MattermostCallbackServer", () => {
     try {
       const params = new URLSearchParams({
         token: "valid-token",
-        team_id: "team-1",
-        channel_id: "channel-1",
-        user_id: "user-1",
+        team_id: TEST_TEAM_ID,
+        channel_id: TEST_CHANNEL_ID,
+        user_id: TEST_USER_ID,
         user_name: "harold",
         command: "/resume",
         text: "--projects",
@@ -214,8 +264,8 @@ describe("MattermostCallbackServer", () => {
       expect(slashHandler.mock.calls[0]?.[0]).toMatchObject({
         command: "/resume",
         text: "--projects",
-        user_id: "user-1",
-        team_id: "team-1",
+        user_id: TEST_USER_ID,
+        team_id: TEST_TEAM_ID,
       });
     } finally {
       await server.stop();
@@ -238,9 +288,9 @@ describe("MattermostCallbackServer", () => {
     try {
       const params = new URLSearchParams({
         token: "spoofed-token",
-        team_id: "team-1",
-        channel_id: "channel-1",
-        user_id: "user-1",
+        team_id: TEST_TEAM_ID,
+        channel_id: TEST_CHANNEL_ID,
+        user_id: TEST_USER_ID,
         command: "/resume",
         text: "",
       });
