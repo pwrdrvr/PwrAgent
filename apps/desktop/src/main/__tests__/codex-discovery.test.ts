@@ -56,7 +56,9 @@ describe("Codex discovery", () => {
   });
 
   it("keeps invalid configured commands visible with a failure reason", async () => {
-    accessMock.mockRejectedValue(new Error("not executable"));
+    const missingError = new Error("missing") as NodeJS.ErrnoException;
+    missingError.code = "ENOENT";
+    accessMock.mockRejectedValue(missingError);
     execFileMock.mockImplementation(
       (
         _command: string,
@@ -76,7 +78,7 @@ describe("Codex discovery", () => {
     expect(snapshot.candidates.find((candidate) => candidate.source === "config")).toMatchObject({
       command: "/missing/codex",
       executable: false,
-      failureReason: "not_executable",
+      failureReason: "not_found",
     });
     expect(snapshot.candidates.some((candidate) => candidate.source === "path")).toBe(false);
     expect(snapshot.candidates.some((candidate) => candidate.source === "application")).toBe(false);

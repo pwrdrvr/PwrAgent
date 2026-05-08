@@ -23,9 +23,11 @@ vi.mock("node:child_process", () => ({
 
 describe("GitHub CLI discovery", () => {
   it("returns checked candidates and selects a Homebrew gh outside PATH", async () => {
+    const missingError = new Error("missing") as NodeJS.ErrnoException;
+    missingError.code = "ENOENT";
     accessMock.mockImplementation(async (candidate: string) => {
       if (candidate === "/opt/homebrew/bin/gh") return undefined;
-      throw new Error("missing");
+      throw missingError;
     });
     execFileMock.mockImplementation(
       (
@@ -72,6 +74,7 @@ describe("GitHub CLI discovery", () => {
         expect.objectContaining({
           command: "/usr/local/bin/gh",
           executable: false,
+          failureReason: "not_found",
           source: "homebrew",
         }),
       ]),

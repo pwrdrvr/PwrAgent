@@ -219,10 +219,11 @@ function GhCandidateRow(props: {
   onUse: (command: string) => void;
 }) {
   const candidate = props.candidate;
+  const unavailableLabel = describeCommandDiscoveryFailure(candidate.failureReason);
   const version =
     candidate.version
-    ?? candidate.versionFailureReason
-    ?? candidate.failureReason
+    ?? describeCommandDiscoveryFailure(candidate.versionFailureReason)
+    ?? unavailableLabel
     ?? "version unknown";
   const chips: SettingsPathRowChip[] = [
     { label: candidate.source, tone: "muted" },
@@ -233,7 +234,7 @@ function GhCandidateRow(props: {
   ];
   if (!candidate.selected) {
     chips.push({
-      label: candidate.executable ? "Available" : "Unavailable",
+      label: candidate.executable ? "Available" : (unavailableLabel ?? "Unavailable"),
       tone: candidate.executable ? "muted" : "err",
     });
   }
@@ -248,6 +249,14 @@ function GhCandidateRow(props: {
       onUse={() => props.onUse(candidate.command)}
     />
   );
+}
+
+function describeCommandDiscoveryFailure(reason?: string): string | undefined {
+  if (!reason) return undefined;
+  if (reason === "not_found") return "Missing";
+  if (reason === "not_executable") return "Not executable";
+  if (reason === "version_not_reported") return "Version unknown";
+  return reason;
 }
 
 function describeGhStatusPill(status: GhStatus | undefined): {

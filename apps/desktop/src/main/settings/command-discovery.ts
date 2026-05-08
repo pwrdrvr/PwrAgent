@@ -44,6 +44,20 @@ export type ResolvedCommandCandidate<Source extends string> = {
   version?: string;
 };
 
+function isNotFoundError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+async function pathExists(candidate: string): Promise<"exists" | "not_found" | "unknown"> {
+  try {
+    await access(candidate, fsConstants.F_OK);
+    return "exists";
+  } catch (error) {
+    return isNotFoundError(error) ? "not_found" : "unknown";
+  }
+}
+
 export async function pathIsExecutable(candidate: string): Promise<boolean> {
   try {
     await access(candidate, fsConstants.X_OK);
@@ -97,7 +111,11 @@ async function readCommandVersion(params: {
   } catch (error) {
     return {
       ran: false,
-      failureReason: error instanceof Error ? error.message : String(error),
+      failureReason: isNotFoundError(error)
+        ? "not_found"
+        : error instanceof Error
+          ? error.message
+          : String(error),
     };
   }
 }
@@ -119,10 +137,12 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
     candidate.source === "path" || !trimmedCommand.includes(path.sep)
       ? await resolvePathCommand(trimmedCommand, options.env)
       : trimmedCommand;
-  const accessExecutable = resolvedCommand
-    ? await pathIsExecutable(resolvedCommand)
-    : false;
-  const versionResult = resolvedCommand
+  const existence = resolvedCommand ? await pathExists(resolvedCommand) : "not_found";
+  const accessExecutable =
+    resolvedCommand && existence !== "not_found"
+      ? await pathIsExecutable(resolvedCommand)
+      : false;
+  const versionResult = resolvedCommand && existence !== "not_found"
     ? await readCommandVersion({
         command: resolvedCommand,
         env: options.env,
@@ -141,7 +161,7 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
     versionFailureReason: executable ? versionResult.failureReason : undefined,
     failureReason: executable
       ? undefined
-      : versionResult.failureReason === "not_found"
+      : existence === "not_found" || versionResult.failureReason === "not_found"
         ? "not_found"
         : "not_executable",
   };
