@@ -30,10 +30,17 @@ type DesktopConfigPathOptions = {
 };
 
 type AuthorizedContactConfig = DesktopAuthorizedContact;
+type LegacyChatReplyComposer =
+  | "textarea"
+  | "tiptap-chips"
+  | "custom-widget-chips";
+type StoredChatReplyComposer =
+  | DesktopChatReplyComposer
+  | LegacyChatReplyComposer;
 
 export type DesktopSettingsConfig = {
   experimental?: {
-    chatReplyComposer?: DesktopChatReplyComposer;
+    chatReplyComposer?: StoredChatReplyComposer;
     diffCondensation?: {
       enabled?: boolean;
       model?: string;
@@ -565,7 +572,7 @@ function hasDefinedValue(values: object): boolean {
   return Object.values(values).some((value) => value !== undefined);
 }
 
-function readComposer(value: TomlScalar | undefined): DesktopChatReplyComposer | undefined {
+function readComposer(value: TomlScalar | undefined): StoredChatReplyComposer | undefined {
   return typeof value === "string" && isDesktopChatReplyComposer(value)
     ? value
     : undefined;
@@ -573,7 +580,7 @@ function readComposer(value: TomlScalar | undefined): DesktopChatReplyComposer |
 
 function isDesktopChatReplyComposer(
   value: string,
-): value is DesktopChatReplyComposer {
+): value is StoredChatReplyComposer {
   return (
     value === "textarea"
     || value === "tiptap-chips"

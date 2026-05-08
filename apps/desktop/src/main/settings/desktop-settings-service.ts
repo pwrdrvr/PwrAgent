@@ -53,7 +53,6 @@ import {
   TELEGRAM_STREAMING_RESPONSES_ENV,
   WORKTREE_STORAGE_ENV,
   readEnvBoolean,
-  readEnvComposer,
   readEnvInteger,
   readEnvList,
   readEnvMessagingImageProfile,
@@ -408,9 +407,9 @@ export class DesktopSettingsService {
   }
 
   private resolveComposer(
-    configValue: DesktopChatReplyComposer | undefined,
+    configValue: string | undefined,
   ): DesktopSettingsValue<DesktopChatReplyComposer> {
-    const envValue = readEnvComposer(this.env);
+    const envValue = readEnvString(this.env, CHAT_REPLY_COMPOSER_ENV);
     if (configValue && !this.loggedObsoleteComposerConfig) {
       this.loggedObsoleteComposerConfig = true;
       settingsLog.warn(
@@ -418,11 +417,11 @@ export class DesktopSettingsService {
         { configValue },
       );
     }
-    if (envValue.value && !this.loggedObsoleteComposerEnv) {
+    if (envValue && !this.loggedObsoleteComposerEnv) {
       this.loggedObsoleteComposerEnv = true;
       settingsLog.warn(
         `${CHAT_REPLY_COMPOSER_ENV} is obsolete and ignored; remove it from the launch environment when convenient`,
-        { envValue: envValue.value },
+        { envValue },
       );
     }
 

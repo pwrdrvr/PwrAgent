@@ -1,7 +1,7 @@
 import { useMemo, useRef } from "react";
 import type { JSONContent } from "@tiptap/react";
 import type { NavigationLaunchpadImageAttachment } from "@pwragent/shared";
-import type { ComposerSkillToken } from "./ComposerRichInput";
+import type { ComposerSkillToken } from "./ComposerInputTypes";
 
 export type ComposerDraftSnapshot = {
   draft: string;

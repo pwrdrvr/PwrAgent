@@ -154,9 +154,6 @@ async function createComposerDraftSettingsFixture(): Promise<{
 test("keeps a thread reply draft after opening settings and returning to the thread", async () => {
   const fixture = await createComposerDraftSettingsFixture();
   const app = await launchElectronApp({
-    env: {
-      PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-chips",
-    },
     fixturePath: fixture.fixturePath,
   });
 

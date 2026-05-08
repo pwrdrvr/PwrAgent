@@ -248,9 +248,6 @@ async function pasteDelayedImage(page: Page, params: {
 test("keeps Tiptap launchpad and reply drafts with pasted images across switching and refresh", async () => {
   const fixture = await createComposerDraftPersistenceFixture();
   const app = await launchElectronApp({
-    env: {
-      PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-chips",
-    },
     fixturePath: fixture.fixturePath,
   });
 
@@ -301,10 +298,6 @@ test("keeps Tiptap launchpad and reply drafts with pasted images across switchin
 test("restores an already-open Tiptap WYSIWYG reply as rendered markdown after switching away", async () => {
   const fixture = await createComposerDraftPersistenceFixture();
   const app = await launchElectronApp({
-    env: {
-      PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER:
-        "tiptap-wysiwyg-markdown-chips",
-    },
     fixturePath: fixture.fixturePath,
   });
 

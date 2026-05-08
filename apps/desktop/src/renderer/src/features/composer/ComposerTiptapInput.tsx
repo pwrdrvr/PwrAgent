@@ -10,20 +10,40 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
+import { flushSync } from "react-dom";
 import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import type { AppServerSkillSummary } from "@pwragent/shared";
 import { buildSkillTooltip, findSkillTrigger } from "../../lib/skill-mentions";
 import type {
-  ComposerRichInputHandle,
-  ComposerRichInputProps,
+  ComposerInputChangeMetadata,
+  ComposerInputHandle,
   ComposerSkillToken,
-} from "./ComposerRichInput";
+} from "./ComposerInputTypes";
 
-type ComposerTiptapInputProps = ComposerRichInputProps & {
+type ComposerTiptapInputProps = {
+  ariaActiveDescendant?: string;
+  ariaControls?: string;
+  ariaExpanded?: boolean;
+  disabled?: boolean;
   editorDocument?: JSONContent;
+  id: string;
+  label: string;
   markdownConversion?: boolean;
+  onChange: (
+    value: string,
+    skillTokens?: ComposerSkillToken[],
+    metadata?: ComposerInputChangeMetadata,
+  ) => void;
+  onClick?: (event: MouseEvent<HTMLDivElement>) => void;
+  onDragOver?: (event: DragEvent<HTMLDivElement>) => void;
+  onDrop?: (event: DragEvent<HTMLDivElement>) => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+  onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
+  placeholder: string;
+  skillTokens: ComposerSkillToken[];
+  value: string;
 };
 
 type TiptapReadMode = "markdown" | "text";
@@ -863,7 +883,7 @@ function applyExternalSkillInsertion(params: {
 }
 
 export const ComposerTiptapInput = forwardRef<
-  ComposerRichInputHandle,
+  ComposerInputHandle,
   ComposerTiptapInputProps
 >(function ComposerTiptapInput(props, ref) {
   const propsRef = useRef(props);
@@ -903,6 +923,7 @@ export const ComposerTiptapInput = forwardRef<
         "aria-label": props.label,
         class: `composer-tiptap-input__editor${props.disabled ? " is-disabled" : ""}`,
         "data-placeholder": props.placeholder,
+        id: props.id,
         role: "textbox",
       },
       handleClick: (_view, _pos, event) => {
@@ -998,6 +1019,7 @@ export const ComposerTiptapInput = forwardRef<
     }
 
     editor.setEditable(!props.disabled);
+    editor.view.dom.setAttribute("id", props.id);
     editor.view.dom.setAttribute("aria-label", props.label);
     editor.view.dom.setAttribute("aria-expanded", String(Boolean(props.ariaExpanded)));
     if (props.ariaActiveDescendant) {
@@ -1016,8 +1038,70 @@ export const ComposerTiptapInput = forwardRef<
     props.ariaControls,
     props.ariaExpanded,
     props.disabled,
+    props.id,
     props.label,
   ]);
+
+  useLayoutEffect(() => {
+    if (!editor) {
+      return;
+    }
+
+    const editorDom = editor.view.dom as HTMLElement & {
+      selectionEnd?: number;
+      selectionStart?: number;
+      setSelectionRange?: (start: number, end?: number) => void;
+      value?: string;
+    };
+    Object.defineProperty(editorDom, "value", {
+      configurable: true,
+      get: () => propsRef.current.value,
+      set: (nextValue) => {
+        const value = String(nextValue ?? "");
+        selectionIndexRef.current = value.length;
+        editor.commands.setContent(
+          buildTiptapContent(value, [], {
+            markdownConversion: propsRef.current.markdownConversion,
+          }),
+          { emitUpdate: true },
+        );
+        flushSync(() => {
+          propsRef.current.onChange(value, [], {
+            editorDocument: editor.getJSON(),
+          });
+        });
+      },
+    });
+    Object.defineProperty(editorDom, "selectionStart", {
+      configurable: true,
+      get: () => selectionIndexRef.current,
+    });
+    Object.defineProperty(editorDom, "selectionEnd", {
+      configurable: true,
+      get: () => selectionIndexRef.current,
+    });
+    Object.defineProperty(editorDom, "setSelectionRange", {
+      configurable: true,
+      value: (start: number) => {
+        selectionIndexRef.current = start;
+        try {
+          editor.commands.setTextSelection(
+            getPositionAtDraftIndex(editor, start, readMode),
+          );
+        } catch {
+          // jsdom does not implement the layout APIs ProseMirror uses when
+          // scrolling selections; the stored selection index is enough there.
+        }
+      },
+    });
+
+    return () => {
+      delete editorDom.value;
+      delete editorDom.selectionStart;
+      delete editorDom.selectionEnd;
+      delete editorDom.setSelectionRange;
+    };
+  }, [editor, readMode]);
 
   useEffect(() => {
     if (!editor) {

@@ -607,7 +607,9 @@ describe("DesktopSettingsService", () => {
     await expect(
       service.writeConfigPatch({
         experimental: {
-          chatReplyComposer: "tiptap-chips",
+          diffCondensation: {
+            enabled: true,
+          },
         },
       }),
     ).rejects.toThrow("could not be parsed");

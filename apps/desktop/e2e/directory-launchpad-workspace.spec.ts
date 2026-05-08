@@ -834,9 +834,6 @@ test("directory launchpad does not duplicate a materialized worktree thread unde
 test("directory launchpad keeps Tiptap Markdown focus and fenced-code formatting after changing workspace mode", async () => {
   const fixture = await createDirectoryLaunchpadFixture();
   const app = await launchElectronApp({
-    env: {
-      PWRAGENT_EXPERIMENTAL_CHAT_REPLY_COMPOSER: "tiptap-wysiwyg-markdown-chips",
-    },
     fixturePath: fixture.fixturePath,
   });
 
