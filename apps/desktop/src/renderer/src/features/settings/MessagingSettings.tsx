@@ -10,6 +10,7 @@ import {
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
+  SettingsSectionStack,
   type SettingsChipTone,
 } from "./SettingsLayout";
 import { SettingsSwitch } from "./SettingsSwitch";
@@ -52,7 +53,7 @@ export function MessagingSettings(props: {
   const runtimeMessaging = props.snapshot.runtime.messaging;
 
   return (
-    <section className="settings-stack" aria-label="Messaging settings">
+    <SettingsSectionStack paneId="messaging" aria-label="Messaging settings">
       <SettingsPanelHead
         eyebrow="Messaging"
         title="Connected chat platforms"
@@ -480,7 +481,7 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
-    </section>
+    </SettingsSectionStack>
   );
 }
 

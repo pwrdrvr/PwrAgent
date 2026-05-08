@@ -4,7 +4,11 @@ import type {
   AppUpdateCheckResult,
 } from "../../../../shared/app-metadata";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { SettingsPanelHead, SettingsSection } from "./SettingsLayout";
+import {
+  SettingsPanelHead,
+  SettingsSection,
+  SettingsSectionStack,
+} from "./SettingsLayout";
 
 export function AboutSettings(props: { desktopApi?: DesktopApi }) {
   const [metadata, setMetadata] = useState<AppMetadata | undefined>(undefined);
@@ -58,7 +62,7 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
 
   if (error) {
     return (
-      <section className="settings-stack" aria-label="About PwrAgent">
+      <SettingsSectionStack paneId="about" aria-label="About PwrAgent">
         <SettingsPanelHead
           eyebrow="About"
           title="PwrAgent"
@@ -67,13 +71,13 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
         <div className="settings-panel" role="alert">
           <p className="settings-row__error">Could not load app info: {error}</p>
         </div>
-      </section>
+      </SettingsSectionStack>
     );
   }
 
   if (!metadata) {
     return (
-      <section className="settings-stack" aria-label="About PwrAgent">
+      <SettingsSectionStack paneId="about" aria-label="About PwrAgent">
         <SettingsPanelHead
           eyebrow="About"
           title="PwrAgent"
@@ -82,12 +86,12 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
         <div className="settings-panel">
           <p className="settings-empty">Loading…</p>
         </div>
-      </section>
+      </SettingsSectionStack>
     );
   }
 
   return (
-    <section className="settings-stack" aria-label="About PwrAgent">
+    <SettingsSectionStack paneId="about" aria-label="About PwrAgent">
       <SettingsPanelHead
         eyebrow="About"
         title={metadata.applicationName}
@@ -142,7 +146,7 @@ export function AboutSettings(props: { desktopApi?: DesktopApi }) {
       </SettingsSection>
 
       {updateResult ? <UpdateResultStatus result={updateResult} /> : null}
-    </section>
+    </SettingsSectionStack>
   );
 }
 

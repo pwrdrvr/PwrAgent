@@ -6,7 +6,11 @@ import type {
   GhStatus,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { SettingsPanelHead, SettingsSection } from "./SettingsLayout";
+import {
+  SettingsPanelHead,
+  SettingsSection,
+  SettingsSectionStack,
+} from "./SettingsLayout";
 import {
   SettingsPathRow,
   type SettingsPathRowChip,
@@ -22,7 +26,7 @@ export function ApplicationsSettings(props: {
   ) => Promise<void>;
 }) {
   return (
-    <section className="settings-stack" aria-label="Application settings">
+    <SettingsSectionStack paneId="applications" aria-label="Application settings">
       <SettingsPanelHead
         eyebrow="Applications"
         title="Editor & terminal"
@@ -48,7 +52,7 @@ export function ApplicationsSettings(props: {
         onPreferredApplicationChange={props.onPreferredApplicationChange}
       />
       <GhStatusPanel desktopApi={props.desktopApi} />
-    </section>
+    </SettingsSectionStack>
   );
 }
 

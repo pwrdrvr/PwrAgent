@@ -6,6 +6,7 @@ import {
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
+  SettingsSectionStack,
 } from "./SettingsLayout";
 import { sourceBadge } from "./settings-fields";
 
@@ -40,7 +41,7 @@ export function WorktreesSettings(props: {
   );
 
   return (
-    <section className="settings-stack" aria-label="Worktree settings">
+    <SettingsSectionStack paneId="worktrees" aria-label="Worktree settings">
       <SettingsPanelHead
         eyebrow="Worktrees"
         title="Storage & cleanup"
@@ -104,6 +105,6 @@ export function WorktreesSettings(props: {
           />
         </div>
       </SettingsSection>
-    </section>
+    </SettingsSectionStack>
   );
 }
