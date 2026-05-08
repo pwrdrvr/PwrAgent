@@ -116,14 +116,69 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect live agent-core inputs
+        id: changes
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE_SHA"
+            head="$PR_HEAD_SHA"
+          else
+            base="$PUSH_BEFORE_SHA"
+            head="$GITHUB_SHA"
+          fi
+
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            base="$(git rev-list --max-parents=0 "$head")"
+          fi
+
+          git diff --name-only "$base" "$head" > changed-files.txt
+
+          relevant=false
+          while IFS= read -r path; do
+            case "$path" in
+              packages/agent-core/*|packages/shared/*|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tsconfig.base.json|vitest.workspace.ts|.nvmrc|.github/workflows/ci.yml)
+                relevant=true
+                break
+                ;;
+            esac
+          done < changed-files.txt
+
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+
+          if [[ "$relevant" == "true" ]]; then
+            echo "Live agent-core inputs changed; running live smoke test."
+          else
+            {
+              echo "### Live Agent Core"
+              echo
+              echo "Skipped live agent-core smoke test because no agent-core inputs changed."
+              echo
+              echo "Relevant inputs: \`packages/agent-core/**\`, \`packages/shared/**\`, root dependency/test config, and this workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Install Node.js and dependencies
+        if: steps.changes.outputs.relevant == 'true'
         uses: pwrdrvr/configure-nodejs@v1
 
       - name: Install ripgrep
+        if: steps.changes.outputs.relevant == 'true'
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
       - name: Live agent-core smoke and tool coverage
+        if: steps.changes.outputs.relevant == 'true'
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           XAI_BASE_URL: https://api.x.ai/v1
