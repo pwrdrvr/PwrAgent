@@ -891,6 +891,169 @@ describe("useThreadSessionState", () => {
     ).toEqual(["commentary", "commentary", "final"]);
   });
 
+  it("preserves live receipt order when consecutive events share a wall-clock millisecond", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(50_000);
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async ({
+        backend,
+        threadId,
+      }: {
+        backend?: "codex" | "grok";
+        threadId: string;
+      }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })
+    );
+
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "inProgress" },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-1",
+            phase: "final",
+            delta: "First commentary.",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "read-1",
+              type: "commandExecution",
+              command: "rg first src",
+              commandActions: [{ type: "search", path: "src" }],
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-2",
+            phase: "final",
+            delta: "Second commentary.",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "read-2",
+              type: "commandExecution",
+              command: "rg second src",
+              commandActions: [{ type: "search", path: "src" }],
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "message-3",
+            delta: "Third commentary.",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed", durationMs: 70_000 },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.map((entry) =>
+        entry.type === "message"
+          ? `message:${entry.text}`
+          : entry.type === "activity"
+            ? `activity:${entry.summary}`
+            : entry.type
+      )
+    ).toEqual([
+      "message:First commentary.",
+      "activity:Explored 1 item",
+      "message:Second commentary.",
+      "activity:Explored 1 item",
+      "message:Third commentary.",
+    ]);
+  });
+
   it("keeps live activity between assistant messages after coarse hydration", async () => {
     let now = 30_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);
