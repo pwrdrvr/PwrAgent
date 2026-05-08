@@ -16,12 +16,8 @@ import type { DesktopApi } from "../../lib/desktop-api";
 const ICONS: Partial<
   Record<MessagingChannelKind, (props: IconProps) => ReactElement>
 > = {
-  telegram: TelegramIcon,
-  discord: DiscordIcon,
-  // Mattermost ships as an `<img>` (brand guidelines require the
-  // official asset, unaltered), so `IconProps` doesn't fully apply —
-  // we forward `size` and let MattermostIcon pick its default variant
-  // (white, for the dark-themed desktop UI).
+  telegram: ({ size }) => <TelegramIcon size={size} variant="color" />,
+  discord: ({ size }) => <DiscordIcon size={size} variant="white" />,
   mattermost: ({ size }) => <MattermostIcon size={size} />,
 };
 

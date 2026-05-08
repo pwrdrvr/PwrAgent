@@ -63,30 +63,63 @@ describe("icon library", () => {
     expect(svg).toHaveAttribute("aria-hidden", "false");
   });
 
-  it.each([
-    ["TelegramIcon", TelegramIcon],
-    ["DiscordIcon", DiscordIcon],
-  ] as const)(
-    "%s renders as a filled glyph using currentColor",
-    (_name, Icon) => {
-      const { container } = render(<Icon />);
-      const svg = container.querySelector("svg");
-      expect(svg).toBeInTheDocument();
-      expect(svg).toHaveAttribute("width", "16");
-      expect(svg).toHaveAttribute("height", "16");
-      expect(svg).toHaveAttribute("viewBox", "0 0 24 24");
-      expect(svg).toHaveAttribute("fill", "currentColor");
-      expect(svg).toHaveAttribute("stroke", "none");
-      expect(svg).toHaveAttribute("aria-hidden", "true");
-    },
-  );
+  describe("TelegramIcon", () => {
+    it("renders the official asset as an <img>", () => {
+      const { container } = render(<TelegramIcon />);
+      const img = container.querySelector("img");
+      expect(img).toBeInTheDocument();
+      expect(img).toHaveAttribute("width", "16");
+      expect(img).toHaveAttribute("height", "16");
+      expect(img).toHaveAttribute("alt", "");
+      expect(img?.getAttribute("src") ?? "").toMatch(/svg|image/i);
+      expect(container.querySelector("svg")).not.toBeInTheDocument();
+    });
+
+    it("respects size overrides", () => {
+      const { container } = render(<TelegramIcon size={28} />);
+      const img = container.querySelector("img");
+      expect(img).toHaveAttribute("width", "28");
+      expect(img).toHaveAttribute("height", "28");
+    });
+  });
+
+  describe("DiscordIcon", () => {
+    it("renders the official asset as an <img>", () => {
+      const { container } = render(<DiscordIcon />);
+      const img = container.querySelector("img");
+      expect(img).toBeInTheDocument();
+      expect(img).toHaveAttribute("width", "16");
+      expect(img).toHaveAttribute("height", "16");
+      expect(img).toHaveAttribute("alt", "");
+      expect(img?.getAttribute("src") ?? "").toMatch(/svg|image/i);
+      expect(container.querySelector("svg")).not.toBeInTheDocument();
+    });
+
+    it("renders distinct sources for each variant", () => {
+      const sources = new Set<string>();
+      for (const variant of ["black", "blurple", "white"] as const) {
+        const { container } = render(<DiscordIcon variant={variant} />);
+        const src = container.querySelector("img")?.getAttribute("src") ?? "";
+        expect(src.length).toBeGreaterThan(0);
+        sources.add(src);
+        cleanup();
+      }
+      expect(sources.size).toBe(3);
+    });
+
+    it("respects size overrides", () => {
+      const { container } = render(<DiscordIcon size={28} />);
+      const img = container.querySelector("img");
+      expect(img).toHaveAttribute("width", "28");
+      expect(img).toHaveAttribute("height", "28");
+    });
+  });
 
   describe("MattermostIcon", () => {
-    // Mattermost is the one icon that does NOT render as a
-    // currentColor SVG — the brand guidelines forbid altering the
-    // mark, so we ship the official asset files verbatim and render
-    // them via <img>. The variant prop selects which of the three
-    // published colorways (white/black/denim) the surface needs.
+    // Vendor marks do not render as currentColor SVGs — the brand
+    // guidelines forbid altering the mark, so we ship the official
+    // asset files verbatim and render them via <img>. The variant prop
+    // selects which published colorway the surface needs.
     it("renders an <img> at the requested size", () => {
       const { container } = render(<MattermostIcon />);
       const img = container.querySelector("img");

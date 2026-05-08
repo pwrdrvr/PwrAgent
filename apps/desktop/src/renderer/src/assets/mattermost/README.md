@@ -27,7 +27,7 @@ in any way."* Restrictions called out specifically include:
   permitted. We do not apply `currentColor` or CSS filters to these
   images. That's why [`MattermostIcon.tsx`](../../icons/MattermostIcon.tsx)
   renders the asset as an `<img>` instead of inlining it as `<svg>` with
-  `stroke="currentColor"` like the other icons in this app.
+  `stroke="currentColor"`.
 - **No effects** — no drop shadows, gradients, glows, or composites.
 - **No warping or cropping** — the icon is rendered as a square at the
   same aspect ratio as the source.
@@ -57,12 +57,7 @@ shipping.
 
 ## Why this matters
 
-Other icons in this app (`TelegramIcon`, `DiscordIcon`) are hand-drawn
-monochrome silhouettes that pick up the surrounding text color via
-`currentColor`. That approach is convenient but technically violates
-those platforms' brand guidelines too — it's a known trade-off the
-project has accepted for those marks. Mattermost's guidelines are
-clearer on alteration than most, and we've chosen the compliant path
-here. If we ever need to apply the same "use the official asset" rule
-to the other platforms, the pattern in `MattermostIcon.tsx` is the
-template.
+The same pattern is now used for Telegram and Discord: official files
+live under `assets/<platform>/`, render via `<img>`, and stay insulated
+from surrounding CSS color state. The status dot communicates health;
+the vendor icon communicates identity.

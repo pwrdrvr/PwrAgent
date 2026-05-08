@@ -447,13 +447,12 @@ Decision tree:
    - Are recoloring or monochrome silhouettes permitted?
    - Are there required clearspace, minimum size, or wordmark-vs-icon rules?
    - Does the platform distribute a downloadable brand kit?
-2. **If the platform forbids alteration** (Mattermost is the canonical example — guidelines explicitly forbid recoloring, redrawing, warping, applying effects), follow the **brand-asset pattern**:
+2. **Follow the brand-asset pattern** for recognizable vendor marks:
    - Download the official kit, take the icon-only variant in each colorway you need (typically black + white + brand-color, "without clearspace" if available).
    - Save the verbatim SVG files under `apps/desktop/src/renderer/src/assets/<platform>/` — never edit the SVG content.
-   - Render via `<img>`, NOT inline `<svg>` — see [`apps/desktop/src/renderer/src/icons/MattermostIcon.tsx`](../apps/desktop/src/renderer/src/icons/MattermostIcon.tsx) for the reference implementation. The `<img>` tag is structurally insulated from parent CSS `color` rules, which protects the asset from recoloring side-effects (the `messaging-status-chip--errored` class reds the surrounding text but cannot reach into the image).
+   - Render via `<img>`, NOT inline `<svg>` — see [`apps/desktop/src/renderer/src/icons/MattermostIcon.tsx`](../apps/desktop/src/renderer/src/icons/MattermostIcon.tsx), [`TelegramIcon.tsx`](../apps/desktop/src/renderer/src/icons/TelegramIcon.tsx), and [`DiscordIcon.tsx`](../apps/desktop/src/renderer/src/icons/DiscordIcon.tsx) for reference implementations. The `<img>` tag is structurally insulated from parent CSS `color` rules, which protects the asset from recoloring side-effects.
    - Add a `README.md` to the asset directory documenting the source URL, the usage rules, and the procedure for re-fetching on update. See [`apps/desktop/src/renderer/src/assets/mattermost/README.md`](../apps/desktop/src/renderer/src/assets/mattermost/README.md) as the template — the minimum content is: source links (brand guidelines + kit zip), the specific usage restrictions ("do not modify color/shape/etc."), and a copy-pasteable update procedure. Future maintainers should be able to update the assets without re-reading this guide.
-3. **If the platform's guidelines permit monochrome silhouettes** (Discord and Telegram are this way in practice, though their guidelines technically restrict recoloring too), the simpler path is a hand-drawn `currentColor`-filled `<svg>` matching the visual weight of the existing icons. See [`DiscordIcon.tsx`](../apps/desktop/src/renderer/src/icons/DiscordIcon.tsx) or [`TelegramIcon.tsx`](../apps/desktop/src/renderer/src/icons/TelegramIcon.tsx). This is acceptable but is a known guideline gray area — prefer the brand-asset pattern when in doubt.
-4. **Wire the icon** into the four usage sites: the icon-map in `MessagingStatusBar.tsx`, the icon-map in `ThreadRow.tsx`, the conditional in `MessagingActivityScreen.tsx`'s `ActivityRow`, and the connection-test row in `MessagingSettings.tsx`. The status-chip dot turns red on `errored` health automatically (it's a separate element from the icon).
+3. **Wire the icon** into the four usage sites: the icon-map in `MessagingStatusBar.tsx`, the icon-map in `ThreadRow.tsx`, the conditional in `MessagingActivityScreen.tsx`'s `ActivityRow`, and the connection-test row in `MessagingSettings.tsx`. The status-chip dot communicates platform health; the icon stays a brand identity mark.
 
 Boundary rule (also captured in [`apps/desktop/AGENTS.md`](../apps/desktop/AGENTS.md#third-party-brand-assets)): **never hand-redraw a vendor's mark from memory or training data, and never modify SVG path data inside a brand-asset file.** If the asset needs updating, re-download from the source.
 
@@ -674,4 +673,3 @@ Captured at the end of Phase 10 of [plan 2026-05-06-001](plans/2026-05-06-001-fe
 
 - Writing the guide first **did** force me to be honest about what a contributor needs vs. what I could just figure out by reading Discord. The bounce-back evaluation surfaced ~15 corrections that would otherwise have stayed implicit knowledge.
 - The reference-implementation index ("Living Examples" section) at the bottom is a good payoff: I caught myself referring to the table mid-implementation.
-

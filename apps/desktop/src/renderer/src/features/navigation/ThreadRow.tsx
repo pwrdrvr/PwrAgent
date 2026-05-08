@@ -28,8 +28,8 @@ import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
 const PLATFORM_ICONS: Partial<
   Record<MessagingThreadBindingSummary["platform"], (props: IconProps) => ReactElement>
 > = {
-  telegram: TelegramIcon,
-  discord: DiscordIcon,
+  telegram: ({ size }) => <TelegramIcon size={size} variant="color" />,
+  discord: ({ size }) => <DiscordIcon size={size} variant="white" />,
   mattermost: ({ size }) => <MattermostIcon size={size} />,
 };
 
