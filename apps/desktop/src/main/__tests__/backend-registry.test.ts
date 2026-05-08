@@ -2635,6 +2635,185 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("rejects workspace handoff while the thread has an active turn", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Move me later",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "local",
+        },
+      ],
+      source: "codex",
+      gitBranch: "feature/handoff",
+      updatedAt: 2,
+    };
+    const handoff = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      direction: "local-to-worktree" as const,
+      workMode: "worktree" as const,
+      branch: "feature/handoff",
+      repositoryPath: "/repo/app",
+      targetPath: "/repo/app/.worktrees/app-feature-handoff",
+      linkedDirectory: {
+        id: "pwragent-handoff:codex:thread-1",
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/repo/app/.worktrees/app-feature-handoff",
+        kind: "worktree" as const,
+      },
+      warnings: [],
+      completedAt: 1000,
+    }));
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      threads: [thread],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      codexSessionMetadataService: {
+        updateThreadCwd: vi.fn(async () => ({ updated: true })),
+      } as never,
+      gitDirectoryService: {
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+      gitWorkspaceHandoffService: {
+        handoff,
+      } as never,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "keep working" }],
+    });
+
+    await expect(
+      registry.handoffThreadWorkspace({
+        backend: "codex",
+        threadId: "thread-1",
+        direction: "local-to-worktree",
+      }),
+    ).rejects.toThrow(
+      "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.",
+    );
+    expect(handoff).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("rejects workspace handoff for active turns learned from backend notifications", async () => {
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Notification active turn",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "local",
+        },
+      ],
+      source: "codex",
+      gitBranch: "feature/handoff",
+      updatedAt: 2,
+    };
+    const handoff = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      direction: "local-to-worktree" as const,
+      workMode: "worktree" as const,
+      branch: "feature/handoff",
+      repositoryPath: "/repo/app",
+      targetPath: "/repo/app/.worktrees/app-feature-handoff",
+      linkedDirectory: {
+        id: "pwragent-handoff:codex:thread-1",
+        label: "app",
+        path: "/repo/app",
+        worktreePath: "/repo/app/.worktrees/app-feature-handoff",
+        kind: "worktree" as const,
+      },
+      warnings: [],
+      completedAt: 1000,
+    }));
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [thread],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      codexSessionMetadataService: {
+        updateThreadCwd: vi.fn(async () => ({ updated: true })),
+      } as never,
+      gitDirectoryService: {
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+      gitWorkspaceHandoffService: {
+        handoff,
+      } as never,
+    });
+
+    await codexClient.emit({
+      method: "turn/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-from-notification",
+        turn: {
+          id: "turn-from-notification",
+          status: "inProgress",
+        },
+      },
+    });
+
+    await expect(
+      registry.handoffThreadWorkspace({
+        backend: "codex",
+        threadId: "thread-1",
+        direction: "local-to-worktree",
+      }),
+    ).rejects.toThrow(
+      "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.",
+    );
+
+    await codexClient.emit({
+      method: "turn/failed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-from-notification",
+        turn: {
+          id: "turn-from-notification",
+          status: "failed",
+          error: {
+            message: "boom",
+          },
+        },
+      },
+    });
+
+    await registry.handoffThreadWorkspace({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "local-to-worktree",
+    });
+    expect(handoff).toHaveBeenCalledTimes(1);
+
+    await registry.close();
+  });
+
   it("records detached handoff results as HEAD immediately", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",

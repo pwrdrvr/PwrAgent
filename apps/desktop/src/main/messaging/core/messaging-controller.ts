@@ -105,6 +105,8 @@ const DEFAULT_PENDING_INTENT_TTL_MS = 15 * 60 * 1000;
 const TYPING_ACTIVITY_LEASE_MS = 15_000;
 const TYPING_ACTIVITY_REFRESH_MS = 10_000;
 const DEFAULT_INPUT_DEBOUNCE_MS = 500;
+const ACTIVE_TURN_HANDOFF_ERROR =
+  "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 // Provider adapters own stricter platform pacing; the generic layer only
 // coalesces noisy token deltas into human-visible refreshes.
 const STREAM_UPDATE_REFRESH_MS = 1_000;
@@ -2582,6 +2584,11 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
+    if (this.handoffBlockedByActiveTurn(binding)) {
+      await this.deliverHandoffUnavailable(binding, event, ACTIVE_TURN_HANDOFF_ERROR);
+      return;
+    }
+
     if (!this.options.backend.handoffThreadWorkspace) {
       await this.deliverHandoffUnavailable(binding, event, "This runtime does not expose workspace handoff through messaging.");
       return;
@@ -2615,6 +2622,11 @@ export class MessagingController {
     event: MessagingInboundEvent,
     pageIndex = 0,
   ): Promise<void> {
+    if (this.handoffBlockedByActiveTurn(binding)) {
+      await this.deliverHandoffUnavailable(binding, event, ACTIVE_TURN_HANDOFF_ERROR);
+      return;
+    }
+
     const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
     const context = handoffContextForBinding(binding, navigation);
     if (!context || context.workspaceKind !== "local") {
@@ -2647,6 +2659,11 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundCallbackEvent,
   ): Promise<void> {
+    if (this.handoffBlockedByActiveTurn(binding)) {
+      await this.deliverHandoffUnavailable(binding, event, ACTIVE_TURN_HANDOFF_ERROR);
+      return;
+    }
+
     const navigation = await this.options.backend.getNavigationSnapshot({ backend: "all" });
     const context = handoffContextForBinding(binding, navigation);
     const request = handoffRequestFromValue(event.value);
@@ -2686,6 +2703,11 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundCallbackEvent,
   ): Promise<void> {
+    if (this.handoffBlockedByActiveTurn(binding)) {
+      await this.deliverHandoffUnavailable(binding, event, ACTIVE_TURN_HANDOFF_ERROR);
+      return;
+    }
+
     if (!this.options.backend.handoffThreadWorkspace) {
       await this.deliverHandoffUnavailable(binding, event, "This runtime does not expose workspace handoff through messaging.");
       return;
@@ -2831,6 +2853,11 @@ export class MessagingController {
     if (pendingIntent && pendingIntent.intent.id.includes("handoff")) {
       await this.options.store.deletePendingIntent(pendingIntent.id);
     }
+  }
+
+  private handoffBlockedByActiveTurn(binding: MessagingBindingRecord): boolean {
+    const activeTurn = this.getActiveTurn(binding);
+    return Boolean(activeTurn && ["working", "waiting"].includes(activeTurn.status));
   }
 
   private async deliverHandoffUnavailable(
