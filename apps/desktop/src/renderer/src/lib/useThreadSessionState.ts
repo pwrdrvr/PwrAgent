@@ -34,8 +34,10 @@ import {
   buildMcpProgressDetail,
   getNotificationItem,
   mergeActivityDetails,
+  readRendererSequence,
   summarizeActivityStatus,
   summarizeLiveActivity,
+  withRendererSequence,
 } from "../features/thread-detail/live-transcript-activity";
 
 const MAX_VIEW_ONLY_THREADS = 10;
@@ -194,15 +196,29 @@ function mergeTranscriptEntries(
       typeof optimisticEntry.createdAt === "number"
         ? optimisticEntry.createdAt
         : undefined;
+    const optimisticSequence = readRendererSequence(optimisticEntry);
     const timedIndex =
       optimisticTurnId && typeof optimisticCreatedAt === "number"
         ? merged.findIndex((entry) => {
             const entryCreatedAt =
               typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+            if (
+              entry.turn?.id !== optimisticTurnId ||
+              typeof entryCreatedAt !== "number"
+            ) {
+              return false;
+            }
+            if (entryCreatedAt > optimisticCreatedAt) {
+              return true;
+            }
+            if (entryCreatedAt < optimisticCreatedAt) {
+              return false;
+            }
+            const entrySequence = readRendererSequence(entry);
             return (
-              entry.turn?.id === optimisticTurnId &&
-              typeof entryCreatedAt === "number" &&
-              entryCreatedAt > optimisticCreatedAt
+              typeof entrySequence === "number" &&
+              typeof optimisticSequence === "number" &&
+              entrySequence > optimisticSequence
             );
           })
         : -1;
@@ -1101,6 +1117,7 @@ function upsertLiveActivityEntry(
         id,
         createdAt: params.now,
         details: params.details,
+        rendererSequence: flushed.nextLiveEntrySequence,
         turn: params.turn,
       }),
     ],
@@ -2041,26 +2058,40 @@ export function useThreadSessionState(params: {
                 optimisticMessageEntries(current.optimisticEntries),
                 current.pendingAssistantMessage
               );
+          const carriedSequence = isSamePendingMessage
+            ? readRendererSequence(current.pendingAssistantMessage)
+            : undefined;
+          const allocatedSequence =
+            carriedSequence ?? current.nextLiveEntrySequence;
+          const nextEntrySequence = isSamePendingMessage
+            ? current.nextLiveEntrySequence
+            : current.nextLiveEntrySequence + 1;
+
+          const nextPendingAssistantMessage: AppServerThreadMessageEntry = {
+            type: "message",
+            id: itemId,
+            role: "assistant",
+            phase,
+            createdAt: isSamePendingMessage
+              ? current.pendingAssistantMessage?.createdAt
+              : Date.now(),
+            ...(turn ? { turn } : {}),
+            text:
+              isSamePendingMessage
+                ? `${pendingText}${delta}`
+                : delta,
+          };
 
           return {
             ...current,
             expectOwnUpdate: true,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
-            pendingAssistantMessage: {
-              type: "message",
-              id: itemId,
-              role: "assistant",
-              phase,
-              createdAt: isSamePendingMessage
-                ? current.pendingAssistantMessage?.createdAt
-                : Date.now(),
-              ...(turn ? { turn } : {}),
-              text:
-                isSamePendingMessage
-                  ? `${pendingText}${delta}`
-                  : delta,
-            },
+            nextLiveEntrySequence: nextEntrySequence,
+            pendingAssistantMessage: withRendererSequence(
+              nextPendingAssistantMessage,
+              allocatedSequence
+            ),
             response: flushedResponse,
           };
         }
@@ -2312,16 +2343,22 @@ export function useThreadSessionState(params: {
               : []),
           ];
 
+          const syntheticFinalSequence = current.nextLiveEntrySequence;
           if (shouldAppendFinalMessage && completedText) {
-            nextEntries.push({
-              type: "message",
-              id: `${event.notification.params.turnId}:assistant`,
-              role: "assistant",
-              phase: "final",
-              ...(completedTurn ? { turn: completedTurn } : {}),
-              text: completedText,
-              createdAt: Date.now(),
-            });
+            nextEntries.push(
+              withRendererSequence(
+                {
+                  type: "message",
+                  id: `${event.notification.params.turnId}:assistant`,
+                  role: "assistant",
+                  phase: "final",
+                  ...(completedTurn ? { turn: completedTurn } : {}),
+                  text: completedText,
+                  createdAt: Date.now(),
+                },
+                syntheticFinalSequence
+              )
+            );
           }
 
           const responseWithCompletedTurn = withCompletedResponseTurnMetadata(
@@ -2376,6 +2413,10 @@ export function useThreadSessionState(params: {
             lastTouchedAt: nextLastTouchedAt,
             needsHydrationAfterCompletion:
               !completedText || shouldHydrateUnknownPhaseAssistant,
+            nextLiveEntrySequence:
+              shouldAppendFinalMessage && completedText
+                ? current.nextLiveEntrySequence + 1
+                : current.nextLiveEntrySequence,
             optimisticEntries: remainingOptimisticEntries,
             pendingAssistantMessage: undefined,
             pendingMcpInteraction: undefined,

@@ -6,6 +6,20 @@ import type {
   AppServerThreadTurnMetadata,
 } from "@pwragent/shared";
 
+export const RENDERER_SEQUENCE_KEY = "__rendererSequence" as const;
+
+export function readRendererSequence(entry: object | undefined): number | undefined {
+  if (!entry) {
+    return undefined;
+  }
+  const value = (entry as Record<string, unknown>)[RENDERER_SEQUENCE_KEY];
+  return typeof value === "number" ? value : undefined;
+}
+
+export function withRendererSequence<T extends object>(entry: T, sequence: number): T {
+  return { ...entry, [RENDERER_SEQUENCE_KEY]: sequence } as T;
+}
+
 export function getNotificationItem(
   params: Record<string, unknown>
 ): Record<string, unknown> | undefined {
@@ -515,6 +529,7 @@ export function buildLiveActivityEntry(params: {
   id: string;
   createdAt?: number;
   details: AppServerThreadActivityDetail[];
+  rendererSequence?: number;
   turn?: AppServerThreadTurnMetadata;
 }): AppServerThreadActivityEntry {
   return {
@@ -525,5 +540,8 @@ export function buildLiveActivityEntry(params: {
     status: summarizeActivityStatus(params.details),
     details: params.details,
     ...(params.turn ? { turn: params.turn } : {}),
+    ...(typeof params.rendererSequence === "number"
+      ? { [RENDERER_SEQUENCE_KEY]: params.rendererSequence }
+      : {}),
   };
 }
