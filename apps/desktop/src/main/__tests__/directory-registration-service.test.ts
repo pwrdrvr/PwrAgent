@@ -3,8 +3,38 @@ import type {
   EnsureDirectoryLaunchpadResponse,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
+  RegisterDirectoryFromDiskResponse,
 } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
+
+/**
+ * Narrowing helpers that THROW on the wrong branch. The previous
+ * `expect(result.ok).toBe(true); if (!result.ok) return;` pattern
+ * relies on `expect` running first to fail the test — fine when
+ * authored together, but easy to copy-paste without the `expect` and
+ * end up with a silent no-op. These helpers make the negative branch
+ * fail loudly even on its own, and TypeScript narrows the return value
+ * for the rest of the test body.
+ */
+function assertOk(
+  result: RegisterDirectoryFromDiskResponse,
+): asserts result is Extract<RegisterDirectoryFromDiskResponse, { ok: true }> {
+  if (!result.ok) {
+    throw new Error(
+      `Expected ok result, got failure: ${result.reason} — ${result.message}`,
+    );
+  }
+}
+
+function assertFailed(
+  result: RegisterDirectoryFromDiskResponse,
+): asserts result is Extract<RegisterDirectoryFromDiskResponse, { ok: false }> {
+  if (result.ok) {
+    throw new Error(
+      `Expected failure result, got ok: ${result.directoryKey}`,
+    );
+  }
+}
 
 // Tests for the project-directory picker registration path (issue #223).
 // We stub the filesystem and `git` invocations so the suite stays fast
@@ -85,8 +115,7 @@ describe("registerDirectoryFromDisk", () => {
       },
     );
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    assertOk(result);
     expect(result.directoryPath).toBe("/Users/huntharo/code/PwrAgent");
     expect(result.directoryKey).toBe("directory:/Users/huntharo/code/PwrAgent");
     expect(result.directoryLabel).toBe("PwrAgent");
@@ -122,8 +151,7 @@ describe("registerDirectoryFromDisk", () => {
       },
     );
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    assertOk(result);
     expect(result.directoryPath).toBe("/Users/me/repos/canonical-name");
     expect(result.directoryKey).toBe(
       "directory:/Users/me/repos/canonical-name",
@@ -145,8 +173,7 @@ describe("registerDirectoryFromDisk", () => {
       },
     );
 
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
+    assertFailed(result);
     expect(result.reason).toBe("not-a-git-repo");
     expect(result.message).toContain("/tmp/not-a-repo");
     expect(ensure).not.toHaveBeenCalled();
@@ -165,8 +192,7 @@ describe("registerDirectoryFromDisk", () => {
       },
     );
 
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
+    assertFailed(result);
     expect(result.reason).toBe("not-a-directory");
     expect(ensure).not.toHaveBeenCalled();
     expect(runGit).not.toHaveBeenCalled();
@@ -185,8 +211,7 @@ describe("registerDirectoryFromDisk", () => {
       },
     );
 
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
+    assertFailed(result);
     expect(result.reason).toBe("inaccessible");
     expect(ensure).not.toHaveBeenCalled();
     expect(runGit).not.toHaveBeenCalled();
@@ -203,8 +228,7 @@ describe("registerDirectoryFromDisk", () => {
       },
     );
 
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
+    assertFailed(result);
     expect(result.reason).toBe("inaccessible");
     expect(ensure).not.toHaveBeenCalled();
   });
@@ -230,12 +254,43 @@ describe("registerDirectoryFromDisk", () => {
       },
     );
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    assertOk(result);
     expect(result.currentBranch).toBeUndefined();
     expect(ensure).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ currentBranch: undefined }),
     );
+  });
+
+  it("canonicalizes pwragent-managed worktree paths back to the parent repo", async () => {
+    // When the user picks a directory inside `<repo>/.worktrees/<hash>/<project>`,
+    // `git rev-parse --show-toplevel` reports the worktree path. We
+    // canonicalize back to `<repo>` so the directoryKey dedupes against
+    // the existing canonical-repo entry rather than producing a duplicate
+    // "PwrAgent" pinned at the worktree path.
+    const ensure = buildEnsureSpy();
+    const runGit = vi.fn(async (_cwd: string, args: string[]) => {
+      if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
+        return "/Users/me/code/PwrAgent/.worktrees/abc123/PwrAgent";
+      }
+      if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") {
+        return "feat/x";
+      }
+      throw new Error(`unexpected git args: ${args.join(" ")}`);
+    });
+
+    const result = await registerDirectoryFromDisk(
+      { path: "/Users/me/code/PwrAgent/.worktrees/abc123/PwrAgent" },
+      {
+        ensureDirectoryLaunchpad: ensure,
+        runGit,
+        statPath: statDir,
+      },
+    );
+
+    assertOk(result);
+    expect(result.directoryPath).toBe("/Users/me/code/PwrAgent");
+    expect(result.directoryKey).toBe("directory:/Users/me/code/PwrAgent");
+    expect(result.directoryLabel).toBe("PwrAgent");
   });
 
   it("propagates preferredBackend through to ensureDirectoryLaunchpad", async () => {

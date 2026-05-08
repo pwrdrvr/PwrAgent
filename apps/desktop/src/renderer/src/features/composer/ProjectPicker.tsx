@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactElement } from "react";
 import type { NavigationDirectorySummary } from "@pwragent/shared";
+import { FolderIcon } from "../../icons";
 
 /**
  * Project-directory picker for the new-thread composer (issue #223).
@@ -114,6 +115,12 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
+        // When the most-recent register attempt failed, point screen
+        // readers at the inline error so it's announced when focus
+        // returns to the trigger. `aria-describedby` is wider-supported
+        // than `aria-errormessage`, and the message is short enough to
+        // read fluently as a description.
+        aria-describedby={props.pickError ? errorId : undefined}
         aria-label={
           props.value ? `Project: ${buttonLabel}` : "Choose a project"
         }
@@ -123,19 +130,7 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
         disabled={props.disabled}
         onClick={() => setOpen((current) => !current)}
       >
-        <svg
-          aria-hidden="true"
-          width="11"
-          height="11"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-        </svg>
+        <FolderIcon size={11} />
         <span className="project-picker__label">{buttonLabel}</span>
         <span className="project-picker__chevron" aria-hidden="true">
           ⌄

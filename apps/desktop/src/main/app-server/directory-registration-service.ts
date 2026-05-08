@@ -70,6 +70,30 @@ function failed(
   return { ok: false, reason, message };
 }
 
+/**
+ * If `target` lives inside `<repo>/.worktrees/<hash>/<project>` —
+ * pwragent's own auxiliary-worktree convention — return `<repo>` so
+ * the picker's directoryKey matches the canonical-repo entry that
+ * already exists in the navigation snapshot.
+ *
+ * Without this, picking a path under `.worktrees/<hash>/<project>`
+ * generates `directory:/repo/.worktrees/<hash>/<project>` while the
+ * rest of the system uses `directory:/repo`, producing a duplicate
+ * entry in the picker's "Recent directories" list. This mirrors the
+ * `repoWorktreeMatch` branch in
+ * `packages/agent-core/src/domain/directory-navigation.ts:88`, which
+ * is the read-side of the same normalization. We deliberately do NOT
+ * canonicalize `.codex/worktrees/...` paths — those are intentionally
+ * tracked as their own directory entries by the directory-navigation
+ * builder.
+ */
+function canonicalizeRepoWorktreePath(target: string): string {
+  const match = target.match(
+    /^(.*)[\\/]\.worktrees[\\/][^\\/]+(?:[\\/][^\\/]+)?(?:[\\/].*)?$/,
+  );
+  return match ? match[1] : target;
+}
+
 export async function registerDirectoryFromDisk(
   request: { path: string; preferredBackend?: AppServerBackendKind },
   deps: DirectoryRegistrationDeps,
@@ -101,13 +125,20 @@ export async function registerDirectoryFromDisk(
 
   let repoRoot: string;
   try {
-    repoRoot = (await runGit(candidate, ["rev-parse", "--show-toplevel"])).trim();
-    if (!repoRoot) {
+    const toplevel = (await runGit(candidate, [
+      "rev-parse",
+      "--show-toplevel",
+    ])).trim();
+    if (!toplevel) {
       return failed(
         "not-a-git-repo",
         `${candidate} is not inside a git repository.`,
       );
     }
+    // If the toplevel is itself a pwragent-managed worktree, walk back
+    // to the parent repo so the directoryKey dedupes against the
+    // already-tracked directory entry. See `canonicalizeRepoWorktreePath`.
+    repoRoot = canonicalizeRepoWorktreePath(toplevel);
   } catch {
     // `git rev-parse --show-toplevel` exits non-zero (with a message on
     // stderr) for any path that isn't tracked. We treat all such

@@ -5981,8 +5981,11 @@ textarea,
   margin: 4px 8px 6px;
   padding: 6px 8px;
   border-radius: 6px;
-  background: var(--errored-soft, rgba(255, 90, 90, 0.08));
-  color: var(--errored, var(--accent-bright));
+  /* Canonical danger pair — same tokens used by .settings-panel--error
+     and .messaging-status-chip--errored. Don't introduce a new error
+     token name (UI-THEME.md). */
+  background: var(--danger-soft);
+  color: var(--danger-text);
   font-size: 12px;
   line-height: 1.35;
 }
