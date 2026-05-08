@@ -273,6 +273,33 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
+  it("groups profile-scoped scratch projects under Workspaces", () => {
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          linkedDirectories: [
+            {
+              id: "/Users/huntharo/.pwragent/profiles/default/projects/2026-05-08-9bc2d3",
+              label: "2026-05-08-9bc2d3",
+              path: "/Users/huntharo/.pwragent/profiles/default/projects/2026-05-08-9bc2d3",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(directories).toEqual([
+      expect.objectContaining({
+        key: "workspace:/Users/huntharo/.pwragent/profiles/default/projects",
+        kind: "workspace",
+        label: "Workspaces",
+        path: "/Users/huntharo/.pwragent/profiles/default/projects",
+        threadKeys: ["codex:thread-1"],
+      }),
+    ]);
+  });
+
   it("keeps same-named Codex worktrees as separate directory rows", () => {
     const directories = buildDirectorySummaries({
       threads: [

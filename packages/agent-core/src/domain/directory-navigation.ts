@@ -58,30 +58,30 @@ function isToolManagedWorktreePath(value: string): boolean {
   );
 }
 
+function matchScratchProjectsRoot(value: string): string | undefined {
+  const scratchWorkspaceRootMatch = value.match(
+    /^(.*[\\/]\.pwrag(?:ent|nt)(?:[\\/]profiles[\\/][^\\/]+)?[\\/]projects)$/,
+  );
+  if (scratchWorkspaceRootMatch) {
+    return scratchWorkspaceRootMatch[1];
+  }
+
+  const scratchWorkspaceMatch = value.match(
+    /^(.*[\\/]\.pwrag(?:ent|nt)(?:[\\/]profiles[\\/][^\\/]+)?[\\/]projects)[\\/][^\\/]+$/,
+  );
+  return scratchWorkspaceMatch?.[1];
+}
+
 function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescriptor {
   // Match both current ".pwragent" and legacy ".pwragnt" home directory names
   // so pre-rebrand thread data classifies correctly.
-  const scratchWorkspaceRootMatch = directory.path.match(
-    /^(.*[\\/]\.pwrag(?:ent|nt)[\\/]projects)$/,
-  );
-  if (scratchWorkspaceRootMatch) {
+  const scratchProjectsRoot = matchScratchProjectsRoot(directory.path);
+  if (scratchProjectsRoot) {
     return {
-      key: `workspace:${scratchWorkspaceRootMatch[1]}`,
+      key: `workspace:${scratchProjectsRoot}`,
       kind: "workspace",
       label: "Workspaces",
-      path: scratchWorkspaceRootMatch[1],
-    };
-  }
-
-  const scratchWorkspaceMatch = directory.path.match(
-    /^(.*[\\/]\.pwrag(?:ent|nt)[\\/]projects)[\\/][^\\/]+$/,
-  );
-  if (scratchWorkspaceMatch) {
-    return {
-      key: `workspace:${scratchWorkspaceMatch[1]}`,
-      kind: "workspace",
-      label: "Workspaces",
-      path: scratchWorkspaceMatch[1],
+      path: scratchProjectsRoot,
     };
   }
 
