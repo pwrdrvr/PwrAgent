@@ -273,8 +273,9 @@ export class DesktopMessagingRuntime {
 
     this.syncRunningAdapterLists();
 
+    const failedChannelSet = new Set<MessagingChannelKind>(failedChannels);
     for (const channel of stoppedChannels) {
-      if (!this.runningAdapters.has(channel)) {
+      if (!this.runningAdapters.has(channel) && !failedChannelSet.has(channel)) {
         this.setPlatformHealth(channel, "suspended");
       }
     }

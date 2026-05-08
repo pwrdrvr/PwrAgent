@@ -1215,6 +1215,59 @@ describe("DesktopMessagingRuntime", () => {
       }),
     ]);
   });
+
+  it("preserves errored health when a hot restart replacement fails", async () => {
+    await prepareRuntimeStore();
+    const firstTelegramAdapter = createAdapter("telegram");
+    const failingTelegramAdapter = createAdapter("telegram", {
+      start: vi.fn(async () => {
+        throw new Error("new token rejected");
+      }),
+    });
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) => {
+      if (!config.telegram) return [];
+      return [
+        config.telegram.botToken === "telegram-token-2"
+          ? failingTelegramAdapter
+          : firstTelegramAdapter,
+      ];
+    });
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        inputDebounceMs: 0,
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token-1",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    await runtime.start();
+    await runtime.applyConfig({
+      inputDebounceMs: 0,
+      telegram: {
+        channel: "telegram",
+        botToken: "telegram-token-2",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
+    });
+
+    expect(firstTelegramAdapter.stop).toHaveBeenCalledTimes(1);
+    expect(failingTelegramAdapter.start).toHaveBeenCalledTimes(1);
+    expect(runtime.getPlatformStatuses()).toEqual([
+      expect.objectContaining({
+        platform: "telegram",
+        health: "errored",
+        reason: "new token rejected",
+      }),
+    ]);
+  });
 });
 
 async function createRuntimeHarness(): Promise<{

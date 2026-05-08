@@ -169,6 +169,21 @@ describe("desktop messaging config", () => {
       inputDebounceMs: 500,
     });
     expect(config.telegram).toBeUndefined();
+
+    const sessionConfig = await loadDesktopMessagingConfigFromSettings(
+      service,
+      {},
+      { messagingEnabledOverride: true },
+    );
+
+    expect(sessionConfig).toMatchObject({
+      enabled: true,
+      telegram: {
+        channel: "telegram",
+        botToken: "settings-telegram-token",
+        authorizedActorIds: [{ id: "111111111", displayName: "" }],
+      },
+    });
   });
 
   it("keeps env-only messaging config fallback enabled for tests", async () => {

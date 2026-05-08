@@ -83,6 +83,7 @@ export type DesktopMessagingSettingsSource = Pick<
 
 export type DesktopMessagingConfigLoadOptions = {
   logStartupEligibility?: boolean;
+  messagingEnabledOverride?: boolean;
 };
 
 export function loadDesktopMessagingConfig(
@@ -244,7 +245,8 @@ export async function loadDesktopMessagingConfigFromSettings(
     maxAttachmentBytes: snapshot.messaging.attachments.maxAttachmentBytes.value,
     maxAttachmentCount: snapshot.messaging.attachments.maxAttachmentCount.value,
   };
-  const messagingEnabled = snapshot.messaging.enabled.value;
+  const messagingEnabled =
+    options.messagingEnabledOverride ?? snapshot.messaging.enabled.value;
 
   // Resolve per-platform enablement and log the decision for each
   const telegramEnabled = shouldEnableSettingsChannel(
