@@ -79,6 +79,8 @@ import type {
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   ClearDesktopSettingsSecretRequest,
+  DesktopMessagingContactLookupRequest,
+  DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
@@ -203,6 +205,9 @@ export type DesktopApi = {
   readLastSettingsCredentialTest?: (
     request: { kind: SettingsCredentialTestKind },
   ) => Promise<SettingsCredentialTestResult | undefined>;
+  resolveMessagingContact?: (
+    request: DesktopMessagingContactLookupRequest,
+  ) => Promise<DesktopMessagingContactLookupResponse>;
   openApplication?: (
     request: OpenDesktopApplicationRequest
   ) => Promise<OpenDesktopApplicationResponse>;

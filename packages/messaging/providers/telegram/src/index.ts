@@ -28,3 +28,4 @@ export {
 } from "./telegram-formatting.ts";
 export type { TelegramMessagingConfig } from "./telegram-config.ts";
 export { validateCredentials } from "./validate-credentials.ts";
+export { resolveContact } from "./resolve-contact.ts";

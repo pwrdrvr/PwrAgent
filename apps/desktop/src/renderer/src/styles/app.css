@@ -2640,7 +2640,7 @@ textarea,
 
 .settings-authorized-list__row {
   display: grid;
-  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto;
+  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto auto;
   gap: 8px;
   align-items: center;
 }
@@ -2651,6 +2651,7 @@ textarea,
 }
 
 .settings-authorized-list__remove,
+.settings-authorized-list__lookup,
 .settings-authorized-list__add {
   width: max-content;
 }

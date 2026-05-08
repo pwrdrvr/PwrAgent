@@ -1074,6 +1074,44 @@ export type MattermostCredentialValidationConfig = {
   serverUrl: string;
 };
 
+/* -----------------------------------------------------------------
+ * Contact identity lookup (Settings → authorized contact rows)
+ * -----------------------------------------------------------------
+ *
+ * Each provider package may export a top-level
+ * `resolveContact(config, request) -> MessagingContactLookupResult`
+ * function. The desktop main process dispatches to the right provider
+ * via dynamic import, keeping provider SDKs out of the renderer and
+ * desktop orchestration layer.
+ *
+ * The lookup is best-effort and read-only. Platform APIs can only
+ * resolve identities the bot is allowed to see: Telegram Bot API
+ * `getChat`, Discord REST `GET /users/{id}` / `GET /guilds/{id}`,
+ * and Mattermost REST `GET /api/v4/users/{id}`.
+ */
+export type MessagingContactLookupKind = "user" | "supergroup" | "guild";
+
+export type MessagingContactLookupRequest = {
+  id: string;
+  kind: MessagingContactLookupKind;
+};
+
+export type MessagingContactLookupStatus =
+  | "ok"
+  | "failed"
+  | "not_found"
+  | "unset"
+  | "unsupported";
+
+export type MessagingContactLookupResult = {
+  status: MessagingContactLookupStatus;
+  id: string;
+  displayName?: string;
+  handle?: string;
+  detail?: string;
+  errorMessage?: string;
+};
+
 /**
  * Helper providers can use to clip an error message to the contract
  * limit. Trims whitespace, replaces a tail with an ellipsis when over

@@ -1,6 +1,8 @@
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import type {
   ClearDesktopSettingsSecretRequest,
+  DesktopMessagingContactLookupRequest,
+  DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
@@ -19,6 +21,7 @@ import {
   SETTINGS_READ_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
+  SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
   SETTINGS_TEST_CREDENTIALS_CHANNEL,
   SETTINGS_WRITE_CONFIG_CHANNEL,
 } from "../../shared/ipc";
@@ -40,6 +43,70 @@ async function refreshModelBackendsIfNeeded(params: {
   if (params.patch?.models?.codex?.path !== undefined || params.secret === "grokApiKey") {
     await disposeDesktopBackendRegistry();
   }
+}
+
+async function resolveMessagingContact(
+  service: DesktopSettingsService,
+  request: DesktopMessagingContactLookupRequest,
+): Promise<DesktopMessagingContactLookupResponse> {
+  const id = request.id.trim();
+  if (!id) {
+    return {
+      status: "failed",
+      id,
+      errorMessage: "ID is required.",
+    };
+  }
+
+  switch (request.platform) {
+    case "telegram": {
+      if (request.kind !== "user" && request.kind !== "supergroup") {
+        return unsupportedLookup(request);
+      }
+      const botToken = service.resolveTelegramBotTokenSync();
+      if (!botToken) return { status: "unset", id };
+      const provider = await import("@pwragent/messaging-provider-telegram");
+      return provider.resolveContact(
+        { botToken },
+        { id, kind: request.kind },
+      );
+    }
+    case "discord": {
+      if (request.kind !== "user" && request.kind !== "guild") {
+        return unsupportedLookup(request);
+      }
+      const botToken = service.resolveDiscordBotTokenSync();
+      if (!botToken) return { status: "unset", id };
+      const provider = await import("@pwragent/messaging-provider-discord");
+      return provider.resolveContact(
+        { botToken },
+        { id, kind: request.kind },
+      );
+    }
+    case "mattermost": {
+      if (request.kind !== "user") {
+        return unsupportedLookup(request);
+      }
+      const botToken = service.resolveMattermostBotTokenSync();
+      const serverUrl = service.resolveMattermostServerUrlSync();
+      if (!botToken || !serverUrl) return { status: "unset", id };
+      const provider = await import("@pwragent/messaging-provider-mattermost");
+      return provider.resolveContact(
+        { botToken, serverUrl },
+        { id, kind: request.kind },
+      );
+    }
+  }
+}
+
+function unsupportedLookup(
+  request: DesktopMessagingContactLookupRequest,
+): DesktopMessagingContactLookupResponse {
+  return {
+    status: "unsupported",
+    id: request.id.trim(),
+    errorMessage: `${request.platform} cannot resolve ${request.kind} contacts.`,
+  };
 }
 
 /**
@@ -231,6 +298,16 @@ export function registerSettingsIpcHandlers(
       return tester.lastResult(request.kind);
     },
   );
+
+  ipcMain.removeHandler(SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
+    async (
+      _event,
+      request: DesktopMessagingContactLookupRequest,
+    ): Promise<DesktopMessagingContactLookupResponse> =>
+      await resolveMessagingContact(getService(service), request),
+  );
 }
 
 export function disposeSettingsIpcHandlers(): void {
@@ -242,5 +319,6 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_PICK_GH_COMMAND_CHANNEL);
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL);
   disposeCredentialTester();
 }

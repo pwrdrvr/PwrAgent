@@ -13,6 +13,7 @@ export type {
   DiscordApplicationCommandBody,
 } from "./discord-commands.ts";
 export { DiscordAdapter, createDiscordAdapter } from "./discord-adapter.ts";
+export { resolveContact } from "./resolve-contact.ts";
 export {
   DISCORD_COMPONENT_CUSTOM_ID_LIMIT_BYTES,
   actionsForDiscordIntent,

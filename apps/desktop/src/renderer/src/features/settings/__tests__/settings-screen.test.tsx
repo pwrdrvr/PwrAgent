@@ -471,6 +471,55 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("looks up blank messaging display names from the settings screen", async () => {
+    const settings = createSettingsState();
+    const resolveMessagingContact = vi.fn(async () => ({
+      status: "ok" as const,
+      id: "8460800771",
+      displayName: "Harold (@huntharo)",
+      handle: "@huntharo",
+    }));
+    const desktopApi = {
+      resolveMessagingContact,
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Add" })[0]!);
+    const telegramUserIds = screen.getByLabelText("Authorized User IDs ID 1");
+    fireEvent.change(telegramUserIds, { target: { value: "8460800771" } });
+    fireEvent.blur(telegramUserIds);
+
+    await waitFor(() => {
+      expect(resolveMessagingContact).toHaveBeenCalledWith({
+        platform: "telegram",
+        kind: "user",
+        id: "8460800771",
+      });
+    });
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          telegram: {
+            authorizedUserIds: [
+              { id: "8460800771", displayName: "Harold (@huntharo)" },
+            ],
+          },
+        },
+      });
+    });
+    expect(
+      screen.getByLabelText("Authorized User IDs display name 1"),
+    ).toHaveValue("Harold (@huntharo)");
+  });
+
   it("surfaces invalid persisted messaging IDs with a Remove action", async () => {
     const snapshot = createSnapshot();
     const settings = createSettingsState({

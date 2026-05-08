@@ -72,6 +72,8 @@ export const SETTINGS_TEST_CREDENTIALS_CHANNEL =
  */
 export const SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL =
   "settings:last-credential-test";
+export const SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL =
+  "settings:resolve-messaging-contact";
 /**
  * Fired main → renderer whenever the messaging store has had bindings
  * created, revoked, or had their conversation metadata change. The
