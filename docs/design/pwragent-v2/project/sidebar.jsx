@@ -149,7 +149,7 @@ function LensSwitch({ value, onChange }) {
   );
 }
 
-function DirectoryGroup({ group, selectedId, onSelect, onAddReaction, onUnbindPlatform }) {
+function DirectoryGroup({ group, selectedId, onSelect, onAddReaction, onUnbindPlatform, onNewThreadInDir }) {
   const I = window.PA.Icon;
   return (
     <div className="pa-dir-section">
@@ -157,7 +157,13 @@ function DirectoryGroup({ group, selectedId, onSelect, onAddReaction, onUnbindPl
         <span className="pa-dir-sticky__icon"><I.Folder size={14} /></span>
         <span className="pa-dir-sticky__title">{group.dir}</span>
         <span className="pa-dir-sticky__count">{group.threads.length}</span>
-        <button className="pa-dir-sticky__action" title="New thread in this folder"><I.Plus size={13} /></button>
+        <button
+          className="pa-dir-sticky__action"
+          title="New thread in this folder"
+          onClick={(e) => { e.stopPropagation(); onNewThreadInDir?.(group); }}
+        >
+          <I.Plus size={13} />
+        </button>
         <button className="pa-dir-sticky__action" title="Collapse"><I.ChevronDown size={13} /></button>
       </div>
       {group.threads.map((t) => (
@@ -174,7 +180,7 @@ function DirectoryGroup({ group, selectedId, onSelect, onAddReaction, onUnbindPl
   );
 }
 
-function Sidebar({ data, selectedId, onSelect, lens, setLens, contextDir, contextBranch, showDevContext, onAddReaction, onUnbindPlatform, onNewThread }) {
+function Sidebar({ data, selectedId, onSelect, lens, setLens, contextDir, contextBranch, showDevContext, newThreadActive, onAddReaction, onUnbindPlatform, onNewThread, onNewThreadInDir }) {
   const I = window.PA.Icon;
   const flat = data.flatMap((g) => g.threads);
   return (
@@ -198,7 +204,7 @@ function Sidebar({ data, selectedId, onSelect, lens, setLens, contextDir, contex
       )}
 
       <div className="pa-sb__newthread-row">
-        <button className="pa-sb__newthread" type="button" onClick={onNewThread}>
+        <button className={`pa-sb__newthread ${newThreadActive ? "is-active" : ""}`} type="button" onClick={onNewThread}>
           <I.PlusSquare size={14} />
           <span>New thread</span>
           <span className="pa-sb__newthread-kbd">⌘N</span>
@@ -226,6 +232,7 @@ function Sidebar({ data, selectedId, onSelect, lens, setLens, contextDir, contex
             onSelect={onSelect}
             onAddReaction={onAddReaction}
             onUnbindPlatform={onUnbindPlatform}
+            onNewThreadInDir={onNewThreadInDir}
           />
         ))}
       </div>
