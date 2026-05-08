@@ -2,6 +2,8 @@
 
 A hands-on, opinionated walkthrough for adding a new messaging platform adapter (Slack, Signal, Mattermost, Feishu/Lark, Matrix, …) to PwrAgent.
 
+> **Reference implementation:** the most recent end-to-end addition is the Mattermost provider in [PR #199](https://github.com/pwrdrvr/PwrAgent/pull/199). It covers every step in this guide — capability profile, callback delivery model (HTTP-callback with HMAC), slash commands, settings UI with Keychain-backed secrets, connection-test wiring, env-var fallbacks, and tests. When this guide says "see how X is done," PR #199 is usually the answer. Read this guide for the *why* and the linked PR for the *how*.
+
 This is the **how-to** companion to:
 
 - [`docs/messaging-architecture.md`](messaging-architecture.md) — *what is the system* (read this first for context)
