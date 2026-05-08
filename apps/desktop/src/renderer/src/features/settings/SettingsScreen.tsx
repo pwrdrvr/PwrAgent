@@ -299,6 +299,13 @@ function SettingsSectionBody(props: {
                 : { terminal: { preferredId } },
           });
         }}
+        onSaveGhPath={async (path) => {
+          await props.settings.writeConfig({
+            applications: {
+              gh: { path },
+            },
+          });
+        }}
       />
     );
   }

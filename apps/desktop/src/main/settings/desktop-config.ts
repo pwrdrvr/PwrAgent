@@ -75,6 +75,9 @@ export type DesktopSettingsConfig = {
     terminal?: {
       preferredId?: string;
     };
+    gh?: {
+      path?: string;
+    };
   };
   worktrees?: {
     storage?: DesktopWorktreeStorageLocation;
@@ -270,6 +273,9 @@ export function desktopSettingsPatchToEdits(
   if (patch.applications?.terminal?.preferredId !== undefined) {
     set(["applications", "terminal", "preferred_id"], patch.applications.terminal.preferredId);
   }
+  if (patch.applications?.gh?.path !== undefined) {
+    set(["applications", "gh", "path"], patch.applications.gh.path);
+  }
 
   if (patch.worktrees?.storage !== undefined) {
     set(["worktrees", "storage"], patch.worktrees.storage);
@@ -298,6 +304,7 @@ function normalizeDesktopConfig(
   const codex = tables["models.codex"];
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
+  const gh = tables["applications.gh"];
   const worktrees = tables["worktrees"];
 
   return pruneEmptyConfig({
@@ -350,6 +357,9 @@ function normalizeDesktopConfig(
       },
       terminal: {
         preferredId: readString(terminal?.preferred_id),
+      },
+      gh: {
+        path: readString(gh?.path),
       },
     },
     worktrees: {
@@ -407,9 +417,11 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
 
   const editor = config.applications?.editor;
   const terminal = config.applications?.terminal;
+  const gh = config.applications?.gh;
   if (
     (editor && hasDefinedValue(editor))
     || (terminal && hasDefinedValue(terminal))
+    || (gh && hasDefinedValue(gh))
   ) {
     pruned.applications = {};
     if (editor && hasDefinedValue(editor)) {
@@ -417,6 +429,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (terminal && hasDefinedValue(terminal)) {
       pruned.applications.terminal = terminal;
+    }
+    if (gh && hasDefinedValue(gh)) {
+      pruned.applications.gh = gh;
     }
   }
 
@@ -510,4 +525,3 @@ function readWorktreeStorage(
     ? value
     : undefined;
 }
-

@@ -47,6 +47,7 @@ import type {
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
   PickDirectoryFromDiskResponse,
+  PickGhCommandResponse,
   RegisterDirectoryFromDiskRequest,
   RegisterDirectoryFromDiskResponse,
   UnbindMessagingThreadRequest,
@@ -149,6 +150,7 @@ import {
   RUNTIME_IDENTITY_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
+  SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
@@ -226,6 +228,8 @@ const desktopApi = Object.freeze({
     request?: RefreshDesktopCodexDiscoveryRequest,
   ): Promise<ReadDesktopSettingsResponse> =>
     await ipcRenderer.invoke(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL, request),
+  pickGhCommand: async (): Promise<PickGhCommandResponse> =>
+    await ipcRenderer.invoke(SETTINGS_PICK_GH_COMMAND_CHANNEL),
   testSettingsCredentials: async (
     request: SettingsCredentialTestRequest,
   ): Promise<SettingsCredentialTestResult> =>

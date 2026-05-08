@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type {
   DesktopApplicationDiscoveryCandidate,
   DesktopApplicationKind,
+  DesktopGhDiscoveryCandidate,
   DesktopSettingsSnapshot,
   GhStatus,
 } from "@pwragent/shared";
@@ -24,6 +25,7 @@ export function ApplicationsSettings(props: {
     kind: DesktopApplicationKind,
     preferredId: string,
   ) => Promise<void>;
+  onSaveGhPath: (path: string) => Promise<void>;
 }) {
   return (
     <SettingsSectionStack paneId="applications" aria-label="Application settings">
@@ -51,16 +53,30 @@ export function ApplicationsSettings(props: {
         title="Terminal"
         onPreferredApplicationChange={props.onPreferredApplicationChange}
       />
-      <GhStatusPanel desktopApi={props.desktopApi} />
+      <GhStatusPanel
+        desktopApi={props.desktopApi}
+        saving={props.saving}
+        snapshot={props.snapshot}
+        onSaveGhPath={props.onSaveGhPath}
+      />
     </SettingsSectionStack>
   );
 }
 
-function GhStatusPanel(props: { desktopApi?: DesktopApi }) {
+function GhStatusPanel(props: {
+  desktopApi?: DesktopApi;
+  saving: boolean;
+  snapshot: DesktopSettingsSnapshot;
+  onSaveGhPath: (path: string) => Promise<void>;
+}) {
   const desktopApi = props.desktopApi;
   const [status, setStatus] = useState<GhStatus | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
+  const gh = props.snapshot.applications.gh;
+  const envForced = gh.path.source === "env";
+  const discovery = status?.discovery ?? gh.discovery;
+  const candidates = discovery.candidates;
 
   const load = useCallback(
     async (recheck: boolean) => {
@@ -84,6 +100,13 @@ function GhStatusPanel(props: { desktopApi?: DesktopApi }) {
   }, [load]);
 
   const pill = describeGhStatusPill(status);
+  const selected = discovery.candidates.find((candidate) => candidate.selected);
+  const resolvedCommand = selected?.command ?? discovery.selectedCommand;
+  const resolvedVersion = selected?.version;
+  const saveGhPath = async (path: string): Promise<void> => {
+    await props.onSaveGhPath(path);
+    await load(true);
+  };
 
   return (
     <section className="settings-panel" aria-labelledby="settings-gh-title">
@@ -112,6 +135,16 @@ function GhStatusPanel(props: { desktopApi?: DesktopApi }) {
         >
           {pill.label}
         </span>
+        {resolvedCommand ? (
+          <span className="settings-pathrow__path">
+            Path: <code>{resolvedCommand}</code>
+          </span>
+        ) : null}
+        {resolvedVersion ? (
+          <span className="settings-pathrow__path">
+            Version: <code>{resolvedVersion}</code>
+          </span>
+        ) : null}
         {status?.account ? (
           <span className="settings-pathrow__path">
             Signed in as <strong>{status.account}</strong>
@@ -129,7 +162,91 @@ function GhStatusPanel(props: { desktopApi?: DesktopApi }) {
           <span className="settings-pathrow__path settings-error">{error}</span>
         ) : null}
       </div>
+      <div className="settings-paths" aria-label="GitHub CLI discovery">
+        {gh.path.value.trim() || envForced ? (
+          <SettingsPathRow
+            title="Auto discovery"
+            path="Clear the override and use the first discovered gh candidate."
+            chips={[{ label: envForced ? "env override active" : "default", tone: "muted" }]}
+            selected={false}
+            disabled={props.saving || envForced}
+            useLabel="Auto"
+            onUse={() => void saveGhPath("")}
+          />
+        ) : null}
+        {candidates.length === 0 ? (
+          <p className="settings-empty">No gh candidates found.</p>
+        ) : (
+          candidates.map((candidate) => (
+            <GhCandidateRow
+              key={`${candidate.source}:${candidate.command}`}
+              candidate={candidate}
+              disabled={props.saving || envForced}
+              onUse={(command) => void saveGhPath(command)}
+            />
+          ))
+        )}
+      </div>
+      <div className="settings-secret">
+        <button
+          className="button button--secondary"
+          disabled={props.saving || envForced || !desktopApi?.pickGhCommand}
+          type="button"
+          onClick={() => {
+            void (async () => {
+              if (!desktopApi?.pickGhCommand) return;
+              setError(undefined);
+              const result = await desktopApi.pickGhCommand();
+              if (result.canceled) return;
+              if (result.error || !result.path) {
+                setError(result.error ?? "No gh path was selected.");
+                return;
+              }
+              await saveGhPath(result.path);
+            })();
+          }}
+        >
+          Choose…
+        </button>
+      </div>
     </section>
+  );
+}
+
+function GhCandidateRow(props: {
+  candidate: DesktopGhDiscoveryCandidate;
+  disabled?: boolean;
+  onUse: (command: string) => void;
+}) {
+  const candidate = props.candidate;
+  const version =
+    candidate.version
+    ?? candidate.versionFailureReason
+    ?? candidate.failureReason
+    ?? "version unknown";
+  const chips: SettingsPathRowChip[] = [
+    { label: candidate.source, tone: "muted" },
+    {
+      label: version,
+      tone: candidate.executable && candidate.version ? "muted" : "err",
+    },
+  ];
+  if (!candidate.selected) {
+    chips.push({
+      label: candidate.executable ? "Available" : "Unavailable",
+      tone: candidate.executable ? "muted" : "err",
+    });
+  }
+
+  return (
+    <SettingsPathRow
+      title={candidate.command}
+      chips={chips}
+      selected={candidate.selected}
+      selectedLabel="Using"
+      disabled={props.disabled || !candidate.executable}
+      onUse={() => props.onUse(candidate.command)}
+    />
   );
 }
 

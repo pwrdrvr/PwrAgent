@@ -12,6 +12,7 @@ import type {
   MessagingChannelKind,
   MessagingConversationKind,
 } from "./messaging";
+import type { DesktopGhDiscoverySnapshot } from "./settings";
 
 export type InboxReason = "new-thread" | "updated-since-seen";
 
@@ -274,8 +275,14 @@ export type RefreshThreadPullRequestsResponse = {
 };
 
 export type GhStatus = {
-  /** `gh` binary present on PATH. */
+  /** `gh` binary discovered. */
   installed: boolean;
+  /** Resolved command path PwrAgent will spawn. */
+  command?: string;
+  /** Version parsed from `gh --version`. */
+  version?: string;
+  /** Discovery candidates checked while resolving gh. */
+  discovery?: DesktopGhDiscoverySnapshot;
   /** Authenticated against github.com. */
   loggedIn: boolean;
   /** Login name parsed from `gh auth status`. */

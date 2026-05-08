@@ -132,6 +132,10 @@ function createSnapshot(
       ],
       preferredEditorId: { value: "", source: "default" },
       preferredTerminalId: { value: "", source: "default" },
+      gh: {
+        path: { value: "", source: "default" },
+        discovery: { candidates: [] },
+      },
     },
     worktrees: {
       storage: { value: "user-home", source: "default" },
@@ -304,6 +308,71 @@ describe("SettingsScreen", () => {
       "aria-current",
       "page",
     );
+  });
+
+  it("shows resolved gh discovery details and saves an alternate candidate", async () => {
+    const snapshot = createSnapshot();
+    snapshot.applications.gh = {
+      path: { value: "", source: "default" },
+      discovery: {
+        selectedCommand: "/opt/homebrew/bin/gh",
+        selectedSource: "homebrew",
+        candidates: [
+          {
+            command: "/opt/homebrew/bin/gh",
+            executable: true,
+            selected: true,
+            source: "homebrew",
+            version: "2.88.1",
+          },
+          {
+            command: "/usr/local/bin/gh",
+            executable: true,
+            selected: false,
+            source: "homebrew",
+            version: "2.80.0",
+          },
+        ],
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const getGhStatus = vi.fn(async () => ({
+      installed: true,
+      command: "/opt/homebrew/bin/gh",
+      version: "2.88.1",
+      loggedIn: true,
+      account: "huntharo",
+      scopes: ["repo"],
+      hasRepoScope: true,
+      discovery: snapshot.applications.gh.discovery,
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ getGhStatus }}
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const ghPanel = screen.getByRole("heading", { name: "GitHub CLI (gh)" })
+      .closest("section")!;
+    expect(await within(ghPanel).findByText("Path:")).toBeInTheDocument();
+    expect(within(ghPanel).getAllByText("/opt/homebrew/bin/gh").length).toBeGreaterThanOrEqual(1);
+    expect(within(ghPanel).getAllByText("2.88.1").length).toBeGreaterThanOrEqual(1);
+    expect(within(ghPanel).getByText("Signed in as")).toBeInTheDocument();
+
+    fireEvent.click(within(ghPanel).getByRole("button", { name: "Use" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        applications: {
+          gh: {
+            path: "/usr/local/bin/gh",
+          },
+        },
+      });
+    });
+    expect(getGhStatus).toHaveBeenCalledWith({ recheck: true });
   });
 
   it("renders the Mattermost section and saves edits via writeConfig", async () => {

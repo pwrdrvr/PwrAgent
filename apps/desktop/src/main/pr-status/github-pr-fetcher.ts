@@ -1,7 +1,14 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { GhStatus, PrChipState, PrSummary } from "@pwragent/shared";
+import type {
+  DesktopGhDiscoverySnapshot,
+  GhStatus,
+  PrChipState,
+  PrSummary,
+} from "@pwragent/shared";
 import { getMainLogger } from "../log";
+import { discoverGhCommands } from "../settings/gh-discovery";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 
 const execFileAsync = promisify(execFile);
 const fetcherLog = getMainLogger("pwragent:pr-fetcher");
@@ -75,6 +82,8 @@ export type GithubPrFetcherOptions = {
   ) => Promise<{ stdout: string; stderr: string }>;
   /** Override `gh --version` probe — used by tests. */
   probeGhAvailable?: () => Promise<boolean>;
+  /** Override gh discovery — used by tests. */
+  discoverGhCommands?: () => Promise<DesktopGhDiscoverySnapshot>;
   /** Override `gh auth status` runner — used by tests. */
   runGhAuthStatus?: () => Promise<{ stdout: string; stderr: string; ok: boolean }>;
   /**
@@ -96,6 +105,9 @@ export class GithubPrFetcher {
   private readonly exec: NonNullable<GithubPrFetcherOptions["exec"]>;
   private readonly probeGhAvailable: NonNullable<
     GithubPrFetcherOptions["probeGhAvailable"]
+  > | undefined;
+  private readonly discoverGhCommands: NonNullable<
+    GithubPrFetcherOptions["discoverGhCommands"]
   >;
   private readonly runGhAuthStatus: NonNullable<
     GithubPrFetcherOptions["runGhAuthStatus"]
@@ -103,6 +115,9 @@ export class GithubPrFetcher {
   private readonly authStatusCacheTtlMs: number;
   private readonly ghAvailableCacheTtlMs: number;
   private ghAvailableCache: { value: boolean; fetchedAt: number } | undefined;
+  private ghDiscoveryCache:
+    | { value: DesktopGhDiscoverySnapshot; fetchedAt: number }
+    | undefined;
   private authStatusCache:
     | { value: GhAuthStatus; fetchedAt: number }
     | undefined;
@@ -116,9 +131,21 @@ export class GithubPrFetcher {
 
   constructor(options: GithubPrFetcherOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.exec = options.exec ?? defaultExec(this.timeoutMs);
-    this.probeGhAvailable = options.probeGhAvailable ?? defaultProbeGhAvailable;
-    this.runGhAuthStatus = options.runGhAuthStatus ?? defaultRunGhAuthStatus;
+    this.probeGhAvailable = options.probeGhAvailable;
+    this.discoverGhCommands =
+      options.discoverGhCommands
+      ?? (options.probeGhAvailable
+        ? async () => syntheticGhDiscovery(this.ghAvailableCache?.value ?? false)
+        : async () =>
+          await discoverGhCommands({
+            configuredCommand:
+              getDesktopSettingsService().resolveGhCommandPreference(),
+            env: process.env,
+          }));
+    this.exec = options.exec ?? defaultExec(this.timeoutMs, () => this.resolveGhCommand());
+    this.runGhAuthStatus =
+      options.runGhAuthStatus
+      ?? defaultRunGhAuthStatus(() => this.resolveGhCommand());
     this.authStatusCacheTtlMs =
       options.authStatusCacheTtlMs ?? DEFAULT_GH_AUTH_STATUS_CACHE_TTL_MS;
     this.ghAvailableCacheTtlMs =
@@ -132,7 +159,9 @@ export class GithubPrFetcher {
     ) {
       return this.ghAvailableCache.value;
     }
-    const value = await this.probeGhAvailable();
+    const value = this.probeGhAvailable
+      ? await this.probeGhAvailable()
+      : Boolean((await this.readGhDiscovery()).selectedCommand);
     this.ghAvailableCache = { value, fetchedAt: Date.now() };
     return value;
   }
@@ -260,16 +289,19 @@ export class GithubPrFetcher {
     const pending = (async (): Promise<GhAuthStatus> => {
       let value: GhAuthStatus;
       if (!(await this.isGhAvailable())) {
+        const discovery = await this.readGhDiscovery();
         value = {
           installed: false,
+          discovery,
           loggedIn: false,
           scopes: [],
           hasRepoScope: false,
           reason: "gh CLI is not installed",
         };
       } else {
+        const discovery = await this.readGhDiscovery();
         const result = await this.runGhAuthStatus();
-        value = parseGhAuthStatus(result);
+        value = withGhDiscovery(parseGhAuthStatus(result), discovery);
       }
       this.authStatusCache = { value, fetchedAt: Date.now() };
       fetcherLog.debug("gh auth status", {
@@ -298,6 +330,7 @@ export class GithubPrFetcher {
   /** Force the next `isGhAvailable` call to re-probe — used by Re-check. */
   invalidateGhAvailable(): void {
     this.ghAvailableCache = undefined;
+    this.ghDiscoveryCache = undefined;
   }
 
   /**
@@ -308,8 +341,30 @@ export class GithubPrFetcher {
    */
   invalidateGhCaches(): void {
     this.ghAvailableCache = undefined;
+    this.ghDiscoveryCache = undefined;
     this.authStatusCache = undefined;
     this.authStatusPending = undefined;
+  }
+
+  private async readGhDiscovery(): Promise<DesktopGhDiscoverySnapshot> {
+    if (
+      this.ghDiscoveryCache
+      && Date.now() - this.ghDiscoveryCache.fetchedAt < this.ghAvailableCacheTtlMs
+    ) {
+      return this.ghDiscoveryCache.value;
+    }
+
+    const value = await this.discoverGhCommands();
+    this.ghDiscoveryCache = { value, fetchedAt: Date.now() };
+    return value;
+  }
+
+  private async resolveGhCommand(): Promise<string> {
+    const command = (await this.readGhDiscovery()).selectedCommand;
+    if (!command) {
+      throw new Error("gh CLI is not installed");
+    }
+    return command;
   }
 }
 
@@ -425,9 +480,11 @@ export function parseGhAuthStatus(input: {
 
 function defaultExec(
   timeoutMs: number,
+  resolveGhCommand: () => Promise<string>,
 ): NonNullable<GithubPrFetcherOptions["exec"]> {
   return async (cwd, args) => {
-    const result = await execFileAsync("gh", args, {
+    const command = await resolveGhCommand();
+    const result = await execFileAsync(command, args, {
       cwd,
       timeout: timeoutMs,
       maxBuffer: 1024 * 1024,
@@ -437,34 +494,58 @@ function defaultExec(
   };
 }
 
-async function defaultProbeGhAvailable(): Promise<boolean> {
-  try {
-    await execFileAsync("gh", ["--version"], { timeout: 2_000 });
-    return true;
-  } catch {
-    return false;
-  }
+function defaultRunGhAuthStatus(
+  resolveGhCommand: () => Promise<string>,
+): NonNullable<GithubPrFetcherOptions["runGhAuthStatus"]> {
+  return async () => {
+    try {
+      const command = await resolveGhCommand();
+      const result = await execFileAsync(
+        command,
+        ["auth", "status", "--hostname", "github.com"],
+        { timeout: 5_000, encoding: "utf8" },
+      );
+      return { stdout: result.stdout, stderr: result.stderr, ok: true };
+    } catch (error) {
+      // gh exits non-zero when not logged in; capture its stderr/stdout for parsing.
+      const err = error as { stdout?: string; stderr?: string };
+      return {
+        stdout: err.stdout ?? "",
+        stderr: err.stderr ?? (error instanceof Error ? error.message : ""),
+        ok: false,
+      };
+    }
+  };
 }
 
-async function defaultRunGhAuthStatus(): Promise<{
-  stdout: string;
-  stderr: string;
-  ok: boolean;
-}> {
-  try {
-    const result = await execFileAsync(
-      "gh",
-      ["auth", "status", "--hostname", "github.com"],
-      { timeout: 5_000, encoding: "utf8" },
-    );
-    return { stdout: result.stdout, stderr: result.stderr, ok: true };
-  } catch (error) {
-    // gh exits non-zero when not logged in; capture its stderr/stdout for parsing.
-    const err = error as { stdout?: string; stderr?: string };
-    return {
-      stdout: err.stdout ?? "",
-      stderr: err.stderr ?? (error instanceof Error ? error.message : ""),
-      ok: false,
-    };
+function withGhDiscovery(
+  status: GhAuthStatus,
+  discovery: DesktopGhDiscoverySnapshot,
+): GhAuthStatus {
+  const selected = discovery.candidates.find((candidate) => candidate.selected);
+  return {
+    ...status,
+    command: selected?.command ?? discovery.selectedCommand,
+    version: selected?.version,
+    discovery,
+  };
+}
+
+function syntheticGhDiscovery(available: boolean): DesktopGhDiscoverySnapshot {
+  if (!available) {
+    return { candidates: [] };
   }
+
+  return {
+    selectedCommand: "gh",
+    selectedSource: "path",
+    candidates: [
+      {
+        command: "gh",
+        source: "path",
+        executable: true,
+        selected: true,
+      },
+    ],
+  };
 }

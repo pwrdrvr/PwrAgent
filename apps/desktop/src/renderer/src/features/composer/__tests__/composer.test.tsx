@@ -196,6 +196,10 @@ describe("Composer", () => {
           ],
           preferredEditorId: { value: "", source: "default" },
           preferredTerminalId: { value: "ghostty", source: "config" },
+          gh: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
         }}
         backends={[backendSummary("codex")]}
         desktopApi={{ openApplication }}
@@ -1877,6 +1881,10 @@ describe("Composer", () => {
           terminals: [],
           preferredEditorId: { value: "", source: "default" },
           preferredTerminalId: { value: "", source: "default" },
+          gh: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
         }}
         backends={[backendSummary("codex")]}
         desktopApi={{ openApplication }}
@@ -1957,6 +1965,10 @@ describe("Composer", () => {
           terminals: [],
           preferredEditorId: { value: "", source: "default" },
           preferredTerminalId: { value: "", source: "default" },
+          gh: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
         }}
         backends={[backendSummary("codex")]}
         desktopApi={{ openApplication }}
