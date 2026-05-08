@@ -57,6 +57,7 @@ import {
   useComposerDraftStore,
   type ComposerDraftSnapshot,
   type ComposerDraftStore,
+  type ComposerQueuedTurnSnapshot,
 } from "./useComposerDraftStore";
 
 type ComposerProps = {
@@ -854,7 +855,7 @@ export function Composer(props: ComposerProps) {
   const inputRef = useRef<ComposerRichInputHandle>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
-  const activeTurnIdRef = useRef<string | undefined>(undefined);
+  const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const skillListboxId = useId();
   const slashListboxId = useId();
@@ -872,6 +873,9 @@ export function Composer(props: ComposerProps) {
   const composerSupportsSkillTokens = composerImplementation !== "textarea";
   const composerUsesTiptap = composerImplementation.startsWith("tiptap-");
   const savedInitialDraft = draftStore.get(composerScopeKey);
+  const savedInitialQueuedTurn = props.thread
+    ? draftStore.getQueuedTurn(composerScopeKey)
+    : undefined;
   const hydratedInitialLaunchpad =
     savedInitialDraft || !props.launchpad
       ? undefined
@@ -923,9 +927,13 @@ export function Composer(props: ComposerProps) {
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
   const [steering, setSteering] = useState(false);
-  const [queuedTurn, setQueuedTurn] = useState<QueuedTurnDraft>();
+  const [queuedTurn, setQueuedTurnState] = useState<QueuedTurnDraft | undefined>(
+    savedInitialQueuedTurn
+  );
   const [pendingSteer, setPendingSteer] = useState<PendingSteerDraft>();
-  const [activeTurnId, setActiveTurnId] = useState<string | undefined>(undefined);
+  const [activeTurnId, setActiveTurnId] = useState<string | undefined>(
+    props.activeTurnId
+  );
   const [sendError, setSendError] = useState<string>();
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
@@ -1044,6 +1052,27 @@ export function Composer(props: ComposerProps) {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);
     }
+  };
+  const isQueuedTurnStoreScope = (scopeKey: string): boolean =>
+    scopeKey.startsWith("thread:");
+  const saveQueuedTurnSnapshot = (
+    scopeKey: string,
+    state?: ComposerQueuedTurnSnapshot,
+  ): void => {
+    if (!isQueuedTurnStoreScope(scopeKey)) {
+      return;
+    }
+
+    if (!state || (!state.text.trim() && state.imageAttachments.length === 0)) {
+      draftStore.deleteQueuedTurn(scopeKey);
+      return;
+    }
+
+    draftStore.setQueuedTurn(scopeKey, state);
+  };
+  const setQueuedTurn = (nextQueuedTurn?: QueuedTurnDraft): void => {
+    saveQueuedTurnSnapshot(composerScopeKey, nextQueuedTurn);
+    setQueuedTurnState(nextQueuedTurn);
   };
   const markComposerDraftSubmitted = (scopeKey: string): void => {
     if (!isDraftStoreScope(scopeKey)) {
@@ -1225,10 +1254,14 @@ export function Composer(props: ComposerProps) {
 
     if (props.thread) {
       const saved = draftStore.get(composerScopeKey);
+      const savedQueuedTurn = draftStore.getQueuedTurn(composerScopeKey);
       setDraft(saved?.draft ?? "");
       setEditorDocument(saved?.editorDocument);
       setImageAttachments(saved?.imageAttachments ?? []);
       setSkillTokens(saved?.skillTokens ?? []);
+      setQueuedTurnState(savedQueuedTurn);
+    } else {
+      setQueuedTurnState(undefined);
     }
     setSending(false);
     setInterrupting(false);
@@ -1236,7 +1269,6 @@ export function Composer(props: ComposerProps) {
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
-    setQueuedTurn(undefined);
     setPendingSteer(undefined);
   }, [composerScopeKey, draft, editorDocument, imageAttachments, skillTokens]);
 
@@ -1347,7 +1379,7 @@ export function Composer(props: ComposerProps) {
     updateActiveTurnId(undefined);
     setActiveOptimisticMessageId(undefined);
     setReviewConfig(undefined);
-    setQueuedTurn(undefined);
+    setQueuedTurnState(undefined);
     setPendingSteer(undefined);
     window.setTimeout(() => {
       inputRef.current?.focus();

@@ -13,6 +13,7 @@ import { Composer } from "../Composer";
 import type {
   ComposerDraftSnapshot,
   ComposerDraftStore,
+  ComposerQueuedTurnSnapshot,
 } from "../useComposerDraftStore";
 
 vi.mock("../../../lib/image-normalization", () => ({
@@ -51,11 +52,19 @@ function chooseDropdownOption(label: string, optionName: string): void {
 
 function createComposerDraftStore(): ComposerDraftStore {
   const drafts = new Map<string, ComposerDraftSnapshot>();
+  const queuedTurns = new Map<string, ComposerQueuedTurnSnapshot>();
   return {
     delete: (scopeKey) => {
       drafts.delete(scopeKey);
     },
     get: (scopeKey) => drafts.get(scopeKey),
+    deleteQueuedTurn: (scopeKey) => {
+      queuedTurns.delete(scopeKey);
+    },
+    getQueuedTurn: (scopeKey) => queuedTurns.get(scopeKey),
+    setQueuedTurn: (scopeKey, snapshot) => {
+      queuedTurns.set(scopeKey, snapshot);
+    },
     set: (scopeKey, snapshot) => {
       drafts.set(scopeKey, snapshot);
     },
@@ -535,6 +544,93 @@ describe("Composer", () => {
         })
       );
     });
+  });
+
+  it("restores a queued active-turn message after navigating away and back", async () => {
+    const draftStore = createComposerDraftStore();
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-2",
+    }));
+    const baseProps = {
+      backends: [backendSummary("codex")],
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startTurn,
+      },
+      disabled: false,
+      draftStore,
+      skills: [],
+    };
+    const threadA = {
+      id: "thread-1",
+      title: "Active turn",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const threadB = {
+      ...threadA,
+      id: "thread-2",
+      title: "Another thread",
+    };
+
+    const { unmount } = render(
+      <Composer
+        {...baseProps}
+        activeTurnId="turn-1"
+        thread={threadA}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Keep this queued reply" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Keep this queued reply"
+    );
+
+    unmount();
+    const { unmount: unmountThreadB } = render(
+      <Composer
+        {...baseProps}
+        activeTurnId={undefined}
+        thread={threadB}
+      />
+    );
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+
+    unmountThreadB();
+    const { unmount: unmountRestoredThreadA } = render(
+      <Composer
+        {...baseProps}
+        activeTurnId="turn-1"
+        thread={threadA}
+      />
+    );
+
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Keep this queued reply"
+    );
+    expect(startTurn).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+
+    unmountRestoredThreadA();
+    render(
+      <Composer
+        {...baseProps}
+        activeTurnId="turn-1"
+        thread={threadA}
+      />
+    );
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
   });
 
   it("shows queued image thumbnails while a turn is active", async () => {
