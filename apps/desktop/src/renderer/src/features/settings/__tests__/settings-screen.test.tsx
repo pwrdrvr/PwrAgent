@@ -231,6 +231,8 @@ describe("SettingsScreen", () => {
     });
     expect(screen.getByRole("heading", { name: "Telegram" })).toBeInTheDocument();
     expect(screen.getByText("Authorized SuperGroups")).toBeInTheDocument();
+    expect(screen.getAllByText(/Voice readers may speak each partial edit/)).toHaveLength(3);
+    expect(screen.getAllByText(/quickly hit platform rate limits/)).toHaveLength(3);
     fireEvent.click(screen.getAllByRole("switch", { name: "Streaming Responses" })[0]!);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({

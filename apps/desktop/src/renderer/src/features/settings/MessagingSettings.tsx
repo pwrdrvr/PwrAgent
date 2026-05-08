@@ -150,6 +150,7 @@ export function MessagingSettings(props: {
             disabled={props.saving}
             label="Streaming Responses"
             sub="Send partial assistant tokens as Telegram message edits."
+            help={STREAMING_RESPONSES_WARNING}
             source={sourceBadge(telegram.streamingResponses)}
             onChange={(streamingResponses) => {
               void props.onSaveTelegram({
@@ -243,6 +244,7 @@ export function MessagingSettings(props: {
             disabled={props.saving}
             label="Streaming Responses"
             sub="Send partial assistant tokens as Discord message edits."
+            help={STREAMING_RESPONSES_WARNING}
             source={sourceBadge(discord.streamingResponses)}
             onChange={(streamingResponses) => {
               void props.onSaveDiscord({
@@ -374,6 +376,7 @@ export function MessagingSettings(props: {
             disabled={props.saving}
             label="Streaming Responses"
             sub="Send partial assistant tokens as Mattermost message edits."
+            help={STREAMING_RESPONSES_WARNING}
             source={sourceBadge(mattermost.streamingResponses)}
             onChange={(streamingResponses) => {
               void props.onSaveMattermost({
@@ -496,6 +499,9 @@ const TOOL_UPDATE_MODE_OPTIONS: Array<{
   { label: "Show All", value: "show_all" },
 ];
 
+const STREAMING_RESPONSES_WARNING =
+  "Leave this off unless you know you need live edits. Voice readers may speak each partial edit as a separate incomplete reply, and frequent edits can quickly hit platform rate limits.";
+
 function chipLabelForBotToken(
   botToken: DesktopSettingsSnapshot["messaging"]["telegram"]["botToken"],
 ): ReactNode {
@@ -558,6 +564,7 @@ function ToggleField(props: {
   disabled?: boolean;
   label: string;
   sub?: ReactNode;
+  help?: ReactNode;
   source: string;
   onChange: (value: boolean) => void;
 }) {
@@ -565,6 +572,7 @@ function ToggleField(props: {
     <SettingsField
       label={props.label}
       sub={props.sub}
+      help={props.help}
       source={props.source}
       control={
         <SettingsSwitch
