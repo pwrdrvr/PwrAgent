@@ -9,6 +9,7 @@ import {
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
+  SettingsSectionStack,
 } from "./SettingsLayout";
 import {
   SettingsPathRow,
@@ -61,7 +62,7 @@ export function ModelsSettings(props: {
   };
 
   return (
-    <section className="settings-stack" aria-label="Model settings">
+    <SettingsSectionStack paneId="models" aria-label="Model settings">
       <SettingsPanelHead
         eyebrow="Models"
         title="Backends & credentials"
@@ -243,7 +244,7 @@ export function ModelsSettings(props: {
           />
         </div>
       </SettingsSection>
-    </section>
+    </SettingsSectionStack>
   );
 }
 

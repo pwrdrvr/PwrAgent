@@ -2103,6 +2103,11 @@ textarea,
 .settings-content {
   min-height: 0;
   overflow: auto;
+  /* Section headers stick inside this scroll container, which already
+     starts below `.settings-titlebar`. The content has 20px top
+     padding for the pane head, so the sticky offset cancels that
+     padding when a section header pins. */
+  --settings-section-sticky-top: -20px;
   /* More generous interior padding now that the card chrome around
      the layout is gone — the panels need breathing room from the
      window edges and from the nav's right border. */
@@ -2165,6 +2170,11 @@ textarea,
 }
 
 .settings-head__action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
   flex: 0 0 auto;
 }
 
@@ -2174,6 +2184,10 @@ textarea,
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel);
+}
+
+.settings-panel--collapsible {
+  overflow: visible;
 }
 
 .settings-panel--error {
@@ -2201,6 +2215,98 @@ textarea,
 
 .settings-panel--has-body .settings-panel__header {
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-section-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-section-controls__button {
+  min-height: 26px;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.settings-section__header-button {
+  position: sticky;
+  z-index: 3;
+  top: var(--settings-section-sticky-top, 0);
+  width: 100%;
+  border: 0;
+  border-radius: 8px 8px 0 0;
+  background: var(--bg-panel-elevated);
+  box-shadow:
+    0 1px 0 var(--border-subtle),
+    0 8px 18px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.settings-section__header-button:hover,
+.settings-section__header-button:focus-visible {
+  background: var(--bg-panel-hover);
+}
+
+.settings-section__header-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.settings-panel--is-collapsed .settings-section__header-button {
+  border-radius: 8px;
+  box-shadow: 0 1px 0 var(--border-subtle);
+}
+
+.settings-section__header-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-section__header-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-section__chevron {
+  position: relative;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  transition:
+    color 120ms ease,
+    transform 120ms ease;
+}
+
+.settings-section__chevron::before {
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  content: "";
+  transform: translateY(-1px) rotate(45deg);
+  transition: transform 120ms ease;
+}
+
+.settings-panel--is-collapsed .settings-section__chevron::before {
+  transform: translateX(-2px) rotate(-45deg);
+}
+
+.settings-section__header-button:hover .settings-section__chevron,
+.settings-section__header-button:focus-visible .settings-section__chevron {
+  color: var(--text-secondary);
 }
 
 .settings-panel__header .eyebrow {
@@ -2321,6 +2427,22 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 0;
+  min-height: 0;
+}
+
+.settings-section__body-clip {
+  display: grid;
+  overflow: hidden;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows 120ms ease,
+    opacity 120ms ease;
+}
+
+.settings-panel--is-collapsed .settings-section__body-clip {
+  grid-template-rows: 0fr;
+  opacity: 0;
 }
 
 .settings-source {

@@ -4,6 +4,7 @@ import {
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
+  SettingsSectionStack,
 } from "./SettingsLayout";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
@@ -69,7 +70,7 @@ export function ExperimentalSettings(props: {
   );
 
   return (
-    <section className="settings-stack" aria-label="Experimental settings">
+    <SettingsSectionStack paneId="experimental" aria-label="Experimental settings">
       <SettingsPanelHead
         eyebrow="Experimental"
         title="Experimental features"
@@ -172,6 +173,6 @@ export function ExperimentalSettings(props: {
           />
         </div>
       </SettingsSection>
-    </section>
+    </SettingsSectionStack>
   );
 }
