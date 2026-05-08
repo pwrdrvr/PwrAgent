@@ -1761,6 +1761,53 @@ describe("Composer", () => {
     });
   });
 
+  it("disables existing thread workspace handoff while a turn is active", () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    const thread = {
+      id: "thread-1",
+      title: "Build Codex client",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      gitBranch: "feature/handoff",
+      linkedDirectories: [
+        {
+          id: "dir-1",
+          label: "PwrAgent",
+          path: "/repo",
+          kind: "local" as const,
+        },
+      ],
+      inbox: { inInbox: false },
+    };
+
+    const { rerender } = render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    expect(screen.getByLabelText("Workspace mode")).toBeDisabled();
+
+    rerender(
+      <Composer
+        activeTurnId={undefined}
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={thread}
+      />
+    );
+
+    expect(screen.getByLabelText("Workspace mode")).toBeEnabled();
+  });
+
   it("lets the desktop handoff dialog move the current branch instead", async () => {
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
 

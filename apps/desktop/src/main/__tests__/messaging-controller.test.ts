@@ -3843,6 +3843,62 @@ describe("MessagingController", () => {
     });
   });
 
+  it("rejects handoff confirmations while a turn is active", async () => {
+    const harness = await createHarness();
+    harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:handoff" }),
+    );
+    const toWorktree = findChoice(harness.delivered.at(-1), "handoff:local-to-worktree");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: toWorktree.id,
+        value: toWorktree.value,
+      }),
+    );
+    const leaveMain = findChoice(harness.delivered.at(-1), "handoff:select-leave-branch");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: leaveMain.id,
+        value: leaveMain.value,
+      }),
+    );
+    const confirm = findAction(harness.delivered.at(-1), "handoff:confirm");
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "inProgress",
+          },
+        },
+      },
+    });
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: confirm.id,
+        value: confirm.value,
+      }),
+    );
+
+    expect(harness.handoffThreadWorkspace).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Handoff unavailable",
+      body: expect.stringContaining(
+        "Worktree/local migration is not available while a turn is in progress",
+      ),
+    });
+  });
+
   it("reports handoff as unavailable when the backend bridge does not expose it", async () => {
     const harness = await createHarness({ handoff: false });
     harness.getNavigationSnapshot.mockResolvedValue(buildLocalHandoffNavigationSnapshot());

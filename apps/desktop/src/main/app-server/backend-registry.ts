@@ -116,6 +116,8 @@ type InitializeResult = {
 const isDevelopment = process.env.NODE_ENV !== "production";
 const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
 const THREAD_LIST_REUSE_WINDOW_MS = 750;
+const ACTIVE_TURN_HANDOFF_ERROR =
+  "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 /**
  * Number of consecutive queued-execution-mode flush failures tolerated
  * before the queue is auto-cancelled and an explanatory `cancelled`
@@ -569,6 +571,19 @@ function readTurnStatus(value: unknown): string | undefined {
 
   const status = value.status;
   return typeof status === "string" ? status : undefined;
+}
+
+function turnIdFromStartedNotification(
+  notification: {
+    params: {
+      turnId?: string;
+      turn: {
+        id: string;
+      };
+    };
+  },
+): string {
+  return notification.params.turnId ?? notification.params.turn.id;
 }
 
 function logBackendLifecycleNotification(
@@ -1408,6 +1423,10 @@ export class DesktopBackendRegistry {
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
+    if (request.backend === "codex" && this.threadHasActiveTurn(request.threadId)) {
+      throw new Error(ACTIVE_TURN_HANDOFF_ERROR);
+    }
+
     const thread = await this.findThreadForWorkspaceHandoff({
       backend: request.backend,
       threadId: request.threadId,
@@ -2175,6 +2194,16 @@ export class DesktopBackendRegistry {
       }
     }
     return false;
+  }
+
+  private async resolveCodexThreadExecutionModeForActiveTurn(
+    threadId: string,
+  ): Promise<ThreadExecutionMode> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId,
+    });
+    return overlay?.executionMode ?? "default";
   }
 
   /**
@@ -3650,20 +3679,55 @@ export class DesktopBackendRegistry {
   private async emit(event: AgentEvent): Promise<void> {
     if (
       event.backend === "codex" &&
-      event.notification.method === "turn/completed" &&
-      event.notification.params.turnId
+      event.notification.method === "turn/started"
     ) {
+      const notification = event.notification as {
+        params: {
+          threadId: string;
+          turnId?: string;
+          turn: {
+            id: string;
+          };
+        };
+      };
+      const turnId = turnIdFromStartedNotification(notification);
+      const key = buildActiveTurnModeKey(
+        notification.params.threadId,
+        turnId,
+      );
+      if (!this.activeCodexTurnModes.has(key)) {
+        this.activeCodexTurnModes.set(
+          key,
+          await this.resolveCodexThreadExecutionModeForActiveTurn(
+            notification.params.threadId,
+          ),
+        );
+      }
+    }
+
+    if (
+      event.backend === "codex" &&
+      (event.notification.method === "turn/completed" ||
+        event.notification.method === "turn/failed" ||
+        event.notification.method === "turn/cancelled")
+    ) {
+      const notification = event.notification as {
+        params: {
+          threadId: string;
+          turnId: string;
+        };
+      };
       this.activeCodexTurnModes.delete(
         buildActiveTurnModeKey(
-          event.notification.params.threadId,
-          event.notification.params.turnId,
+          notification.params.threadId,
+          notification.params.turnId,
         ),
       );
       // Turn-end is the resume boundary — flush any queued mode change
       // now. Fire-and-forget; failures are logged + retried inside
       // flushQueuedExecutionModeIfPresent.
       void this.flushQueuedExecutionModeIfPresent(
-        event.notification.params.threadId,
+        notification.params.threadId,
       );
     }
 

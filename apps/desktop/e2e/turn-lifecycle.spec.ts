@@ -122,6 +122,160 @@ async function createActiveTurnThinkingFixture(): Promise<{
   };
 }
 
+async function createActiveTurnWorkspaceFixture(): Promise<{
+  cleanup: () => Promise<void>;
+  fixturePath: string;
+}> {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-active-turn-workspace-"));
+  const fixturePath = path.join(rootDir, "active-turn-workspace.fixture.json");
+
+  await writeFile(
+    fixturePath,
+    JSON.stringify(
+      {
+        metadata: {
+          backend: "codex",
+          scenario: "active-turn-workspace",
+          threadId: "thread-active-workspace",
+        },
+        steps: [
+          {
+            id: "initialize-1",
+            kind: "response",
+            method: "initialize",
+            result: {
+              serverInfo: {
+                name: "Replay Codex",
+                version: "1.0.0",
+              },
+              methods: ["thread/list", "thread/read"],
+            },
+          },
+          {
+            id: "thread-list-1",
+            kind: "response",
+            method: "thread/list",
+            result: [
+              {
+                id: "thread-active-workspace",
+                title: "Active workspace handoff replay",
+                titleSource: "explicit",
+                source: "codex",
+                executionMode: "default",
+                gitBranch: "feature/active",
+                linkedDirectories: [
+                  {
+                    id: "directory:/repo/pwragent",
+                    kind: "local",
+                    label: "PwrAgent",
+                    path: "/repo/pwragent",
+                  },
+                ],
+                updatedAt: 2_000,
+              },
+              {
+                id: "thread-idle-workspace",
+                title: "Idle workspace handoff replay",
+                titleSource: "explicit",
+                source: "codex",
+                executionMode: "default",
+                gitBranch: "feature/idle",
+                linkedDirectories: [
+                  {
+                    id: "directory:/repo/pwragent",
+                    kind: "local",
+                    label: "PwrAgent",
+                    path: "/repo/pwragent",
+                  },
+                ],
+                updatedAt: 1_000,
+              },
+            ],
+          },
+          {
+            id: "thread-read-active",
+            kind: "response",
+            method: "thread/read",
+            result: {
+              entries: [
+                {
+                  type: "message",
+                  id: "active-message-1",
+                  role: "assistant",
+                  text: "Active workspace baseline.",
+                },
+              ],
+              messages: [
+                {
+                  id: "active-message-1",
+                  role: "assistant",
+                  text: "Active workspace baseline.",
+                },
+              ],
+              lastAssistantMessage: "Active workspace baseline.",
+              pagination: {
+                supportsPagination: false,
+                hasPreviousPage: false,
+              },
+            },
+          },
+          {
+            id: "turn-started-active",
+            kind: "notification",
+            notification: {
+              method: "turn/started",
+              params: {
+                threadId: "thread-active-workspace",
+                turnId: "turn-active-workspace-1",
+                turn: {
+                  id: "turn-active-workspace-1",
+                  status: "inProgress",
+                },
+              },
+            },
+          },
+          {
+            id: "thread-read-idle",
+            kind: "response",
+            method: "thread/read",
+            result: {
+              entries: [
+                {
+                  type: "message",
+                  id: "idle-message-1",
+                  role: "assistant",
+                  text: "Idle workspace baseline.",
+                },
+              ],
+              messages: [
+                {
+                  id: "idle-message-1",
+                  role: "assistant",
+                  text: "Idle workspace baseline.",
+                },
+              ],
+              lastAssistantMessage: "Idle workspace baseline.",
+              pagination: {
+                supportsPagination: false,
+                hasPreviousPage: false,
+              },
+            },
+          },
+        ],
+      },
+      null,
+      2
+    )
+  );
+
+  return {
+    cleanup: async () => {
+      await rm(rootDir, { force: true, recursive: true });
+    },
+    fixturePath,
+  };
+}
+
 test("keeps transient turn UI through metadata and premature idle notifications", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
@@ -215,6 +369,45 @@ test("keeps transient turn UI through metadata and premature idle notifications"
     ).toBeVisible();
   } finally {
     await app.close();
+  }
+});
+
+test("disables workspace handoff on the focused thread while its turn is active", async () => {
+  const fixture = await createActiveTurnWorkspaceFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+
+  try {
+    await app.window
+      .getByRole("button", { name: /Active workspace handoff replay/i })
+      .first()
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Active workspace handoff replay",
+      })
+    ).toBeVisible();
+
+    await expect(app.window.getByLabel("Workspace mode")).toBeEnabled();
+    await app.advance({ stepId: "turn-started-active" });
+    await expect(app.window.getByLabel("Workspace mode")).toBeDisabled();
+
+    await app.window
+      .getByRole("button", { name: /Idle workspace handoff replay/i })
+      .first()
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Idle workspace handoff replay",
+      })
+    ).toBeVisible();
+    await expect(app.window.getByLabel("Workspace mode")).toBeEnabled();
+  } finally {
+    await app.close();
+    await fixture.cleanup();
   }
 });
 

@@ -2418,6 +2418,12 @@ export function Composer(props: ComposerProps) {
       !handoffSubmitting
   );
 
+  useEffect(() => {
+    if (activeTurnId) {
+      setWorkspaceMenuOpen(false);
+    }
+  }, [activeTurnId]);
+
   const openHandoffDialog = (
     direction: HandoffThreadWorkspaceRequest["direction"]
   ): void => {
@@ -3731,7 +3737,7 @@ export function Composer(props: ComposerProps) {
                 aria-haspopup="menu"
                 aria-label="Workspace mode"
                 className="composer-dropdown__button"
-                disabled={!props.onHandoffThreadWorkspace}
+                disabled={!canHandoffThreadWorkspace}
                 type="button"
                 value={threadWorkspace.mode}
                 onClick={() => setWorkspaceMenuOpen((open) => !open)}
