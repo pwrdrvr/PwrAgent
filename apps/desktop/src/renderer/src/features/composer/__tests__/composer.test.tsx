@@ -7,6 +7,7 @@ import type {
   StartTurnRequest,
   StartTurnResponse,
 } from "@pwragent/shared";
+import type { JSONContent } from "@tiptap/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { Composer } from "../Composer";
@@ -3053,6 +3054,114 @@ describe("Composer", () => {
           },
         ],
       });
+    });
+  });
+
+  it("does not collapse pasted GitHub paragraph gaps when deleting a trailing blank line", async () => {
+    const heading =
+      "feat(navigation): replace Inbox tab with user-curated Pins tab (drag-to-pin, reorderable, with auto-switch on drag)";
+    const url = "https://github.com/pwrdrvr/PwrAgent/issues/255";
+    const firstParagraph =
+      "I'm not positive about this... Inbox is kinda duplicated by the top of Recents.  So I think yeah maybe Inbox goes away.  We could replace it with Pins.";
+    const secondParagraph =
+      "But I think the way that pins work is that they are a scrollable section at the top of Recents and you can click the 3 dots menu to Pin / Unpin a thread on the Recents tab.  If you pin it, it moves up to the bottom of the pinned section.  The pinned section is scrollable and has a divider between the unpinned items below.  The whole list scrolls as one though.  Pins scroll off the top, then the divider, then you're only looking at unpinned threads.";
+    const finalParagraph =
+      "The pinned threads can be drag/drop re-ordered and the order is saved and restored on startup.";
+    const draft = [
+      `# ${heading}`,
+      "",
+      "",
+      "",
+      url,
+      "",
+      "",
+      "",
+      firstParagraph,
+      "",
+      "",
+      "",
+      secondParagraph,
+      "",
+      "",
+      "",
+      finalParagraph,
+    ].join("\n");
+    const editorDocument: JSONContent = {
+      type: "doc",
+      content: [
+        {
+          type: "heading",
+          attrs: { level: 1 },
+          content: [{ type: "text", text: heading }],
+        },
+        { type: "paragraph" },
+        { type: "paragraph" },
+        { type: "paragraph", content: [{ type: "text", text: url }] },
+        { type: "paragraph" },
+        { type: "paragraph" },
+        { type: "paragraph", content: [{ type: "text", text: firstParagraph }] },
+        { type: "paragraph" },
+        { type: "paragraph" },
+        { type: "paragraph", content: [{ type: "text", text: secondParagraph }] },
+        { type: "paragraph" },
+        { type: "paragraph" },
+        { type: "paragraph", content: [{ type: "text", text: finalParagraph }] },
+        { type: "paragraph" },
+        { type: "paragraph" },
+      ],
+    };
+    const draftStore = createComposerDraftStore();
+    draftStore.set("thread:codex:thread-1", {
+      draft,
+      editorDocument,
+      imageAttachments: [],
+      skillTokens: [],
+    });
+
+    render(
+      <Composer
+        composerImplementation="tiptap-wysiwyg-markdown-chips"
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(),
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    const blankParagraphsBefore = Array.from(textbox.querySelectorAll("p")).filter(
+      (paragraph) => paragraph.textContent === "",
+    );
+    expect(blankParagraphsBefore.length).toBeGreaterThan(1);
+
+    const lastBlankParagraph = blankParagraphsBefore.at(-1);
+    expect(lastBlankParagraph).toBeInTheDocument();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(lastBlankParagraph!);
+    range.collapse(false);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    textbox.focus();
+
+    fireEvent.keyDown(textbox, { key: "Backspace" });
+
+    await waitFor(() => {
+      const blankParagraphsAfter = Array.from(textbox.querySelectorAll("p")).filter(
+        (paragraph) => paragraph.textContent === "",
+      );
+      expect(blankParagraphsAfter).toHaveLength(blankParagraphsBefore.length - 1);
     });
   });
 
