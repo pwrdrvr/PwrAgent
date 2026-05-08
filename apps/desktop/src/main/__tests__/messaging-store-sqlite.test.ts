@@ -1,0 +1,167 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import type {
+  MessagingBindingRecord,
+  MessagingCallbackHandleRecord,
+  MessagingPendingIntentRecord,
+} from "@pwragent/messaging-interface";
+import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
+import { StateDb } from "../state/state-db";
+
+const tempDirs: string[] = [];
+const stateDbs: StateDb[] = [];
+
+async function createStore(): Promise<SqliteMessagingStore> {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-sqlite-msg-"));
+  tempDirs.push(tempDir);
+  const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDbs.push(stateDb);
+  return new SqliteMessagingStore(stateDb);
+}
+
+function buildBinding(
+  overrides: Partial<MessagingBindingRecord> = {},
+): MessagingBindingRecord {
+  return {
+    id: "binding-1",
+    channel: {
+      channel: "telegram",
+      conversation: {
+        id: "chat-1",
+        kind: "dm",
+      },
+    },
+    backend: "codex",
+    threadId: "thread-1",
+    authorizedActorIds: ["user-1"],
+    createdAt: 1000,
+    updatedAt: 1000,
+    ...overrides,
+  };
+}
+
+function buildPendingIntent(
+  overrides: Partial<MessagingPendingIntentRecord> = {},
+): MessagingPendingIntentRecord {
+  return {
+    id: "intent-1",
+    bindingId: "binding-1",
+    allowedActorIds: ["user-1"],
+    createdAt: 1000,
+    expiresAt: 2000,
+    intent: {
+      id: "surface-1",
+      kind: "single_select",
+      createdAt: 1000,
+      prompt: "Choose",
+      choices: [{ id: "choice-a", label: "Choice A" }],
+    },
+    ...overrides,
+  };
+}
+
+function buildCallbackHandle(
+  overrides: Partial<MessagingCallbackHandleRecord> = {},
+): MessagingCallbackHandleRecord {
+  return {
+    id: "callback-1",
+    actionId: "status:refresh",
+    allowedActorIds: ["user-1"],
+    bindingId: "binding-1",
+    channel: buildBinding().channel,
+    createdAt: 1000,
+    updatedAt: 1000,
+    expiresAt: 2000,
+    handle: "tg:short",
+    ...overrides,
+  };
+}
+
+afterEach(async () => {
+  for (const stateDb of stateDbs.splice(0)) {
+    stateDb.close();
+  }
+  await Promise.all(
+    tempDirs.splice(0).map((tempDir) =>
+      rm(tempDir, { recursive: true, force: true }),
+    ),
+  );
+});
+
+describe("SqliteMessagingStore", () => {
+  it("sweeps binding and channel state when a binding is revoked", async () => {
+    const store = await createStore();
+    await store.upsertBinding(buildBinding());
+    await store.upsertPendingIntent(buildPendingIntent());
+    await store.upsertPendingIntent(
+      buildPendingIntent({
+        id: "channel-intent",
+        bindingId: undefined,
+        channel: buildBinding().channel,
+      }),
+    );
+    await store.upsertPendingIntent(
+      buildPendingIntent({
+        id: "other-channel-intent",
+        bindingId: undefined,
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "other-chat",
+            kind: "dm",
+          },
+        },
+      }),
+    );
+    await store.upsertCallbackHandle(buildCallbackHandle());
+    await store.upsertCallbackHandle(
+      buildCallbackHandle({
+        id: "other-callback",
+        bindingId: "binding-2",
+        handle: "tg:other",
+      }),
+    );
+
+    await store.revokeBinding({ bindingId: "binding-1", revokedAt: 3000 });
+
+    await expect(store.getPendingIntent("intent-1", { now: 1500 })).resolves
+      .toBeUndefined();
+    await expect(store.getPendingIntent("channel-intent", { now: 1500 })).resolves
+      .toBeUndefined();
+    await expect(
+      store.getPendingIntent("other-channel-intent", { now: 1500 }),
+    ).resolves.toMatchObject({
+      id: "other-channel-intent",
+    });
+    await expect(store.getCallbackHandle("callback-1", { now: 1500 })).resolves
+      .toBeUndefined();
+    await expect(store.getCallbackHandle("other-callback", { now: 1500 })).resolves
+      .toMatchObject({
+        id: "other-callback",
+      });
+  });
+
+  it("can delete callback handles for a binding without revoking it", async () => {
+    const store = await createStore();
+    await store.upsertCallbackHandle(buildCallbackHandle());
+    await store.upsertCallbackHandle(
+      buildCallbackHandle({
+        id: "other-callback",
+        bindingId: "binding-2",
+        handle: "tg:other",
+      }),
+    );
+
+    await expect(
+      store.deleteCallbackHandlesForBinding({ bindingId: "binding-1" }),
+    ).resolves.toEqual(["callback-1"]);
+    await expect(store.getCallbackHandle("callback-1", { now: 1500 })).resolves
+      .toBeUndefined();
+    await expect(store.getCallbackHandle("other-callback", { now: 1500 })).resolves
+      .toMatchObject({
+        id: "other-callback",
+      });
+  });
+});

@@ -297,24 +297,84 @@ describe("MessagingStore", () => {
     });
   });
 
-  it("removes pending intents for a binding when the binding is revoked", async () => {
+  it("sweeps binding and channel state when a binding is revoked", async () => {
     const { store } = await createStore();
     await store.upsertBinding(buildBinding());
     await store.upsertPendingIntent(buildPendingIntent());
+    await store.upsertPendingIntent(
+      buildPendingIntent({
+        id: "channel-intent",
+        bindingId: undefined,
+        channel: buildBinding().channel,
+      }),
+    );
+    await store.upsertPendingIntent(
+      buildPendingIntent({
+        id: "other-channel-intent",
+        bindingId: undefined,
+        channel: {
+          channel: "telegram",
+          conversation: {
+            id: "other-chat",
+            kind: "dm",
+          },
+        },
+      }),
+    );
     await store.upsertBrowseSession(buildBrowseSession());
     await store.upsertCallbackHandle(buildCallbackHandle());
+    await store.upsertCallbackHandle(
+      buildCallbackHandle({
+        id: "other-callback",
+        bindingId: "binding-2",
+        handle: "tg:other",
+      }),
+    );
 
     await store.revokeBinding({ bindingId: "binding-1", revokedAt: 3000 });
 
     await expect(store.getPendingIntent("intent-1", { now: 1500 })).resolves
       .toBeUndefined();
+    await expect(store.getPendingIntent("channel-intent", { now: 1500 })).resolves
+      .toBeUndefined();
+    await expect(
+      store.getPendingIntent("other-channel-intent", { now: 1500 }),
+    ).resolves.toMatchObject({
+      id: "other-channel-intent",
+    });
     await expect(store.getBrowseSession("browse-1", { now: 1500 })).resolves
       .toBeUndefined();
     await expect(store.getCallbackHandle("callback-1", { now: 1500 })).resolves
       .toBeUndefined();
+    await expect(store.getCallbackHandle("other-callback", { now: 1500 })).resolves
+      .toMatchObject({
+        id: "other-callback",
+      });
     await expect(store.getBinding("binding-1")).resolves.toMatchObject({
       revokedAt: 3000,
     });
+  });
+
+  it("can delete callback handles for a binding without revoking it", async () => {
+    const { store } = await createStore();
+    await store.upsertCallbackHandle(buildCallbackHandle());
+    await store.upsertCallbackHandle(
+      buildCallbackHandle({
+        id: "other-callback",
+        bindingId: "binding-2",
+        handle: "tg:other",
+      }),
+    );
+
+    await expect(
+      store.deleteCallbackHandlesForBinding({ bindingId: "binding-1" }),
+    ).resolves.toEqual(["callback-1"]);
+    await expect(store.getCallbackHandle("callback-1", { now: 1500 })).resolves
+      .toBeUndefined();
+    await expect(store.getCallbackHandle("other-callback", { now: 1500 })).resolves
+      .toMatchObject({
+        id: "other-callback",
+      });
   });
 
   it("ignores and cleans up expired pending intents and browse state without deleting active records", async () => {
