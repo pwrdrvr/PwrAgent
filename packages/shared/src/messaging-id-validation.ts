@@ -17,6 +17,7 @@ const DISCORD_MAX_SNOWFLAKE_LENGTH = 19;
 const DISCORD_MIN_SNOWFLAKE_LENGTH = 17;
 const DISCORD_MAX_FUTURE_MS = 24n * 60n * 60n * 1000n;
 const MATTERMOST_ID_LENGTH = 26;
+const SLACK_MAX_ID_LENGTH = 64;
 
 export function validateTelegramChatId(value: unknown): IdentifierValidationResult {
   return validateTelegramIntegerId(value, { allowNegative: true });
@@ -86,6 +87,43 @@ export function validateMattermostId(value: unknown): IdentifierValidationResult
   return { ok: true };
 }
 
+export function validateSlackUserId(value: unknown): IdentifierValidationResult {
+  return validateSlackId(value, ["U", "W"]);
+}
+
+export function validateSlackTeamId(value: unknown): IdentifierValidationResult {
+  return validateSlackId(value, ["T"]);
+}
+
+export function validateSlackChannelId(value: unknown): IdentifierValidationResult {
+  return validateSlackId(value, ["C", "G", "D"]);
+}
+
+function validateSlackId(
+  value: unknown,
+  prefixes: readonly string[],
+): IdentifierValidationResult {
+  if (typeof value !== "string") {
+    return { ok: false, reason: "type" };
+  }
+  if (value.length === 0) {
+    return { ok: false, reason: "empty" };
+  }
+  if (value.length > SLACK_MAX_ID_LENGTH) {
+    return { ok: false, reason: "length" };
+  }
+  if (!prefixes.includes(value[0] ?? "")) {
+    return { ok: false, reason: "format" };
+  }
+  for (let index = 1; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (!isAsciiDigit(code) && !isUppercaseAsciiLetter(code)) {
+      return { ok: false, reason: "format" };
+    }
+  }
+  return { ok: true };
+}
+
 function validateTelegramIntegerId(
   value: unknown,
   options: { allowNegative: boolean },
@@ -137,6 +175,10 @@ function validateTelegramIntegerId(
 
 function isAsciiDigit(code: number): boolean {
   return code >= 0x30 && code <= 0x39;
+}
+
+function isUppercaseAsciiLetter(code: number): boolean {
+  return code >= 0x41 && code <= 0x5a;
 }
 
 function isLowercaseAlphaNumeric(code: number): boolean {

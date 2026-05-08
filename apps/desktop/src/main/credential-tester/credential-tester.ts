@@ -39,6 +39,7 @@ export interface CredentialTesterDependencies {
   resolveTelegramBotToken: () => string | undefined;
   resolveDiscordBotToken: () => string | undefined;
   resolveMattermostBotToken: () => string | undefined;
+  resolveSlackBotToken: () => string | undefined;
   /** Returns the configured Mattermost server URL (settings/env merged).
    *  Used together with the bot token to target the `users/me` probe. */
   resolveMattermostServerUrl: () => string | undefined;
@@ -127,6 +128,7 @@ export class CredentialTester {
       resolveTelegramBotToken: dependencies.resolveTelegramBotToken,
       resolveDiscordBotToken: dependencies.resolveDiscordBotToken,
       resolveMattermostBotToken: dependencies.resolveMattermostBotToken,
+      resolveSlackBotToken: dependencies.resolveSlackBotToken,
       resolveMattermostServerUrl: dependencies.resolveMattermostServerUrl,
       resolveGrokApiKey: dependencies.resolveGrokApiKey,
       resolveCodexCommand: dependencies.resolveCodexCommand,
@@ -191,6 +193,8 @@ export class CredentialTester {
         return await this.testCodex(startedAt);
       case "mattermost":
         return await this.testMattermost(startedAt);
+      case "slack":
+        return await this.testSlack(startedAt);
       default: {
         const exhaustive: never = kind;
         throw new Error(`unknown credential test kind: ${exhaustive as string}`);
@@ -239,6 +243,20 @@ export class CredentialTester {
       credential: { botToken, serverUrl },
     });
     return liftMessagingResult("mattermost", result);
+  }
+
+  private async testSlack(
+    startedAt: number,
+  ): Promise<SettingsCredentialTestResult> {
+    const botToken = this.deps.resolveSlackBotToken();
+    if (!botToken) {
+      return unset("slack", startedAt);
+    }
+    const result = await this.deps.validateMessagingCredentials({
+      channel: "slack",
+      credential: { botToken },
+    });
+    return liftMessagingResult("slack", result);
   }
 
   private async testGrok(
@@ -377,7 +395,7 @@ export class CredentialTester {
  * differ only in the `kind` field; everything else is preserved.
  */
 function liftMessagingResult(
-  kind: "telegram" | "discord" | "mattermost",
+  kind: "telegram" | "discord" | "mattermost" | "slack",
   result: MessagingCredentialValidationResult,
 ): SettingsCredentialTestResult {
   return {

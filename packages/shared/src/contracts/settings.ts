@@ -42,7 +42,8 @@ export type DesktopAuthorizedContact = {
 export type DesktopMessagingContactLookupPlatform =
   | "telegram"
   | "discord"
-  | "mattermost";
+  | "mattermost"
+  | "slack";
 
 export type DesktopMessagingContactLookupKind =
   | "user"
@@ -76,7 +77,10 @@ export type DesktopSettingsSecretName =
   | "discordBotToken"
   | "grokApiKey"
   | "mattermostBotToken"
-  | "mattermostHmacSecret";
+  | "mattermostHmacSecret"
+  | "slackBotToken"
+  | "slackAppToken"
+  | "slackSigningSecret";
 
 export type DesktopSettingsSecretState = {
   configured: boolean;
@@ -238,6 +242,19 @@ export type DesktopSettingsSnapshot = {
       registerSlashCommands: DesktopSettingsValue<boolean>;
       authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
     };
+    slack: {
+      enabled: DesktopSettingsValue<boolean>;
+      streamingResponses: DesktopSettingsValue<boolean>;
+      botToken: DesktopSettingsSecretState;
+      appToken: DesktopSettingsSecretState;
+      signingSecret: DesktopSettingsSecretState;
+      workspaceUrl: DesktopSettingsValue<string>;
+      inboundMode: DesktopSettingsValue<"socket" | "events">;
+      slashCommandPrefix: DesktopSettingsValue<string>;
+      registerSlashCommands: DesktopSettingsValue<boolean>;
+      authorizedUserIds: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+      authorizedWorkspaces: DesktopSettingsValue<DesktopAuthorizedContact[]>;
+    };
   };
   models: {
     codex: {
@@ -293,6 +310,16 @@ export type DesktopSettingsConfigPatch = {
       slashCommandPrefix?: string;
       registerSlashCommands?: boolean;
       authorizedUserIds?: DesktopAuthorizedContact[];
+    };
+    slack?: {
+      enabled?: boolean;
+      streamingResponses?: boolean;
+      workspaceUrl?: string;
+      inboundMode?: "socket" | "events";
+      slashCommandPrefix?: string;
+      registerSlashCommands?: boolean;
+      authorizedUserIds?: DesktopAuthorizedContact[];
+      authorizedWorkspaces?: DesktopAuthorizedContact[];
     };
   };
   models?: {
@@ -384,6 +411,7 @@ export function isDesktopWorktreeStorageLocation(
  * - `grok`      → HTTP GET https://api.x.ai/v1/models
  * - `codex`     → spawn `<resolved-path> --version`
  * - `mattermost` → GET <serverUrl>/api/v4/users/me with bot token
+ * - `slack`     → Slack Web API `auth.test` with bot token
  */
 export const SETTINGS_CREDENTIAL_TEST_KINDS = [
   "telegram",
@@ -391,6 +419,7 @@ export const SETTINGS_CREDENTIAL_TEST_KINDS = [
   "grok",
   "codex",
   "mattermost",
+  "slack",
 ] as const;
 
 export type SettingsCredentialTestKind =

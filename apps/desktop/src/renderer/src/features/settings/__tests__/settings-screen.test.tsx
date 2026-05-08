@@ -73,6 +73,19 @@ function createSnapshot(
         registerSlashCommands: { value: false, source: "default" },
         authorizedUserIds: { value: [], source: "default" },
       },
+      slack: {
+        enabled: { value: false, source: "default" },
+        streamingResponses: { value: false, source: "default" },
+        botToken: { configured: false, source: "unset", writable: true },
+        appToken: { configured: false, source: "unset", writable: true },
+        signingSecret: { configured: false, source: "unset", writable: true },
+        workspaceUrl: { value: "", source: "default" },
+        inboundMode: { value: "socket", source: "default" },
+        slashCommandPrefix: { value: "pwragent_", source: "default" },
+        registerSlashCommands: { value: false, source: "default" },
+        authorizedUserIds: { value: [], source: "default" },
+        authorizedWorkspaces: { value: [], source: "default" },
+      },
       attachments: {
         imageProfile: { value: "medium", source: "default" },
         maxAttachmentBytes: { value: 10485760, source: "default" },
@@ -236,8 +249,8 @@ describe("SettingsScreen", () => {
     });
     expect(screen.getByRole("heading", { name: "Telegram" })).toBeInTheDocument();
     expect(screen.getByText("Authorized SuperGroups")).toBeInTheDocument();
-    expect(screen.getAllByText(/Voice readers may speak each partial edit/)).toHaveLength(3);
-    expect(screen.getAllByText(/quickly hit platform rate limits/)).toHaveLength(3);
+    expect(screen.getAllByText(/Voice readers may speak each partial edit/)).toHaveLength(4);
+    expect(screen.getAllByText(/quickly hit platform rate limits/)).toHaveLength(4);
     fireEvent.click(screen.getAllByRole("switch", { name: "Streaming Responses" })[0]!);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -388,10 +401,10 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Server URL")).toBeInTheDocument();
     expect(screen.getByText("Callback Base URL")).toBeInTheDocument();
-    expect(screen.getByText("Register slash commands")).toBeInTheDocument();
+    expect(screen.getAllByText("Register slash commands").length).toBeGreaterThan(0);
     // The slash command prefix field should be disabled while
     // registerSlashCommands is off.
-    const prefixInput = screen.getByLabelText("Slash command prefix");
+    const prefixInput = screen.getAllByLabelText("Slash command prefix")[0]!;
     expect(prefixInput).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText("Server URL"), {
@@ -409,7 +422,7 @@ describe("SettingsScreen", () => {
     });
 
     fireEvent.click(
-      screen.getByRole("switch", { name: "Register slash commands" }),
+      screen.getAllByRole("switch", { name: "Register slash commands" })[0]!,
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({

@@ -140,7 +140,8 @@ export type CredentialValidationRequest =
   | {
       channel: "mattermost";
       credential: { botToken: string; serverUrl: string };
-    };
+    }
+  | { channel: "slack"; credential: { botToken: string } };
 
 export class DesktopMessagingRuntime {
   private adapters: DesktopMessagingAdapter[] = [];
@@ -516,6 +517,10 @@ export class DesktopMessagingRuntime {
           "@pwragent/messaging-provider-mattermost"
         );
         return await mattermostProvider.validateCredentials(request.credential);
+      }
+      case "slack": {
+        const slackProvider = await import("@pwragent/messaging-provider-slack");
+        return await slackProvider.validateCredentials(request.credential);
       }
       default: {
         const exhaustive: never = request;

@@ -6,7 +6,7 @@ import type { DesktopMessagingAdapter } from "./messaging-runtime";
 
 export type DesktopMessagingProviderId = Extract<
   MessagingChannelKind,
-  "telegram" | "discord" | "mattermost"
+  "telegram" | "discord" | "mattermost" | "slack"
 >;
 
 export type DesktopMessagingProviderModule = {
@@ -75,6 +75,7 @@ export function configuredMessagingProviderIds(
     ...(config.mattermost && config.mattermost.enabled !== false
       ? (["mattermost"] as const)
       : []),
+    ...(config.slack && config.slack.enabled !== false ? (["slack"] as const) : []),
   ];
 }
 
@@ -128,6 +129,18 @@ const defaultMessagingProviderRegistry: DesktopMessagingProviderRegistry = {
         createAdapter({ config, logger, store }) {
           return config.mattermost
             ? module.createMattermostAdapter(config.mattermost, store, logger)
+            : undefined;
+        },
+      };
+    },
+  },
+  slack: {
+    async load() {
+      const module = await import("@pwragent/messaging-provider-slack");
+      return {
+        createAdapter({ config, logger, store }) {
+          return config.slack
+            ? module.createSlackAdapter(config.slack, store, logger)
             : undefined;
         },
       };

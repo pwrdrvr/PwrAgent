@@ -98,6 +98,31 @@ describe("desktop settings contracts", () => {
           registerSlashCommands: { value: false, source: "default" },
           authorizedUserIds: { value: [], source: "default" },
         },
+        slack: {
+          enabled: { value: false, source: "default" },
+          streamingResponses: { value: false, source: "default" },
+          botToken: {
+            configured: false,
+            source: "unset",
+            writable: true,
+          },
+          appToken: {
+            configured: false,
+            source: "unset",
+            writable: true,
+          },
+          signingSecret: {
+            configured: false,
+            source: "unset",
+            writable: true,
+          },
+          workspaceUrl: { value: "", source: "default" },
+          inboundMode: { value: "socket", source: "default" },
+          slashCommandPrefix: { value: "pwragent_", source: "default" },
+          registerSlashCommands: { value: false, source: "default" },
+          authorizedUserIds: { value: [], source: "default" },
+          authorizedWorkspaces: { value: [], source: "default" },
+        },
       },
       models: {
         codex: {

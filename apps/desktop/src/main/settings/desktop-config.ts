@@ -77,6 +77,16 @@ export type DesktopSettingsConfig = {
       registerSlashCommands?: boolean;
       authorizedUserIds?: AuthorizedContactConfig[];
     };
+    slack?: {
+      enabled?: boolean;
+      streamingResponses?: boolean;
+      workspaceUrl?: string;
+      inboundMode?: "socket" | "events";
+      slashCommandPrefix?: string;
+      registerSlashCommands?: boolean;
+      authorizedUserIds?: AuthorizedContactConfig[];
+      authorizedWorkspaces?: AuthorizedContactConfig[];
+    };
   };
   models?: {
     codex?: {
@@ -374,6 +384,46 @@ export function desktopSettingsPatchToEdits(
     );
   }
 
+  const slack = patch.messaging?.slack;
+  if (slack?.enabled !== undefined) {
+    set(["messaging", "slack", "enabled"], slack.enabled);
+  }
+  if (slack?.streamingResponses !== undefined) {
+    set(["messaging", "slack", "streaming_responses"], slack.streamingResponses);
+  }
+  if (slack?.workspaceUrl !== undefined) {
+    set(["messaging", "slack", "workspace_url"], slack.workspaceUrl);
+  }
+  if (slack?.inboundMode !== undefined) {
+    set(["messaging", "slack", "inbound_mode"], slack.inboundMode);
+  }
+  if (slack?.slashCommandPrefix !== undefined) {
+    set(["messaging", "slack", "slash_command_prefix"], slack.slashCommandPrefix);
+  }
+  if (slack?.registerSlashCommands !== undefined) {
+    set(
+      ["messaging", "slack", "register_slash_commands"],
+      slack.registerSlashCommands,
+    );
+  }
+  if (slack?.authorizedUserIds !== undefined) {
+    setAuthorizedContacts(
+      ["messaging", "slack"],
+      "authorized_user_ids",
+      "authorized_users",
+      slack.authorizedUserIds,
+      ["authorized_user_ids_list"],
+    );
+  }
+  if (slack?.authorizedWorkspaces !== undefined) {
+    setAuthorizedContacts(
+      ["messaging", "slack"],
+      "authorized_workspaces",
+      "authorized_workspaces",
+      slack.authorizedWorkspaces,
+    );
+  }
+
   if (patch.models?.codex?.path !== undefined) {
     set(["models", "codex", "path"], patch.models.codex.path);
   }
@@ -412,6 +462,7 @@ function normalizeDesktopConfig(
   const telegram = tables["messaging.telegram"];
   const discord = tables["messaging.discord"];
   const mattermost = tables["messaging.mattermost"];
+  const slack = tables["messaging.slack"];
   const codex = tables["models.codex"];
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
@@ -475,6 +526,23 @@ function normalizeDesktopConfig(
           mattermost?.authorized_user_ids,
         ),
       },
+      slack: {
+        enabled: readBoolean(slack?.enabled),
+        streamingResponses: readBoolean(slack?.streaming_responses),
+        workspaceUrl: readString(slack?.workspace_url),
+        inboundMode: readSlackInboundMode(slack?.inbound_mode),
+        slashCommandPrefix: readString(slack?.slash_command_prefix),
+        registerSlashCommands: readBoolean(slack?.register_slash_commands),
+        authorizedUserIds: readAuthorizedContacts(
+          slack?.authorized_users,
+          slack?.authorized_user_ids_list,
+          slack?.authorized_user_ids,
+        ),
+        authorizedWorkspaces: readAuthorizedContacts(
+          slack?.authorized_workspaces_list,
+          slack?.authorized_workspaces,
+        ),
+      },
     },
     models: {
       codex: {
@@ -509,6 +577,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const telegram = config.messaging?.telegram;
   const discord = config.messaging?.discord;
   const mattermost = config.messaging?.mattermost;
+  const slack = config.messaging?.slack;
   const inputDebounceMs = config.messaging?.inputDebounceMs;
   const enabled = config.messaging?.enabled;
   const toolUpdateMode = config.messaging?.toolUpdateMode;
@@ -520,6 +589,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     || (telegram && hasDefinedValue(telegram))
     || (discord && hasDefinedValue(discord))
     || (mattermost && hasDefinedValue(mattermost))
+    || (slack && hasDefinedValue(slack))
   ) {
     pruned.messaging = {};
     if (enabled !== undefined) {
@@ -542,6 +612,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (mattermost && hasDefinedValue(mattermost)) {
       pruned.messaging.mattermost = mattermost;
+    }
+    if (slack && hasDefinedValue(slack)) {
+      pruned.messaging.slack = slack;
     }
   }
 
@@ -617,6 +690,12 @@ function isMessagingToolUpdateMode(
     || value === "show_more"
     || value === "show_all"
   );
+}
+
+function readSlackInboundMode(
+  value: TomlScalar | undefined,
+): "socket" | "events" | undefined {
+  return value === "socket" || value === "events" ? value : undefined;
 }
 
 function readBoolean(value: TomlScalar | undefined): boolean | undefined {

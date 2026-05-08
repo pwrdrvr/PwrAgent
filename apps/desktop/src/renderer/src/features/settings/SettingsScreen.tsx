@@ -14,6 +14,7 @@ import { WorktreesSettings } from "./WorktreesSettings";
 import {
   buildDiscordPatchDelta,
   buildMattermostPatchDelta,
+  buildSlackPatchDelta,
   buildTelegramPatchDelta,
 } from "./settings-patch-delta";
 import { useCallback, useEffect, useState } from "react";
@@ -285,6 +286,16 @@ function SettingsSectionBody(props: {
           if (delta === undefined) return;
           await props.settings.writeConfig({
             messaging: { mattermost: delta },
+          });
+        }}
+        onSaveSlack={async (slack) => {
+          const delta = buildSlackPatchDelta(
+            props.snapshot.messaging.slack,
+            slack,
+          );
+          if (delta === undefined) return;
+          await props.settings.writeConfig({
+            messaging: { slack: delta },
           });
         }}
       />

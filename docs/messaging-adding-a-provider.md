@@ -619,6 +619,8 @@ Concrete code references in the tree, kept current as adapters evolve:
 | `packages/messaging/providers/mattermost/src/mattermost-adapter.ts` | An out-of-band HTTP callback provider. WebSocket inbound + REST outbound + HTTP listener for callbacks. Threading via `root_id`. |
 | `packages/messaging/providers/mattermost/src/mattermost-callback-server.ts` | The reference implementation of the localhost-bound HTTP callback listener with HMAC verification. |
 | `packages/messaging/providers/mattermost/src/mattermost-formatting.ts` | Multi-attachment auto-flow rendering. Action ID alphanumeric sanitization. |
+| `packages/messaging/providers/slack/src/slack-adapter.ts` | Socket Mode provider with Block Kit rendering, Slack mrkdwn translation, opaque callback handles in button `value`, and stable Slack ID validation. |
+| `packages/messaging/providers/slack/src/slack-formatting.ts` | Slack Block Kit action rows, button text limits, `slack-mrkdwn` conversion, and action-id sanitization. |
 
 ## Evaluation rubric
 
@@ -675,3 +677,12 @@ Captured at the end of Phase 10 of [plan 2026-05-06-001](plans/2026-05-06-001-fe
 
 - Writing the guide first **did** force me to be honest about what a contributor needs vs. what I could just figure out by reading Discord. The bounce-back evaluation surfaced ~15 corrections that would otherwise have stayed implicit knowledge.
 - The reference-implementation index ("Living Examples" section) at the bottom is a good payoff: I caught myself referring to the table mid-implementation.
+
+### Lessons from Slack
+
+Captured while implementing [issue #261](https://github.com/pwrdrvr/PwrAgent/issues/261).
+
+- **Socket Mode is materially simpler than the Mattermost-style HTTP path.** Slack button clicks, message events, and slash-command payloads all arrive over the outbound app socket, so a desktop deployment does not need Cloudflare Tunnel / Tailscale Funnel just to receive clicks.
+- **The provider still needs signed opaque callback values.** Socket Mode authenticates transport, but the adapter stores only a short handle in Block Kit button `value`; signing `{handle, intentId, issuedAt}` catches stale or tampered values before the callback-handle lookup.
+- **Slack has a real markdown dialect gap.** `slack-mrkdwn` is not CommonMark. The adapter needs a small boundary translator and tests for links/bold/escaping instead of forwarding producer markdown verbatim.
+- **Settings fan-out grows quickly for two-token providers.** Slack needs bot token + app token, optional signing secret, inbound mode, authorized users, and optional workspace IDs. The guide's settings table was accurate, but tests that construct full `DesktopSettingsSnapshot` fixtures also need an explicit default block.

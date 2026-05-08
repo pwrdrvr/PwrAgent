@@ -33,7 +33,8 @@ graph TB
         Telegram["telegram<br/>uses grammy"]
         Discord["discord<br/>uses discord.js"]
         Mattermost["mattermost<br/>uses @mattermost/client<br/>+ HTTP callback listener"]
-        Future["future:<br/>slack, signal,<br/>feishu, matrix, …"]
+        Slack["slack<br/>uses @slack/web-api<br/>+ @slack/socket-mode"]
+        Future["future:<br/>signal, feishu,<br/>matrix, …"]
     end
 
     subgraph Shared["packages/shared"]
@@ -45,6 +46,7 @@ graph TB
     Telegram -->|implements adapter contract| Interface
     Discord -->|implements adapter contract| Interface
     Mattermost -->|implements adapter contract| Interface
+    Slack -->|implements adapter contract| Interface
     Future -->|implements adapter contract| Interface
     Interface -->|imports app/nav types| Shared
     DesktopApp -->|imports messaging types| Interface
@@ -150,6 +152,7 @@ Different platforms deliver button clicks back to the bot through different tran
 | Telegram | Long-poll callbacks via `grammy` | The same connection used for `posted`-style events. |
 | Discord | Gateway component-interaction events via `discord.js` | The same gateway connection. |
 | **Mattermost** | **Out-of-band HTTP POST** to a URL the bot supplies as `integration.url` on each rendered button | **A small HTTP listener bound to `127.0.0.1:<port>`** inside the adapter package. Production deployments expose it through Cloudflare Tunnel or Tailscale Funnel; the listener never binds to a public interface. HMAC-signed `integration.context` defends against forged callbacks (the platform doesn't sign them). |
+| Slack | Socket Mode events via `@slack/socket-mode` | The outbound WebSocket carries message events, button clicks, and slash-command payloads. No public callback URL is needed for v1. |
 
 Inline-stream providers don't need a listener — clicks ride back over their existing connection. HTTP-callback providers need an authenticated, tunneled listener; PwrAgent's pattern uses HMAC over `(intentId, actionId, issuedAt)` with a per-process secret that regenerates on adapter restart (acts as automatic TTL for outstanding callback URLs). See [`docs/messaging-platform-integration.md`](messaging-platform-integration.md) for the recommended Cloudflare Tunnel + Zero Trust deployment posture and the Tailscale Funnel free-ish alternative.
 

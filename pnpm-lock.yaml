@@ -41,6 +41,9 @@ importers:
       '@pwragent/messaging-provider-mattermost':
         specifier: workspace:*
         version: link:../../packages/messaging/providers/mattermost
+      '@pwragent/messaging-provider-slack':
+        specifier: workspace:*
+        version: link:../../packages/messaging/providers/slack
       '@pwragent/messaging-provider-telegram':
         specifier: workspace:*
         version: link:../../packages/messaging/providers/telegram

@@ -132,6 +132,54 @@ export function buildMattermostPatchDelta(
   return Object.keys(patch).length === 0 ? undefined : patch;
 }
 
+export function buildSlackPatchDelta(
+  snapshot: DesktopSettingsSnapshot["messaging"]["slack"],
+  candidate: DesktopSettingsSnapshot["messaging"]["slack"],
+): NonNullable<NonNullable<DesktopSettingsConfigPatch["messaging"]>["slack"]> | undefined {
+  const patch: NonNullable<
+    NonNullable<DesktopSettingsConfigPatch["messaging"]>["slack"]
+  > = {};
+
+  if (snapshot.enabled.value !== candidate.enabled.value) {
+    patch.enabled = candidate.enabled.value;
+  }
+  if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
+    patch.streamingResponses = candidate.streamingResponses.value;
+  }
+  if (snapshot.workspaceUrl.value !== candidate.workspaceUrl.value) {
+    patch.workspaceUrl = candidate.workspaceUrl.value;
+  }
+  if (snapshot.inboundMode.value !== candidate.inboundMode.value) {
+    patch.inboundMode = candidate.inboundMode.value;
+  }
+  if (snapshot.slashCommandPrefix.value !== candidate.slashCommandPrefix.value) {
+    patch.slashCommandPrefix = candidate.slashCommandPrefix.value;
+  }
+  if (
+    snapshot.registerSlashCommands.value !== candidate.registerSlashCommands.value
+  ) {
+    patch.registerSlashCommands = candidate.registerSlashCommands.value;
+  }
+  if (
+    !authorizedContactArrayEqual(
+      snapshot.authorizedUserIds.value,
+      candidate.authorizedUserIds.value,
+    )
+  ) {
+    patch.authorizedUserIds = candidate.authorizedUserIds.value;
+  }
+  if (
+    !authorizedContactArrayEqual(
+      snapshot.authorizedWorkspaces.value,
+      candidate.authorizedWorkspaces.value,
+    )
+  ) {
+    patch.authorizedWorkspaces = candidate.authorizedWorkspaces.value;
+  }
+
+  return Object.keys(patch).length === 0 ? undefined : patch;
+}
+
 function authorizedContactArrayEqual(
   a: readonly DesktopAuthorizedContact[],
   b: readonly DesktopAuthorizedContact[],

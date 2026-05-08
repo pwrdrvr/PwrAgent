@@ -66,7 +66,10 @@ function messagingSecretTouchesRuntime(
   return secret === "telegramBotToken"
     || secret === "discordBotToken"
     || secret === "mattermostBotToken"
-    || secret === "mattermostHmacSecret";
+    || secret === "mattermostHmacSecret"
+    || secret === "slackBotToken"
+    || secret === "slackAppToken"
+    || secret === "slackSigningSecret";
 }
 
 async function applyLatestMessagingRuntimeConfig(
@@ -162,6 +165,8 @@ async function resolveMessagingContact(
         ),
       );
     }
+    case "slack":
+      return unsupportedLookup(request);
   }
 }
 
@@ -220,6 +225,8 @@ function getCredentialTester(
         resolveService().resolveMattermostBotTokenSync(),
       resolveMattermostServerUrl: () =>
         resolveService().resolveMattermostServerUrlSync(),
+      resolveSlackBotToken: () =>
+        resolveService().resolveSlackBotTokenSync(),
       resolveGrokApiKey: () => resolveService().resolveGrokApiKey(),
       resolveCodexCommand: async () => {
         const snapshot = await resolveService().readSettings();

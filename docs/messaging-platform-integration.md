@@ -1,7 +1,7 @@
 # Messaging Platform Integration
 
 PwrAgent can run messaging adapters from the Electron main process so an
-allowlisted Telegram, Discord, or Mattermost user can choose a thread, bind
+allowlisted Telegram, Discord, Mattermost, or Slack user can choose a thread, bind
 the current conversation, and send free-form text into that thread. The
 workflow logic is shared; the providers only own transport, formatting,
 callback handles, and platform limits.
@@ -501,6 +501,61 @@ openssl rand -hex 32
 Pin the same value across desktop instances if you ever run multiple
 clients pointed at the same Mattermost workspace; otherwise each
 client's buttons only validate against its own keyring.
+
+## Slack Setup
+
+Slack is supported with **Socket Mode** as the v1 inbound transport. PwrAgent
+opens an outbound WebSocket to Slack, so desktop users do not need a public
+callback URL or tunnel. Slack's Events API / signed HTTP request path is modeled
+in settings for a future mode, but the adapter currently starts only in Socket
+Mode.
+
+### 1. Create a Slack app
+
+In Slack's app configuration UI:
+
+1. Create an app for the target workspace.
+2. Enable Socket Mode and create an app-level token with the `connections:write`
+   scope. Slack app tokens start with `xapp-`.
+3. Add a bot user and install the app to the workspace. Slack bot tokens start
+   with `xoxb-`.
+4. Subscribe the app to message events your deployment needs (`message.channels`,
+   `message.groups`, `message.im`, `message.mpim`, and `app_mention`) and enable
+   interactivity for Block Kit button clicks.
+
+Minimum bot scopes for the current adapter shape:
+
+- `chat:write` for outbound messages and updates.
+- `channels:history`, `groups:history`, `im:history`, and `mpim:history` for the
+  conversation types you allow.
+- `files:read` for inbound file downloads.
+- `files:write` for outbound file delivery.
+- `commands` only if you configure Slack slash commands for the app.
+
+### 2. Configure PwrAgent
+
+**Path A — Desktop Settings UI.** Open Settings → Messaging → Slack. Fill in Bot
+Token, App Token, authorized Slack user IDs, optional workspace/team IDs, and
+leave Inbound Mode set to Socket Mode. The connection-test button calls Slack
+`auth.test` with the bot token.
+
+**Path B — Environment variables.** Env vars override Settings UI values when
+both are present.
+
+```bash
+PWRAGENT_MESSAGING_SLACK_ENABLED=true
+PWRAGENT_MESSAGING_SLACK_BOT_TOKEN=xoxb-...
+PWRAGENT_MESSAGING_SLACK_APP_TOKEN=xapp-...
+PWRAGENT_MESSAGING_SLACK_AUTHORIZED_USER_IDS=U012ABCDEF0,U099ZZZZZZZ
+PWRAGENT_MESSAGING_SLACK_AUTHORIZED_WORKSPACES=T012ABCDEF0   # optional
+PWRAGENT_MESSAGING_SLACK_WORKSPACE_URL=https://example.slack.com # optional
+PWRAGENT_MESSAGING_SLACK_STREAMING_RESPONSES=false              # optional
+PWRAGENT_MESSAGING_SLACK_REGISTER_SLASH_COMMANDS=false          # reserved
+PWRAGENT_MESSAGING_SLACK_SLASH_COMMAND_PREFIX=pwragent_         # optional
+```
+
+Authorize on stable Slack user IDs (`U…` or enterprise `W…`), not display names
+or handles. Workspace allowlisting uses Slack team IDs (`T…`).
 
 > **Note for future-you:** When the Settings UI lands, the desktop
 > will mint and persist the HMAC in macOS Keychain on first run.
