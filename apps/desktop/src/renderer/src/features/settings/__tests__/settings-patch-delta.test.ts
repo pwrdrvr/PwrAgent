@@ -1,0 +1,136 @@
+import { describe, expect, it } from "vitest";
+import type { DesktopSettingsSnapshot } from "@pwragent/shared";
+import {
+  buildDiscordPatchDelta,
+  buildTelegramPatchDelta,
+} from "../settings-patch-delta";
+
+type Telegram = DesktopSettingsSnapshot["messaging"]["telegram"];
+type Discord = DesktopSettingsSnapshot["messaging"]["discord"];
+
+function telegramSnapshot(overrides: Partial<Telegram> = {}): Telegram {
+  return {
+    enabled: { value: false, source: "default" },
+    streamingResponses: { value: false, source: "default" },
+    botToken: { configured: false, source: "unset", writable: true },
+    authorizedUserIds: { value: [], source: "default" },
+    authorizedSupergroups: { value: [], source: "default" },
+    ...overrides,
+  };
+}
+
+function discordSnapshot(overrides: Partial<Discord> = {}): Discord {
+  return {
+    enabled: { value: false, source: "default" },
+    streamingResponses: { value: false, source: "default" },
+    botToken: { configured: false, source: "unset", writable: true },
+    applicationId: { value: "", source: "default" },
+    authorizedUserIds: { value: [], source: "default" },
+    authorizedGuilds: { value: [], source: "default" },
+    ...overrides,
+  };
+}
+
+describe("buildTelegramPatchDelta", () => {
+  it("returns undefined when nothing changed", () => {
+    const snapshot = telegramSnapshot();
+    expect(buildTelegramPatchDelta(snapshot, snapshot)).toBeUndefined();
+  });
+
+  it("emits only the field the user changed", () => {
+    const snapshot = telegramSnapshot();
+    const candidate: Telegram = {
+      ...snapshot,
+      streamingResponses: { ...snapshot.streamingResponses, value: true },
+    };
+    expect(buildTelegramPatchDelta(snapshot, candidate)).toEqual({
+      streamingResponses: true,
+    });
+  });
+
+  it("does not leak env-overridden values the user did not touch", () => {
+    // Env says enabled=true; user toggles streaming, leaves enabled alone.
+    const snapshot = telegramSnapshot({
+      enabled: { value: true, source: "env", overriddenByEnv: true },
+    });
+    const candidate: Telegram = {
+      ...snapshot,
+      streamingResponses: { ...snapshot.streamingResponses, value: true },
+    };
+    const delta = buildTelegramPatchDelta(snapshot, candidate);
+    expect(delta).toEqual({ streamingResponses: true });
+    expect(delta).not.toHaveProperty("enabled");
+  });
+
+  it("writes a new value when the user actively overrides an env-sourced field", () => {
+    // Env says enabled=true; user explicitly toggles to false.
+    const snapshot = telegramSnapshot({
+      enabled: { value: true, source: "env", overriddenByEnv: true },
+    });
+    const candidate: Telegram = {
+      ...snapshot,
+      enabled: { ...snapshot.enabled, value: false },
+    };
+    expect(buildTelegramPatchDelta(snapshot, candidate)).toEqual({
+      enabled: false,
+    });
+  });
+
+  it("compares string arrays element-wise", () => {
+    const snapshot = telegramSnapshot({
+      authorizedUserIds: { value: ["111", "222"], source: "config" },
+    });
+    const same: Telegram = {
+      ...snapshot,
+      authorizedUserIds: { ...snapshot.authorizedUserIds, value: ["111", "222"] },
+    };
+    expect(buildTelegramPatchDelta(snapshot, same)).toBeUndefined();
+
+    const different: Telegram = {
+      ...snapshot,
+      authorizedUserIds: { ...snapshot.authorizedUserIds, value: ["333"] },
+    };
+    expect(buildTelegramPatchDelta(snapshot, different)).toEqual({
+      authorizedUserIds: ["333"],
+    });
+  });
+});
+
+describe("buildDiscordPatchDelta", () => {
+  it("returns undefined when nothing changed", () => {
+    const snapshot = discordSnapshot();
+    expect(buildDiscordPatchDelta(snapshot, snapshot)).toBeUndefined();
+  });
+
+  it("emits applicationId only when changed", () => {
+    const snapshot = discordSnapshot({
+      applicationId: { value: "old-id", source: "config" },
+    });
+    const same: Discord = {
+      ...snapshot,
+      applicationId: { ...snapshot.applicationId, value: "old-id" },
+    };
+    expect(buildDiscordPatchDelta(snapshot, same)).toBeUndefined();
+
+    const different: Discord = {
+      ...snapshot,
+      applicationId: { ...snapshot.applicationId, value: "new-id" },
+    };
+    expect(buildDiscordPatchDelta(snapshot, different)).toEqual({
+      applicationId: "new-id",
+    });
+  });
+
+  it("does not leak env-sourced applicationId when other fields change", () => {
+    const snapshot = discordSnapshot({
+      applicationId: { value: "env-app", source: "env", overriddenByEnv: true },
+    });
+    const candidate: Discord = {
+      ...snapshot,
+      enabled: { ...snapshot.enabled, value: true },
+    };
+    const delta = buildDiscordPatchDelta(snapshot, candidate);
+    expect(delta).toEqual({ enabled: true });
+    expect(delta).not.toHaveProperty("applicationId");
+  });
+});

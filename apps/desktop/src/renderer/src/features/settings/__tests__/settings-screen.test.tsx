@@ -236,9 +236,6 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
           telegram: {
-            authorizedSupergroups: [],
-            authorizedUserIds: [],
-            enabled: false,
             streamingResponses: true,
           },
         },
@@ -333,13 +330,7 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
           mattermost: {
-            authorizedUserIds: [],
-            callbackBaseUrl: "",
-            enabled: false,
-            registerSlashCommands: false,
             serverUrl: "https://chat.example.com",
-            slashCommandPrefix: "pwragent_",
-            streamingResponses: false,
           },
         },
       });
@@ -352,13 +343,7 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
           mattermost: {
-            authorizedUserIds: [],
-            callbackBaseUrl: "",
-            enabled: false,
             registerSlashCommands: true,
-            serverUrl: "",
-            slashCommandPrefix: "pwragent_",
-            streamingResponses: false,
           },
         },
       });

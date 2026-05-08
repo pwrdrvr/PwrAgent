@@ -14,11 +14,10 @@ import {
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
 } from "@pwragent/shared";
 import {
-  mergeDesktopSettingsConfig,
+  applyDesktopSettingsPatch,
   readDesktopSettingsConfig,
   resolveDesktopConfigPath,
   userHomeWorktreesRoot,
-  writeDesktopSettingsConfig,
   type DesktopSettingsConfig,
 } from "./desktop-config";
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
@@ -307,10 +306,7 @@ export class DesktopSettingsService {
         `Cannot save settings because ${this.configPath} could not be parsed: ${current.error}`,
       );
     }
-    writeDesktopSettingsConfig(
-      this.configPath,
-      mergeDesktopSettingsConfig(current.config, patch),
-    );
+    applyDesktopSettingsPatch(this.configPath, patch);
     return this.readSettings();
   }
 
