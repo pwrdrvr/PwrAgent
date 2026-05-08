@@ -39,15 +39,11 @@ describe("GitHub CLI discovery", () => {
           result?: { stdout: string; stderr?: string },
         ) => void,
       ) => {
-        if (command === "/usr/bin/which") {
-          callback(new Error("not on path"));
-          return;
-        }
         if (command === "/opt/homebrew/bin/gh") {
           callback(null, { stdout: "gh version 2.88.1 (2026-04-30)\n" });
           return;
         }
-        callback(new Error("missing"));
+        callback(missingError);
       },
     );
     const { discoverGhCommands } = await import("../settings/gh-discovery");
@@ -71,24 +67,20 @@ describe("GitHub CLI discovery", () => {
     accessMock.mockResolvedValue(undefined);
     execFileMock.mockImplementation(
       (
-        command: string,
-        args: string[],
+        _command: string,
+        _args: string[],
         _options: Record<string, unknown>,
         callback: (
           error: Error | null,
           result?: { stdout: string; stderr?: string },
         ) => void,
       ) => {
-        if (command === "/usr/bin/which") {
-          callback(null, { stdout: "/opt/homebrew/bin/gh\n" });
-          return;
-        }
         callback(null, { stdout: "gh version 2.92.0 (2026-05-01)\n" });
       },
     );
     const { discoverGhCommands } = await import("../settings/gh-discovery");
 
-    const snapshot = await discoverGhCommands({ env: {} });
+    const snapshot = await discoverGhCommands({ env: { PATH: "/opt/homebrew/bin" } });
 
     expect(
       snapshot.candidates.filter((candidate) => candidate.command === "/opt/homebrew/bin/gh"),
@@ -109,15 +101,11 @@ describe("GitHub CLI discovery", () => {
     accessMock.mockRejectedValue(missingError);
     execFileMock.mockImplementation(
       (
-        command: string,
+        _command: string,
         _args: string[],
         _options: Record<string, unknown>,
         callback: (error: Error | null) => void,
       ) => {
-        if (command === "/usr/bin/which") {
-          callback(new Error("not on path"));
-          return;
-        }
         callback(missingError);
       },
     );
@@ -149,19 +137,17 @@ describe("GitHub CLI discovery", () => {
     execFileMock.mockImplementation(
       (
         command: string,
-        args: string[],
+        _args: string[],
         _options: Record<string, unknown>,
         callback: (
           error: Error | null,
           result?: { stdout: string; stderr?: string },
         ) => void,
       ) => {
-        if (command === "/usr/bin/which") {
-          callback(null, { stdout: `/resolved/${args[0]}\n` });
-          return;
-        }
         callback(null, {
-          stdout: command.includes("env") ? "gh version 2.90.0\n" : "gh version 2.80.0\n",
+          stdout: command.includes("env")
+            ? "gh version 2.90.0\n"
+            : "gh version 2.80.0\n",
         });
       },
     );
@@ -169,7 +155,7 @@ describe("GitHub CLI discovery", () => {
 
     const snapshot = await discoverGhCommands({
       configuredCommand: "gh-config",
-      env: { PWRAGENT_GH_COMMAND: "gh-env" },
+      env: { PATH: "/resolved", PWRAGENT_GH_COMMAND: "gh-env" },
     });
 
     expect(snapshot.selectedSource).toBe("env");
@@ -178,6 +164,56 @@ describe("GitHub CLI discovery", () => {
       selected: true,
       version: "2.90.0",
     });
+  });
+
+  it("resolves a Windows PATH-only gh through PATHEXT", async () => {
+    const windowsGh = "C:\\Tools\\GitHub CLI\\bin\\gh.EXE";
+    accessMock.mockImplementation(async (candidate: string) => {
+      if (candidate === windowsGh) return undefined;
+      const missingError = new Error("missing") as NodeJS.ErrnoException;
+      missingError.code = "ENOENT";
+      throw missingError;
+    });
+    execFileMock.mockImplementation(
+      (
+        command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        callback: (
+          error: Error | null,
+          result?: { stdout: string; stderr?: string },
+        ) => void,
+      ) => {
+        if (command === windowsGh) {
+          callback(null, { stdout: "gh version 2.91.0 (2026-05-01)\n" });
+          return;
+        }
+        const missingError = new Error("missing") as NodeJS.ErrnoException;
+        missingError.code = "ENOENT";
+        callback(missingError);
+      },
+    );
+    const { discoverGhCommands } = await import("../settings/gh-discovery");
+
+    const snapshot = await discoverGhCommands({
+      env: {
+        Path: "C:\\Tools\\GitHub CLI\\bin",
+        PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      },
+      platform: "win32",
+    });
+
+    expect(snapshot.selectedCommand).toBe(windowsGh);
+    expect(snapshot.selectedSource).toBe("path");
+    expect(snapshot.candidates).toEqual([
+      expect.objectContaining({
+        command: windowsGh,
+        executable: true,
+        selected: true,
+        source: "path",
+        version: "2.91.0",
+      }),
+    ]);
   });
 
   it("parses common gh --version output", async () => {

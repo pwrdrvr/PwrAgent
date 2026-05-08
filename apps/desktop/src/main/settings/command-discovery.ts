@@ -32,6 +32,7 @@ export type DiscoverCommandOptions<Source extends string> = {
   fixedCandidates: Array<CommandDiscoveryInput<Source>>;
   autoCandidates: Array<CommandDiscoveryInput<Source>>;
   env: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
   versionArgs?: string[];
   parseVersion: (output: string) => string | undefined;
   compareVersions?: (left?: string, right?: string) => number;
@@ -67,23 +68,83 @@ export async function pathIsExecutable(candidate: string): Promise<boolean> {
   }
 }
 
+function commandHasPathSeparator(command: string): boolean {
+  return command.includes("/") || command.includes("\\");
+}
+
+function readPathEnv(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {
+  if (platform !== "win32") {
+    return env.PATH;
+  }
+
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path");
+  return pathKey ? env[pathKey] : undefined;
+}
+
+function normalizePathEntry(entry: string): string {
+  const trimmed = entry.trim();
+  const quoted = trimmed.match(/^"(.+)"$/);
+  return quoted?.[1] ?? trimmed;
+}
+
+function buildPathCommandNames(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): string[] {
+  if (platform !== "win32") {
+    return [command];
+  }
+
+  const rawExtensions = env.PATHEXT?.trim() || ".COM;.EXE;.BAT;.CMD";
+  const extensions = rawExtensions
+    .split(";")
+    .map((extension) => extension.trim())
+    .filter(Boolean)
+    .map((extension) => (extension.startsWith(".") ? extension : `.${extension}`));
+  const commandExtension = path.win32.extname(command).toLowerCase();
+
+  if (
+    commandExtension &&
+    extensions.some((extension) => extension.toLowerCase() === commandExtension)
+  ) {
+    return [command];
+  }
+
+  return [command, ...extensions.map((extension) => `${command}${extension}`)];
+}
+
 async function resolvePathCommand(
   command: string,
   env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
 ): Promise<string | undefined> {
-  if (command.includes(path.sep)) {
+  if (commandHasPathSeparator(command)) {
     return command;
   }
 
-  try {
-    const result = await execFile("/usr/bin/which", [command], {
-      env,
-      timeout: 2_000,
-    });
-    return result.stdout.trim() || undefined;
-  } catch {
+  const pathValue = readPathEnv(env, platform);
+  if (!pathValue?.trim()) {
     return undefined;
   }
+
+  const delimiter = platform === "win32" ? ";" : path.delimiter;
+  const joinPath = platform === "win32" ? path.win32.join : path.join;
+  const commandNames = buildPathCommandNames(command, env, platform);
+
+  for (const directory of pathValue
+    .split(delimiter)
+    .map(normalizePathEntry)
+    .filter(Boolean)) {
+    for (const commandName of commandNames) {
+      const candidate = joinPath(directory, commandName);
+      if (await pathExists(candidate) !== "not_found") {
+        return candidate;
+      }
+    }
+  }
+
+  return undefined;
 }
 
 async function readCommandVersion(params: {
@@ -124,6 +185,7 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
   candidate: CommandDiscoveryInput<Source>,
   options: {
     env: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
     versionArgs?: string[];
     parseVersion: (output: string) => string | undefined;
   },
@@ -133,18 +195,21 @@ export async function buildCommandDiscoveryCandidate<Source extends string>(
     return undefined;
   }
 
-  const resolvedCommand =
-    candidate.source === "path" || !trimmedCommand.includes(path.sep)
-      ? await resolvePathCommand(trimmedCommand, options.env)
-      : trimmedCommand;
-  const existence = resolvedCommand ? await pathExists(resolvedCommand) : "not_found";
+  const platform = options.platform ?? process.platform;
+  const shouldResolveFromPath =
+    candidate.source === "path" || !commandHasPathSeparator(trimmedCommand);
+  const resolvedCommand = shouldResolveFromPath
+    ? await resolvePathCommand(trimmedCommand, options.env, platform)
+    : trimmedCommand;
+  const probeCommand = resolvedCommand ?? trimmedCommand;
+  const existence = resolvedCommand ? await pathExists(resolvedCommand) : "unknown";
   const accessExecutable =
     resolvedCommand && existence !== "not_found"
       ? await pathIsExecutable(resolvedCommand)
       : false;
-  const versionResult = resolvedCommand && existence !== "not_found"
+  const versionResult = existence !== "not_found"
     ? await readCommandVersion({
-        command: resolvedCommand,
+        command: probeCommand,
         env: options.env,
         parseVersion: options.parseVersion,
         versionArgs: options.versionArgs ?? ["--version"],

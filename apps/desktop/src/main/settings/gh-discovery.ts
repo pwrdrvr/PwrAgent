@@ -52,6 +52,7 @@ export async function discoverGhCommands(params?: {
   configuredCommand?: string;
   env?: NodeJS.ProcessEnv;
   includeFailedAutoCandidates?: boolean;
+  platform?: NodeJS.Platform;
 }): Promise<DesktopGhDiscoverySnapshot> {
   const env = params?.env ?? process.env;
   const envOverride = env[GH_COMMAND_ENV]?.trim();
@@ -59,6 +60,7 @@ export async function discoverGhCommands(params?: {
 
   return discoverCommands<DesktopGhCandidateSource>({
     env,
+    platform: params?.platform,
     fixedCandidates: [
       { command: envOverride, source: "env" },
       { command: configuredCommand, source: "config" },

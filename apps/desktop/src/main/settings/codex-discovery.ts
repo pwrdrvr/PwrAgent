@@ -118,6 +118,7 @@ function getCodexAppCandidatePaths(): string[] {
 export async function discoverCodexCommands(params?: {
   configuredCommand?: string;
   env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 }): Promise<DesktopCodexDiscoverySnapshot> {
   const env = params?.env ?? process.env;
   const envOverride = env[CODEX_COMMAND_ENV]?.trim();
@@ -125,6 +126,7 @@ export async function discoverCodexCommands(params?: {
 
   return discoverCommands<DesktopCodexCandidateSource>({
     env,
+    platform: params?.platform,
     fixedCandidates: [
       { command: envOverride, source: "env" },
       { command: configuredCommand, source: "config" },
