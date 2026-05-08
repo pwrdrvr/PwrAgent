@@ -48,24 +48,25 @@ export class OverlayStore {
       if (firstSnapshot) {
         for (const thread of params.threads) {
           const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+          const current = data.threads[threadKey];
           data.threads[threadKey] = {
+            ...(current ?? {}),
             backend: thread.source,
             threadId: thread.id,
             executionMode:
-              data.threads[threadKey]?.executionMode ?? thread.executionMode ?? "default",
-            model: data.threads[threadKey]?.model ?? thread.model,
+              current?.executionMode ?? thread.executionMode ?? "default",
+            model: current?.model ?? thread.model,
             reasoningEffort:
-              data.threads[threadKey]?.reasoningEffort ?? thread.reasoningEffort,
-            serviceTier: data.threads[threadKey]?.serviceTier ?? thread.serviceTier,
-            fastMode: data.threads[threadKey]?.fastMode ?? thread.fastMode,
-            gitBranch: data.threads[threadKey]?.gitBranch,
-            observedGitBranch: data.threads[threadKey]?.observedGitBranch,
-            retainedBranchDriftPairs: data.threads[threadKey]?.retainedBranchDriftPairs,
+              current?.reasoningEffort ?? thread.reasoningEffort,
+            serviceTier: current?.serviceTier ?? thread.serviceTier,
+            fastMode: current?.fastMode ?? thread.fastMode,
+            gitBranch: current?.gitBranch,
+            observedGitBranch: current?.observedGitBranch,
+            retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
             lastSeenAt: params.fetchedAt,
             lastSeenUpdatedAt: thread.updatedAt,
-            extraLinkedDirectories:
-              data.threads[threadKey]?.extraLinkedDirectories ?? [],
-            worktreeSnapshots: data.threads[threadKey]?.worktreeSnapshots ?? [],
+            extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
+            worktreeSnapshots: current?.worktreeSnapshots ?? [],
           };
         }
       }
@@ -124,6 +125,7 @@ export class OverlayStore {
       const seenAt = params.seenAt ?? Date.now();
 
       data.threads[threadKey] = {
+        ...(current ?? {}),
         backend: params.backend,
         threadId: params.threadId,
         executionMode: current?.executionMode ?? "default",
