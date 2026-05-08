@@ -59,6 +59,18 @@ import {
 const DEFAULT_CALLBACK_PORT = 47821;
 
 /**
+ * Minimum consecutive websocket failures before we declare the adapter
+ * runtime-errored. The Mattermost `WebSocketClient` auto-reconnects
+ * with exponential backoff and fires its close listener once per
+ * attempt; we don't want a single hiccup to flap the status indicator.
+ *
+ * 3 attempts at the default backoff ≈ 12s of sustained failure before
+ * the user sees red — long enough to ride out a brief blip, short
+ * enough that bad-token / bad-URL setups surface quickly.
+ */
+const MATTERMOST_WS_FAIL_THRESHOLD = 3;
+
+/**
  * Derive the local HTTP listener port from the public callback URL.
  *
  * - `http://localhost:47821/cb`        → 47821 (localhost-direct mode)
@@ -111,6 +123,17 @@ export type MattermostProviderAdapter = {
   downloadAttachment(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
+  /**
+   * Subscribe to fatal post-start runtime errors. Fires once per
+   * runtime-error episode, NOT per transient websocket retry.
+   * The desktop runtime subscribes after `start()` and flips platform
+   * health to `errored`, which turns the status-bar dot red.
+   *
+   * The Mattermost icon stays unaltered (brand guidelines forbid
+   * recoloring the mark, so the renderer reds the dot only — not the
+   * `<img>` icon, which is structurally insulated from `currentColor`).
+   */
+  onRuntimeError?(listener: (reason: string) => void): () => void;
   setConversationTitle?(request: {
     actor?: MessagingActorIdentity;
     channel: MessagingChannelRef;
@@ -248,6 +271,23 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private botUsername: string | undefined;
   private started = false;
   /**
+   * `true` once `stop()` has been called. Suppresses the runtime-error
+   * fan-out for any websocket-close / -error events that fire as part
+   * of normal shutdown (the WebSocketClient closes the socket, which
+   * fires the close listener with no `connectFailCount`-honoring
+   * caller). Mirrors the pattern in `telegram-adapter.ts`.
+   */
+  private stopping = false;
+  /**
+   * Latched once the websocket has fired `onRuntimeError` for sustained
+   * disconnect. Prevents multi-fire across each retry attempt — once
+   * the platform health is `errored` there's nothing more for the
+   * runtime to do, and additional fan-outs would just be noise.
+   * Reset on `stop()` so a subsequent `start()` can re-arm.
+   */
+  private wsErroredLatched = false;
+  private readonly runtimeErrorListeners = new Set<(reason: string) => void>();
+  /**
    * Live token set, owned by the adapter and shared by reference with
    * the callback server. The reconciler mutates this on every
    * `start()` (and any future re-reconcile tick) — the server reads
@@ -352,6 +392,29 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     });
     this.websocketClient.addCloseListener((connectFailCount) => {
       this.logger.warn("mattermost websocket closed", { connectFailCount });
+      // Mattermost's WebSocketClient auto-reconnects with backoff and
+      // fires this listener once per failed reconnect attempt. We don't
+      // want a single transient blip to flap the platform health, so
+      // wait until the retry counter shows sustained failure.
+      //
+      // The same path covers two failure modes the user-visible status
+      // dot needs to reflect:
+      //   - startup ws failure (bad token, bad URL, server unreachable)
+      //     — `initialize()` doesn't throw; the ws lifecycle just keeps
+      //     closing
+      //   - mid-run disconnect (network drop, server shutdown)
+      //
+      // Both manifest as connectFailCount climbing past the threshold.
+      if (
+        !this.stopping
+        && !this.wsErroredLatched
+        && connectFailCount >= MATTERMOST_WS_FAIL_THRESHOLD
+      ) {
+        this.wsErroredLatched = true;
+        this.emitRuntimeError(
+          `websocket disconnected (${connectFailCount} consecutive failures)`,
+        );
+      }
     });
     this.websocketClient.addErrorListener((event) => {
       this.logger.warn("mattermost websocket error", {
@@ -400,6 +463,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (!this.started) {
       return;
     }
+    this.stopping = true;
     this.started = false;
     this.listener = undefined;
     try {
@@ -410,7 +474,36 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       });
     }
     await this.callbackServer.stop();
+    // Reset latch + drop listeners so a subsequent `start()` re-arms.
+    this.runtimeErrorListeners.clear();
+    this.wsErroredLatched = false;
+    this.stopping = false;
     this.logger.info("mattermost adapter stopped", {});
+  }
+
+  /**
+   * Subscribe to fatal post-start runtime errors. The desktop runtime
+   * uses this to flip platform health to `errored` after the websocket
+   * has failed to (re)connect for `MATTERMOST_WS_FAIL_THRESHOLD`
+   * consecutive attempts. Returns an unsubscribe.
+   */
+  onRuntimeError(listener: (reason: string) => void): () => void {
+    this.runtimeErrorListeners.add(listener);
+    return () => {
+      this.runtimeErrorListeners.delete(listener);
+    };
+  }
+
+  private emitRuntimeError(reason: string): void {
+    for (const listener of this.runtimeErrorListeners) {
+      try {
+        listener(reason);
+      } catch (error) {
+        this.logger.warn("mattermost runtime-error listener threw", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {

@@ -24,7 +24,6 @@ const baseConfig = {
   botToken: "test-token",
   serverUrl: "https://chat.example.com",
   callbackBaseUrl: "https://callback.example.com/cb",
-  callbackPort: 47899,
   callbackHmacSecret: "test-secret",
   authorizedActorIds: ["user-1"],
 };
@@ -36,6 +35,10 @@ const baseConfig = {
  */
 type WebSocketHooks = {
   fireMessage(message: { event: string; data?: Record<string, unknown> }): void;
+  /** Simulate a websocket close. The adapter latches `wsErroredLatched`
+   *  and fires `onRuntimeError` once `connectFailCount` reaches the
+   *  threshold; tests fire incrementally to exercise both paths. */
+  fireClose(connectFailCount: number): void;
 };
 
 function fakeWebSocketClient(
@@ -43,16 +46,22 @@ function fakeWebSocketClient(
   hooks?: WebSocketHooks,
 ): WebSocketClient {
   let messageListener: ((m: { event: string; data?: Record<string, unknown> }) => void) | undefined;
+  let closeListener: ((connectFailCount: number) => void) | undefined;
   if (hooks) {
     hooks.fireMessage = (m) => {
       messageListener?.(m);
+    };
+    hooks.fireClose = (count) => {
+      closeListener?.(count);
     };
   }
   return {
     addMessageListener: (listener: typeof messageListener) => {
       messageListener = listener;
     },
-    addCloseListener: () => {},
+    addCloseListener: (listener: typeof closeListener) => {
+      closeListener = listener;
+    },
     addErrorListener: () => {},
     initialize: () => {},
     close: () => {},
@@ -670,7 +679,10 @@ describe("MattermostAdapter — response_url echo dedup", () => {
           },
         ],
       };
-      const wsHooks: WebSocketHooks = { fireMessage: () => {} };
+      const wsHooks: WebSocketHooks = {
+        fireMessage: () => {},
+        fireClose: () => {},
+      };
       const inboundEvents: Array<{ kind: string }> = [];
       const adapter = new MattermostAdapter({
         callbackHandleStore: fakeStore,
@@ -745,5 +757,124 @@ describe("MattermostAdapter — response_url echo dedup", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+/**
+ * Runtime-error fan-out — sustained websocket disconnect (bad URL,
+ * server unreachable, mid-run network drop) drives `onRuntimeError`,
+ * which the desktop runtime uses to flip platform health to `errored`.
+ * The renderer then turns the status-bar dot red. The Mattermost icon
+ * itself stays unaltered (brand guidelines require it) — that's an
+ * `<img>`-vs-`<svg>` render-shape concern handled in the renderer.
+ */
+describe("MattermostAdapter — onRuntimeError", () => {
+  function buildHooks(): WebSocketHooks {
+    return {
+      fireMessage: () => {},
+      fireClose: () => {},
+    };
+  }
+
+  async function startedAdapter(hooks: WebSocketHooks) {
+    const adapter = new MattermostAdapter({
+      callbackHandleStore: fakeStore,
+      config: baseConfig,
+      logger: silentLogger,
+      // Stub the callback server so adapter.start() doesn't try to
+      // bind a real HTTP listener. The cast is intentional — we only
+      // exercise the websocket lifecycle here.
+      callbackServer: {
+        start: async () => {},
+        stop: async () => {},
+      } as unknown as ConstructorParameters<
+        typeof MattermostAdapter
+      >[0]["callbackServer"],
+      websocketClient: fakeWebSocketClient(undefined, hooks),
+      client: fakeClient4({ createdPosts: [], patchedPosts: [] }),
+    });
+    await adapter.start(async () => {});
+    return adapter;
+  }
+
+  it("does not fire on transient closes below the failure threshold", async () => {
+    const hooks = buildHooks();
+    const adapter = await startedAdapter(hooks);
+    const reasons: string[] = [];
+    adapter.onRuntimeError((reason) => reasons.push(reason));
+
+    hooks.fireClose(1);
+    hooks.fireClose(2);
+
+    expect(reasons).toEqual([]);
+    await adapter.stop();
+  });
+
+  it("fires once with a descriptive reason at the threshold", async () => {
+    const hooks = buildHooks();
+    const adapter = await startedAdapter(hooks);
+    const reasons: string[] = [];
+    adapter.onRuntimeError((reason) => reasons.push(reason));
+
+    hooks.fireClose(1);
+    hooks.fireClose(2);
+    hooks.fireClose(3);
+
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain("websocket disconnected");
+    expect(reasons[0]).toContain("3");
+    await adapter.stop();
+  });
+
+  it("latches — does not double-fire when retries continue past the threshold", async () => {
+    const hooks = buildHooks();
+    const adapter = await startedAdapter(hooks);
+    const reasons: string[] = [];
+    adapter.onRuntimeError((reason) => reasons.push(reason));
+
+    hooks.fireClose(3);
+    hooks.fireClose(4);
+    hooks.fireClose(8);
+
+    expect(reasons).toHaveLength(1);
+    await adapter.stop();
+  });
+
+  it("suppresses fan-out for closes that happen as part of stop()", async () => {
+    const hooks = buildHooks();
+    const adapter = await startedAdapter(hooks);
+    const reasons: string[] = [];
+    adapter.onRuntimeError((reason) => reasons.push(reason));
+
+    // Real WebSocketClient.close() during stop() fires the close
+    // listener too; we don't want stop()-induced closes to flap the
+    // health indicator.
+    let closedDuringStop = false;
+    const stopPromise = adapter.stop().then(() => {
+      closedDuringStop = true;
+    });
+    hooks.fireClose(7); // happens after stopping = true
+    await stopPromise;
+    expect(closedDuringStop).toBe(true);
+    expect(reasons).toEqual([]);
+  });
+
+  it("re-arms after stop + start so a subsequent run can flip to errored again", async () => {
+    const hooks = buildHooks();
+    const adapter = await startedAdapter(hooks);
+    const reasons: string[] = [];
+    adapter.onRuntimeError((reason) => reasons.push(reason));
+
+    hooks.fireClose(3);
+    expect(reasons).toHaveLength(1);
+
+    await adapter.stop();
+    // stop() clears the listener set, so we must re-subscribe.
+    await adapter.start(async () => {});
+    adapter.onRuntimeError((reason) => reasons.push(reason));
+    hooks.fireClose(3);
+
+    expect(reasons).toHaveLength(2);
+    await adapter.stop();
   });
 });
