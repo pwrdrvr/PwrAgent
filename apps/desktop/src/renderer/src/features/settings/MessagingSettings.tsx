@@ -1,4 +1,10 @@
-import { useId, useState, type ReactNode } from "react";
+import {
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import {
   validateDiscordSnowflake,
   validateMattermostId,
@@ -729,7 +735,8 @@ function AuthorizedListField(props: {
 }) {
   const inputId = useId();
   const descriptionId = `${inputId}-validation`;
-  const [rows, setRows] = useState<DesktopAuthorizedContact[]>(props.value);
+  const [rows, setRowsState] = useState<DesktopAuthorizedContact[]>(props.value);
+  const rowsRef = useRef<DesktopAuthorizedContact[]>(props.value);
   const [lookupState, setLookupState] = useState<
     Record<number, { loading?: boolean; message?: string }>
   >({});
@@ -752,6 +759,16 @@ function AuthorizedListField(props: {
         )
     : [];
   const hasInvalidEntries = invalidEntries.length > 0;
+  const setRows = (
+    nextRowsOrUpdater: SetStateAction<DesktopAuthorizedContact[]>,
+  ) => {
+    const nextRows =
+      typeof nextRowsOrUpdater === "function"
+        ? nextRowsOrUpdater(rowsRef.current)
+        : nextRowsOrUpdater;
+    rowsRef.current = nextRows;
+    setRowsState(nextRows);
+  };
 
   const saveIfValid = (nextRows: DesktopAuthorizedContact[]) => {
     const normalized = nextRows.map(normalizeAuthorizedContactRow);
@@ -816,7 +833,19 @@ function AuthorizedListField(props: {
       };
     }
     if (result.status === "ok" && result.displayName) {
-      const nextRows = candidateRows.map((current, rowIndex) =>
+      const latestRows = rowsRef.current;
+      const latestRow = normalizeAuthorizedContactRow(
+        latestRows[indexToLookup] ?? { id: "", displayName: "" },
+      );
+      if (latestRow.id !== row.id) {
+        setLookupState((current) => {
+          const { [indexToLookup]: _discard, ...rest } = current;
+          return rest;
+        });
+        return;
+      }
+
+      const nextRows = latestRows.map((current, rowIndex) =>
         rowIndex === indexToLookup
           ? { id: row.id, displayName: result.displayName ?? "" }
           : current,

@@ -1,5 +1,13 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopSettingsSnapshot } from "@pwragent/shared";
 import { SettingsScreen } from "../SettingsScreen";
@@ -518,6 +526,101 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByLabelText("Authorized User IDs display name 1"),
     ).toHaveValue("Harold (@huntharo)");
+  });
+
+  it("ignores stale lookup results after an authorized ID is removed", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState({
+      ...snapshot,
+      messaging: {
+        ...snapshot.messaging,
+        telegram: {
+          ...snapshot.messaging.telegram,
+          authorizedUserIds: {
+            value: [{ id: "8460800771", displayName: "" }],
+            source: "config",
+          },
+        },
+      },
+    });
+    let resolveLookup:
+      | ((value: {
+          status: "ok";
+          id: string;
+          displayName: string;
+        }) => void)
+      | undefined;
+    const resolveMessagingContact = vi.fn(
+      () =>
+        new Promise<{
+          status: "ok";
+          id: string;
+          displayName: string;
+        }>((resolve) => {
+          resolveLookup = resolve;
+        }),
+    );
+    const desktopApi = {
+      resolveMessagingContact,
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Lookup Authorized User IDs row 1",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(resolveMessagingContact).toHaveBeenCalledWith({
+        platform: "telegram",
+        kind: "user",
+        id: "8460800771",
+      });
+    });
+    const removeButton = await screen.findByRole("button", {
+      name: "Remove Authorized User IDs row 1",
+    });
+    expect(removeButton).toBeEnabled();
+    fireEvent.click(removeButton);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          telegram: {
+            authorizedUserIds: [],
+          },
+        },
+      });
+    });
+
+    const writeConfig = settings.writeConfig as ReturnType<typeof vi.fn>;
+    const callsBeforeLookupResolution = writeConfig.mock.calls.length;
+    await act(async () => {
+      resolveLookup?.({
+        status: "ok",
+        id: "8460800771",
+        displayName: "Harold (@huntharo)",
+      });
+    });
+
+    expect(writeConfig).toHaveBeenCalledTimes(callsBeforeLookupResolution);
+    expect(writeConfig).not.toHaveBeenCalledWith({
+      messaging: {
+        telegram: {
+          authorizedUserIds: [
+            { id: "8460800771", displayName: "Harold (@huntharo)" },
+          ],
+        },
+      },
+    });
   });
 
   it("surfaces invalid persisted messaging IDs with a Remove action", async () => {
