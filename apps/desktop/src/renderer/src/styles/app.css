@@ -1938,11 +1938,14 @@ textarea,
   display: flex;
   min-height: 0;
   min-width: 0;
-  /* Issue #240: composer sits flush against the bottom edge — the
-     previous 24px bottom padding produced a dead band below the
-     composer. Left padding (28px) is the sidebar gutter and stays
-     per the issue's out-of-scope list. */
-  padding: 0 0 0 28px;
+  /* Issue #240: edge-to-edge transcript + composer. Bottom padding
+     was 24px — produced a dead band below the composer. Left padding
+     was 28px — produced a dead band between the sidebar's right
+     border and the start of the composer / transcript content. The
+     sidebar already provides its own right-edge separation via
+     `.sidebar { border-right: 1px solid var(--border-subtle) }`, so
+     the composer can sit flush against it without crowding. */
+  padding: 0;
   overflow: hidden;
 }
 
@@ -3474,11 +3477,19 @@ textarea,
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  padding-right: calc(48px + 24px);
+  /* Issue #240: only reserve enough on the right for the 48px
+     context-rail spine — the previous extra 24px gutter showed up
+     as a visible band of empty bg-app between the composer's right
+     edge and the spine. The composer/transcript now sit flush
+     against the spine without overlapping the hamburger button. */
+  padding-right: 48px;
   transition: padding-right 160ms ease;
 }
 
 .thread-view__layout.has-pinned-context-rail {
+  /* When the rail is pinned open it claims real layout width — keep
+     the small 24px breathing room here so the rail's left border
+     doesn't kiss the message column. */
   padding-right: calc(min(var(--context-rail-width, 380px), 42vw) + 24px);
 }
 
