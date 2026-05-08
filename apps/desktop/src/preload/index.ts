@@ -38,6 +38,10 @@ import type {
   HandoffThreadWorkspaceResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
+  ReorderThreadPinsRequest,
+  ReorderThreadPinsResponse,
+  SetThreadPinRequest,
+  SetThreadPinResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
   GetGhStatusRequest,
@@ -141,8 +145,10 @@ import {
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+  NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
+  NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
@@ -358,6 +364,14 @@ const desktopApi = Object.freeze({
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_REACTION_CHANNEL, request),
+  setThreadPin: async (
+    request: SetThreadPinRequest,
+  ): Promise<SetThreadPinResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_THREAD_PIN_CHANNEL, request),
+  reorderThreadPins: async (
+    request: ReorderThreadPinsRequest,
+  ): Promise<ReorderThreadPinsResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_REORDER_THREAD_PINS_CHANNEL, request),
   refreshThreadPullRequests: async (
     request: RefreshThreadPullRequestsRequest,
   ): Promise<RefreshThreadPullRequestsResponse> =>

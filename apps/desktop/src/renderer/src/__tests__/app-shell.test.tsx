@@ -405,7 +405,7 @@ describe("App", () => {
 
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { level: 1, name: "Threads" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "inbox" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "inbox" })).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "recents" })
     ).toBeInTheDocument();

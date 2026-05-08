@@ -1186,6 +1186,10 @@ export class DesktopBackendRegistry {
     };
   }
 
+  async publishLocalEvent(event: AgentEvent): Promise<void> {
+    await this.emit(event);
+  }
+
   async listBackends(
     request: ListBackendsRequest = {}
   ): Promise<ListBackendsResponse> {

@@ -76,6 +76,7 @@ export class SqliteOverlayStore {
           lastSeenUpdatedAt: thread.updatedAt,
           extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
           worktreeSnapshots: current?.worktreeSnapshots ?? [],
+          pinnedRank: current?.pinnedRank,
         });
       }
     }
@@ -266,6 +267,53 @@ export class SqliteOverlayStore {
     };
     this.putThread(threadKey, nextState);
     return nextState;
+  }
+
+  async setThreadPin(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    pinnedRank?: string | null;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const pinnedRank = params.pinnedRank?.trim();
+    const nextState: ThreadOverlayState = {
+      ...current,
+      pinnedRank: pinnedRank || undefined,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async reorderThreadPins(params: {
+    backend: ThreadOverlayState["backend"];
+    threadIds: string[];
+  }): Promise<Record<string, string>> {
+    const pinnedRanks: Record<string, string> = {};
+    const write = this.stateDb.raw.transaction(() => {
+      params.threadIds.forEach((threadId, index) => {
+        const threadKey = buildThreadIdentityKey(params.backend, threadId);
+        const current = this.getThread(threadKey) ?? {
+          backend: params.backend,
+          threadId,
+          executionMode: "default" as const,
+          extraLinkedDirectories: [],
+        };
+        const pinnedRank = String((index + 1) * 1024);
+        pinnedRanks[threadId] = pinnedRank;
+        this.putThread(threadKey, {
+          ...current,
+          pinnedRank,
+        });
+      });
+    });
+    write();
+    return pinnedRanks;
   }
 
   async setThreadPullRequests(params: {
@@ -666,6 +714,8 @@ export type OverlayStoreLike = Pick<
   | "getThreadOverlayState"
   | "getThreadOverlayStates"
   | "setThreadReaction"
+  | "setThreadPin"
+  | "reorderThreadPins"
   | "setThreadPullRequests"
   | "upsertWorktreeSnapshot"
   | "setThreadExecutionMode"

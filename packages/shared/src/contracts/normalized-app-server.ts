@@ -821,4 +821,23 @@ export type AppServerNotification =
         serviceTier?: string;
       };
     }
+  | {
+      method: "thread/pin/added";
+      params: {
+        threadId: string;
+        pinnedRank: string;
+      };
+    }
+  | {
+      method: "thread/pin/removed";
+      params: {
+        threadId: string;
+      };
+    }
+  | {
+      method: "thread/pin/reordered";
+      params: {
+        pinnedRanks: Record<string, string>;
+      };
+    }
   | AppServerPendingRequestNotification;

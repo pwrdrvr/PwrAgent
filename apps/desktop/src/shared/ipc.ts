@@ -34,6 +34,10 @@ export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
 export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
+export const NAVIGATION_SET_THREAD_PIN_CHANNEL =
+  "navigation:set-thread-pin";
+export const NAVIGATION_REORDER_THREAD_PINS_CHANNEL =
+  "navigation:reorder-thread-pins";
 export const NAVIGATION_REFRESH_THREAD_PRS_CHANNEL =
   "navigation:refresh-thread-prs";
 export const NAVIGATION_GET_GH_STATUS_CHANNEL =

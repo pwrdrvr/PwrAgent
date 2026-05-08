@@ -18,7 +18,6 @@ import {
   runtimeGitRefCopyValue,
 } from "../../lib/runtime-identity";
 import { DirectoriesList } from "./DirectoriesList";
-import { InboxList } from "./InboxList";
 import { RecentsList } from "./RecentsList";
 
 type ThreadContextMenuPosition = {
@@ -33,7 +32,7 @@ type SidebarProps = {
   createThreadError?: string;
   directories: NavigationDirectorySummary[];
   error?: string;
-  inboxThreads: NavigationThreadSummary[];
+  inboxThreads?: NavigationThreadSummary[];
   loading: boolean;
   creatingThread?: {
     backend: AppServerBackendKind;
@@ -62,6 +61,14 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     emoji: string,
     present: boolean,
+  ) => Promise<void>;
+  onSetThreadPin?: (
+    thread: NavigationThreadSummary,
+    pinned: boolean,
+  ) => Promise<void>;
+  onReorderThreadPins?: (
+    backend: AppServerBackendKind,
+    threadIds: string[],
   ) => Promise<void>;
   /**
    * Called by thread rows when the user hovers a non-merged PR chip
@@ -223,6 +230,11 @@ export function Sidebar(props: SidebarProps) {
     void onArchiveThread(thread);
   };
 
+  const togglePinFromContextMenu = (thread: NavigationThreadSummary): void => {
+    setContextMenu(undefined);
+    void props.onSetThreadPin?.(thread, !thread.pinnedRank);
+  };
+
   const copyFromContextMenu = (value: string): void => {
     setContextMenu(undefined);
     void copyText(value);
@@ -260,7 +272,9 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuWorktreeCopyPath =
     contextMenuWorktreePath?.worktreePath ?? contextMenuWorktreePath?.path;
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
-  const contextMenuHasTopActions = contextMenuCanRename || contextMenuCanArchive;
+  const contextMenuCanPin = Boolean(contextMenu && props.onSetThreadPin);
+  const contextMenuHasTopActions =
+    contextMenuCanPin || contextMenuCanRename || contextMenuCanArchive;
 
   return (
     <aside className="sidebar" aria-label="Threads">
@@ -344,7 +358,7 @@ export function Sidebar(props: SidebarProps) {
 
       <section className="sidebar__section sidebar__section--fill" aria-label="Thread browser">
         <div className="lens-switch" role="tablist" aria-label="Thread lenses">
-          {(["inbox", "recents", "directories"] as const).map((mode) => (
+          {(["recents", "directories"] as const).map((mode) => (
             <button
               key={mode}
               aria-pressed={props.browseMode === mode}
@@ -364,18 +378,6 @@ export function Sidebar(props: SidebarProps) {
             <p className="sidebar-empty">Loading threads…</p>
           ) : props.error ? (
             <p className="sidebar-error">{props.error}</p>
-          ) : props.browseMode === "inbox" ? (
-            <InboxList
-              approvalRequestThreadKeys={props.approvalRequestThreadKeys}
-              selectedThreadKey={props.selectedItemKey}
-              thinkingThreadKeys={props.thinkingThreadKeys}
-              threads={props.inboxThreads}
-              onOpenThreadContextMenu={openThreadContextMenu}
-              onPrefetchPullRequests={props.onPrefetchPullRequests}
-              onSelectThread={props.onSelectThread}
-              onSetReaction={props.onSetThreadReaction}
-              onUnbindMessagingBinding={props.onUnbindMessagingBinding}
-            />
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -401,8 +403,10 @@ export function Sidebar(props: SidebarProps) {
                 threads={props.threads}
                 onOpenThreadContextMenu={openThreadContextMenu}
                 onPrefetchPullRequests={props.onPrefetchPullRequests}
+                onReorderThreadPins={props.onReorderThreadPins}
                 onSelectThread={props.onSelectThread}
                 onSetReaction={props.onSetThreadReaction}
+                onUnbindMessagingBinding={props.onUnbindMessagingBinding}
               />
             )
           )}
@@ -423,6 +427,15 @@ export function Sidebar(props: SidebarProps) {
         >
           {contextMenuHasTopActions ? (
             <div className="thread-context-menu__section">
+              {contextMenuCanPin ? (
+                <button
+                  role="menuitem"
+                  type="button"
+                  onClick={() => togglePinFromContextMenu(contextMenu.thread)}
+                >
+                  {contextMenu.thread.pinnedRank ? "Unpin Thread" : "Pin Thread"}
+                </button>
+              ) : null}
               {contextMenuCanRename ? (
                 <button
                   role="menuitem"

@@ -175,13 +175,16 @@ The main shell should not look like stacked floating cards on a dark background.
 The sidebar is a structured queue. It should contain:
 
 1. top-level global actions
-2. Inbox / Recents / Directories thread lens switch
+2. Recents / Directories thread lens switch
 3. thread or project lists
 4. utility footer items
 
 Rules:
 
-- Inbox is the leftmost thread lens and should show unread work
+- Recents is the default thread lens and should include user-curated Pins at
+  the top of its scrollable list
+- unread work is a row-local state shown with the orange cookie marker, not a
+  separate primary lens
 - section headers should be quiet, compact, and utility-first
 - rows should carry metadata inline
 - active row state should be obvious without being loud
@@ -296,7 +299,7 @@ PwrAgent UI copy should sound like product UI, not demo narration.
 
 Good:
 
-- `Inbox`
+- `Recents`
 - `Needs review`
 - `2 linked repos`
 - `Blocked on approval`

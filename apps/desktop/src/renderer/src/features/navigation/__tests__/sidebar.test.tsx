@@ -133,7 +133,7 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
-  it("renders Inbox as the first thread lens and keeps directory rows available", () => {
+  it("renders Recents as the first thread lens and keeps directory rows available", () => {
     const onOpenSettings = vi.fn();
     render(
       <Sidebar
@@ -163,7 +163,6 @@ describe("Sidebar", () => {
       screen.getByRole("tablist", { name: "Thread lenses" })
     ).getAllByRole("button");
     expect(lensButtons.map((button) => button.textContent)).toEqual([
-      "inbox",
       "recents",
       "directories",
     ]);
@@ -509,11 +508,11 @@ describe("Sidebar", () => {
     expect(unreadIndicator).not.toHaveTextContent("!");
   });
 
-  it("renders unread inbox rows with the same dense treatment as recents", () => {
+  it("does not render the retired inbox lens", () => {
     render(
       <Sidebar
         backends={backends}
-        browseMode="inbox"
+        browseMode="recents"
         createThreadError={undefined}
         directories={directories}
         inboxThreads={[updatedSinceSeenThread]}
@@ -529,18 +528,11 @@ describe("Sidebar", () => {
       />
     );
 
-    const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Updated thread/i,
-    });
-
-    expect(screen.getByRole("button", { name: "inbox" })).toHaveAttribute(
+    expect(screen.queryByRole("button", { name: "inbox" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "recents" })).toHaveAttribute(
       "aria-pressed",
-      "true"
+      "true",
     );
-    expect(threadButton.querySelector('[data-thread-status="unread"]')).not.toBeNull();
-    expect(within(threadButton).getByText("PwrAgent")).toBeInTheDocument();
-    expect(screen.queryByText("Cross-project cleanup")).not.toBeInTheDocument();
   });
 
   it("opens thread actions from the row overflow button", () => {
@@ -572,6 +564,53 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
 
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
+  });
+
+  it("pins from the row menu and renders pinned threads above recents", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    const pinnedThread = {
+      ...updatedSinceSeenThread,
+      pinnedRank: "1024",
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[sharedThread, pinnedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadPin={onSetThreadPin}
+      />
+    );
+
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    const rows = within(browseSection as HTMLElement).getAllByRole("button", {
+      name: /Cross-project cleanup|Updated thread/i,
+    });
+    expect(rows[0]).toHaveTextContent("Updated thread");
+    expect(rows[0]).toHaveTextContent("Pinned");
+    expect(screen.getByRole("separator", { name: "Unpinned threads" })).toBeInTheDocument();
+
+    const unpinnedRow = within(browseSection as HTMLElement).getByRole("button", {
+      name: /Cross-project cleanup/i,
+    });
+    const overflowButton = unpinnedRow
+      .closest(".thread-row-shell")
+      ?.querySelector(".thread-row__overflow-button") as HTMLButtonElement;
+    fireEvent.click(overflowButton);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Pin Thread" }));
+
+    expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
   });
 
   it("shows copy actions below the thread context menu divider", () => {

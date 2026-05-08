@@ -113,6 +113,7 @@ export function materializeNavigationThreads(params: {
       linkedDirectories,
       worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
       reactions: overlay?.reactions ?? [],
+      pinnedRank: overlay?.pinnedRank,
       prs: overlay?.prs ?? [],
       messagingBindings: messagingBindings && messagingBindings.length > 0
         ? messagingBindings
@@ -232,6 +233,7 @@ export function buildNavigationSnapshotHash(params: {
         lastSeenUpdatedAt: thread.inbox.lastSeenUpdatedAt ?? null,
       },
       reactions: thread.reactions ?? [],
+      pinnedRank: thread.pinnedRank ?? null,
       // Include prs in the hash so refreshThreadPullRequests writes to
       // the overlay actually propagate to the renderer. Without this,
       // the next snapshot tick computes an identical hash, gets marked
