@@ -83,6 +83,94 @@ describe("TelegramAdapter", () => {
     });
   });
 
+  it("fans out a runtime-error event when the polling loop rejects after start", async () => {
+    const api = createApi();
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    };
+    let rejectStart: ((error: Error) => void) | undefined;
+    const startPromise = new Promise<void>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    const bot: TelegramBotLike = {
+      api: api as unknown as TelegramBotApi,
+      catch: vi.fn(),
+      on: vi.fn(),
+      start: vi.fn(async () => startPromise),
+      stop: vi.fn(),
+    };
+    const adapter = new TelegramAdapter({
+      bot,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+      },
+      logger,
+      now: () => 1000,
+    });
+    const reasons: string[] = [];
+    adapter.onRuntimeError((reason) => reasons.push(reason));
+
+    await adapter.start(async () => {});
+    rejectStart?.(
+      new Error(
+        "Call to 'getUpdates' failed! (409: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running)",
+      ),
+    );
+    for (let i = 0; i < 5; i += 1) {
+      await Promise.resolve();
+    }
+
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain("409");
+    expect(logger.warn).toHaveBeenCalledWith(
+      "telegram polling loop exited with error",
+      expect.objectContaining({
+        error: expect.stringContaining("409"),
+      }),
+    );
+  });
+
+  it("does not fire a runtime-error event when the polling loop unwinds during stop()", async () => {
+    const api = createApi();
+    const logger = {
+      debug: vi.fn(),
+      warn: vi.fn(),
+    };
+    let rejectStart: ((error: Error) => void) | undefined;
+    const startPromise = new Promise<void>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    const bot: TelegramBotLike = {
+      api: api as unknown as TelegramBotApi,
+      catch: vi.fn(),
+      on: vi.fn(),
+      start: vi.fn(async () => startPromise),
+      stop: vi.fn(() => {
+        rejectStart?.(new Error("polling stopped"));
+      }),
+    };
+    const adapter = new TelegramAdapter({
+      bot,
+      config: {
+        channel: "telegram",
+        botToken: "12345:test-token",
+        authorizedActorIds: ["42"],
+      },
+      logger,
+      now: () => 1000,
+    });
+    const reasons: string[] = [];
+    adapter.onRuntimeError((reason) => reasons.push(reason));
+
+    await adapter.start(async () => {});
+    await adapter.stop();
+
+    expect(reasons).toHaveLength(0);
+  });
+
   it("normalizes /resume and renders a thread picker with inline keyboard handles", async () => {
     const harness = await createControllerHarness();
 

@@ -673,6 +673,91 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
+  it("flips health to errored when an adapter signals a runtime error after start", async () => {
+    await prepareRuntimeStore();
+    let fireRuntimeError: ((reason: string) => void) | undefined;
+    const adapter = createAdapter("telegram", {
+      onRuntimeError: (listener: (reason: string) => void) => {
+        fireRuntimeError = listener;
+        return () => {
+          fireRuntimeError = undefined;
+        };
+      },
+    });
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: bridge,
+      config: {
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: ["user-1"],
+        },
+      },
+    });
+
+    await runtime.start();
+    const events: unknown[] = [];
+    runtime.onPlatformStatus((event) => events.push(event));
+
+    fireRuntimeError?.(
+      "Call to 'getUpdates' failed! (409: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running)",
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "health-changed",
+        platform: "telegram",
+        health: "errored",
+        reason: expect.stringContaining("409"),
+      }),
+    );
+    expect(runtime.getPlatformStatuses()).toEqual([
+      expect.objectContaining({
+        platform: "telegram",
+        health: "errored",
+        reason: expect.stringContaining("409"),
+      }),
+    ]);
+  });
+
+  it("detaches adapter runtime-error listeners on stop so a graceful shutdown does not flip to errored", async () => {
+    await prepareRuntimeStore();
+    let fireRuntimeError: ((reason: string) => void) | undefined;
+    const adapter = createAdapter("telegram", {
+      onRuntimeError: (listener: (reason: string) => void) => {
+        fireRuntimeError = listener;
+        return () => {
+          fireRuntimeError = undefined;
+        };
+      },
+    });
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: bridge,
+      config: {
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: ["user-1"],
+        },
+      },
+    });
+
+    await runtime.start();
+    await runtime.stop();
+
+    expect(fireRuntimeError).toBeUndefined();
+  });
+
   it("emits an activity event when an inbound message arrives", async () => {
     const { runtime, adapter } = await createRuntimeHarness();
     await runtime.start();

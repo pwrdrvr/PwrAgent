@@ -333,6 +333,15 @@ export type TelegramProviderAdapter = {
   downloadAttachment?(
     request: MessagingAttachmentDownloadRequest,
   ): Promise<MessagingAttachmentDownloadResult>;
+  /**
+   * Subscribe to fatal runtime errors that took the adapter offline
+   * after a successful start — e.g. the long-poll loop exited because
+   * Telegram returned a 409 Conflict (another bot instance is running).
+   * Fired at most once per `start()` lifecycle and never on graceful
+   * `stop()`. The host is expected to surface this to the user (e.g.
+   * flip the platform status pill from green to red).
+   */
+  onRuntimeError?(listener: (reason: string) => void): () => void;
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
@@ -422,6 +431,13 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     store?: MessagingCallbackHandleStore;
   };
   private startPromise?: Promise<void>;
+  /**
+   * `true` once `stop()` has been called; suppresses the runtime-error
+   * fan-out for the polling-loop rejection that grammy raises as part
+   * of normal shutdown.
+   */
+  private stopping = false;
+  private readonly runtimeErrorListeners = new Set<(reason: string) => void>();
   private typingSignalSequence = 0;
   private typingSignals = new Map<string, TelegramTypingSignal>();
 
@@ -499,22 +515,54 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         allowed_updates: [...TELEGRAM_ALLOWED_UPDATES],
       });
       // Eagerly handle rejection so it doesn't become unhandled if the
-      // process exits before stop() can await startPromise.
+      // process exits before stop() can await startPromise. A rejection
+      // after startup is a fatal runtime error (most often Telegram's
+      // 409 Conflict when a second bot instance starts polling and
+      // kicks ours off) — fan it out to runtime-error listeners so the
+      // host can flip the platform status indicator. Suppress the
+      // fan-out when we're in the middle of `stop()` because grammy
+      // resolves/rejects the start promise as part of normal shutdown.
       this.startPromise?.catch((error) => {
+        const reason = errorMessage(error);
         this.options.logger?.warn?.("telegram polling loop exited with error", {
-          error: errorMessage(error),
+          error: reason,
         });
+        if (!this.stopping) {
+          this.emitRuntimeError(reason);
+        }
       });
     }
   }
 
+  onRuntimeError(listener: (reason: string) => void): () => void {
+    this.runtimeErrorListeners.add(listener);
+    return () => {
+      this.runtimeErrorListeners.delete(listener);
+    };
+  }
+
+  private emitRuntimeError(reason: string): void {
+    for (const listener of this.runtimeErrorListeners) {
+      try {
+        listener(reason);
+      } catch (error) {
+        this.options.logger?.warn?.("telegram runtime-error listener threw", {
+          error: errorMessage(error),
+        });
+      }
+    }
+  }
+
   async stop(): Promise<void> {
+    this.stopping = true;
     this.stopTypingSignals();
     await this.bot.stop?.();
     await this.startPromise?.catch(() => undefined);
     this.startPromise = undefined;
     this.listener = undefined;
     this.botUsername = undefined;
+    this.runtimeErrorListeners.clear();
+    this.stopping = false;
   }
 
   async downloadAttachment(
