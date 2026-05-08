@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.0-alpha.8 - 2026-05-08
+
+- Fixed workspace handoff controls so directory/workspace migration is blocked while a thread has an active turn, including active turns reported by backend lifecycle notifications and messaging callbacks.
+- Fixed new Codex thread startup so the first turn no longer sends a premature `thread/resume` before the initial rollout exists.
+- Kept thread reactions synchronized across refreshes, multiple desktop instances, and legacy overlay-store read/write paths.
+- Stopped repeated pull-request refresh loops during live Codex turns by coalescing in-flight refreshes and reusing fresh persisted results.
+- Improved messaging settings contact lists with authorized contact labels, resolved display names, legacy authorized-ID preservation, stale lookup protection, and sanitized lookup labels.
+
 ## v1.0.0-alpha.7 - 2026-05-08
 
 - Fixed GitHub CLI discovery for desktop sessions launched from Finder or the Dock by probing common install locations, supporting configured `gh` paths, and exposing validation controls in Settings.
