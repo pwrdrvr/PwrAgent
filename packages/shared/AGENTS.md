@@ -2,6 +2,13 @@
 
 This package contains types, contracts, and utility functions shared across the monorepo. It is the lowest-level internal package.
 
+When changing shared settings/config contracts in a way that changes the TOML
+shape persisted by the desktop app, read
+[../../docs/config-file-evolution.md](../../docs/config-file-evolution.md)
+before editing types. The reader/writer migration behavior lives in the desktop
+app, but the shared contract should still be shaped to support recognized
+legacy config values and current canonical values cleanly.
+
 ## Dependency Boundary Enforcement
 
 **DO NOT, under any circumstances, loosen the dependency boundary rules.**

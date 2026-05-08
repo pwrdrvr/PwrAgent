@@ -48,6 +48,14 @@ pnpm --filter @pwragent/desktop dev:no-messaging
 - The `dev` script (without `no-messaging`) also works but will attempt to connect messaging providers.
 - If the app starts but shows no threads, you are likely running from the wrong directory or with overridden env vars.
 
+## Config File Evolution
+
+Before changing `config.toml` keys in a backwards-incompatible way, read
+[../../docs/config-file-evolution.md](../../docs/config-file-evolution.md).
+The desktop config writer must preserve recognized legacy shapes when possible,
+mark them with the `pwragent-legacy-settings` comment, lazily convert on save,
+and avoid whole-file rewrites that discard user comments.
+
 ## Thread-State Update Bus
 
 When mutating persistent thread state (model, reasoning effort, fast mode,
