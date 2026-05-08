@@ -54,6 +54,22 @@ describe("desktopSettingsPatchToEdits — Mattermost", () => {
       },
       {
         op: "delete",
+        path: ["messaging", "mattermost", "authorized_user_ids"],
+      },
+      {
+        op: "deleteTableArray",
+        path: ["messaging", "mattermost", "authorized_user_ids"],
+      },
+      {
+        op: "delete",
+        path: ["messaging", "mattermost", "authorized_users_list"],
+      },
+      {
+        op: "deleteTableArray",
+        path: ["messaging", "mattermost", "authorized_users_list"],
+      },
+      {
+        op: "delete",
         path: ["messaging", "mattermost", "authorized_user_ids_list"],
       },
       {
@@ -69,12 +85,8 @@ describe("desktopSettingsPatchToEdits — Mattermost", () => {
         path: ["messaging", "mattermost", "authorized_users"],
       },
       {
-        op: "deleteTableArray",
-        path: ["messaging", "mattermost", "authorized_user_ids"],
-      },
-      {
         op: "setTableArray",
-        path: ["messaging", "mattermost", "authorized_user_ids"],
+        path: ["messaging", "mattermost", "authorized_users"],
         value: [
           { id: "abc", display_name: "Alice" },
           { id: "def", display_name: "Dev Team" },
@@ -103,11 +115,19 @@ describe("desktopSettingsPatchToEdits — Mattermost", () => {
     expect(edits).toEqual([
       {
         op: "delete",
-        path: ["messaging", "mattermost", "authorized_users"],
+        path: ["messaging", "mattermost", "authorized_users_list"],
       },
       {
         op: "deleteTableArray",
-        path: ["messaging", "mattermost", "authorized_users"],
+        path: ["messaging", "mattermost", "authorized_users_list"],
+      },
+      {
+        op: "delete",
+        path: ["messaging", "mattermost", "authorized_user_ids_list"],
+      },
+      {
+        op: "deleteTableArray",
+        path: ["messaging", "mattermost", "authorized_user_ids_list"],
       },
       {
         op: "ensureCommentBefore",
@@ -122,12 +142,16 @@ describe("desktopSettingsPatchToEdits — Mattermost", () => {
         value: ["abc"],
       },
       {
+        op: "delete",
+        path: ["messaging", "mattermost", "authorized_users"],
+      },
+      {
         op: "deleteTableArray",
-        path: ["messaging", "mattermost", "authorized_user_ids_list"],
+        path: ["messaging", "mattermost", "authorized_users"],
       },
       {
         op: "setTableArray",
-        path: ["messaging", "mattermost", "authorized_user_ids_list"],
+        path: ["messaging", "mattermost", "authorized_users"],
         value: [{ id: "abc", display_name: "Alice" }],
       },
     ]);

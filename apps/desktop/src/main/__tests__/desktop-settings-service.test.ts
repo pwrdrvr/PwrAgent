@@ -138,7 +138,7 @@ describe("DesktopSettingsService", () => {
         "[messaging.telegram]",
         "enabled = true",
         "",
-        "[[messaging.telegram.authorized_user_ids]]",
+        "[[messaging.telegram.authorized_users]]",
         'id = "111111111"',
         'display_name = "Harold"',
         "",
@@ -204,7 +204,8 @@ describe("DesktopSettingsService", () => {
       "# pwragent-legacy-settings key=authorized_user_ids shape=string-array used_through=1.0.0-alpha.9 kept_for_older_clients",
     );
     expect(contents).toContain('authorized_user_ids = ["111111111"]');
-    expect(contents).toContain("[[messaging.telegram.authorized_user_ids_list]]");
+    expect(contents).toContain("[[messaging.telegram.authorized_users]]");
+    expect(contents).not.toContain("[[messaging.telegram.authorized_user_ids_list]]");
     expect(contents).toContain('id = "111111111"');
     expect(contents).toContain('display_name = "Harold"');
     expect(contents).toContain("streaming_responses = true");
@@ -213,6 +214,49 @@ describe("DesktopSettingsService", () => {
     expect(after.messaging.telegram.authorizedUserIds.value).toEqual([
       { id: "111111111", displayName: "Harold" },
     ]);
+  });
+
+  it("migrates interim authorized user list tables to the canonical name", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[messaging.telegram]",
+        "streaming_responses = true",
+        "",
+        "[[messaging.telegram.authorized_user_ids_list]]",
+        'id = "111111111"',
+        'display_name = "Harold"',
+      ].join("\n"),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const before = await service.readSettings();
+    expect(before.messaging.telegram.authorizedUserIds.value).toEqual([
+      { id: "111111111", displayName: "Harold" },
+    ]);
+
+    await service.writeConfigPatch({
+      messaging: {
+        telegram: {
+          authorizedUserIds: [{ id: "111111111", displayName: "Harold" }],
+        },
+      },
+    });
+
+    const contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain("[[messaging.telegram.authorized_users]]");
+    expect(contents).not.toContain(
+      "[[messaging.telegram.authorized_user_ids_list]]",
+    );
+    expect(contents).not.toContain("authorized_user_ids =");
+    expect(contents).toContain("streaming_responses = true");
   });
 
   it("loads the worktree storage location from TOML and exposes the effective path", async () => {
@@ -417,7 +461,7 @@ describe("DesktopSettingsService", () => {
     expect(contents).toContain('tool_update_mode = "show_less"');
     expect(contents).toContain("streaming_responses = true");
     expect(contents).not.toContain("authorized_user_ids =");
-    expect(contents).toContain("[[messaging.telegram.authorized_user_ids]]");
+    expect(contents).toContain("[[messaging.telegram.authorized_users]]");
     expect(contents).toContain('id = "111111111"');
     expect(contents).toContain('display_name = "Harold"');
     expect(contents).toContain("[applications.terminal]");
@@ -549,7 +593,7 @@ describe("DesktopSettingsService", () => {
     expect(contents).not.toContain("callback_port");
     expect(contents).toContain('slash_command_prefix = "agent_"');
     expect(contents).not.toContain("authorized_user_ids =");
-    expect(contents).toContain("[[messaging.mattermost.authorized_user_ids]]");
+    expect(contents).toContain("[[messaging.mattermost.authorized_users]]");
     expect(contents).toContain('id = "userA"');
     expect(contents).toContain('display_name = "Alice"');
     // Bot token + HMAC secret never written to TOML
