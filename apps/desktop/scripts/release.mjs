@@ -138,6 +138,22 @@ function applyDmgFileIcons(distDir) {
   }
 }
 
+function createFinderPreservingDmgArchives(distDir) {
+  if (process.platform !== "darwin") {
+    console.log("  skipping Finder-preserving DMG archives outside macOS");
+    return;
+  }
+
+  const dmgFiles = readdirSync(distDir).filter((name) => name.endsWith(".dmg"));
+
+  for (const dmgFile of dmgFiles) {
+    const archiveName = dmgFile.replace(/\.dmg$/, "-finder-icon.zip");
+    runChecked("ditto", ["-c", "-k", "--sequesterRsrc", dmgFile, archiveName], {
+      cwd: distDir,
+    });
+  }
+}
+
 // 2. Build (electron-vite -> apps/desktop/out/).
 step("electron-vite build");
 runChecked("pnpm", ["--filter", "@pwragent/desktop", "build"], { cwd: repoRoot });
@@ -191,7 +207,13 @@ runChecked("npx", cleanedArgs, { cwd: stageDir });
 step("apply Finder file icons to DMG artifacts");
 applyDmgFileIcons(join(stageDir, "dist"));
 
-// 7. Post-build asar contents check — fails if forbidden files (TS sources,
+// 7. GitHub Actions artifacts do not preserve macOS resource forks when they
+//    zip raw files. Provide a ditto-built archive that preserves the Finder
+//    file icon for preview/debug downloads.
+step("create Finder-preserving DMG archives");
+createFinderPreservingDmgArchives(join(stageDir, "dist"));
+
+// 8. Post-build asar contents check — fails if forbidden files (TS sources,
 //    tests, third-party docs, design docs, screenshots, etc.) leaked into the
 //    bundle. Exclusions are configured in electron-builder.yml; this script
 //    is a belt-and-braces guard against accidental edits to that YAML.

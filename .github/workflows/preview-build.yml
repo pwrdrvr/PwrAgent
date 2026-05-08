@@ -46,5 +46,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: PwrAgent-${{ steps.version.outputs.version }}-preview
-          path: apps/desktop/release-stage/dist/*.dmg
+          path: |
+            apps/desktop/release-stage/dist/*.dmg
+            apps/desktop/release-stage/dist/*-finder-icon.zip
           retention-days: 14
