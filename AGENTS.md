@@ -50,6 +50,7 @@
 - Override the root with `PWRAGENT_HOME=/path/to/root` for isolated E2E or dev-profile use.
 - Select a named profile with `PWRAGENT_PROFILE=<name>` (defaults to `default`).
 - Per-profile layout: `~/.pwragent/profiles/<name>/config.toml` (settings), `~/.pwragent/profiles/<name>/state/state.db` (sqlite).
+- Before making a backwards-incompatible TOML config shape change, read [docs/config-file-evolution.md](docs/config-file-evolution.md) and follow its read-fallback, lazy-conversion, legacy-comment, and dual-write rules.
 - Grok app-server config lives at `~/.config/grok-app-server/config.toml` (legacy path, still read).
 - Runtime config keys in the grok config: `xai_api_key`, `grok_model`, `xai_base_url`, `state_root`.
 - Environment variables (`XAI_API_KEY`, `GROK_MODEL`, `XAI_BASE_URL`) still override the toml config.
