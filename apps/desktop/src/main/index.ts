@@ -123,7 +123,11 @@ export function bootstrapApp(): void {
         reason: messagingOverride.reason,
       });
     } else {
-      await messagingRuntime.start();
+      void messagingRuntime.start().catch((error) => {
+        mainLog.error("messaging runtime failed during background startup", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     }
     // Register status IPC after the runtime is constructed so the
     // initial subscriber attaches before the renderer asks for the

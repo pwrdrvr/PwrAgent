@@ -251,25 +251,28 @@ export class DesktopMessagingRuntime {
         stoppedChannels.push(channel);
       }
     }
+    this.syncRunningAdapterLists();
 
-    const startedChannels: MessagingChannelKind[] = [];
-    const failedChannels: MessagingChannelKind[] = [];
-    for (const [channel, adapter] of nextAdapters.entries()) {
-      if (this.runningAdapters.has(channel)) {
-        continue;
-      }
+    const startResults = await Promise.all(
+      [...nextAdapters.entries()].map(async ([channel, adapter]) => {
+        if (this.runningAdapters.has(channel)) {
+          return { channel, started: false, unchanged: true };
+        }
 
-      const started = await this.startRunningAdapter({
-        adapter,
-        config,
-        store,
-      });
-      if (started) {
-        startedChannels.push(channel);
-      } else {
-        failedChannels.push(channel);
-      }
-    }
+        const started = await this.startRunningAdapter({
+          adapter,
+          config,
+          store,
+        });
+        return { channel, started, unchanged: false };
+      }),
+    );
+    const startedChannels = startResults
+      .filter((result) => result.started)
+      .map((result) => result.channel);
+    const failedChannels = startResults
+      .filter((result) => !result.unchanged && !result.started)
+      .map((result) => result.channel);
 
     this.syncRunningAdapterLists();
 
@@ -542,6 +545,7 @@ export class DesktopMessagingRuntime {
           reason: event.reason,
         });
       });
+      this.setPlatformHealth(adapter.channel, "unknown");
       await adapter.start?.(async (event) => {
         // Activity ping fires on every inbound, before authorization checks.
         this.emitPlatformActivity(adapter.channel);
@@ -616,6 +620,7 @@ export class DesktopMessagingRuntime {
       unsubscribeInboundRejected,
       unsubscribeRuntimeError,
     });
+    this.syncRunningAdapterLists();
     this.setPlatformHealth(adapter.channel, "enabled");
     messagingLog.info(`${adapter.channel}: adapter started successfully`, {
       channel: adapter.channel,
