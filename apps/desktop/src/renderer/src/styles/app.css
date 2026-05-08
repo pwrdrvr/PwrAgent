@@ -3385,6 +3385,15 @@ textarea,
   width: 100%;
 }
 
+/* The launchpad surface doesn't have a transcript above the composer,
+   so the composer's `border-top` (issue #240) would render as a
+   floating divider line with empty space above it. The launchpad-panel
+   above the composer is its own visually-framed card; no divider line
+   needed between it and the composer. */
+.thread-view__launchpad-composer > .composer {
+  border-top: 0;
+}
+
 .thread-header__title {
   font-size: 40px;
   font-weight: 700;
@@ -3472,16 +3481,33 @@ textarea,
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 24px;
+  /* Issue #240: no inter-pane gap — the composer's `border-top` is the
+     single divider between transcript and composer. The previous 24px
+     gap plus the transcript / composer box borders + each surface's
+     own inner padding stacked into a wide visual gutter that pushed
+     the composer noticeably away from the last message. */
+  gap: 0;
   min-width: 0;
   min-height: 0;
 }
 
-.transcript-panel,
-.context-panel,
-.composer {
+/* The right-rail context panel still reads as a card. */
+.context-panel {
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+/* Transcript + composer share ONE continuous chat surface (issue #240).
+   The transcript pane is transparent and rides the app background; the
+   composer below it is tinted with the panel surface and separated by a
+   single `border-top` line. No outer boxes, no doubled gutters. */
+.transcript-panel {
+  background: transparent;
+}
+
+.composer {
+  border-top: 1px solid var(--border-subtle);
   background: var(--bg-panel);
 }
 
@@ -3600,7 +3626,12 @@ textarea,
   flex-direction: column;
   gap: 12px;
   min-height: 0;
-  padding: 16px;
+  /* Bottom is intentionally smaller than top: the composer's
+     `border-top` (issue #240) handles the visual divide, so the
+     wrapper doesn't need to reserve panel-edge breathing room below
+     the scroll area. Items still has its own 24px in-scroll
+     padding-bottom for over-scroll feel above the last message. */
+  padding: 16px 16px 8px;
   overflow: hidden;
 }
 
@@ -5523,7 +5554,12 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px;
+  /* Issue #240: lighter top padding (12 vs the old uniform 16) since
+     the composer's `border-top` defines the boundary — no need for
+     the panel-style breathing room above the eyebrow / textarea.
+     Horizontal padding stays 16 so the input column lines up with the
+     transcript message inset. */
+  padding: 12px 16px 16px;
 }
 
 .composer__label {
